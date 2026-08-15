@@ -1,10 +1,12 @@
 //! How a module is entered from outside: the C `main` of an executable, and the
 //! per-function trampolines of a hybrid library.
 //!
-//! The two [`ModuleKind`](super::ModuleKind)s differ precisely here. An
-//! executable is entered once, by the operating system, at `main`. A hybrid
-//! library is entered many times, by its host, one call per crossing — so it
-//! exports a fixed-shape trampoline per `@Native` function instead of a `main`.
+//! The entry-bearing [`ModuleKind`](super::ModuleKind)s differ precisely here.
+//! An executable is entered once by the operating system at `main`, a whole
+//! native live library at its fixed runner symbol, and a hybrid library many
+//! times by its host through one trampoline per `@Native` function.
+
+use std::ffi::CStr;
 
 use kira_ir::IrFunction;
 use kira_semantics_model::Type;
@@ -24,22 +26,40 @@ impl Codegen<'_> {
     /// same — freeing the result first when it owns a string, exactly as the VM
     /// drops it.
     pub(super) fn lower_entry_point(&mut self) -> Result<(), LlvmError> {
+        self.lower_process_entry(c"main", false)
+    }
+
+    /// Emits the fixed entry symbol a whole-program native live library exports.
+    pub(super) fn lower_native_live_entry_point(&mut self) -> Result<(), LlvmError> {
+        let symbol = c_string(kira_runtime_abi::NATIVE_LIVE_ENTRY_SYMBOL);
+        self.lower_process_entry(&symbol, true)
+    }
+
+    /// Emits a zero-argument process entry that calls `@Main` and returns a
+    /// runner-friendly status code.
+    fn lower_process_entry(&mut self, symbol: &CStr, exported: bool) -> Result<(), LlvmError> {
         let main_function = self
             .program
             .main_function()
-            .ok_or(LlvmError::Unsupported("an executable with no entrypoint"))?;
+            .ok_or(LlvmError::internal("an executable with no entrypoint"))?;
         let index = self
             .program
             .main
-            .ok_or(LlvmError::Unsupported("an executable with no entrypoint"))?;
+            .ok_or(LlvmError::internal("an executable with no entrypoint"))?;
         let entry = self.functions[index as usize]
-            .ok_or(LlvmError::Unsupported("an entrypoint with no native body"))?;
+            .ok_or(LlvmError::internal("an entrypoint with no native body"))?;
 
         // SAFETY: every value and type below belongs to this live module, and
         // the builder is positioned on a block of the function being built.
         unsafe {
             let main_ty = LLVMFunctionType(self.types.i32, std::ptr::null_mut(), 0, 0);
-            let main = LLVMAddFunction(self.module, c"main".as_ptr(), main_ty);
+            let main = LLVMAddFunction(self.module, symbol.as_ptr(), main_ty);
+            if exported && cfg!(target_env = "msvc") {
+                LLVMSetDLLStorageClass(
+                    main,
+                    llvm_sys::LLVMDLLStorageClass::LLVMDLLExportStorageClass,
+                );
+            }
             let block = LLVMAppendBasicBlockInContext(self.context, main, c"entry".as_ptr());
             LLVMPositionBuilderAtEnd(self.builder, block);
 
@@ -124,7 +144,7 @@ impl Codegen<'_> {
         index: usize,
         function: &IrFunction,
     ) -> Result<(), LlvmError> {
-        let target = self.functions[index].ok_or(LlvmError::Unsupported(
+        let target = self.functions[index].ok_or(LlvmError::internal(
             "a trampoline to a function with no body",
         ))?;
         let symbol = c_string(&trampoline_name(index));
@@ -169,7 +189,7 @@ impl Codegen<'_> {
             for slot in 0..function.param_count {
                 let ty = function
                     .param_type(slot)
-                    .ok_or(LlvmError::Unsupported("a parameter with no type"))?;
+                    .ok_or(LlvmError::internal("a parameter with no type"))?;
                 let element = self.bridge_slot(args, slot);
                 let value = self.read_bridge_payload(element, ty)?;
                 // A written-through parameter arrives as a value like any

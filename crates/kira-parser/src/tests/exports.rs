@@ -153,10 +153,9 @@ fn export_composes_with_the_engine_annotations() {
 
 #[test]
 fn a_struct_cannot_be_exported_and_is_still_registered() {
-    // Only a class crosses, as a handle. Refused by name rather than falling
-    // into the generic "not supported yet" arm — and the struct itself still
-    // lands in the tree, so one refusal does not become an unresolved-type
-    // cascade at every use of the name.
+    // Only a class crosses, as a handle. The specific diagnostic keeps the
+    // struct in the tree, so the marker error does not cause unresolved-type
+    // diagnostics at every later use of the name.
     let result = parse_text("@Export\nstruct Point { let x: Int }");
     let codes: Vec<_> = result
         .diagnostics

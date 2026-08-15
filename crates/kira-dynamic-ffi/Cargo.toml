@@ -9,6 +9,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+kira-libffi.workspace = true
 kira-runtime-abi.workspace = true
 libloading.workspace = true
 thiserror.workspace = true

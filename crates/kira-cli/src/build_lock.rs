@@ -1,63 +1,13 @@
-//! One builder at a time in a package's `.kira-build` directory.
+//! Serializes writers to a package's `.kira-build` directory.
 //!
-//! Artifacts are named after the package, not after the process building it:
-//! two `kira` invocations against one package write the same `main.o`, the same
-//! `main.exe`, the same `.kbc`. Nothing about that is safe to do twice at once.
-//!
-//! On Unix the damage is usually invisible — a running executable keeps the
-//! inode it was started from, so a relink that replaces the file underneath it
-//! looks like it worked. On Windows the file is held open and the link fails
-//! outright:
-//!
-//! ```text
-//! LINK : fatal error LNK1104: cannot open file '...\.kira-build\main.exe'
-//! ```
-//!
-//! That is the failure this exists to stop, and it is worth stopping in the
-//! toolchain rather than in whichever caller happened to hit it: a test harness
-//! that runs two cases in parallel, a watch mode that rebuilds while a run is
-//! still going, and two terminals in one checkout are all the same collision.
-//! Serializing them here fixes all three at once, and a caller never has to
-//! know the rule exists.
-//!
-//! # Waiting rather than failing, and saying so
-//!
-//! A second builder waits for the first. Refusing outright would turn a
-//! perfectly ordinary "two things built the same package" into an error a user
-//! has to understand and work around, when the correct behaviour — do them one
-//! after the other — is available and is what they meant.
-//!
-//! A wait is **always reported** before it begins. A compiler that goes quiet
-//! for as long as another build takes, with no line saying what it is waiting
-//! for, is indistinguishable from one that has hung; and the wait is also given
-//! a phase of its own, so `--timings` credits it to waiting rather than to
-//! whichever phase happened to be open.
-//!
-//! # The lock is the operating system's, not a timestamp
-//!
-//! The hold is an exclusive lock on the file — `flock` on Unix,
-//! `LockFileEx` on Windows — taken for as long as this process lives. That is
-//! what makes the two failure modes of a lock file impossible rather than
-//! merely unlikely:
-//!
-//! A builder that is killed releases its lock, because the kernel closes its
-//! handles. There is nothing to time out, so a killed build wedges nothing and
-//! the next one starts immediately.
-//!
-//! And a lock is never taken from a builder that still holds it. Deciding by
-//! clock — "this has been held too long, it must be dead" — is a guess, and
-//! when the guess is wrong the result is two linkers in one directory writing
-//! each other's objects: empty `.o` files, a link that fails on symbols that
-//! are really there, and no diagnostic naming any of it. A slow build is slow;
-//! it is not abandoned.
-//!
-//! The file itself is never removed. It is only the thing the lock is attached
-//! to, and removing it while another process waits on that same lock would take
-//! the anchor out from under the waiter.
+//! The OS file lock handles other processes; the local registry makes nested
+//! acquisition reentrant while still serializing separate threads.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread::ThreadId;
 
 /// The lock file's name inside a build directory.
 const LOCK_FILE: &str = ".build-lock";
@@ -69,8 +19,41 @@ const LOCK_FILE: &str = ".build-lock";
 /// which is what a lock file compared against a clock could not promise.
 #[derive(Debug)]
 pub struct BuildLock {
-    /// The locked file. Held open because closing it releases the lock.
+    key: PathBuf,
+    owner: ThreadId,
+    locked: Option<Arc<LockedFile>>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[derive(Debug)]
+struct LockedFile {
     file: File,
+}
+
+#[derive(Debug)]
+struct LocalHold {
+    owner: ThreadId,
+    depth: usize,
+    locked: Option<Arc<LockedFile>>,
+}
+
+#[derive(Default)]
+struct LocalLocks {
+    holds: std::collections::HashMap<PathBuf, LocalHold>,
+}
+
+fn local_locks() -> &'static (Mutex<LocalLocks>, Condvar) {
+    static LOCKS: OnceLock<(Mutex<LocalLocks>, Condvar)> = OnceLock::new();
+    LOCKS.get_or_init(|| (Mutex::new(LocalLocks::default()), Condvar::new()))
+}
+
+fn report_wait(path: &Path) {
+    kira_diagnostics::progress!("waiting for another build of this package");
+    eprintln!(
+        "kira: another build of this package is running; waiting for it to finish\n\
+         note: it holds `{}`",
+        path.display(),
+    );
 }
 
 impl BuildLock {
@@ -84,49 +67,125 @@ impl BuildLock {
     /// build was going to fail on anyway.
     pub fn acquire(directory: &Path) -> Result<BuildLock, std::io::Error> {
         std::fs::create_dir_all(directory)?;
-        let path = directory.join(LOCK_FILE);
-        let file = OpenOptions::new()
+        let key = std::fs::canonicalize(directory)?;
+        let path = key.join(LOCK_FILE);
+        let owner = std::thread::current().id();
+        let (local, changed) = local_locks();
+        let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
+        let mut reported_wait = false;
+        loop {
+            match state.holds.get_mut(&key) {
+                Some(hold) if hold.owner == owner => {
+                    if let Some(locked) = hold.locked.clone() {
+                        hold.depth += 1;
+                        return Ok(BuildLock {
+                            key,
+                            owner,
+                            locked: Some(locked),
+                            _not_send: std::marker::PhantomData,
+                        });
+                    }
+                    state = changed
+                        .wait(state)
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+                Some(_) => {
+                    if !reported_wait {
+                        report_wait(&path);
+                        reported_wait = true;
+                    }
+                    state = changed
+                        .wait(state)
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+                None => {
+                    state.holds.insert(
+                        key.clone(),
+                        LocalHold {
+                            owner,
+                            depth: 1,
+                            locked: None,
+                        },
+                    );
+                    break;
+                }
+            }
+        }
+        drop(state);
+
+        let result = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
-            .open(&path)?;
+            .open(&path)
+            .and_then(|file| {
+                if lock::try_exclusive(&file)? {
+                    Ok(file)
+                } else {
+                    report_wait(&path);
+                    lock::exclusive(&file)?;
+                    Ok(file)
+                }
+            });
 
-        if !lock::try_exclusive(&file)? {
-            // Before blocking, not after: the point of the line is that the
-            // silence has a reason, and a line printed once the wait is over
-            // explains a pause the user has already spent.
-            kira_diagnostics::progress!("waiting for another build of this package");
-            eprintln!(
-                "kira: another build of this package is running; waiting for it to finish\n\
-                 note: it holds `{}`",
-                path.display(),
-            );
-            lock::exclusive(&file)?;
-        }
+        let mut file = match result {
+            Ok(file) => file,
+            Err(error) => {
+                let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
+                state.holds.remove(&key);
+                changed.notify_all();
+                return Err(error);
+            }
+        };
+        let _ = file.set_len(0);
+        let _ = writeln!(file, "kira build, pid {}", std::process::id());
+        let _ = file.flush();
+        let locked = Arc::new(LockedFile { file });
 
-        let mut lock = BuildLock { file };
-        lock.record_holder();
-        Ok(lock)
-    }
-
-    /// Writes who holds the lock, for a human who opens the file.
-    ///
-    /// Best effort and never fatal: the hold is the operating system's lock, and
-    /// the contents are a courtesy to whoever is looking at a build directory
-    /// wondering which process to go and find.
-    fn record_holder(&mut self) {
-        let _ = self.file.set_len(0);
-        let _ = writeln!(self.file, "kira build, pid {}", std::process::id());
-        let _ = self.file.flush();
+        let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .holds
+            .get_mut(&key)
+            .expect("local build lock reservation disappeared")
+            .locked = Some(Arc::clone(&locked));
+        changed.notify_all();
+        Ok(BuildLock {
+            key,
+            owner,
+            locked: Some(locked),
+            _not_send: std::marker::PhantomData,
+        })
     }
 }
 
 impl Drop for BuildLock {
     fn drop(&mut self) {
-        // Best effort, and the close that follows releases the lock regardless.
-        // The file stays: it is the lock's anchor, and a waiter is holding on to
-        // it right now.
+        let Some(locked) = self.locked.take() else {
+            return;
+        };
+        let (local, changed) = local_locks();
+        let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(hold) = state.holds.get_mut(&self.key) else {
+            return;
+        };
+        debug_assert_eq!(hold.owner, self.owner);
+        if hold.depth > 1 {
+            hold.depth -= 1;
+            drop(state);
+            drop(locked);
+            return;
+        }
+
+        let hold = state.holds.remove(&self.key);
+        drop(locked);
+        drop(hold);
+        changed.notify_all();
+    }
+}
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
         lock::release(&self.file);
     }
 }
@@ -273,6 +332,27 @@ mod tests {
         assert!(dir.join(LOCK_FILE).exists());
         let _second = BuildLock::acquire(&dir).expect("the directory locks again");
         drop(_second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_build_can_enter_the_same_directory_twice() {
+        let dir = scratch("reentrant");
+        let outer = BuildLock::acquire(&dir).expect("outer build lock");
+        let inner = BuildLock::acquire(&dir).expect("nested build lock");
+        drop(outer);
+
+        let path = dir.join(LOCK_FILE);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("lock file");
+        assert!(!lock::try_exclusive(&file).expect("inner lock remains held"));
+        drop(inner);
+        assert!(lock::try_exclusive(&file).expect("last nested guard releases"));
+        lock::release(&file);
+        drop(file);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

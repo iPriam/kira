@@ -262,4 +262,6 @@ runtime and library portions incorporated into products built with Kira.
 - [Strings](docs/strings.md)
 - [Structs](docs/structs.md)
 - [Live sessions](docs/live.md)
+- [Debugging](docs/debugging.md)
+- [Profiling](docs/profiling.md)
 - [Toolchain manager](docs/knvm.md)

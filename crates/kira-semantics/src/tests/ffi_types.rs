@@ -1,11 +1,11 @@
-//! The struct-attached `@FFI.*` family: what each form becomes, the executable
-//! zero-fill of a C-layout struct, and the typed refusals for the forms whose
-//! runtime behavior is not yet executable.
+//! The struct-attached `@FFI.*` family: its C representations, zero-fill rules,
+//! and typed diagnostics for positions with no matching C representation.
 //!
 //! `@FFI.Alias`/`@FFI.Pointer` are aliases; `@FFI.Struct` is a real C-layout
-//! struct with zero-filled construction; `@FFI.Array`/`@FFI.Callback` declare a
-//! nominal type but refuse any *use* precisely. Every accepted case is proved
-//! clean, and every refusal is checked by code, so a rule is never a cascade.
+//! struct with zero-filled construction; `@FFI.Array` is inline fixed-size C
+//! storage; and `@FFI.Callback` is a native function-pointer type. Every
+//! accepted case is checked independently, so one invalid position does not
+//! create a diagnostic cascade.
 
 use super::*;
 use kira_semantics_model::HirProgram;
@@ -215,12 +215,12 @@ fn a_c_layout_initializer_still_type_checks_its_value() {
     );
 }
 
-// ----- deferred forms: array and callback ---------------------------------
+// ----- arrays and callbacks -------------------------------------------------
 
 #[test]
 fn an_ffi_array_declaration_type_checks_as_a_field() {
-    // Declaring the array and naming it as a field is fine; only a *use* is
-    // refused.
+    // A C array is valid as a field of a C-layout struct, with its declared
+    // extent applied during zero-fill.
     let text = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
          @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n return }";

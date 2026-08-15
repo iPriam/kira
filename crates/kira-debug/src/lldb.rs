@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::DebugInfo;
+use crate::engine::{self, Engine};
 
 /// A prepared LLDB launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,11 +139,9 @@ impl LldbLaunch {
 
     /// Launches the real LLDB executable selected by `KIRA_LLDB` or `PATH`.
     pub fn launch(&self) -> Result<LldbOutput, LldbError> {
-        let executable = std::env::var_os("KIRA_LLDB")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("lldb"));
+        let executable = Engine::CommandLine.executable();
         let mut command = Command::new(&executable);
-        configure_lldb_environment(&mut command);
+        engine::configure(&mut command, &executable);
         command.arg("--no-lldbinit");
         if self.batch {
             command.arg("--batch");
@@ -187,47 +186,6 @@ impl LldbLaunch {
         }
     }
 }
-
-/// Finds the Python runtime used by the Windows Swift LLDB distribution.
-///
-/// Swift's LLDB executable has a delay dependency on `python39.dll`, while
-/// Python is commonly installed beside the compiler rather than on the user's
-/// `PATH`. `KIRA_PYTHON_HOME`/`PYTHONHOME` are explicit overrides; the standard
-/// per-user Python 3.9 location is a safe fallback for the bundled toolchain.
-#[cfg(windows)]
-pub(crate) fn configure_lldb_environment(command: &mut Command) {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("KIRA_PYTHON_HOME") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Some(path) = std::env::var_os("PYTHONHOME") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(
-            PathBuf::from(local_app_data)
-                .join("Programs")
-                .join("Python")
-                .join("Python39"),
-        );
-    }
-    let Some(home) = candidates
-        .into_iter()
-        .find(|path| path.join("python39.dll").is_file())
-    else {
-        return;
-    };
-    let mut paths = vec![home];
-    if let Some(current) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&current));
-    }
-    if let Ok(path) = std::env::join_paths(paths) {
-        command.env("PATH", path);
-    }
-}
-
-#[cfg(not(windows))]
-pub(crate) fn configure_lldb_environment(_command: &mut Command) {}
 
 /// Quotes one program argument for LLDB's command interpreter.
 fn quote_command_argument(argument: &str) -> String {

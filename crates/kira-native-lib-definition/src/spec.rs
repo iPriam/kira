@@ -69,7 +69,7 @@ impl LinkMode {
     }
 }
 
-/// Whether a program can be built for a target the library does not support.
+/// Whether a native library may be absent on a selected target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Availability {
     /// Every target the build selects must be one this library declares.
@@ -162,9 +162,6 @@ impl AutobindProfile {
 }
 
 /// The bindings a library wants generated from its headers.
-///
-/// Carried, not yet acted on: binding generation is its own slice. Reading it
-/// into the model is what keeps a declaration from being silently dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AutobindSpec {
     /// The Kira module the generated bindings land in.
@@ -444,6 +441,15 @@ impl NativeLibrarySpec {
         self.link_mode
     }
 
+    /// Whether this declaration names a static archive for any target.
+    pub fn has_static_archive(&self) -> bool {
+        self.link_mode == LinkMode::Static
+            && self
+                .targets
+                .iter()
+                .any(|row| self.archive_path(row).is_some())
+    }
+
     /// The headers the library is bound and compiled against.
     pub fn headers(&self) -> Option<&NativeHeaders> {
         self.headers.as_ref()
@@ -548,7 +554,8 @@ impl NativeLibrarySpec {
             }
             rows.push(
                 ResolvedTargetRow::new(row.triple.clone(), artifact, attributes)
-                    .with_runtime_files(runtime_files),
+                    .with_runtime_files(runtime_files)
+                    .with_link_mode(self.link_mode),
             );
         }
         Ok(ResolvedNativeLibrary::new(

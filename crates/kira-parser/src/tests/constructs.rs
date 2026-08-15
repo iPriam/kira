@@ -164,8 +164,7 @@ Widget Wrap() {
 /// The parser cannot answer what that member returns — it has no families — so
 /// it records the question and semantics answers it against the declaration.
 /// A family that declares `body` with a type gives the shorthand that type; one
-/// that never mentions `body` falls back to the family type, which is what this
-/// spelling used to mean unconditionally.
+/// that never mentions `body` falls back to the family type.
 #[test]
 fn a_body_shorthand_member_defers_its_result_type_to_the_family() {
     let result = parse_text(
@@ -516,7 +515,7 @@ extend Widget {
 }
 
 /// A modifier is a function, so the annotations that select how a function runs
-/// reach it. They used to be a syntax error about a missing `function`.
+/// reach it.
 #[test]
 fn an_extend_modifier_carries_the_engine_its_annotation_selected() {
     let result = parse_text(

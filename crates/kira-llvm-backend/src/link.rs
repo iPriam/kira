@@ -1,15 +1,16 @@
-//! Linking a native executable.
+//! Linking native executables and shared libraries.
 //!
 //! Codegen happens in process through LLVM; `clang` is used only here, as the
 //! linker driver, and always the `clang` from the discovered LLVM install
 //! rather than whatever is on `PATH` — the same explicit-toolchain rule the
 //! rest of the backend follows.
 //!
-//! The link inputs are the program's object file and the native runtime archive
-//! (`libkira_native_bridge.a`), which is a Rust `staticlib` and therefore
-//! carries the Rust standard library with it; the driver supplies the system
-//! libraries around it.
+//! The link inputs are the program's object files and the native runtime archive
+//! (`libkira_native_bridge.a`), which is a Rust `staticlib` and therefore carries
+//! the Rust standard library with it; the driver supplies the system libraries
+//! around it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -30,6 +31,29 @@ pub enum LinkError {
     ArchiverMissing {
         /// Where `llvm-ar` was expected.
         path: PathBuf,
+    },
+    /// The discovered LLVM install has no `llvm-nm` symbol reader.
+    #[error("no `llvm-nm` symbol reader at `{path}` in the discovered LLVM install")]
+    SymbolReaderMissing {
+        /// Where `llvm-nm` was expected.
+        path: PathBuf,
+    },
+    /// The symbol reader could not be run.
+    #[error("cannot run the symbol reader `{tool}`: {source}")]
+    SymbolReaderUnusable {
+        /// The symbol reader that could not be spawned.
+        tool: PathBuf,
+        /// The underlying failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The symbol reader rejected a selected archive.
+    #[error("cannot inspect the foreign archive `{archive}`:\n{diagnostic}")]
+    SymbolReaderFailed {
+        /// The archive that could not be inspected.
+        archive: PathBuf,
+        /// The reader's diagnostic.
+        diagnostic: String,
     },
     /// The archive's directory could not be prepared, or a stale archive could
     /// not be removed.
@@ -68,16 +92,6 @@ pub enum LinkError {
     #[error("the foreign native archive `{path}` is missing")]
     ForeignArchiveMissing {
         /// Where the archive was expected.
-        path: PathBuf,
-    },
-    /// The compiled foreign shim object was not where the build left it.
-    ///
-    /// Named on its own because every adapter in a by-value program calls into
-    /// this object: without it the link fails on a wall of undefined
-    /// `kira_ffi_shim_*` symbols that says nothing about the missing file.
-    #[error("the generated foreign shim object `{path}` is missing")]
-    ShimObjectMissing {
-        /// Where the object was expected.
         path: PathBuf,
     },
     /// The linker driver could not be run at all.
@@ -175,10 +189,209 @@ pub fn link_shared_library(
         &[object.to_path_buf()],
         runtime_archive,
         &NativeLinkInputs::default(),
-        None,
         library,
         &arguments,
     )
+}
+
+/// Links a symbol-retaining shared carrier for explicitly opted-in static FFI
+/// archives.
+///
+/// The carrier contains archive members selected by the imported symbol names;
+/// it has no generated call wrappers or signature-specific code. Libffi calls
+/// the exported symbols after the carrier is loaded.
+pub fn link_ffi_carrier(
+    llvm: &LlvmInstallation,
+    foreign_link: &NativeLinkInputs,
+    symbols: &[String],
+    carrier: &Path,
+) -> Result<Vec<String>, LinkError> {
+    let driver = llvm.clang();
+    if !driver.is_file() {
+        return Err(LinkError::DriverMissing { path: driver });
+    }
+    if foreign_link.static_archives().is_empty() {
+        return Err(LinkError::Failed {
+            output: carrier.to_path_buf(),
+            diagnostic: "a thin FFI carrier requires at least one static archive".to_owned(),
+        });
+    }
+    for (_, archive) in foreign_link.static_archives() {
+        if !archive.is_file() {
+            return Err(LinkError::ForeignArchiveMissing {
+                path: archive.clone(),
+            });
+        }
+    }
+
+    // A package's static row can contain declarations satisfied by the host
+    // process rather than by the archive itself. Inspect the archive before
+    // asking the linker to retain anything: forcing all declarations turns a
+    // process binding into a carrier export and makes Windows link.exe report
+    // a false unresolved carrier symbol.
+    let retained = archive_defined_symbols(llvm, foreign_link, symbols)?;
+    if retained.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let shared_flag = if cfg!(target_os = "macos") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    };
+    let mut arguments: Vec<std::ffi::OsString> = vec![shared_flag.into()];
+    arguments.extend(
+        force_symbols(retained.iter().cloned())
+            .into_iter()
+            .map(Into::into),
+    );
+    for (_, archive) in foreign_link.static_archives() {
+        arguments.push(archive.into());
+    }
+    arguments.push("-o".into());
+    arguments.push(carrier.into());
+    for argument in foreign_link.driver_arguments() {
+        arguments.push(argument.into());
+    }
+    for argument in platform_link_arguments() {
+        arguments.push(argument.into());
+    }
+    for argument in reproducible_link_arguments() {
+        arguments.push(argument.into());
+    }
+    if let Some(sysroot) = macos_sysroot() {
+        arguments.push("-isysroot".into());
+        arguments.push(sysroot.into());
+    }
+
+    stage_runtime_files(foreign_link, carrier)?;
+    let mut command = Command::new(&driver);
+    match response_file_for(&arguments, carrier)? {
+        Some(response) => {
+            let mut flag = std::ffi::OsString::from("@");
+            flag.push(response);
+            command.arg(flag);
+        }
+        None => {
+            command.args(&arguments);
+        }
+    }
+    let output = command
+        .output()
+        .map_err(|source| LinkError::DriverUnusable {
+            driver: driver.clone(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(LinkError::Failed {
+            output: carrier.to_path_buf(),
+            diagnostic: tool_diagnostic(&output),
+        });
+    }
+    Ok(retained)
+}
+
+/// Returns requested symbols that are actually defined by one selected static
+/// archive, in the request order and without duplicates.
+fn archive_defined_symbols(
+    llvm: &LlvmInstallation,
+    foreign_link: &NativeLinkInputs,
+    requested: &[String],
+) -> Result<Vec<String>, LinkError> {
+    let reader = llvm
+        .bin_dir
+        .join(kira_toolchain::executable_name("llvm-nm"));
+    if !reader.is_file() {
+        return Err(LinkError::SymbolReaderMissing { path: reader });
+    }
+    let requested_set: HashSet<&str> = requested.iter().map(String::as_str).collect();
+    let mut defined = HashSet::new();
+    for (_, archive) in foreign_link.static_archives() {
+        let output = Command::new(&reader)
+            .args(["-P", "--extern-only", "--defined-only"])
+            .arg(archive)
+            .output()
+            .map_err(|source| LinkError::SymbolReaderUnusable {
+                tool: reader.clone(),
+                source,
+            })?;
+        if !output.status.success() {
+            return Err(LinkError::SymbolReaderFailed {
+                archive: archive.clone(),
+                diagnostic: tool_diagnostic(&output),
+            });
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Some(name) = line.split_whitespace().next() else {
+                continue;
+            };
+            if name.ends_with(':') {
+                continue;
+            }
+            let name = archive_symbol_name(name);
+            if requested_set.contains(name.as_str()) {
+                defined.insert(name);
+            }
+        }
+    }
+    Ok(requested
+        .iter()
+        .filter(|symbol| defined.contains(symbol.as_str()))
+        .cloned()
+        .collect())
+}
+
+/// Normalizes the one object-file symbol prefix used by Mach-O `nm` output.
+fn archive_symbol_name(name: &str) -> String {
+    if cfg!(target_os = "macos") {
+        name.strip_prefix('_').unwrap_or(name).to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Links a whole native program into the shared library an LLVM live runner
+/// loads and invokes.
+///
+/// The native library carries the complete program, the Kira runtime, and the
+/// selected foreign link inputs. Its run-path points at
+/// its own directory on POSIX so bundled dynamic dependencies resolve after the
+/// runner stages the library and assets together.
+pub fn link_native_live_library(
+    llvm: &LlvmInstallation,
+    objects: &[PathBuf],
+    runtime_archive: &Path,
+    foreign_link: &NativeLinkInputs,
+    library: &Path,
+) -> Result<(), LinkError> {
+    let shared_flag = if cfg!(target_os = "macos") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    };
+    let mut arguments = vec![shared_flag.to_owned()];
+    arguments.extend(force_host_symbols());
+    arguments.extend(native_live_runtime_arguments());
+    link_with(
+        llvm,
+        objects,
+        runtime_archive,
+        foreign_link,
+        library,
+        &arguments,
+    )
+}
+
+/// Makes dependencies staged beside the native live library visible to its
+/// loader on the platforms that need an explicit relative search path.
+fn native_live_runtime_arguments() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        vec!["-Wl,-rpath,@loader_path".to_owned()]
+    } else if cfg!(unix) {
+        vec!["-Wl,-rpath,$ORIGIN".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Combines `object` and the native runtime archive into one static archive.
@@ -307,7 +520,6 @@ pub fn link_executable(
     objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
     executable: &Path,
 ) -> Result<(), LinkError> {
     let extra = executable_stack_arguments();
@@ -316,7 +528,6 @@ pub fn link_executable(
         objects,
         runtime_archive,
         foreign_link,
-        shim,
         executable,
         extra,
     )
@@ -329,7 +540,6 @@ pub fn link_executable_debug(
     objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
     executable: &Path,
     debug_symbols: &[String],
 ) -> Result<(), LinkError> {
@@ -345,7 +555,6 @@ pub fn link_executable_debug(
         objects,
         runtime_archive,
         foreign_link,
-        shim,
         executable,
         extra,
     )
@@ -356,7 +565,6 @@ fn link_executable_inner(
     objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
     executable: &Path,
     extra: Vec<String>,
 ) -> Result<(), LinkError> {
@@ -365,73 +573,22 @@ fn link_executable_inner(
         objects,
         runtime_archive,
         foreign_link,
-        shim,
         executable,
         &extra,
-    )
-}
-
-/// Links the VM's foreign-adapter sidecar: the adapters-only object plus the
-/// selected C archives and the native runtime, into one shared library the host
-/// loads through `kira-dynamic-ffi`.
-///
-/// Every adapter, the foreign-adapter marker, and the string helpers the loader
-/// resolves are forced in by name: nothing inside the sidecar references them
-/// (the sidecar has no call sites), so without forcing the linker would drop
-/// them and the host's `dlsym` would fail on a library that is otherwise sound.
-pub fn link_adapter_sidecar(
-    llvm: &LlvmInstallation,
-    object: &Path,
-    runtime_archive: &Path,
-    foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
-    adapter_symbols: &[String],
-    library: &Path,
-) -> Result<(), LinkError> {
-    let shared_flag = if cfg!(target_os = "macos") {
-        "-dynamiclib"
-    } else {
-        "-shared"
-    };
-    let mut arguments = vec![shared_flag.to_owned()];
-    // The host symbols as well as the adapters': the sidecar carries its own
-    // copy of the runtime archive, so the invoker slot a callback runs through
-    // is the *sidecar's*, and the host installs into it by name through
-    // `kira_hybrid_install_runtime_invoker`. On Mach-O and ELF that symbol is
-    // exported the moment it is linked in; on PE it is not, and a C function
-    // calling back into Kira reported `native code called runtime function 0
-    // before a host installed a runtime invoker`.
-    arguments.extend(force_host_symbols());
-    arguments.extend(force_foreign_symbols(adapter_symbols));
-    link_with(
-        llvm,
-        &[object.to_path_buf()],
-        runtime_archive,
-        foreign_link,
-        shim,
-        library,
-        &arguments,
     )
 }
 
 /// Links the native half of a hybrid program: the hybrid object plus the
 /// selected C archives and the runtime, into one shared library.
 ///
-/// The hybrid half carries both the `@Native` trampolines and one generated
-/// adapter per foreign import. Both symbol families need forcing in: the host
-/// resolves the trampoline-adjacent runtime symbols (see [`force_host_symbols`])
-/// and — when the program has foreign imports — the foreign-adapter marker, the
-/// string helpers, and every adapter by name (see [`force_foreign_symbols`]), so
-/// the hybrid session binds every foreign call out of this one dylib rather than
-/// opening a second sidecar. The C archives satisfy each adapter's reference to
-/// its real C symbol.
+/// The hybrid half carries the `@Native` trampolines, callback thunks, and any
+/// opted-in static FFI symbols shared with its runtime half.
 pub fn link_hybrid_library(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
-    adapter_symbols: &[String],
+    retained_symbols: &[String],
     library: &Path,
 ) -> Result<(), LinkError> {
     link_hybrid_library_inner(
@@ -439,10 +596,9 @@ pub fn link_hybrid_library(
         object,
         runtime_archive,
         foreign_link,
-        shim,
         library,
         HybridLinkOptions {
-            adapter_symbols,
+            retained_symbols,
             debug_symbols: None,
         },
     )
@@ -455,8 +611,7 @@ pub fn link_hybrid_library_debug(
     object: &Path,
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
-    adapter_symbols: &[String],
+    retained_symbols: &[String],
     library: &Path,
     debug_symbols: &[String],
 ) -> Result<(), LinkError> {
@@ -465,10 +620,9 @@ pub fn link_hybrid_library_debug(
         object,
         runtime_archive,
         foreign_link,
-        shim,
         library,
         HybridLinkOptions {
-            adapter_symbols,
+            retained_symbols,
             debug_symbols: Some(debug_symbols),
         },
     )
@@ -476,7 +630,7 @@ pub fn link_hybrid_library_debug(
 
 #[derive(Debug, Clone, Copy)]
 struct HybridLinkOptions<'a> {
-    adapter_symbols: &'a [String],
+    retained_symbols: &'a [String],
     debug_symbols: Option<&'a [String]>,
 }
 
@@ -485,7 +639,6 @@ fn link_hybrid_library_inner(
     object: &Path,
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
     library: &Path,
     options: HybridLinkOptions<'_>,
 ) -> Result<(), LinkError> {
@@ -496,10 +649,8 @@ fn link_hybrid_library_inner(
     };
     let mut arguments = vec![shared_flag.to_owned()];
     arguments.extend(force_host_symbols());
-    // A program with no foreign imports emits no adapters and no foreign marker,
-    // so forcing either would fail the link on an undefined symbol.
-    if !options.adapter_symbols.is_empty() {
-        arguments.extend(force_foreign_symbols(options.adapter_symbols));
+    if !options.retained_symbols.is_empty() {
+        arguments.extend(force_callback_symbols(options.retained_symbols));
     }
     if let Some(debug_symbols) = options.debug_symbols {
         arguments.push("-g".to_owned());
@@ -510,7 +661,6 @@ fn link_hybrid_library_inner(
         &[object.to_path_buf()],
         runtime_archive,
         foreign_link,
-        shim,
         library,
         &arguments,
     )
@@ -529,26 +679,10 @@ fn export_debug_symbols(symbols: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The `-Wl,-u` flags that force every foreign-sidecar symbol a host resolves.
-///
-/// The foreign-adapter marker and the string helpers the loader binds, plus one
-/// entry per generated adapter, so a host loading the sidecar finds each by
-/// `dlsym`. The marker and helper names come from the shared runtime-abi
-/// constants, so what is forced in and what the loader demands cannot drift.
-fn force_foreign_symbols(adapter_symbols: &[String]) -> Vec<String> {
-    let mut names: Vec<String> = vec![kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER.to_owned()];
-    names.extend(
-        [
-            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_FREE_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_DATA_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_LEN_SYMBOL,
-        ]
-        .into_iter()
-        .map(str::to_owned),
-    );
-    names.extend(adapter_symbols.iter().cloned());
-    force_symbols(names)
+/// The linker flags that retain callback thunks a foreign C library reaches
+/// only through a function pointer.
+fn force_callback_symbols(callback_symbols: &[String]) -> Vec<String> {
+    force_symbols(callback_symbols.iter().cloned())
 }
 
 /// Linker flags that pull the host-facing runtime symbols into a shared library.
@@ -670,35 +804,6 @@ mod force_host_symbol_tests {
         let response = response_file_for(&arguments, Path::new("out"))
             .expect("a short line is never an error");
         assert!(response.is_none());
-    }
-
-    /// The sidecar's symbols get the same treatment as the hybrid library's.
-    ///
-    /// They did not once: this function spelled only the Mach-O and ELF forms,
-    /// so on Windows the VM's sidecar linked clean and then reported `missing
-    /// ABI marker kira_foreign_adapter_abi_version_2` — the marker was in the
-    /// DLL but not in its export table.
-    #[test]
-    fn every_foreign_symbol_is_forced_in_this_platforms_spelling() {
-        let adapters = ["kira_foreign_adapter_0".to_owned()];
-        let flags = force_foreign_symbols(&adapters);
-        for symbol in [
-            kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER,
-            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
-            "kira_foreign_adapter_0",
-        ] {
-            assert!(
-                flags.iter().any(|flag| flag.contains(symbol)),
-                "`{symbol}` is never forced into the sidecar link"
-            );
-            if cfg!(target_env = "msvc") {
-                assert!(
-                    flags.contains(&format!("-Wl,/EXPORT:{symbol}")),
-                    "`{symbol}` is pulled into the sidecar but never exported, \
-                     so the loader cannot resolve it"
-                );
-            }
-        }
     }
 }
 
@@ -855,7 +960,6 @@ fn link_with(
     objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    shim: Option<&Path>,
     output: &Path,
     extra: &[String],
 ) -> Result<(), LinkError> {
@@ -877,25 +981,12 @@ fn link_with(
         }
     }
 
-    if let Some(shim) = shim
-        && !shim.is_file()
-    {
-        return Err(LinkError::ShimObjectMissing {
-            path: shim.to_path_buf(),
-        });
-    }
-
     let mut arguments: Vec<std::ffi::OsString> = Vec::new();
     for object in objects {
         arguments.push(object.into());
     }
-    // The shim object sits between the program and the archives: the adapters in
-    // `object` call into it, and it calls the real C symbols the archives define.
-    if let Some(shim) = shim {
-        arguments.push(shim.into());
-    }
-    // The foreign archives precede the runtime archive so an adapter's reference
-    // to a C symbol is satisfied by the archive that defines it.
+    // The foreign link inputs precede the runtime archive so direct foreign
+    // symbol references are satisfied by the library that defines them.
     for archive in foreign_link.archives() {
         arguments.push(archive.into());
     }
@@ -990,9 +1081,15 @@ fn platform_link_arguments() -> Vec<String> {
 /// the reserve on the executable itself so a launcher does not need a Kira
 /// runtime-specific stack setting. Shared libraries and sidecars do not get
 /// this flag: their host owns the thread stack.
+///
+/// The size is [`kira_toolchain::WINDOWS_STACK_RESERVE`], which the toolchain's
+/// own binaries also reserve.
 fn executable_stack_arguments() -> Vec<String> {
     if cfg!(target_os = "windows") {
-        vec!["-Wl,/STACK:33554432".to_owned()]
+        vec![format!(
+            "-Wl,/STACK:{}",
+            kira_toolchain::WINDOWS_STACK_RESERVE
+        )]
     } else {
         Vec::new()
     }
@@ -1000,19 +1097,11 @@ fn executable_stack_arguments() -> Vec<String> {
 
 /// Flags that make this host's linker write the same bytes for the same inputs.
 ///
-/// Kira's live reload decides its tier by byte identity: a `@Runtime`-only edit
-/// hot patches only while the native library it sits beside is *the same
-/// library*, compared by hash. ELF and Mach-O give that for free — relinking
-/// unchanged inputs reproduces the file — but a PE header carries a timestamp,
-/// so every relink on Windows produces different bytes and every edit looks
-/// like the native half changed. The tier decision then always says relaunch,
-/// and tier 1 is unreachable on the platform rather than unimplemented.
-/// Incremental PE linking has the same problem for debug addresses: its PDB
-/// contribution table can retain the old object layout, leaving an LLDB
-/// breakpoint thunk and its source line at different PCs.
-///
-/// `/Brepro` replaces that timestamp with a hash of the content, which is what
-/// makes the comparison mean what it says.
+/// Kira compares native library bytes when selecting its live-reload tier. On
+/// MSVC, `/Brepro` makes PE output reproducible and `/INCREMENTAL:NO` keeps
+/// linker and PDB layouts stable for debugger addresses. Without these flags,
+/// timestamp or incremental-link metadata could make unchanged inputs look
+/// different.
 fn reproducible_link_arguments() -> Vec<String> {
     if cfg!(target_env = "msvc") {
         vec!["-Wl,/Brepro".to_owned(), "-Wl,/INCREMENTAL:NO".to_owned()]
@@ -1048,28 +1137,6 @@ fn macos_sysroot() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_sidecar_forces_the_marker_string_helpers_and_every_adapter() {
-        // The host resolves each of these by name, and nothing inside the
-        // sidecar references them, so the link must force every one in.
-        let forced = force_foreign_symbols(&["kira_foreign_adapter_0".to_owned()]);
-        let joined = forced.join(" ");
-        for symbol in [
-            kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER,
-            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_FREE_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_DATA_SYMBOL,
-            kira_runtime_abi::FOREIGN_STRING_LEN_SYMBOL,
-            "kira_foreign_adapter_0",
-        ] {
-            assert!(joined.contains(symbol), "sidecar must force `{symbol}`");
-        }
-        // Every entry is an undefined-symbol linker flag, never a bare input.
-        for argument in &forced {
-            assert!(argument.starts_with("-Wl,"), "unexpected flag `{argument}`");
-        }
-    }
 
     #[test]
     fn a_missing_foreign_archive_names_the_missing_file() {

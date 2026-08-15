@@ -400,3 +400,13 @@ double ffi_call_quad_taker(ffi_quad_taker take, double a, double b, double c, do
     q.d = d;
     return take(q, tag);
 }
+
+int ffi_call_userdata_twice(ffi_userdata_taker take, unsigned long long userdata, int n) {
+    if (take == 0) {
+        return -1;
+    }
+    /* Two crossings, so what the first one wrote through the userdata has to be
+     * there when the second reads it. */
+    int first = take(userdata, n);
+    return take(userdata, first);
+}

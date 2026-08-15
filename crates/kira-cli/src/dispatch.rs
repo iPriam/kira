@@ -33,7 +33,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Remove => crate::dependencies::remove(args),
         Command::MigrateManifest => crate::migrate::migrate(args),
         Command::Ffi => crate::ffi::ffi(args),
-        Command::Instruments => crate::instruments::run(args),
+        Command::Profile => crate::profile::profile(args),
         Command::Update => crate::update::update(args),
         Command::Shader => crate::shader::shader(args),
         Command::Help => {
@@ -71,7 +71,7 @@ fn implemented(command: Command) -> bool {
             | Command::Remove
             | Command::MigrateManifest
             | Command::Ffi
-            | Command::Instruments
+            | Command::Profile
             | Command::Update
             | Command::Package
             | Command::Export

@@ -375,15 +375,8 @@ function main() {
 
 /// Reading an element must not copy the array — on either engine.
 ///
-/// Both used to: the VM's `LoadLocal` copied the whole array before
-/// `ArrayGet` read one element, and the native backend cloned the base for the
-/// same reason. That made a loop over `n` elements cost `O(n²)`, so 200,000
-/// reads took seven seconds native and three minutes on the VM, and loading an
-/// 18 MB mesh never finished at all.
-///
-/// The size is what makes this a regression test rather than a unit test: a
-/// quadratic read is *correct*, just unusable, so only a program big enough to
-/// notice can tell the two apart.
+/// The large loop makes an accidental full-array copy visible: indexed reads
+/// must stay linear in the number of elements visited.
 #[test]
 fn reading_elements_does_not_copy_the_array() {
     assert_parity(
@@ -436,10 +429,8 @@ fn an_element_read_out_is_independent_of_the_array() {
 /// A `borrow mut` array given a second name is still the caller's array.
 ///
 /// `var out = nodes` binds no value when `nodes` is a borrow — there is none to
-/// bind, only the caller's storage — so an append through the second name has
-/// to reach the first. Every engine used to copy here, agreeing with each other
-/// and with nobody else, which is why this asserts the values rather than
-/// leaving the three backends to confirm one answer among themselves.
+/// bind, only the caller's storage — so an append through the second name must
+/// reach the first.
 #[test]
 fn appending_through_a_rebound_borrow_reaches_the_caller() {
     let output = assert_parity(
@@ -540,11 +531,8 @@ function main() {
 
 /// An array reached through a field is indexed where it lives.
 ///
-/// Reading a field yields a copy of it, so an array behind one used to be
-/// duplicated in full to read a single entry. The values below pin that the
-/// borrow reads the same thing the copy did — including that a write through
-/// the field is visible to the next read, and that the struct still owns its
-/// array afterwards.
+/// A field read yields the array value, while a write through the field remains
+/// visible to the next read and the containing struct keeps ownership.
 #[test]
 fn indexing_an_array_reached_through_a_field_agrees() {
     let output = assert_parity(

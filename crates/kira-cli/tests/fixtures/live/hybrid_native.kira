@@ -1,0 +1,16 @@
+@Native
+function double(n: Int) -> Int {
+    return n * 2
+}
+
+@Runtime
+function describe(n: Int) -> Int {
+    return double(n) + 1
+}
+
+@Main
+function main() {
+    print(double(42))
+    print(describe(10))
+    return
+}

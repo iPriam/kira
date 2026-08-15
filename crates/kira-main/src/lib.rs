@@ -41,21 +41,11 @@
 //! }
 //! ```
 //!
-//! # Rust first, and deliberately not C
+//! # Rust embedding
 //!
-//! The crate's charter has always been "the stable entry points embedders call
-//! to load and run Kira programs", and that is what this is — but in Rust, not
-//! in C. The reason is asymmetry of cost: **every C signature is append-only
-//! forever**, and the only consumer this feature names is Rust. A
-//! language-agnostic C facade (`kira_program_load` / `kira_program_call`, for
-//! Swift, Zig, or C hosts) is v2 growth of this same crate, and starts when a
-//! non-Rust consumer actually exists. Shipping one now would freeze a shape
-//! before anything had pulled on it.
-//!
-//! The packaging follows the same rule as the surface: `rlib` only, because
-//! Rust is the only consumer named. Carrying `staticlib` and `cdylib` for the
-//! facade that does not exist yet was not free — see the note in `Cargo.toml`
-//! for what it cost — and adding them back is one line when it does.
+//! The public surface is Rust-specific: it uses Rust types and traits for
+//! loading, hosting, and calling a Kira library. A language-neutral C ABI is
+//! outside this crate's contract.
 //!
 //! # Where the guards are
 //!
@@ -99,7 +89,7 @@ pub use abi::{
 pub use callback::ForeignSession;
 pub use error::{ContractError, Error, describe_result, describe_tag};
 #[cfg(not(target_family = "wasm"))]
-pub use foreign::{ForeignBinding, ForeignHost};
+pub use foreign::{ForeignBinding, ForeignBindingTarget, ForeignHost};
 pub use host::StdoutHost;
 pub use instance::{Handle, Instance};
 pub use library::{ExpectedExport, ExportContract, Library, content_hash};

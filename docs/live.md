@@ -16,8 +16,9 @@ only a way to start one.
 
 ```sh
 kira live                                      # the package you are standing in
-kira live app.kira                             # the VM half
-kira live --backend hybrid app.kira            # both halves
+kira live app.kira                             # the VM backend
+kira live --backend llvm app.kira              # the whole native program
+kira live --backend hybrid app.kira            # the VM/native hybrid
 kira live --watch app.kira                     # reload on every save
 kira live --watch --quit-after 30s app.kira    # bounded, for scripts and CI
 kira live ios app.kira                         # a runner with no client yet: says so
@@ -28,17 +29,16 @@ same default `run`, `build`, and `check` take. The path goes through the same
 package discovery either way, so a directory holding no `package.kira` is
 refused by name.
 
-A program that calls C gets a native half on either backend. `@FFI.Extern`
-reaches a C symbol through a generated adapter, and an adapter has to live in a
-library the runner can load — which is as true of a VM program as of a hybrid
-one. So a VM bundle for a program with foreign imports is three payloads rather
-than one: every function still runs on the VM, and the native half holds only
-the adapters. It is a hybrid bundle whose split happens to be entirely on one
-side, which is why the runner needs to know nothing new about it.
+A program that calls C gets a generated adapter sidecar on the VM backend.
+`@FFI.Extern` reaches a C symbol through that sidecar, while the bytecode
+payload remains the bundle entrypoint. The LLVM backend compiles the whole
+program into one native library with a fixed runner entry symbol and stages its
+foreign archives and runtime files beside it. The hybrid backend instead carries
+a hybrid manifest, bytecode, and native library.
 
 | Flag | Meaning |
 |---|---|
-| `--backend vm\|hybrid` | which halves the bundle carries; `vm` by default |
+| `--backend vm\|llvm\|hybrid` | the VM, whole-native, or hybrid bundle shape; `vm` by default |
 | `--watch` | rebuild and reload on every save |
 | `--quit-after <5s\|500ms\|2m>` | shut the session down cleanly after this long |
 
@@ -61,14 +61,20 @@ app.klbundle/
   payloads/
     app.khm             one file per payload, named by the manifest
     app.kbc
+    libapp_ffi.dylib
     libapp.dylib
+    libapp_live.dylib    whole-program LLVM live entry
+    libffifixture.a      native link asset, when selected
+    runtime.dll          native runtime asset, when selected
 ```
 
 The manifest records the runner and profile the bundle was built for, one row per
 payload (name, kind, SHA-256, size), and which payload is the entrypoint.
 Payloads are staged flat because a `KHM1` hybrid manifest names its bytecode and
-library as file names beside itself — staging them as siblings is what makes it
-resolve inside a runner's cache exactly as it did in the build directory.
+library as file names beside itself, and a whole-native library resolves its
+bundled runtime files from the same directory. Staging them as siblings is what
+makes both forms resolve inside a runner's cache exactly as they did in the
+build directory.
 
 Bundles arrive over a socket, so the format is a validated wire format rather
 than a struct that happens to serialize: every truncation, unknown tag, and
@@ -77,8 +83,9 @@ file names once, at the decoder, because they become paths on disk. Payloads are
 verified against the manifest on arrival — a runner holds the bytes the build
 produced, or it holds an error.
 
-The hash is SHA-256 rather than a checksum because reload decides from it. A
-collision would hot-patch across an ABI change and corrupt memory silently.
+Payload hashes are SHA-256 identity fingerprints. A collision could make a
+changed payload look unchanged, so reload never treats a changed bytecode
+payload as compatible without separate live-value evidence.
 
 ## Events
 
@@ -127,27 +134,33 @@ than on milestones.
 
 ## Reload
 
-Two tiers, chosen by what actually changed.
+Reload decisions use the `KLB1` manifest. Each payload row carries a name, kind,
+SHA-256 hash, and size. An exact manifest match is `Unchanged`.
 
-**Hot patch** — the rebuilt native library is byte-for-byte the loaded one, so
-the edit was a bytecode-only edit whatever the source looked like. The bytecode
-swaps into the running process: same process, same mapped library, nothing
-re-`dlopen`ed. Only payloads whose hash moved are rewritten, so the byte-identical
-library is exactly the file left untouched, and the replacement is built before
-the old one is dropped — the library's refcount never reaches zero, so the loader
-never unmaps it and its addresses stay put.
+**Hot patch**
 
-**Relaunch** — anything else. The runner is replaced, and the reason is reported.
+A hot patch requires an in-process replacement operation and compatibility
+evidence for live values. The current `KLB1` manifest has payload identity only.
+It has no struct or enum layout or closure signature fingerprint, so
+`reload::decide` relaunches every changed bytecode payload, including a hybrid
+bundle whose native library and hybrid manifest are unchanged. The runner can
+also refuse a proposed swap when its app thread or live values cannot accept it.
 
-The rule is byte identity, not a source diff. A `@Runtime` edit in a hybrid app
-rebuilds the library identically and hot-patches; a `@Native` edit does not and
-cannot, because the process has that library's code mapped and native state
-holding pointers into it.
+Matching hash and size prove payload identity. They do not prove that a different
+bytecode artifact is safe beside live values.
+
+**Relaunch**
+
+The runner is replaced, and the reason is reported. The rule is manifest
+evidence, not a source diff. A source edit that produces an identical manifest
+does nothing. A source edit that changes bytecode, native code, the hybrid
+manifest, or an asset relaunches.
 
 | Relaunch reason | When |
 |---|---|
 | the native library changed | its bytes moved; the mapped code is stale |
 | the hybrid manifest changed | the VM/native boundary moved |
+| the bytecode changed | `KLB1` has no layout or closure compatibility evidence |
 | a payload changed | something not swappable in place, e.g. an asset |
 | the bundle's payloads changed | one appeared, vanished, was renamed, or changed kind |
 | the entrypoint moved / is not swappable | a different program shape |
@@ -156,39 +169,28 @@ holding pointers into it.
 | the app's entrypoint is still running | a run loop has a call stack in the code the swap would replace |
 | the runner refused | only it knows what its live values depend on |
 
-Nothing degrades quietly. A bundle that cannot be hot-patched says so and says
-why, rather than relaunching silently and leaving someone wondering where their
-state went. The supervisor always attempts tier 1 first and announces the
-fallback, so a relaunch never looks like a slow hot patch.
+Unsafe or rejected swaps report their reason. Direct relaunch decisions and
+runner refusals are both visible to the session.
 
-`KIRA_LIVE_NO_HOTPATCH=1` turns tier 1 off entirely — the runner refuses every
-swap and every reload relaunches. It exists so a session can run with the
-hot-patch path *removed* rather than merely unused, which is what makes it
-possible to tell whether a bug belongs to it.
+`KIRA_LIVE_NO_HOTPATCH=1` turns tier 1 off entirely. The runner refuses every
+swap and every reload relaunches.
 
 A save that changes nothing does nothing. A save that does not compile prints its
 diagnostics and leaves the running app alone: killing a working app over a
 half-typed line would make watching worse than not watching.
 
-A running app is the common case of that refusal, not an exotic one. An app's
-entrypoint does not return: it opens a window and its run loop owns the thread
-until the window closes, so a swap would be replacing the very code the process
-has a call stack in. Every reload of a running app therefore relaunches, and
-says which of the two it was. A swap point *inside* a live app is a frame
-boundary the runner does not have yet; when it does, this is the reason that
-stops being reported.
+A running app's entrypoint stays on its run loop, so the runner refuses a swap
+until it has a safe frame boundary.
 
 ### What survives
 
-Today: the process and its loaded native library.
+A compatible hot patch keeps the current process, loaded native libraries, and
+values owned by them. A relaunch loses process state.
 
-*App state* surviving is the eventual promise, and it is not testable yet — the
-language has no globals and no closures, so nothing outlives a call. The two
-rejection conditions that protect such state, a struct or enum whose layout
-changed and a live closure whose function changed signature, are **not checked**,
-because neither can happen yet. They are not skipped; there is nothing to skip.
-`kira-live`'s `reload::decide` is where they land when those features do, and the
-hot patch must not be trusted for them until they are there.
+The current `KLB1` manifest records payload identity only. It does not record
+struct or enum layouts or closure function signatures. `reload::decide` treats
+every changed bytecode payload as unsafe and returns `Relaunch` until that
+compatibility evidence exists.
 
 ## Watching
 
@@ -217,10 +219,10 @@ rebuild rather than queueing three.
 
 ## Runners
 
-`kira-desktop-runner` is the client that ships today. It hosts a VM bytecode
-entrypoint and a hybrid one, `dlopen`ing the native half for the latter. Running
-a bundle needs no LLVM — only building one does — which is what lets the native
-path be real rather than deferred.
+`kira-desktop-runner` is the client that ships today. It hosts VM bytecode, a
+whole-program native library, and a hybrid entrypoint. It loads the LLVM live
+library and calls its fixed entry symbol in the runner process. Running a bundle
+needs no LLVM, only building one does.
 
 **The app gets the main thread; the protocol gets another.** A Kira app is not a
 function that returns, and a runner that started one on the thread holding the

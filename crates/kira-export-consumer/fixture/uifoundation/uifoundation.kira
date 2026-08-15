@@ -1,6 +1,6 @@
 // UI Foundation: the motivating library, authored in Kira and consumed from
-// Rust. Every shape v1 supports appears here exactly once, because this file is
-// what proves the export boundary rather than what demonstrates it.
+// Rust. This fixture exercises the export boundary with a class handle and
+// scalar functions.
 //
 // A handle-eligible class: instances cross to Rust as opaque handles.
 @Export

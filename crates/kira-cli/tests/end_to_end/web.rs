@@ -82,19 +82,33 @@ fn a_web_build_links_and_runs_with_the_vms_exact_output() {
 }
 
 #[test]
-fn a_wasm64_build_is_refused_by_name() {
+fn a_wasm64_build_reaches_the_target_toolchain() {
     let path = write_source(PROGRAM);
+    let directory = path.parent().expect("source directory").to_path_buf();
     let output = kira(&[
         "build",
         "--device",
         "wasm64",
         path.to_str().expect("utf-8 path"),
     ]);
-    let _ = std::fs::remove_file(&path);
-    assert!(!output.status.success());
+    let web = directory.join(".kira-build").join("web");
+    let stem = path.file_stem().expect("source stem").to_string_lossy();
+    let wasm = web.join(format!("{stem}.wasm"));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("wasm64") && stderr.contains("wasm32"),
-        "the refusal must name the device and the alternative: {stderr}"
-    );
+    let object = web.join(format!("{stem}.o"));
+    let artifacts = (object.is_file(), wasm.is_file());
+    let _ = std::fs::remove_file(&path);
+    if output.status.success() {
+        assert_eq!(artifacts, (true, true));
+    } else {
+        assert!(
+            artifacts.0,
+            "wasm64 codegen did not produce its object: {stderr}"
+        );
+        assert!(
+            stderr.contains("runtime archive") || stderr.contains("WebAssembly"),
+            "the missing external target was not identified: {stderr}"
+        );
+        assert!(!stderr.contains("not buildable yet"), "{stderr}");
+    }
 }

@@ -6,7 +6,7 @@ use kira_bytecode::module::{FrameRelease, FuncProto, Module};
 use kira_bytecode::op::Instruction as I;
 use kira_runtime_abi::CapturingHost;
 
-fn func(name: &str, params: u16, locals: u16, code: Vec<I>) -> FuncProto {
+fn func(name: &str, params: u64, locals: u64, code: Vec<I>) -> FuncProto {
     FuncProto {
         name: name.to_owned(),
         param_count: params,
@@ -46,7 +46,7 @@ fn library() -> Module {
             I::ConstStr(1),
             I::StoreField {
                 slot: 0,
-                path: kira_bytecode::op::FieldPath::new(vec![0]).expect("a one-step path"),
+                path: kira_bytecode::op::FieldPath::new(vec![0]),
             },
             I::LoadLocal(1),
             I::ConstInt(0),

@@ -190,6 +190,71 @@ fn an_index_must_be_an_integer_and_only_an_array_indexes() {
     );
 }
 
+/// A type that declares `subscript` is indexed through it, and the index is
+/// checked against the parameter that member declares rather than against
+/// `Int` — which is what lets an anchor be written as a leading-dot member.
+#[test]
+fn a_type_declaring_subscript_is_indexed_through_it() {
+    assert!(
+        diagnostics(
+            "enum Anchor { Leading Trailing }
+             struct Dimensions {
+                 let width: Float
+                 function subscript(anchor: Anchor) -> Float {
+                     match anchor {
+                         Leading -> return 0.0;
+                         Trailing -> return width;
+                     }
+                 }
+             }
+             @Main function main() {
+                 let d = Dimensions { width: 20.0 }
+                 print(d[.Leading] + 20.0)
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+/// The subscript's parameter type is enforced, so a wrong index is a wrong
+/// ARGUMENT and reports as one — `KSEM063`, the same code any call gets — not
+/// as the array rule's "an index must be an integer".
+#[test]
+fn a_subscript_checks_its_index_against_the_declared_parameter() {
+    assert_eq!(
+        codes(
+            "enum Anchor { Leading }
+             struct Dimensions {
+                 function subscript(anchor: Anchor) -> Float { return 0.0 }
+             }
+             @Main function main() {
+                 let d = Dimensions {}
+                 print(d[7])
+                 return
+             }"
+        ),
+        vec!["KSEM063"]
+    );
+}
+
+/// A struct WITHOUT the member still reports "only an array can be indexed":
+/// the subscript path answers `None` and leaves the array rule to speak.
+#[test]
+fn a_struct_without_subscript_still_reports_that_it_cannot_be_indexed() {
+    assert_eq!(
+        codes(
+            "struct Point { let x: Int }
+             @Main function main() {
+                 let p = Point { x: 1 }
+                 print(p[0])
+                 return
+             }"
+        ),
+        vec!["KSEM100"]
+    );
+}
+
 /// A bad receiver reports once, not once per pass: the type probe rolls its
 /// diagnostics back and the place resolution is the one that speaks.
 #[test]

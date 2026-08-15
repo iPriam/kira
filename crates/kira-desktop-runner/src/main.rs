@@ -30,6 +30,7 @@ const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
+    kira_native_bridge::retain_process_exports();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let options = match Options::parse(&args) {
         Ok(options) => options,
@@ -61,6 +62,15 @@ enum RunError {
     /// The protocol thread panicked.
     #[error("the live protocol thread panicked")]
     ProtocolPanicked,
+    /// The scratch cache directory could not be created.
+    #[error("could not create the runner's staging directory: {0}")]
+    Scratch(#[source] std::io::Error),
+    /// Every scratch name this process could take was already taken.
+    #[error(
+        "every staging directory name for this process is taken; \
+         remove the `kira-live-runner-*` directories in the system temporary directory"
+    )]
+    ScratchExhausted,
 }
 
 /// Connects, hosts the app, takes reloads, and says goodbye.
@@ -70,9 +80,10 @@ enum RunError {
 /// the thread that starts it for as long as the window is open, and on macOS
 /// that thread has to be this one.
 fn run(options: &Options) -> Result<(), RunError> {
+    let cache = RunnerCache::open(options.cache.clone())?;
     let client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
-    let mut host = DesktopHost::new(options.cache.clone());
-    let (relay, app) = relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch());
+    let mut host = DesktopHost::new(cache.path.clone());
+    let (relay, app) = relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch_status());
     let running = app.running();
 
     let protocol = std::thread::Builder::new()
@@ -135,8 +146,9 @@ fn session(client: &mut RunnerClient, relay: &mut RelayHost) -> Result<(), Clien
 struct Options {
     /// The live server to connect to.
     server: SocketAddr,
-    /// Where to stage the bundle.
-    cache: PathBuf,
+    /// Where to stage the bundle, or `None` to use a scratch directory of the
+    /// runner's own.
+    cache: Option<PathBuf>,
 }
 
 /// A usage error.
@@ -187,14 +199,59 @@ impl Options {
 
         Ok(Options {
             server: server.ok_or(OptionsError::NoServer)?,
-            cache: cache.unwrap_or_else(default_cache),
+            cache,
         })
     }
 }
 
-/// Where a runner stages bundles when it is not told.
-fn default_cache() -> PathBuf {
-    std::env::temp_dir().join(format!("kira-live-runner-{}", std::process::id()))
+/// Where this runner stages bundles.
+///
+/// A runner told `--cache <dir>` stages there and leaves it alone; one that was
+/// not gets a directory of its own under the system temporary directory and
+/// removes it when the session ends normally.
+struct RunnerCache {
+    path: PathBuf,
+    owned: bool,
+}
+
+/// How many names a runner tries before giving up on a scratch directory.
+///
+/// Only leftovers of *this* process id are in the way, and only a runner that
+/// was killed leaves one, so the first name is free in every ordinary run.
+const SCRATCH_ATTEMPTS: u32 = 4096;
+
+impl RunnerCache {
+    /// Opens the cache the options asked for, creating a scratch directory when
+    /// none was named.
+    ///
+    /// The scratch directory is created exclusively rather than named and
+    /// assumed free: process ids are reused, and a directory a killed runner
+    /// left behind holds files but no bundle manifest, which staging refuses to
+    /// clear. Creating the directory is what makes the name this run's.
+    fn open(named: Option<PathBuf>) -> Result<Self, RunError> {
+        if let Some(path) = named {
+            return Ok(Self { path, owned: false });
+        }
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        for attempt in 0..SCRATCH_ATTEMPTS {
+            let path = base.join(format!("kira-live-runner-{pid}-{attempt}"));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path, owned: true }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(RunError::Scratch(error)),
+            }
+        }
+        Err(RunError::ScratchExhausted)
+    }
+}
+
+impl Drop for RunnerCache {
+    fn drop(&mut self) {
+        if self.owned {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -215,7 +272,33 @@ mod tests {
     fn parses_a_cache_directory() {
         let options = Options::parse(&args(&["--server", "127.0.0.1:1", "--cache", "/tmp/x"]))
             .expect("parses");
-        assert_eq!(options.cache, PathBuf::from("/tmp/x"));
+        assert_eq!(options.cache, Some(PathBuf::from("/tmp/x")));
+    }
+
+    /// Two runners of the same process id take different scratch directories,
+    /// which is what a reused process id needs and a bare name cannot give.
+    #[test]
+    fn two_scratch_caches_of_one_process_do_not_collide() {
+        let first = RunnerCache::open(None).expect("first scratch");
+        let second = RunnerCache::open(None).expect("second scratch");
+        assert_ne!(first.path, second.path);
+        assert!(first.path.is_dir());
+        assert!(second.path.is_dir());
+        let path = first.path.clone();
+        drop(first);
+        assert!(!path.exists(), "a runner removes the scratch it owns");
+    }
+
+    /// A named cache is the caller's: the runner stages there and leaves it.
+    #[test]
+    fn a_named_cache_is_not_removed() {
+        let named = std::env::temp_dir().join("kira-runner-named-cache-test");
+        std::fs::create_dir_all(&named).expect("named cache");
+        let cache = RunnerCache::open(Some(named.clone())).expect("named");
+        assert_eq!(cache.path, named);
+        drop(cache);
+        assert!(named.is_dir());
+        let _ = std::fs::remove_dir_all(&named);
     }
 
     #[test]

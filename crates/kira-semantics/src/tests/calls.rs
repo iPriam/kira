@@ -67,10 +67,8 @@ fn a_labeled_argument_is_type_checked_where_it_is_written() {
     );
 }
 
-/// A label binds nothing, so none of the shapes that used to be refused as
-/// label mistakes are mistakes: the reference implementation accepts every one
-/// of them and binds by position. Refusing them here would reject programs that
-/// run there, which is the wrong direction to differ in.
+/// A label binds nothing. The reference implementation accepts labels that do
+/// not name parameters and still binds arguments by position.
 #[test]
 fn a_label_that_names_nothing_is_still_accepted() {
     const MEASURE: &str =

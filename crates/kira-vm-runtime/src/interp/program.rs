@@ -156,7 +156,7 @@ impl Program {
         host: &mut dyn HostCapabilities,
         function_id: u32,
         args: &[NativeArg<'_>],
-        capture: &[u16],
+        capture: &[u32],
     ) -> Result<NativeReturn, VmError> {
         check_signature(&self.module, function_id, args.len())?;
 
@@ -184,6 +184,52 @@ impl Program {
     }
 }
 
+impl Vm<'_> {
+    pub(super) fn call_capturing_on_shared_heap(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+        capture: &[u32],
+    ) -> Result<NativeReturn, VmError> {
+        check_signature(module, function_id, args.len())?;
+
+        let heap = std::mem::take(&mut self.heap);
+        let host: *mut dyn HostCapabilities = self.host;
+        // SAFETY: `host` is this VM's own host reference, and the nested VM ends
+        // before this frame returns, so the reborrow does not outlive it.
+        let mut nested = Vm::new(unsafe { &mut *host }, heap);
+        let outcome = nested.enter_capturing(module, function_id, args, capture);
+        let result = match outcome {
+            Ok((value, captured)) => {
+                let mut writebacks = Vec::with_capacity(captured.len());
+                for (slot, value) in captured {
+                    let lifted = nested.heap.lift(value);
+                    nested.heap.drop_value(value);
+                    writebacks.push((
+                        slot,
+                        lifted.ok_or(VmError::StructAtSeam {
+                            function: function_id,
+                        })?,
+                    ));
+                }
+                let lifted = nested.heap.lift(value);
+                nested.heap.drop_value(value);
+                Ok(NativeReturn {
+                    result: lifted.ok_or(VmError::StructAtSeam {
+                        function: function_id,
+                    })?,
+                    writebacks,
+                })
+            }
+            Err(error) => Err(error),
+        };
+        let (heap, _) = nested.into_heap_and_scratch();
+        self.heap = heap;
+        result
+    }
+}
+
 /// Checks that `function_id` names a function of this module that takes exactly
 /// `arg_count` arguments.
 ///
@@ -198,16 +244,19 @@ pub(crate) fn check_signature(
 ) -> Result<(), VmError> {
     let function = module
         .functions
-        .get(function_id as usize)
-        .ok_or(VmError::UnknownFunction(function_id))?;
+        .get(
+            usize::try_from(function_id)
+                .map_err(|_| VmError::UnknownFunction(u64::from(function_id)))?,
+        )
+        .ok_or(VmError::UnknownFunction(u64::from(function_id)))?;
     if function.is_native() {
         return Err(VmError::NativeEntry {
             function: function_id,
         });
     }
-    if arg_count != usize::from(function.param_count) {
+    if arg_count as u64 != function.param_count {
         return Err(VmError::ArityMismatch {
-            function: function_id,
+            function: u64::from(function_id),
             expected: function.param_count,
             got: arg_count,
         });

@@ -1,14 +1,8 @@
 //! The generated crate's `Cargo.toml` and `README.md`.
 //!
-//! # Why the dependencies are paths
-//!
-//! `kira-main` and the crates under it are not published yet, so the generated
-//! manifest points at the toolchain checkout that produced it. That is the whole
-//! reason the crate is regenerated rather than committed: the paths are true of
-//! one machine, and a committed manifest carrying them would be wrong on every
-//! other one. When the runtime crates publish, this becomes a version
-//! requirement and the crate becomes committable — the README says so, in the
-//! generated crate, where the person who would otherwise commit it is reading.
+//! The manifest uses path dependencies rooted at the compiler checkout. The
+//! generated crate is therefore tied to that checkout and is regenerated with
+//! each build.
 
 use crate::wrapper::WrapperSpec;
 use crate::wrapper::render::{EngineBinding, Model};
@@ -207,8 +201,8 @@ pub(crate) fn native_readme(model: &crate::wrapper::render_native::NativeModel) 
            engines.\n\
          - **One Kira native library per binary.** Two of them both define the\n\
            `kira_rt_*` runtime, so linking two fails with a duplicate-symbol error\n\
-           — loud, at link, by name. That is the v1 answer *because* it cannot be\n\
-           missed; the fix is per-library runtime prefixing (`kira_rt_*` becoming\n\
+           — loud, at link, by name. The fix is per-library runtime prefixing\n\
+           (`kira_rt_*` becoming\n\
            `kira_rt_<library>_*`), at which point two archives stop naming the same\n\
            symbols. A host that `dlopen`s the shared form instead is already\n\
            isolated by `RTLD_LOCAL`.\n\

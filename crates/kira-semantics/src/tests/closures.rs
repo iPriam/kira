@@ -1,7 +1,8 @@
 //! Semantic-analysis tests for closures: function types, capture rules, and
 //! what calling a closure value checks.
 
-use super::{codes, diagnostics};
+use super::{analyze_text, codes, diagnostics};
+use kira_semantics_model::hir::{HirExpr, HirStmt};
 
 #[test]
 fn a_function_type_checks_in_every_position() {
@@ -80,10 +81,8 @@ fn capturing_a_var_is_accepted() {
 
 #[test]
 fn assigning_to_a_captured_binding_is_accepted() {
-    // Both halves have to work for the feature to mean anything: the name has
-    // to *resolve* on the left of an assignment inside a closure (it used to
-    // report `KSEM023`, undefined) and the write has to be legal (it used to
-    // report `KSEM021`, immutable).
+    // The captured name must resolve on the left of an assignment, and the
+    // write must remain legal inside the closure.
     assert_eq!(
         codes(
             "function run(f: () -> Void) { f() return }\n\
@@ -443,4 +442,43 @@ fn callback_state_may_hold_a_function_value() {
                 var f = Frame { n: 1 } back.onFrame(f) print(f.n) \
                 nativeStateFree(boxed) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+// ----- the value a dispatcher returns when nothing implements its type -----
+
+/// A function type called with no literal anywhere still gets a dispatcher, and
+/// that dispatcher needs a well-typed `return` for a body nothing can reach.
+///
+/// The value is built for the result type, and here that type reaches itself:
+/// `Tree.Node` carries a `Branch` whose field is a `Tree`. Taking variant zero
+/// would build `Node(Branch { Node(Branch { … } ) })` until the stack was gone,
+/// so the terminating variant is the one that must be chosen.
+#[test]
+fn a_dispatcher_with_no_implementations_returns_a_finite_value() {
+    let text = "enum Tree { Node(Branch) Leaf }\n\
+                struct Branch { let child: Tree }\n\
+                function apply(f: borrow () -> Tree) -> Tree { return f() }\n\
+                @Main function main() { return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
+
+    let program = analyze_text(text);
+    let dispatcher = program
+        .functions
+        .iter()
+        .find(|function| function.name.ends_with("$call"))
+        .expect("calling a function value mints a dispatcher");
+    let returned = dispatcher
+        .body
+        .iter()
+        .find_map(|&stmt| match program.stmt(stmt) {
+            HirStmt::Return { value } => *value,
+            _ => None,
+        })
+        .expect("the dispatcher returns a value");
+    let HirExpr::EnumNew { tag, payload, .. } = program.expr(returned) else {
+        panic!("expected an enum value, found {:?}", program.expr(returned));
+    };
+    // `Leaf`, the second variant: the first one leads back into `Tree`.
+    assert_eq!(*tag, 1);
+    assert!(payload.is_none(), "`Leaf` carries nothing");
 }

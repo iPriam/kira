@@ -79,7 +79,8 @@ impl IntSpelling {
     }
 
     /// Resolves a written fixed-width integer name, or `None` when it is not
-    /// one.
+    /// one. The C-shaped `Int32` spelling is accepted as an alias for `I32`
+    /// at the source boundary, while `I32` remains the canonical spelling.
     ///
     /// Deliberately does **not** answer for `"Int"`: bare `Int` is resolved by
     /// [`super::Type::from_name`] alongside the other kinds, and routing it
@@ -88,7 +89,7 @@ impl IntSpelling {
         Some(match name {
             "I8" => IntSpelling::I8,
             "I16" => IntSpelling::I16,
-            "I32" => IntSpelling::I32,
+            "I32" | "Int32" => IntSpelling::I32,
             "U8" => IntSpelling::U8,
             "U16" => IntSpelling::U16,
             "U32" => IntSpelling::U32,

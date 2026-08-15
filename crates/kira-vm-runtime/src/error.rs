@@ -39,7 +39,7 @@ pub enum VmError {
     },
     /// A `Call` named a function index outside the module.
     #[error("call to unknown function index {0}")]
-    UnknownFunction(u32),
+    UnknownFunction(u64),
     /// A host called a function with the wrong number of arguments.
     ///
     /// Only reachable through the embedder's entry point: a call the compiler
@@ -48,9 +48,9 @@ pub enum VmError {
     #[error("function {function} takes {expected} arguments, but the host passed {got}")]
     ArityMismatch {
         /// The function that was called.
-        function: u32,
+        function: u64,
         /// How many parameters it declares.
-        expected: u16,
+        expected: u64,
         /// How many arguments the host passed.
         got: usize,
     },
@@ -152,7 +152,7 @@ pub enum VmError {
     },
     /// A jump target fell outside the current function's code.
     #[error("jump to out-of-range instruction {0}")]
-    BadJump(u32),
+    BadJump(u64),
     /// Recursion or looping exceeded the interpreter's call-depth guard.
     #[error("maximum call depth exceeded")]
     CallDepthExceeded,
@@ -192,7 +192,7 @@ pub enum VmError {
         /// The function at the boundary.
         function: u32,
         /// The parameter slot whose final value never arrived.
-        param: u16,
+        param: u64,
     },
     /// `print` was handed a value with no pinned rendering (a struct).
     ///
@@ -207,8 +207,15 @@ pub enum VmError {
     #[error("no field at index {index}")]
     NoSuchField {
         /// The index the instruction asked for.
-        index: u16,
+        index: u64,
     },
+    /// An instruction named a local slot that cannot be represented by this
+    /// host's `usize`.
+    #[error("local slot {0} is too large for this host")]
+    LocalSlotOutOfRange(u64),
+    /// A `ConstStr` named no entry in the module string pool.
+    #[error("string constant index {0} is out of range")]
+    StringConstantOutOfRange(u64),
     /// A `StoreField` carried no path, so it named no field to write.
     #[error("a field store must name at least one field")]
     EmptyFieldPath,

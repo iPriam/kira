@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kira_bytecode::Module;
+use kira_main::ForeignSession;
 use kira_vm_runtime::Program;
+
+use crate::native::NativeProgram;
 
 /// What the runner has staged.
 pub enum Staged {
@@ -21,11 +24,34 @@ pub enum Staged {
     VmLoaded {
         /// The decoded entry module.
         module: Module,
+        /// The parsed import-ordered direct binding paths, when imports exist.
+        ///
+        /// Each path is already resolved against the runner cache when it names
+        /// a bundled native dependency. A missing path represents an unavailable
+        /// optional binding and is preserved as `None`.
+        bindings: Option<Vec<Option<PathBuf>>>,
+        /// The staged bundled libffi runtime, when the module has a foreign surface.
+        runtime: Option<PathBuf>,
     },
     /// A VM bytecode entry, validated and ready to run.
     VmLinked {
         /// The validated program.
         program: Arc<Program>,
+    },
+    /// A VM bytecode entry with its direct foreign session loaded.
+    VmForeignLinked {
+        /// The VM program and direct foreign library session.
+        session: Arc<ForeignSession>,
+    },
+    /// A whole-program native library, staged on disk but not yet loaded.
+    NativeLoaded {
+        /// The staged shared library's path.
+        library: PathBuf,
+    },
+    /// A whole-program native library loaded and ready to run.
+    NativeLinked {
+        /// The loaded native entry.
+        program: NativeProgram,
     },
     /// A hybrid entry, staged on disk but not yet loaded.
     HybridLoaded {
@@ -49,6 +75,9 @@ impl Staged {
             Self::Empty => "empty",
             Self::VmLoaded { .. } => "vm-loaded",
             Self::VmLinked { .. } => "vm-linked",
+            Self::VmForeignLinked { .. } => "vm-foreign-linked",
+            Self::NativeLoaded { .. } => "native-loaded",
+            Self::NativeLinked { .. } => "native-linked",
             Self::HybridLoaded { .. } => "hybrid-loaded",
             Self::HybridLinked { .. } => "hybrid-linked",
         }
@@ -59,7 +88,13 @@ impl Staged {
     /// This is what a hot patch requires: a swap replaces something live, and a
     /// merely-loaded bundle has nothing mapped that a swap could preserve.
     pub fn is_linked(&self) -> bool {
-        matches!(self, Self::VmLinked { .. } | Self::HybridLinked { .. })
+        matches!(
+            self,
+            Self::VmLinked { .. }
+                | Self::VmForeignLinked { .. }
+                | Self::NativeLinked { .. }
+                | Self::HybridLinked { .. }
+        )
     }
 }
 

@@ -41,14 +41,19 @@ impl Analyzer<'_> {
         let name = self.function_type_name(&params, &param_ownership, result);
         // The name carries parentheses and an arrow, so it can collide with no
         // declared struct: an identifier holds neither.
-        let Some(id) = self.program.types.structs_mut().declare(StructDef {
-            name,
-            fields: vec![FieldDef {
-                name: "tag".to_owned(),
-                ty: Type::INT,
-                mutable: false,
-            }],
-        }) else {
+        let Some(id) = self
+            .program
+            .types
+            .structs_mut()
+            .declare_function_type(StructDef {
+                name,
+                fields: vec![FieldDef {
+                    name: "tag".to_owned(),
+                    ty: Type::INT,
+                    mutable: false,
+                }],
+            })
+        else {
             return Type::Error;
         };
         // Kept in step with the table: `struct_defaults` is indexed by the ids

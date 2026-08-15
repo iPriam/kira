@@ -10,6 +10,7 @@ mod attempts;
 mod calls;
 mod classes;
 mod closures;
+mod collectors;
 mod compiler;
 mod constructs;
 mod conversions;

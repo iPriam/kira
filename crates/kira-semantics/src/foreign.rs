@@ -434,18 +434,13 @@ impl<'a> Analyzer<'a> {
         ty
     }
 
-    /// Refuses a written type whose *shape* the seam does not support —
-    /// a function pointer, a generic, or an array — with a message precise to
-    /// the shape. Returns `Some(())` when it refused.
+    /// Refuses a written function type with a message precise to the shape.
+    /// Returns `Some(())` when it refused.
     ///
     /// Caught from the written [`TypeRef`] rather than the resolved [`Type`]
     /// because the shape names the fix: a function type has no resolved-type
     /// spelling to blame, and `@FFI.Callback` is the form that carries one.
     ///
-    /// Only that shape. An array and a generic instantiation were refused here
-    /// too, which pre-empted the answer: both have crossings once resolved — an
-    /// array of seam scalars is a pointer, and a generic instantiation is
-    /// whatever it instantiated to.
     fn refuse_written_shape(
         &mut self,
         type_ref: kira_syntax_model::ast::TypeRefId,
@@ -532,9 +527,9 @@ impl<'a> Analyzer<'a> {
             // ever freed on Kira's side and the question of who owns a returned
             // C string never arises. Kira sees a `String` either way.
             Type::CString => Some(ForeignType::CString),
-            // A `@FFI.Callback`/`@FFI.Array` type at the seam is a declared but
-            // not-yet-executable form, not a generic aggregate; its refusal
-            // names the form so the fix is clear.
+            // A standalone `@FFI.Array` has no scalar foreign signature: C
+            // decays it to a pointer at a parameter or result boundary. Its
+            // diagnostic names the form and its valid representation.
             Type::Struct(id) if self.ffi_struct_kind(id).is_some_and(is_deferred_ffi) => {
                 let kind = self.ffi_struct_kind(id).expect("checked by the guard");
                 self.emit_ffi_not_executable(kind, id, span);

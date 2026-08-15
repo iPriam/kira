@@ -564,3 +564,120 @@ Shape Strip(length: Int) {
     );
     assert_eq!(output, "25\nstrip\nsquare\n16\nstrip\n9\n");
 }
+
+/// A declaration with more than one child slot fills the first from its bare
+/// content block and the rest by name, byte-identically on every backend.
+///
+/// This is the named-child-fill execution requirement: `Split { … } detail: { … }`
+/// is a whole construction, not two statements, and every slot it names must
+/// reach the struct the backends run.
+#[test]
+fn named_child_fills_agree() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required function total() -> Int
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Split(gap: Int = 0) {
+    let sidebar: some Widget
+    let detail: some Widget
+    function total() -> Int {
+        return sidebar.total() * 100 + detail.total() * 10 + gap
+    }
+}
+
+@Main function main() {
+    // The bare block fills the first slot; the named fill closes the second.
+    let a = Split() { Leaf(number = 3) } detail: { Leaf(number = 4) }
+    print(a.total())
+    // A named fill may carry an ordinary construction instead of a block.
+    let b = Split(gap = 7) { Leaf(number = 1) } detail: Leaf(number = 2)
+    print(b.total())
+    // Every slot may be named, in any order, with no bare block at all.
+    let c = Split { } detail: { Leaf(number = 5) } sidebar: { Leaf(number = 6) }
+    print(c.total())
+    // A fill written inside the block means the same thing as one written
+    // after it.
+    let d = Split { Leaf(number = 8) detail: Leaf(number = 9) }
+    print(d.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "340\n127\n650\n890\n");
+}
+
+/// A child slot may declare a default, which a construction that fills neither
+/// its position nor its name falls back to on every backend.
+#[test]
+fn a_child_slot_default_agrees() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required function total() -> Int
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Frame(tag: Int) {
+    let main: some Widget
+    let side: some Widget = Leaf(number = 9)
+    function total() -> Int { return main.total() * 10 + side.total() + tag }
+}
+
+@Main function main() {
+    print(Frame(tag = 1) { Leaf(number = 2) }.total())
+    print(Frame(tag = 1) { Leaf(number = 2) } side: { Leaf(number = 5) }.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "30\n26\n");
+}
+
+/// A named fill accepts the `For`/`if` builders a bare block does, so a list
+/// slot filled by name is built at run time the same way.
+#[test]
+fn a_named_fill_of_a_list_slot_runs_its_builders() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required function total() -> Int
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Panes(tag: Int) {
+    let header: some Widget
+    let rows: [some Widget]
+    function total() -> Int {
+        var sum = header.total()
+        for row in rows { sum = sum + row.total() }
+        return sum * 10 + tag
+    }
+}
+
+@Main function main() {
+    let counts = [1, 2, 3]
+    let a = Panes(tag = 4) { Leaf(number = 100) } rows: {
+        For(n in counts) { Leaf(number = n) }
+        if counts.count > 2 { Leaf(number = 50) }
+    }
+    print(a.total())
+    // A list slot nobody filled is empty rather than missing.
+    print(Panes(tag = 1) { Leaf(number = 7) }.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1564\n71\n");
+}

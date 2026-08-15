@@ -62,6 +62,7 @@ pub struct ResolvedTargetRow {
     artifact: Option<PathBuf>,
     attributes: NativeLinkAttributes,
     runtime_files: Vec<PathBuf>,
+    link_mode: LinkMode,
 }
 
 impl ResolvedTargetRow {
@@ -79,7 +80,15 @@ impl ResolvedTargetRow {
             artifact,
             attributes,
             runtime_files: Vec::new(),
+            link_mode: LinkMode::Static,
         }
+    }
+
+    /// Records how the library owning this row reaches the program.
+    #[must_use]
+    pub fn with_link_mode(mut self, link_mode: LinkMode) -> Self {
+        self.link_mode = link_mode;
+        self
     }
 
     /// Adds the located files this row's program must find beside itself.
@@ -107,6 +116,11 @@ impl ResolvedTargetRow {
     /// The frameworks, system libraries, and flags this row contributes.
     pub fn attributes(&self) -> &NativeLinkAttributes {
         &self.attributes
+    }
+
+    /// How the library owning this row reaches the program.
+    pub fn link_mode(&self) -> LinkMode {
+        self.link_mode
     }
 }
 
@@ -175,6 +189,8 @@ impl ResolvedNativeLibrary {
 /// naming the same library must not put its archive on the line twice.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeLinkInputs {
+    library_paths: Vec<(String, PathBuf)>,
+    static_archives: Vec<(String, PathBuf)>,
     archives: Vec<PathBuf>,
     frameworks: Vec<String>,
     system_libs: Vec<String>,
@@ -206,6 +222,8 @@ impl NativeLinkInputs {
     /// imports can hand out a `&'static` reference instead of building an empty
     /// value it then has to keep alive.
     pub const EMPTY: Self = Self {
+        library_paths: Vec::new(),
+        static_archives: Vec::new(),
         archives: Vec::new(),
         frameworks: Vec::new(),
         system_libs: Vec::new(),
@@ -238,6 +256,57 @@ impl NativeLinkInputs {
         }
     }
 
+    /// Records the runtime path for a named foreign library and its link row.
+    pub fn push_library(
+        &mut self,
+        name: impl Into<String>,
+        path: PathBuf,
+        row: &ResolvedTargetRow,
+    ) {
+        let name = name.into();
+        self.push_library_path(name.clone(), path);
+        if row.link_mode() == LinkMode::Static
+            && let Some(archive) = row.artifact()
+        {
+            push_unique(&mut self.static_archives, (name, archive.to_path_buf()));
+        }
+        self.push_row(row);
+    }
+
+    /// Records a library opened at run time when its row contributes no link
+    /// input of its own.
+    pub fn push_library_path(&mut self, name: impl Into<String>, path: PathBuf) {
+        let name = name.into();
+        if !self.library_paths.iter().any(|(known, _)| known == &name) {
+            self.library_paths.push((name, path));
+        }
+    }
+
+    /// Adds an internal archive required by a runtime-owned ABI surface.
+    ///
+    /// The archive is kept in the same ordered list as declared native
+    /// archives so every backend gives the linker one identical input set.
+    pub fn push_archive(&mut self, path: PathBuf) {
+        push_unique(&mut self.archives, path);
+    }
+
+    /// Adds a named static archive that a thin carrier must retain.
+    pub fn push_static_archive(&mut self, name: impl Into<String>, path: PathBuf) {
+        let name = name.into();
+        push_unique(&mut self.static_archives, (name, path.clone()));
+        self.push_archive(path);
+    }
+
+    /// Adds a runtime file that must be staged beside every finished artifact.
+    pub fn push_runtime_file(&mut self, path: PathBuf) {
+        push_unique(&mut self.runtime_files, path);
+    }
+
+    /// The named native libraries the runtime must open for foreign calls.
+    pub fn library_paths(&self) -> &[(String, PathBuf)] {
+        &self.library_paths
+    }
+
     /// The files every link output must be able to find beside itself.
     ///
     /// Not a link input: nothing on the command line names them. They are what
@@ -259,6 +328,11 @@ impl NativeLinkInputs {
     /// The selected library files, in first-use order.
     pub fn archives(&self) -> &[PathBuf] {
         &self.archives
+    }
+
+    /// The declared static archives, paired with their library names.
+    pub fn static_archives(&self) -> &[(String, PathBuf)] {
+        &self.static_archives
     }
 
     /// The selected Apple frameworks, in first-use order.

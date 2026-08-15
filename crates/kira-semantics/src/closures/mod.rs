@@ -190,10 +190,10 @@ pub(crate) enum Captured {
 
 /// Whether a value of `ty` may be copied into a closure without a `copy`.
 ///
-/// The oracle's `isTriviallyCopyable`: the scalars, and a `RawPtr`, which is an
-/// opaque word that copies bits and frees nothing. A `String`, a struct, and an
-/// array all own heap storage, and copying one into a closure is exactly the
-/// "non-Copy owned capture" `KSEM117` names.
+/// The oracle's `isTriviallyCopyable`: the scalars and pointer words, which copy
+/// bits and free nothing. A `String`, a struct, and an array all own heap
+/// storage, and copying one into a closure is exactly the "non-Copy owned
+/// capture" `KSEM117` names.
 ///
 /// An **enum** is decided by [`Analyzer::capture_is_trivially_copyable`], and a
 /// **function type** likewise: both answers need tables this cannot see.
@@ -210,6 +210,7 @@ pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
             | Type::Void
             | Type::Error
             | Type::RawPtr
+            | Type::ForeignPtr(_)
             | Type::Cell(_)
     )
 }

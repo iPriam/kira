@@ -1,10 +1,12 @@
 //! What a module is being built as, and which part of the program it carries.
 //!
-//! The lowering in [`super`] is one path taken four ways — a program, a
-//! library, a hybrid half, a foreign-adapter sidecar — and, for a program, taken
-//! several times over in parallel across the same functions. These are the
-//! values that say which of those is happening; nothing here emits anything.
+//! The lowering in [`super`] is one path taken five ways — a process executable,
+//! a whole-program live library, a library, a hybrid half, or a foreign-adapter
+//! and, for a program, taken several times over in parallel across the
+//! same functions. These are the values that say which of those is happening;
+//! nothing here emits anything.
 
+use kira_backend_api::WasmDevice;
 use kira_runtime_abi::{Execution, ForeignPointerWidth};
 
 use crate::exports::NativeExportSurface;
@@ -18,6 +20,9 @@ use crate::exports::NativeExportSurface;
 pub(crate) enum ModuleKind {
     /// A whole program: every function is native and a C `main` starts it.
     Executable,
+    /// A whole native program in a shared library: every function is native and
+    /// the runner starts it through the fixed live-entry symbol.
+    NativeLiveLibrary,
     /// The native half of a hybrid program: only `@Native` functions have
     /// bodies, each also gets a trampoline the host can call, and there is no
     /// `main` — the host is the program.
@@ -30,10 +35,15 @@ pub(crate) enum ModuleKind {
     /// trampoline per export, one synthesized destructor per exported class, and
     /// the per-library ABI marker. See [`super::library`].
     Library,
-    /// The VM's foreign-adapter sidecar: only the generated adapters, exported
-    /// for a host to `dlsym`. No Kira function body and no entry point — the VM
-    /// runs the bytecode and reaches C only through these adapters.
-    AdapterSidecar,
+}
+
+/// The target whose data layout the module must carry while it is lowered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodegenTarget {
+    /// The machine running the compiler.
+    Host,
+    /// A WebAssembly target selected by the command line.
+    Wasm(WasmDevice),
 }
 
 /// Which of a program's function bodies one module carries.
@@ -45,10 +55,9 @@ pub(crate) enum ModuleKind {
 /// the same code the single module would have produced.
 ///
 /// What is *not* dealt out is everything a program has exactly one of: the C
-/// `main`, the foreign adapters, and the callback thunks. Those are emitted by
-/// the first unit, and every other unit reaches them as declarations the linker
-/// resolves — which is also how each unit reaches a Kira function another unit
-/// defines.
+/// `main` and the callback thunks. Those are emitted by the first unit, and
+/// every other unit reaches them as declarations the linker resolves — which is
+/// also how each unit reaches a Kira function another unit defines.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CodegenUnit {
     index: usize,
@@ -85,9 +94,9 @@ impl CodegenUnit {
 
 /// Everything about *how* a program is lowered that is not the program itself.
 ///
-/// One value rather than six parameters, because the four `Module::build_*`
-/// entry points differ from each other in exactly these fields and in nothing
-/// else — which is the shape a struct says and a parameter list does not.
+/// One value rather than a parameter list, because the `Module::build_*` entry
+/// points differ from each other in exactly these fields and in nothing else,
+/// which is the shape a struct says and a parameter list does not.
 pub(super) struct Plan<'a> {
     /// What the module is being built as.
     pub(super) kind: ModuleKind,
@@ -99,6 +108,8 @@ pub(super) struct Plan<'a> {
     pub(super) exports: &'a NativeExportSurface,
     /// The pointer width of the target this module is emitted for.
     pub(super) pointer_width: ForeignPointerWidth,
+    /// The target machine that owns the module's LLVM data layout.
+    pub(super) target: CodegenTarget,
     /// Imports whose library is absent on this target.
     pub(super) unavailable: &'a [usize],
     /// Which of the program's function bodies this module carries.

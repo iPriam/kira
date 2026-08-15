@@ -158,6 +158,10 @@ impl TypeTable {
             // The same runtime word a `RawPtr` is, so the same identity: what
             // it points at is a compile-time fact, not a runtime one.
             Type::RawPtr | Type::ForeignPtr(_) => (8, 0),
+            // A capture cell is one box, and what recovery has to agree about
+            // is what the box holds: two cells of different inner types are
+            // different state schemas exactly as two structs are.
+            Type::Cell(_) => (9, self.native_state_fingerprint(ty)),
             // `Any` has no identity to give: the whole point of the type is
             // that the value inside it kept its own and this one has none, so
             // there is nothing for a recovery to check against.
@@ -166,10 +170,6 @@ impl TypeTable {
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
-            // A cell never crosses into opaque callback state: it is shared
-            // mutable storage this runtime manages the count of, and handing
-            // one to a host that does not would leave the count wrong.
-            | Type::Cell(_)
             | Type::Any => {
                 return None;
             }
@@ -215,6 +215,15 @@ impl TypeTable {
                 };
                 mix_native_state_bytes(hash, b"struct");
                 mix_native_state_bytes(hash, def.name.as_bytes());
+                // A function type's representation is named for its signature,
+                // and the signature is the whole of its identity: the fields
+                // are the captures this compilation happened to find, so
+                // walking them would give a library and the application that
+                // links it two different ids for one type — and the recovery
+                // would be refused for a program that is correct.
+                if self.structs.origin(id) == crate::StructOrigin::FunctionType {
+                    return;
+                }
                 if !visiting.insert((5, id.index())) {
                     mix_native_state_bytes(hash, b"recursive");
                     return;
@@ -257,6 +266,18 @@ impl TypeTable {
                 }
                 visiting.remove(&(7, id.index()));
             }
+            Type::Cell(id) => {
+                mix_native_state_bytes(hash, b"cell");
+                if !visiting.insert((9, id.index())) {
+                    mix_native_state_bytes(hash, b"recursive");
+                    return;
+                }
+                match self.cells.inner(id) {
+                    Some(inner) => self.mix_native_state_type(hash, inner, visiting),
+                    None => mix_native_state_bytes(hash, b"missing-cell"),
+                }
+                visiting.remove(&(9, id.index()));
+            }
             // These shapes are refused before this method is called. Keeping a
             // marker here makes the fingerprint total if an error node leaks
             // through a diagnostic-preserving analysis.
@@ -265,7 +286,6 @@ impl TypeTable {
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
-            | Type::Cell(_)
             | Type::Any => mix_native_state_bytes(hash, b"unsupported"),
         }
     }

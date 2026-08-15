@@ -34,6 +34,11 @@ impl FunctionLowering<'_, '_> {
             IrExpr::ForeignCallbackPtr { callback } => {
                 self.codegen.callback_thunk_address(callback as usize)
             }
+            IrExpr::CellNull { .. } => {
+                // A null cell is only closure-representation padding.
+                // SAFETY: the pointer type belongs to this live module context.
+                Ok(unsafe { LLVMConstNull(self.codegen.types.ptr) })
+            }
             IrExpr::Local(slot) => self.load_local(slot),
             IrExpr::CellNew { value, ty } => self.lower_cell_new(value, ty),
             IrExpr::CellGet { slot, ty } => self.lower_cell_get(slot, ty),
@@ -247,11 +252,8 @@ impl FunctionLowering<'_, '_> {
     /// arithmetic, so the whole path can be addressed rather than evaluated,
     /// and a handle at the end of it read without cloning what holds it.
     ///
-    /// This is what keeps `tree.nodes[i]` from cloning `nodes`. Reading a field
-    /// yields a *copy* of it, so an array reached through one used to be
-    /// duplicated in full — every element, and every handle inside every
-    /// element — to read one entry of it and drop the duplicate again. A layout
-    /// pass does that thousands of times a frame.
+    /// This lets `tree.nodes[i]` address the array in place instead of cloning
+    /// every element before reading one entry.
     ///
     /// `None` for anything that is not such a place: the caller then evaluates
     /// the expression, uses it, and drops it as before.

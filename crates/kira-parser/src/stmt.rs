@@ -381,10 +381,8 @@ mod tests {
         }
     }
 
-    /// `for i in 0 { }` used to be a parse error, because `..` was mandatory.
-    /// Now that `for x in xs` exists, the parser cannot demand `..` — so this
-    /// parses cleanly as an `Each` over `0`, and reporting that an `Int` is not
-    /// iterable belongs to analysis, which is where the type is known.
+    /// `for x in xs` parses as an `Each` without a range token. Reporting that
+    /// an `Int` is not iterable belongs to analysis, where the type is known.
     #[test]
     fn a_non_iterable_for_is_left_for_analysis_to_report() {
         let result = parse(SourceId::new(0), "function f() { for i in 0 { } }");

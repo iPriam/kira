@@ -57,10 +57,9 @@ pub trait RunnerHost {
 
     /// Swaps `bundle` into the running process, in place.
     ///
-    /// The supervisor has already established that the swap is possible — the
-    /// native half is byte-identical, so the process's loaded code is still
-    /// current — and this is the host committing to it. The process, its loaded
-    /// libraries, and anything they hold survive; the bytecode does not.
+    /// The supervisor has checked the bundle manifest and admitted the swap.
+    /// The process, its loaded libraries, and anything they hold survive; the
+    /// bytecode does not.
     ///
     /// A host that cannot take a particular swap returns an error, and the
     /// session relaunches instead. That is the honest answer and it is always

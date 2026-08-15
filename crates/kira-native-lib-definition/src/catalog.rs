@@ -105,6 +105,47 @@ impl ResolvedNativeLibraries {
             })
     }
 
+    /// Resolves the file or loader name the libffi host opens for `library`.
+    ///
+    /// A declared artifact wins. A framework-only or system-library row has no
+    /// file, so its first system library is the loader name; otherwise the
+    /// declaration's own name is the platform loader name.
+    pub fn foreign_library_path(
+        &self,
+        library: Symbol,
+        target: &TargetTriple,
+    ) -> Result<Option<std::path::PathBuf>, ImportResolveError> {
+        let Some(resolved) = self.libraries.get(&library) else {
+            return Err(ImportResolveError::UndeclaredLibrary {
+                library: self.name_of(library),
+            });
+        };
+        if resolved.is_excluded_on(target) {
+            return Ok(None);
+        }
+        let row = resolved.targets().iter().find(|row| row.triple() == target);
+        let Some(row) = row else {
+            if resolved.is_runtime_loaded() {
+                return Ok(Some(std::path::PathBuf::from(resolved.name())));
+            }
+            return Err(ImportResolveError::NoArtifactForTarget {
+                library: resolved.name().to_owned(),
+                target: target.clone(),
+            });
+        };
+        Ok(Some(
+            row.artifact()
+                .map(std::path::Path::to_path_buf)
+                .or_else(|| {
+                    row.attributes()
+                        .system_libs
+                        .first()
+                        .map(std::path::PathBuf::from)
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from(resolved.name())),
+        ))
+    }
+
     /// Whether `library` is one this target does not have at all.
     ///
     /// Distinct from contributing no link input: a runtime-loaded library

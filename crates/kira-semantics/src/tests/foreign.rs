@@ -178,10 +178,7 @@ fn extern_param(ty: &str) -> String {
 
 #[test]
 fn the_bare_scalars_cross_as_the_sixty_four_bit_c_types() {
-    // `Int` *is* the 64-bit signed integer and `Float` the 64-bit float — there
-    // is no second spelling for either — so both name a C type exactly and are
-    // accepted. They were refused back when `I64`/`F64` existed to say the
-    // width out loud; refusing them now would leave nothing to write.
+    // `Int` and `Float` name the native 64-bit C scalar types directly.
     assert_eq!(codes(&extern_param("Int")), Vec::<String>::new());
     assert_eq!(codes(&extern_param("Float")), Vec::<String>::new());
 }
@@ -193,8 +190,6 @@ fn a_string_in_the_signature_is_refused() {
 
 #[test]
 fn an_array_parameter_names_itself() {
-    // It used to be refused, with a message telling the author to write a
-    // `RawPtr` and a length — which threw away what the signature knew.
     assert!(codes(&extern_param("[I32]")).is_empty());
 }
 
@@ -205,10 +200,8 @@ fn a_callback_parameter_is_refused() {
 
 #[test]
 fn a_generic_type_in_the_signature_is_judged_by_what_it_resolves_to() {
-    // `Opt` is undeclared here, so what this reports is that — not a refusal
-    // for being generic. The shape used to be turned away before anything
-    // asked what it resolved to, which meant an instantiation that *could*
-    // cross was refused for the wrong reason.
+    // `Opt` is undeclared here, so the diagnostic names that unresolved type
+    // rather than treating generic syntax as a foreign-boundary error.
     let codes = codes(&extern_param("Opt<I32>"));
     assert!(codes.iter().any(|code| code == "KSEM050"), "{codes:?}");
 }
@@ -646,9 +639,8 @@ fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
 
 #[test]
 fn a_c_layout_struct_may_hold_the_bare_scalars() {
-    // A member's offset is decided by its width, and both bare scalars have
-    // one: `Int` is `int64_t` and `Float` is `double`. They were refused here
-    // while `I64`/`F64` existed to say the width out loud.
+    // `Int` maps to int64_t and `Float` maps to double, so both have defined
+    // C widths for layout.
     let text = "@FFI.Struct { layout: c; }\n\
                 struct Fine { var a: Float\n var n: Int }\n\
                 @Main function main() { return }\n\
@@ -865,10 +857,8 @@ function take(values: [String]): I32;
 
 /// A generic instantiation is judged by what it instantiated to.
 ///
-/// It used to be refused for *being* generic, before anything asked what it
-/// resolved to. The refusal now names the type and the real reason — this one is
-/// a tagged union — so an instantiation that does cross is not turned away for
-/// the wrong cause.
+/// This instantiation resolves to a tagged union, so the diagnostic names the
+/// resolved representation rather than generic syntax.
 #[test]
 fn a_generic_instantiation_is_refused_by_what_it_resolves_to() {
     let source = r#"

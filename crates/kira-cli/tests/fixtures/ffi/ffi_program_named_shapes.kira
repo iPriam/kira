@@ -1,10 +1,4 @@
-// Two shapes a signature could not name until now: a Kira enum and an array.
-//
-// Each was refused with a message telling the author to write something else —
-// an integer, or a `RawPtr` and a length — and each of those workarounds threw
-// away the name the author had already written. A graphics binding paid for it
-// twice over: sixteen enums, each with a hand-written `*Code()` mapper, and a
-// six-function shim whose only job was streaming an array into C.
+// Named enum and array shapes in a C foreign signature.
 
 enum Usage { Vertex Index Uniform }
 

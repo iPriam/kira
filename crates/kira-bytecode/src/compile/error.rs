@@ -1,13 +1,13 @@
 //! The typed failures the bytecode compiler reports.
 //!
 //! Split out of [`crate::compile`] so the compiler body stays one readable
-//! walk: these are the vocabulary, not the algorithm. Every variant is either a
-//! real limit of the bytecode format (a count that outgrew its operand width)
-//! or an invariant the frontend was supposed to have enforced — and each says
-//! which, because the two mean very different things to whoever reads one.
+//! walk: these are the vocabulary, not the algorithm. Each variant is an
+//! invariant or an input mismatch that remains meaningful after lowering.
 
 /// An error raised while lowering IR to bytecode.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// `Eq` is not derived: [`CompileError::Malformed`] carries a validation fault,
+/// which carries a float bound in one of its variants.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum CompileError {
     /// The mid stage could not decide what a function releases.
     ///
@@ -17,25 +17,6 @@ pub enum CompileError {
     /// runs and leaks every value it holds.
     #[error("cannot plan releases: {0}")]
     ReleasePlan(#[from] kira_ir::mid::MidError),
-    /// A function needs more local slots than the format's `u16` can address.
-    #[error("function `{function}` needs {count} local slots; the bytecode format allows 65535")]
-    TooManyLocals {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of local slots.
-        count: u32,
-    },
-    /// An IR expression referenced a local slot beyond the `u16` range.
-    #[error("function `{function}` references local slot {slot}, beyond the format's 65535")]
-    LocalSlotOutOfRange {
-        /// The offending function's name.
-        function: String,
-        /// The out-of-range slot index.
-        slot: u32,
-    },
-    /// The program has more distinct string constants than the pool can index.
-    #[error("program has too many distinct string constants for the bytecode format")]
-    TooManyStrings,
     /// Internal invariant: a jump patch landed on a non-jump instruction.
     #[error("bytecode compiler invariant violated: patch target is not a jump")]
     PatchedNonJump,
@@ -50,12 +31,6 @@ pub enum CompileError {
     /// program the user can write.
     #[error("bytecode compiler invariant violated: a type with no value was erased into `Any`")]
     ErasureOfAValuelessType,
-    /// A program has more functions than the format's `u32` call operand.
-    #[error("the program has {count} functions; the format allows 4294967295")]
-    TooManyFunctions {
-        /// How many functions the program has.
-        count: usize,
-    },
     /// Internal invariant: a widening reached codegen with a non-enum row.
     ///
     /// Only a generic instantiation widens, and `TypeTable::admits` refuses
@@ -83,23 +58,6 @@ pub enum CompileError {
         /// The offending function's name.
         function: String,
     },
-    /// A struct has more fields than the format's `u16` operand can count.
-    #[error("function `{function}` builds a struct of {count} fields; the format allows 65535")]
-    TooManyFields {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of fields.
-        count: usize,
-    },
-    /// A nested field assignment walks deeper than the format can encode.
-    #[error("function `{function}` assigns through {count} nested fields; the format allows 65535")]
-    FieldPathTooDeep {
-        /// The offending function's name.
-        function: String,
-        /// The requested path depth.
-        count: usize,
-    },
-    /// An array literal has more elements than the format's `u32` can count.
     /// A read through an `@FFI.Pointer` names a member the target's C layout
     /// does not describe.
     #[error("function `{function}` reads member {member} of a C layout that has no such member")]
@@ -108,23 +66,6 @@ pub enum CompileError {
         function: String,
         /// The member index the read asked for.
         member: u32,
-    },
-    #[error("function `{function}` builds an array of {count} elements; the format allows 2^32-1")]
-    TooManyElements {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of elements.
-        count: usize,
-    },
-    /// An enum has a variant tag beyond the format's `u16` operand.
-    #[error(
-        "function `{function}` constructs enum variant #{tag}; the format allows 65535 variants"
-    )]
-    TooManyVariants {
-        /// The offending function's name.
-        function: String,
-        /// The out-of-range variant tag.
-        tag: u32,
     },
     /// Internal invariant: a place with an array index reached the static
     /// field-path encoder, which cannot express one.
@@ -159,4 +100,24 @@ pub enum CompileError {
         /// The type that cannot cross, as the author would recognize it.
         ty: String,
     },
+    /// An exported class index cannot cross the fixed-width export seam.
+    #[error("export `{export}` needs class index {class}, beyond the export boundary's u32 index")]
+    ExportClassIndexTooLarge {
+        /// The export whose signature introduced the class.
+        export: String,
+        /// The zero-based class index that could not be represented.
+        class: usize,
+    },
+    /// The module this compile produced does not satisfy the format's own rules.
+    ///
+    /// [`crate::Module::validate`] states what a well-formed module is, and
+    /// every engine that loads one checks it. Checking it *here* is what makes a
+    /// violation a compiler fault at the point the bad function was emitted,
+    /// rather than a loader message from whichever engine happened to run
+    /// first — a dispatcher that declared one parameter and no local slots
+    /// built, wrote a `.kbc`, wrote a manifest, and was reported by the hybrid
+    /// loader as a manifest/bytecode arity disagreement, which names neither the
+    /// function that was wrong nor what was wrong with it.
+    #[error("bytecode compiler produced a module the format rejects: {0}")]
+    Malformed(#[from] crate::ModuleValidateError),
 }

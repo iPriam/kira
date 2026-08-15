@@ -111,10 +111,9 @@ fn a_library_builds_on_the_vm_backend() {
 }
 
 #[test]
-fn a_library_cannot_be_built_for_the_web_and_says_why() {
-    // The recorded wasm refusal: a library artifact for a JS host needs a
-    // string/allocator contract across the module boundary that is undesigned.
+fn a_library_builds_for_the_web() {
     let path = write_package(".Library", LIBRARY_SOURCE);
+    let directory = path.parent().expect("package directory").to_path_buf();
     let output = kira(&[
         "build",
         "--backend",
@@ -123,13 +122,14 @@ fn a_library_cannot_be_built_for_the_web_and_says_why() {
         "wasm32",
         path.to_str().unwrap(),
     ]);
-    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
-    assert_eq!(output.status.code(), Some(1));
+    let web = directory.join(".kira-build").join("web");
+    let wasm = web.join("uifoundation.wasm");
+    let javascript = web.join("uifoundation.js");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("a library cannot be built as a wasm module yet"),
-        "{stderr}"
-    );
+    let artifacts = (wasm.is_file(), javascript.is_file());
+    let _ = std::fs::remove_dir_all(directory);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(artifacts, (true, true), "{web:?}");
 }
 
 #[test]
@@ -312,6 +312,55 @@ fn a_multi_package_directory_checks_runs_and_builds_on_every_host_backend() {
 }
 
 #[test]
+fn a_runtime_app_with_an_unused_native_library_dependency_runs_hybrid() {
+    let tree = PackageTree::new("hybrid-reachability");
+    tree.write(
+        "app/package.kira",
+        r#"Package RuntimeApp {
+    let kind = .App
+    let dependencies = [
+        Dependency { name: "NativeLibrary", path: "../native-library" }
+    ]
+}
+"#,
+    );
+    tree.write(
+        "native-library/package.kira",
+        r#"Package NativeLibrary {
+    let kind = .Library
+    let moduleRoot = "NativeLibrary"
+}
+"#,
+    );
+    tree.write(
+        "native-library/app/NativeLibrary.kira",
+        "@Native function unusedNative() -> Int { return 7 }\n\
+         function libraryValue() -> Int { return 42 }",
+    );
+    tree.write(
+        "app/app/main.kira",
+        "import NativeLibrary\n@Main function main() { print(libraryValue()) return }",
+    );
+    let app = tree.path().join("app");
+    let app = app.to_str().expect("UTF-8 temp path");
+
+    let checked = kira(&["check", app]);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let run = kira(&["run", "--backend", "hybrid", app]);
+    assert!(
+        run.status.success(),
+        "hybrid run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
 fn manifest_llvm_default_runs_natively_but_an_explicit_vm_still_wins() {
     let tree = PackageTree::new("defaults");
     tree.write(
@@ -395,10 +444,7 @@ fn an_explicit_vm_backend_outranks_a_manifest_wasm32_target() {
     );
 }
 
-/// `kira build` on the default backend used to report success and write
-/// nothing: the match bound `Ok(_)`, so the compiled module was dropped and the
-/// build directory was left exactly as it was found. The claim in the output is
-/// what this pins — that a reported build put a real module on the disk.
+/// A successful VM build writes the bytecode module it reports.
 #[test]
 fn a_program_build_writes_the_bytecode_it_reports() {
     let path = write_program(
@@ -424,10 +470,10 @@ fn a_program_build_writes_the_bytecode_it_reports() {
         "{stdout:?}"
     );
     let written = written.expect("the reported bytecode is on disk");
-    // A real KBC1 module, not an empty file standing in for one.
+    // A real module, not an empty file standing in for one.
     assert!(
-        written.starts_with(b"KBC1"),
-        "the artifact is not a KBC1 module: {:?}",
+        written.starts_with(&kira_bytecode::module::MAGIC),
+        "the artifact is not a bytecode module: {:?}",
         &written[..written.len().min(8)]
     );
 }

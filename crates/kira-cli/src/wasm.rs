@@ -9,7 +9,7 @@
 //! the Web glue the host gets from its OS: memory setup, stdio routed to the
 //! page, and the page itself.
 //!
-//! `build --device wasm32` writes the module and the page that runs it.
+//! `build --device wasm32` writes the module and the page or loader that uses it.
 //! `run --device wasm32` does the same and then serves them, because a Kira
 //! program on the Web runs in a browser and a browser needs an origin.
 
@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kira_backend_api::WasmDevice;
+use kira_build::export_surface;
 use kira_ir::IrProgram;
-use kira_llvm_backend::{LlvmError, NativeLinkInputs};
+use kira_llvm_backend::{LlvmError, NativeExportSurface, NativeLinkInputs};
 
 use crate::native::Artifacts;
 use crate::serve::{ServeError, Server, open_browser};
@@ -28,7 +29,8 @@ use crate::serve::{ServeError, Server, open_browser};
 /// The name carries the target so it can sit beside the host archive without
 /// either being mistaken for the other: linking a host runtime into a wasm
 /// module fails in the linker at best and at runtime at worst.
-const WASM_RUNTIME_ARCHIVE: &str = "libkira_native_bridge-wasm32-emscripten.a";
+const WASM32_RUNTIME_ARCHIVE: &str = "libkira_native_bridge-wasm32-emscripten.a";
+const WASM64_RUNTIME_ARCHIVE: &str = "libkira_native_bridge-wasm64-emscripten.a";
 
 /// Why a Web build or run could not be completed.
 #[derive(Debug, thiserror::Error)]
@@ -39,37 +41,22 @@ pub enum WebError {
     /// The backend could not emit the module's object.
     #[error(transparent)]
     Backend(#[from] LlvmError),
-    /// A library has no wasm artifact to be built into.
-    ///
-    /// The refusal is about the artifact, not any engine: one module, one
-    /// entrypoint, and the string/allocator contract across a wasm module
-    /// boundary is undesigned.
-    #[error(
-        "a library cannot be built as a wasm module yet: the string/allocator \
-         contract across a module boundary is undesigned. A Rust program that \
-         embeds the library and is itself compiled to wasm works today — build \
-         with `--backend vm` and depend on the generated crate"
-    )]
-    LibraryUnbuilt,
-    /// `wasm64` has no runtime to link yet.
-    ///
-    /// Rust has no `wasm64-unknown-emscripten` target to build the runtime
-    /// archive for, so a Memory64 module would have no `kira_rt_*` to call.
-    /// Refused by name rather than shipped half-linked.
-    #[error(
-        "`--device wasm64` is not buildable yet: the runtime archive has no \
-         Memory64 build. Use `--device wasm32`"
-    )]
-    Wasm64Unbuilt,
+    /// The library has no package name with which to derive its export symbols.
+    #[error("a Web library build needs a package name to derive its exported symbols")]
+    LibraryNameMissing,
+    /// The bytecode compiler could not provide the library's export table.
+    #[error(transparent)]
+    Bytecode(#[from] kira_bytecode::CompileError),
     /// The runtime archive for the Web is not installed beside this compiler.
     #[error(
-        "the Web runtime archive is missing (looked for `{name}` beside this \
-         executable and in the cargo target tree); rebuild the toolchain with \
-         `knvm binstall`",
-        name = WASM_RUNTIME_ARCHIVE
+        "the Web runtime archive `{name}` is missing; install or build the matching \
+         `kira-native-bridge` target"
     )]
-    RuntimeArchiveMissing,
-    /// `emcc` compiled the generated foreign shim and refused it.
+    RuntimeArchiveMissing {
+        /// The target-specific runtime archive name.
+        name: &'static str,
+    },
+    /// `emcc` rejected the generated foreign shim.
     #[error(
         "`emcc` could not compile the generated foreign shim; its output above names the error"
     )]
@@ -152,51 +139,133 @@ pub struct BuiltWeb {
 /// `foreign_link` are the resolved `wasm32-emscripten` link inputs that satisfy
 /// the program's `@FFI.Extern` imports. The archives precede the runtime
 /// archive on the `emcc` line so an adapter's reference to a C symbol is
-/// satisfied by the archive that defines it, and the flags the wasm rows
+/// satisfied by the archive that defines it, and the flags the Web target rows
 /// declared (`--use-port=…`, `-sERROR_ON_UNDEFINED_SYMBOLS=0`) follow it —
-/// emscripten needs those to link a port at all. A program whose wasm target
-/// row is absent was already refused by the caller, before this runs.
+/// emscripten needs those to link a port at all. A program whose target row is
+/// absent was already reported by the caller, before this runs.
 pub fn build(
     ir: &IrProgram,
     source: &Path,
     device: WasmDevice,
     foreign_link: &NativeLinkInputs,
 ) -> Result<BuiltWeb, WebError> {
-    if ir.main.is_none() {
-        return Err(WebError::LibraryUnbuilt);
-    }
-    if device == WasmDevice::Wasm64 {
-        return Err(WebError::Wasm64Unbuilt);
-    }
     let artifacts = WebArtifacts::for_source(source)?;
 
     kira_llvm_backend::build_wasm_object(ir, &artifacts.stem, &artifacts.object(), device)?;
 
-    // A program passing a struct by value needs its C shim compiled for wasm
-    // too, and by emcc rather than the host clang: the shim is what applies the
-    // by-value ABI, and wasm32's is emscripten's to define.
+    // A program passing a struct by value needs its C shim compiled for the Web
+    // target too, and by emcc rather than the host clang: the shim is what
+    // applies the by-value ABI the selected emscripten target defines.
     let shim = build_wasm_shim(ir, foreign_link, &artifacts)?;
 
-    let runtime = wasm_runtime_archive().ok_or(WebError::RuntimeArchiveMissing)?;
+    let runtime = wasm_runtime_archive(device).ok_or(WebError::RuntimeArchiveMissing {
+        name: runtime_archive_name(device),
+    })?;
+    link_web(
+        &artifacts,
+        device,
+        foreign_link,
+        shim.as_deref(),
+        &runtime,
+        &[],
+        true,
+    )?;
+
+    Ok(BuiltWeb {
+        wasm: artifacts.wasm(),
+        page: artifacts.page(),
+    })
+}
+
+/// Builds an exported library for a Web device.
+///
+/// The native library surface is reused as the wasm surface: every export and
+/// class destructor has one `BridgeValue` trampoline, and emscripten retains
+/// those symbols in the no-entry module for its JavaScript loader.
+pub fn build_library(
+    ir: &IrProgram,
+    source: &Path,
+    device: WasmDevice,
+    foreign_link: &NativeLinkInputs,
+    library: Option<&str>,
+) -> Result<BuiltWeb, WebError> {
+    let library = library.ok_or(WebError::LibraryNameMissing)?;
+    let module = kira_bytecode::compile(ir)?;
+    let surface = export_surface(library, &module.exports);
+    let artifacts = WebArtifacts::for_source(source)?;
+
+    kira_llvm_backend::build_wasm_library(
+        ir,
+        &artifacts.stem,
+        &artifacts.object(),
+        device,
+        &surface,
+    )?;
+    let shim = build_wasm_shim(ir, foreign_link, &artifacts)?;
+    let runtime = wasm_runtime_archive(device).ok_or(WebError::RuntimeArchiveMissing {
+        name: runtime_archive_name(device),
+    })?;
+    let symbols = export_symbols(&surface);
+    link_web(
+        &artifacts,
+        device,
+        foreign_link,
+        shim.as_deref(),
+        &runtime,
+        &symbols,
+        false,
+    )?;
+
+    Ok(BuiltWeb {
+        wasm: artifacts.wasm(),
+        page: artifacts.page(),
+    })
+}
+
+/// Links one Web object as either an executable page or a no-entry library.
+fn link_web(
+    artifacts: &WebArtifacts,
+    device: WasmDevice,
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
+    runtime: &Path,
+    exports: &[String],
+    executable: bool,
+) -> Result<(), WebError> {
     let mut command = Command::new("emcc");
     command.arg(artifacts.object());
-    if let Some(shim) = &shim {
+    if let Some(shim) = shim {
         command.arg(shim);
     }
     for archive in foreign_link.archives() {
         command.arg(archive);
     }
-    command.arg(&runtime);
+    command.arg(runtime);
     for argument in foreign_link.driver_arguments() {
         command.arg(argument);
+    }
+    if executable {
+        // `main` returning ends the program, exactly as it does on the host;
+        // without this emscripten keeps the runtime alive for a page that may
+        // want callbacks later, which a Kira program has not asked for.
+        command.arg("-sEXIT_RUNTIME=1");
+    } else {
+        command.arg("--no-entry");
+        if !exports.is_empty() {
+            let names = exports
+                .iter()
+                .map(|symbol| format!("_{symbol}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            command.arg(format!("-sEXPORTED_FUNCTIONS={names}"));
+        }
+    }
+    if device == WasmDevice::Wasm64 {
+        command.arg("-sMEMORY64=1");
     }
     let status = command
         .arg("-o")
         .arg(artifacts.page())
-        // `main` returning ends the program, exactly as it does on the host;
-        // without this emscripten keeps the runtime alive for a page that
-        // might want callbacks later, which a Kira program has not asked for.
-        .arg("-sEXIT_RUNTIME=1")
         .status()
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => WebError::EmccUnavailable,
@@ -205,18 +274,25 @@ pub fn build(
     if !status.success() {
         return Err(WebError::LinkFailed);
     }
+    Ok(())
+}
 
-    Ok(BuiltWeb {
-        wasm: artifacts.wasm(),
-        page: artifacts.page(),
-    })
+/// Converts a native export surface to the symbols emscripten must retain.
+fn export_symbols(surface: &NativeExportSurface) -> Vec<String> {
+    surface
+        .abi_marker
+        .iter()
+        .cloned()
+        .chain(surface.functions.iter().map(|export| export.symbol.clone()))
+        .chain(surface.classes.iter().map(|class| class.symbol.clone()))
+        .collect()
 }
 
 /// Compiles the program's foreign C shim for wasm with `emcc`, if it needs one.
 ///
 /// `None` for a program that neither passes a struct by value nor hands C a
-/// callback entered with one — which is every program that ever built for the
-/// Web before, so no build gains an `emcc -c` step it does not need. The
+/// callback entered with one, so no build gains an `emcc -c` step it does not
+/// need. The
 /// generated source is the same text the host build compiles; only the compiler
 /// differs, which is the point: each target's own C compiler decides that
 /// target's by-value ABI.
@@ -293,23 +369,35 @@ pub fn run(
 ///
 /// Installed toolchains ship it beside `kira` (knvm's installers put it
 /// there); a `kira` running out of a cargo target tree finds the archive
-/// where `cargo build -p kira-native-bridge --target wasm32-unknown-emscripten`
-/// left it, two directories over.
-fn wasm_runtime_archive() -> Option<PathBuf> {
+/// where the matching `cargo build -p kira-native-bridge --target
+/// <device>-unknown-emscripten` left it, two directories over.
+fn wasm_runtime_archive(device: WasmDevice) -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let directory = executable.parent()?;
+    let installed_name = runtime_archive_name(device);
+    let development_name = "libkira_native_bridge.a";
 
-    let installed = directory.join(WASM_RUNTIME_ARCHIVE);
-    if installed.is_file() {
-        return Some(installed);
+    for name in [installed_name, development_name] {
+        let installed = directory.join(name);
+        if installed.is_file() {
+            return Some(installed);
+        }
     }
 
-    // target/<profile>/kira -> target/wasm32-unknown-emscripten/<profile>/
+    // target/<profile>/kira -> target/<device>-unknown-emscripten/<profile>/
     let profile = directory.file_name()?.to_owned();
-    let dev = directory
-        .parent()?
-        .join("wasm32-unknown-emscripten")
-        .join(profile)
-        .join("libkira_native_bridge.a");
-    dev.is_file().then_some(dev)
+    let target = format!("{}-unknown-emscripten", device.label());
+    let dev_directory = directory.parent()?.join(target).join(profile);
+    [installed_name, development_name]
+        .into_iter()
+        .map(|name| dev_directory.join(name))
+        .find(|path| path.is_file())
+}
+
+/// The installed runtime archive name for a Web memory width.
+fn runtime_archive_name(device: WasmDevice) -> &'static str {
+    match device {
+        WasmDevice::Wasm32 => WASM32_RUNTIME_ARCHIVE,
+        WasmDevice::Wasm64 => WASM64_RUNTIME_ARCHIVE,
+    }
 }

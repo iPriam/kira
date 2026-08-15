@@ -48,7 +48,10 @@ impl FunctionLowering<'_, '_> {
         let builder = self.codegen.builder;
         let types = self.codegen.types;
         match kind {
-            ConvertKind::IntToInt | ConvertKind::FloatToFloat => value,
+            ConvertKind::IntToInt
+            | ConvertKind::FloatToFloat
+            | ConvertKind::IntToRawPtr
+            | ConvertKind::RawPtrToInt => value,
             // SAFETY: `value` is the `i64` the typed conversion fixes and the
             // builder is on a live block; the call builds a pure value.
             ConvertKind::IntToFloat => unsafe {
@@ -221,7 +224,7 @@ impl FunctionLowering<'_, '_> {
                             LLVMBuildICmp(builder, predicate, left, right, c"icmp".as_ptr())
                         }
                         None => {
-                            let predicate = real_predicate(other).ok_or(LlvmError::Unsupported(
+                            let predicate = real_predicate(other).ok_or(LlvmError::internal(
                                 "an operator with no native lowering",
                             ))?;
                             LLVMBuildFCmp(builder, predicate, left, right, c"fcmp".as_ptr())

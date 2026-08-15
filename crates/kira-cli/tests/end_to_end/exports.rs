@@ -1,18 +1,17 @@
 //! The `@Export` surface.
 //!
-//! The VM engine serves it: `kira build` in a library package writes the
-//! artifact *and* the Rust crate that embeds and calls it, which is the product
-//! a consumer depends on. The other two engines are refused by name, each saying
-//! what it still owes. All of this runs through the real binary, on a machine
-//! with no LLVM — the crate it generates is compiled and called for real by
-//! `kira-export-consumer`.
+//! `kira build` in a library package writes the artifact and the generated
+//! consumer surface for the selected engine. The Web path writes an emscripten
+//! module and JavaScript loader alongside the native and VM artifacts. The
+//! host-facing cases run through the real binary and the generated crate is
+//! compiled and called for real by `kira-export-consumer`.
 
 use std::path::Path;
 
 use crate::{kira, write_package};
 
-/// A library that exports the shapes v1 supports: a handle-eligible class, a
-/// constructor-shaped export, and scalars both ways.
+/// A library exporting a class handle, a constructor-shaped function, and
+/// scalar values in both directions.
 const EXPORTING_LIBRARY: &str = "@Export\n\
      class Button {\n\
          var title: String = \"\"\n\
@@ -83,7 +82,7 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
     assert!(artifact_present, "no artifact at {artifact:?}");
     assert_eq!(present, [true, true, true, true], "{generated:?}");
     // One safe method per export, with the consumer-facing names the frontend
-    // derived — the same list the other engines' refusal prints.
+    // derived for every engine.
     for method in ["make_button", "button_width", "click_at"] {
         assert!(
             wrapper.contains(&format!("pub fn {method}(")),
@@ -101,15 +100,9 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
 
 #[test]
 fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
-    // The hybrid engine builds this surface now, so nothing is left refusing on
-    // *host* engine grounds — the only export refusal that remains is the wasm
-    // library artifact, which is about the artifact rather than an engine.
-    //
-    // Same two legitimate outcomes as the native engine's test above, and for
-    // the same reason: the hybrid engine's native half needs LLVM, so a `kira`
-    // built without the feature — which is the CI configuration — refuses for
-    // the missing backend rather than for exports. What would be a regression is
-    // the export refusal coming back, and that is what this pins.
+    // The hybrid engine's native half needs LLVM, so a `kira`
+    // built without the feature reports the missing backend rather than an
+    // export-specific error.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let output = kira(&["build", "--backend", "hybrid", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
@@ -128,9 +121,8 @@ fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
 
 #[test]
 fn the_native_engine_no_longer_refuses_an_export_on_export_grounds() {
-    // The native engine builds this surface now, so whatever it says, it must
-    // not be "library export is not built yet" — and with the LLVM backend a
-    // hard part of every kira, the build itself must succeed.
+    // The native engine builds this surface, and with LLVM available the build
+    // itself must succeed.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let output = kira(&["build", "--backend", "llvm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
@@ -227,8 +219,9 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
 }
 
 #[test]
-fn the_web_refuses_to_build_an_export_too() {
+fn the_web_builds_an_exported_library() {
     let path = write_package(".Library", EXPORTING_LIBRARY);
+    let directory = path.parent().expect("package directory").to_path_buf();
     let output = kira(&[
         "build",
         "--backend",
@@ -237,16 +230,25 @@ fn the_web_refuses_to_build_an_export_too() {
         "wasm32",
         path.to_str().unwrap(),
     ]);
-    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
-    assert_eq!(output.status.code(), Some(1));
+    let web = directory.join(".kira-build").join("web");
+    let wasm = web.join("uifoundation.wasm");
+    let javascript = web.join("uifoundation.js");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("library export is not built yet"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("`--device wasm32`"), "{stderr}");
-    assert!(
-        stderr.contains("string/allocator contract"),
-        "the wasm reason was missing: {stderr}"
-    );
+    let loader = std::fs::read_to_string(&javascript).unwrap_or_default();
+    let artifacts = (wasm.is_file(), javascript.is_file());
+    let _ = std::fs::remove_dir_all(directory);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(artifacts, (true, true), "{web:?}");
+    for symbol in [
+        "kira_lib_uifoundation_abi_1",
+        "kira_lib_uifoundation_make_button",
+        "kira_lib_uifoundation_button_width",
+        "kira_lib_uifoundation_click_at",
+    ] {
+        assert!(
+            loader.contains(symbol),
+            "{symbol} is not retained in {}",
+            javascript.display()
+        );
+    }
 }

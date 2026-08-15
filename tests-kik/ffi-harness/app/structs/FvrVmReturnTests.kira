@@ -1,0 +1,115 @@
+import Foundation
+
+// VM-to-native return ownership regressions. Prefix: fvr / Fvr.
+//
+// These drive the shape where @Native code calls a @Runtime builder, receives a
+// VM-built aggregate, and returns or embeds it. The returned values must be
+// materialized for native layout exactly once and must not leak or double-free.
+
+struct FvrBox {
+    var x: Int
+}
+
+struct FvrFrame {
+    var id: Int
+    var box: FvrBox
+}
+
+class FvrClassBox {
+    var x: Int
+}
+
+@Runtime
+function fvrMakeBox(seed: Int) -> FvrBox {
+    return FvrBox { x: seed + 1 }
+}
+
+@Runtime
+function fvrMakeClassBox(seed: Int) -> FvrClassBox {
+    return FvrClassBox { x: seed + 2 }
+}
+
+@Runtime
+function fvrMakeArray(seed: Int) -> [Int] {
+    var xs: [Int] = []
+    xs.append(seed)
+    xs.append(seed + 1)
+    xs.append(seed + 2)
+    return xs
+}
+
+@Native
+function fvrNativeWrapBox(seed: Int) -> FvrBox {
+    return fvrMakeBox(seed)
+}
+
+@Native
+function fvrNativeWrapClassBox(seed: Int) -> FvrClassBox {
+    return fvrMakeClassBox(seed)
+}
+
+@Native
+function fvrNativeWrapArray(seed: Int) -> [Int] {
+    return fvrMakeArray(seed)
+}
+
+@Native
+function fvrNativeWrapFrame(seed: Int) -> FvrFrame {
+    return FvrFrame { id: seed, box: fvrMakeBox(seed + 10) }
+}
+
+Test FvrNativeReturnsRuntimeStructLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            let box = fvrNativeWrapBox(i)
+            total = total + box.x
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(210); return e }
+}
+
+Test FvrNativeReturnsRuntimeClassLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            let box = fvrNativeWrapClassBox(i)
+            total = total + box.x
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(230); return e }
+}
+
+Test FvrNativeReturnsRuntimeArrayLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            let xs = fvrNativeWrapArray(i)
+            total = total + xs[0] + xs[1] + xs[2]
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(630); return e }
+}
+
+Test FvrNativeEmbedsRuntimeStructFieldLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            let frame = fvrNativeWrapFrame(i)
+            total = total + frame.id + frame.box.x
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(600); return e }
+}

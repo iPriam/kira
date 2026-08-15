@@ -3,16 +3,14 @@
 //! Split from `hybrid.rs` rather than sitting at its foot, per this workspace's
 //! file-size ladder.
 //!
-//! Everything here runs **without LLVM**, which is deliberate: the two refusals
-//! and the manifest are what a hybrid library build decides before it reaches a
-//! backend, and they are the parts CI can prove. Building the native half is
-//! LLVM-gated and proved by the consumer crate.
+//! Everything here runs **without LLVM**. The manifest is what a hybrid library
+//! build decides before it reaches a backend, and it is the part CI can prove.
+//! Building the native half is LLVM-gated and proved by the consumer crate.
 
 use super::*;
 use crate::wrapper;
-use crate::wrapper_export_name;
 
-use kira_ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrStmt};
+use kira_ir::{IrExpr, IrFunction, IrStmt};
 use la_arena::Arena;
 
 /// A program of `functions`, sharing one expression arena.
@@ -48,28 +46,6 @@ fn function(name: &str, execution: Execution, body: Vec<IrStmt>) -> IrFunction {
     }
 }
 
-/// A statement calling user function `index` for effect.
-fn call(exprs: &mut Arena<IrExpr>, index: u32) -> IrStmt {
-    let expr: IrExprId = exprs.alloc(IrExpr::Call {
-        callee: IrCallee::User(index),
-        args: Vec::new(),
-        result: Type::Void,
-        writebacks: Vec::new(),
-    });
-    IrStmt::Eval { expr }
-}
-
-/// An export of function `index`.
-fn export(kira_name: &str, index: u32) -> kira_ir::IrExport {
-    kira_ir::IrExport {
-        kira_name: kira_name.to_owned(),
-        exported_name: wrapper_export_name(kira_name),
-        function: index,
-        params: Vec::new(),
-        result: Type::Void,
-    }
-}
-
 #[test]
 fn an_annotation_free_library_builds_its_split_with_everything_on_the_vm() {
     // The default matters: a library that says nothing about engines is a
@@ -82,108 +58,6 @@ fn an_annotation_free_library_builds_its_split_with_everything_on_the_vm() {
         Vec::new(),
     );
     assert_eq!(engines(&ir), vec![Execution::Runtime]);
-    check_library(&ir).expect("nothing to refuse");
-}
-
-#[test]
-fn a_native_function_a_runtime_function_calls_is_the_direction_that_works() {
-    // The whole point of this engine: the surface stays on the VM and the hot
-    // function underneath is machine code. Runtime-calls-native is the crossing
-    // the seam already serves, so it must not be caught by the refusal aimed at
-    // the other direction.
-    let mut exprs = Arena::new();
-    let body = vec![call(&mut exprs, 1)];
-    let ir = program(
-        vec![
-            function("surface", Execution::Runtime, body),
-            function("hot", Execution::Native, Vec::new()),
-        ],
-        exprs,
-        vec![export("surface", 0)],
-    );
-    check_library(&ir).expect("runtime calling native is the supported direction");
-}
-
-#[test]
-fn a_native_function_calling_a_runtime_function_is_refused_naming_both() {
-    let mut exprs = Arena::new();
-    let body = vec![call(&mut exprs, 1)];
-    let ir = program(
-        vec![
-            function("hot", Execution::Native, body),
-            function("helper", Execution::Runtime, Vec::new()),
-        ],
-        exprs,
-        Vec::new(),
-    );
-    let error = check_library(&ir).expect_err("a library cannot be re-entered");
-    let message = error.to_string();
-    assert!(message.contains("hot"), "{message}");
-    assert!(message.contains("helper"), "{message}");
-    // The refusal has to say what an application may do that a library may not,
-    // or it reads as a bug in the seam rather than as a limit of this shape.
-    assert!(message.contains("application"), "{message}");
-}
-
-#[test]
-fn a_native_function_calling_another_native_function_is_fine() {
-    // Machine code calling machine code never touches the instance, so it is
-    // not the thing the refusal is about — and a refusal that caught it would
-    // make the annotation useless for anything but a leaf.
-    let mut exprs = Arena::new();
-    let body = vec![call(&mut exprs, 1)];
-    let ir = program(
-        vec![
-            function("outer", Execution::Native, body),
-            function("inner", Execution::Native, Vec::new()),
-        ],
-        exprs,
-        Vec::new(),
-    );
-    check_library(&ir).expect("native calling native stays inside the library");
-}
-
-#[test]
-fn a_call_buried_inside_a_loop_inside_a_branch_is_still_found() {
-    // The walk is the refusal. A call the walk misses is a program that builds
-    // and then aborts at run time naming a null invoker, which is exactly the
-    // failure this check exists to convert into a build error.
-    let mut exprs = Arena::new();
-    let inner = call(&mut exprs, 1);
-    let cond = exprs.alloc(IrExpr::Bool(true));
-    let body = vec![IrStmt::If {
-        cond,
-        then_body: vec![IrStmt::While {
-            cond,
-            body: vec![inner],
-        }],
-        else_body: Vec::new(),
-    }];
-    let ir = program(
-        vec![
-            function("hot", Execution::Native, body),
-            function("helper", Execution::Runtime, Vec::new()),
-        ],
-        exprs,
-        Vec::new(),
-    );
-    let error = check_library(&ir).expect_err("depth does not hide a call");
-    assert!(error.to_string().contains("helper"), "{error}");
-}
-
-#[test]
-fn an_export_that_is_also_native_is_refused_by_name() {
-    let exprs = Arena::new();
-    let ir = program(
-        vec![function("makeButton", Execution::Native, Vec::new())],
-        exprs,
-        vec![export("makeButton", 0)],
-    );
-    let error = check_library(&ir).expect_err("an export enters the bytecode half");
-    let message = error.to_string();
-    assert!(message.contains("makeButton"), "{message}");
-    assert!(message.contains("@Export"), "{message}");
-    assert!(message.contains("@Native"), "{message}");
 }
 
 #[test]
@@ -213,7 +87,7 @@ fn the_manifest_records_a_library_as_having_no_entrypoint() {
 }
 
 #[test]
-fn the_manifest_records_the_symbol_the_backend_emitted_rather_than_deriving_one() {
+fn the_manifest_records_native_exports_and_runtime_invocations() {
     let exprs = Arena::new();
     let ir = program(
         vec![
@@ -232,7 +106,9 @@ fn the_manifest_records_the_symbol_the_backend_emitted_rather_than_deriving_one(
         0,
     )
     .expect("describe");
+    assert_eq!(described.functions[0].execution, Execution::Runtime);
     assert_eq!(described.functions[0].exported_name, None);
+    assert_eq!(described.functions[1].execution, Execution::Native);
     assert_eq!(
         described.functions[1].exported_name.as_deref(),
         Some("kira_native_fn_1")

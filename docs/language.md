@@ -30,8 +30,7 @@ b.origin.x = 100             // a nested write lands in place
 mixed in one literal. A struct is a **value**: `var copy = b` copies it deeply,
 strings included, so writing to the copy never disturbs the original.
 
-One edge is deliberate rather than pending, and one question that used to be
-open is now answered:
+Two boundary rules are explicit:
 
 - **`print(someStruct)` is rejected.** What `print` renders for a struct is not
   pinned anywhere in the language corpus, and inventing a format here would be
@@ -88,15 +87,11 @@ method, `KSEM068` for a field) and qualifying it says which was meant.
 
 Nothing below semantics learns classes exist. A class flattens into an ordinary
 struct, and each class gets its **own copy** of every method it inherits, with
-`self` typed as that class. That is worth stating plainly because it buys the
-one thing inheritance usually costs: since `self` is always statically the
-concrete class, an inherited method calling `self.m()` reaches the override, and
-it does so identically on the VM, native, hybrid, and wasm — with nothing
-dispatched at run time. The reference implementation has a live vm/llvm
-divergence on exactly this shape and steers its corpus around it; here it is a
-tested case.
+`self` typed as that class. Since `self` is always statically the concrete
+class, an inherited method calling `self.m()` reaches the override identically
+on the VM, native, hybrid, and wasm, with no run-time dispatch.
 
-One edge is deliberate rather than pending:
+One boundary is explicit:
 
 - **There is no subtyping.** A `Savings` is not assignable to an `Account`
   binding or parameter (`KSEM063`). Nothing in the language corpus binds a
@@ -238,10 +233,9 @@ The same pair as a struct's, and for the same reasons:
   call site pins a separator or a bracket, so a format here would be invented
   surface.
 - **An array crosses the `@Native`/`@Runtime` boundary as a copy**, the same
-  node tree a struct crosses as. That answers the ownership question the
-  crossing was once waiting on: each side ends up with its own array, so a
-  native callee growing one says nothing about the other half's, and the
-  elements are freed by the side that reads them.
+  node tree a struct crosses as. Each side owns its array, so a native callee
+  growing one does not change the other, and the side that reads the elements
+  frees them.
 
 See [.codex/work/arrays.md](.codex/work/arrays.md) for the design, and
 [examples/arrays/arrays.kira](examples/arrays/arrays.kira) for a tour.
@@ -282,19 +276,21 @@ function rank(c: Color) -> Int {
 Like an array, an enum is a heap value that **moves on binding** (`let b = a`
 consumes `a`) and is **not** trivially copyable (a named enum needs `move` into
 an owned parameter; a fresh `.Variant` needs nothing). Two edges of its own,
-and the crossing the struct and array sections describe:
+plus the bridge rules shared with structs and arrays:
 
 - **`print(someEnum)` is rejected (`KSEM081`).** No corpus site pins a
   rendering, so a format here would be invented surface.
 - **An enum crosses the `@Native`/`@Runtime` boundary.** A payload-less one
   *is* its variant number, so the number crosses and the far side rebuilds its
-  own value from it, with nothing owned travelling. One carrying a payload does
-  not fit a word, so it crosses as the node tree a struct does.
-- **A payload may be `Int`, `Float`, `Bool`, `String`, or another enum.** A
-  struct or array payload is refused (`KSEM118`): the runtime box carries one
-  type-erased word, which an aggregate has no form in yet. A nested enum is a
-  handle, so it fits that word — and it has to, because a `Result`-shaped
-  value's `Error` variant carries the failure enum.
+  own value from it. One carrying a payload crosses as the node tree a struct
+  does, including strings, structs, arrays, and nested enums.
+- **An enum declaration may use `Int`, `Float`, `Bool`, `String`, an array, a
+  struct, another enum, or `Any` as its payload.** `Void`, `CString`, `RawPtr`,
+  and runtime handles are refused (`KSEM118`) because the enum box cannot own
+  those values. A nested enum is admitted because a `Result`-shaped value's
+  `Error` variant carries the failure enum. The `@Native`/`@Runtime` bridge
+  still requires a concrete payload type, so `Any` remains refused at that
+  boundary.
 
 See [.codex/work/enums.md](.codex/work/enums.md) for the design, and
 [examples/enums/enums.kira](examples/enums/enums.kira) for a tour.
@@ -756,8 +752,9 @@ visited-set-guarded, so a cycle terminates and each file lands in the program
 once — there is no import-cycle diagnostic, because the reference
 implementation accepts these and rejecting them would break working programs.
 
-`import Foundation` parses and resolves like any other import, and reports
-`KSEM032` here: there is no Foundation package in this repo yet.
+`import Foundation` resolves to the bundled standard library. In this checkout
+the bundle is `foundation/package.kira`; an installed toolchain keeps the same
+package beside its compiler. The import remains file-scoped.
 
 Imports are resolved entirely in the frontend. By the time the IR exists a
 program is one flat list of functions, so no backend — VM, LLVM, hybrid, or
@@ -947,41 +944,28 @@ rule rather than three: an application must declare exactly one `@Main`
 refused identically on all three backends, because there is nothing backend-
 specific about a package having no way in.
 
-### What a library build refuses, and what would lift it
+### Library boundaries
 
-Three things, each refused by name with its reason and the change that would
-build it. None is a silent gap, and none is discovered at run time.
+A library builds for VM, native, hybrid, and Web devices. `kira run` still
+rejects it because a library has no `@Main` entrypoint.
 
-**A library as a wasm module artifact.** A Web build emits one self-contained
-module entered at `main`, and the string and allocator contract across a wasm
-module boundary is undesigned — so there is no answer yet to who allocated a
-string a JS host is holding. Lifting it means deciding that contract and
-emitting one wasm export per Kira export through the same backend that emits
-`main` today. What works instead is the other wasm consumer — a Rust program
-that embeds the library and is *itself* compiled to `wasm32-unknown-unknown`,
-which the VM engine's generated crate supports because everything under it
-does.
+**Web library artifacts.** `kira build --device wasm32` emits a no-entry
+Emscripten module. It reuses the export surface and retains one trampoline for
+each export and class destructor for the JavaScript loader.
 
-**An `@Export` that is also `@Native`, and a `@Native` function that calls a
-`@Runtime` one** — both on the hybrid engine, both by function name. A consumer
-always enters the bytecode half, and a handle is a root into that half's heap,
-so machine code cannot mint one; and a library instance owns a heap and is
-entered through a mutable borrow, so it cannot be re-entered from inside a call.
-Neither is a missing feature: an *application* built with `--backend hybrid`
-calls in both directions, and giving that up is the whole of what a library
-gives up.
+**Hybrid library boundaries.** A consumer enters the bytecode half, so machine
+code cannot mint a handle into that heap. A library instance is also entered
+through a mutable borrow and cannot be re-entered during a call. Therefore a
+hybrid library rejects an `@Export` that is also `@Native` and a `@Native`
+function that calls `@Runtime`. Applications built with `--backend hybrid` may
+still call in both directions.
 
-`@Native` on its own is refused by no engine. `--backend vm` compiles every
-function to bytecode whatever it was annotated with — which is what makes `vm`
-and `llvm` comparable on any program — so nothing native executes on a pure VM
-and there is nothing to prevent.
+`@Native` on its own is accepted by every engine. The VM compiles every function
+to bytecode, so the annotation does not request native execution there.
 
-**Two Kira native libraries in one binary.** Both archives carry the `kira_rt_*`
-runtime, so linking both fails with a duplicate-symbol error — loud, at link, by
-symbol name, which is what makes it an acceptable v1 answer rather than a trap.
-The fix is per-library runtime prefixing (`kira_rt_*` becoming
-`kira_rt_<library>_*`), and a host that `dlopen`s the shared form is already
-isolated by `RTLD_LOCAL`.
+**One Kira native library per binary.** Each archive carries the `kira_rt_*`
+runtime, so linking two archives reports duplicate symbols. Per-library runtime
+prefixing or a shared library loaded with `RTLD_LOCAL` avoids that collision.
 
 ### `@Export`: the consumer-facing surface
 
@@ -1205,8 +1189,9 @@ cannot take in place relaunches it and says why.
 
 ```sh
 kira live                                      # the package you are standing in
-kira live app.kira                             # the VM half
-kira live --backend hybrid app.kira            # both halves
+kira live app.kira                             # the VM backend
+kira live --backend llvm app.kira              # the whole native program
+kira live --backend hybrid app.kira            # the VM/native hybrid
 kira live --watch app.kira                     # reload on every save
 ```
 

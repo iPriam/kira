@@ -13,7 +13,7 @@ use kira_bytecode::{ExportTable, ExportType, ModuleExport};
 
 use crate::wrapper::*;
 
-/// The motivating library's surface, in the shapes v1 supports.
+/// The motivating library's exported class and scalar function surface.
 pub(super) fn uifoundation() -> ExportTable {
     ExportTable {
         classes: vec!["Button".to_owned()],

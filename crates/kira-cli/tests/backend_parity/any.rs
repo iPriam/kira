@@ -14,19 +14,7 @@
 //! returned, and released on all three engines with the same output and the
 //! same exit status.
 //!
-//! # What these do not prove
-//!
-//! This harness compares stdout and exit status; it runs no heap accounting, so
-//! an erased value whose box forgot it owned bytes leaks here silently rather
-//! than failing. What the cases do catch is the louder half of that bug class —
-//! a box freed as the wrong kind, or a payload read as a pointer that was a
-//! scalar, traps or diverges — and
-//! [`super::any::erasing_in_a_loop_stays_consistent`] is sized so a per-crossing leak is
-//! a thousand allocations rather than one. A real balance assertion needs
-//! per-program accounting on the native side, which this workspace does not yet
-//! expose; the claim is stated here rather than assumed.
-
-use crate::assert_parity;
+use crate::assert_parity_with_heap_balance;
 
 /// A scalar of each kind crosses in.
 ///
@@ -34,7 +22,7 @@ use crate::assert_parity;
 /// mistakenly freed its payload would corrupt rather than leak.
 #[test]
 fn scalars_cross_into_any() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 @Main
 function main() {
@@ -49,10 +37,37 @@ function main() {
     assert_eq!(output, "scalars\n");
 }
 
+/// A typed foreign pointer crosses as the same inert word as `RawPtr`.
+#[test]
+fn a_foreign_pointer_crosses_into_any() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+@FFI.Struct { layout: c; }
+struct Byte {
+    let value: U8
+}
+
+@FFI.Pointer { target: Byte; ownership: borrowed; }
+struct BytePtr {}
+
+@Main
+function main() {
+    let raw: RawPtr = RawPtr(0)
+    let typed: BytePtr = RawPtr(0)
+    let first: Any = raw
+    let second: Any = typed
+    print(first == second)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\n");
+}
+
 /// A `String` crosses in, and the box takes over freeing its bytes.
 #[test]
 fn a_string_crosses_into_any() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 @Main
 function main() {
@@ -73,7 +88,7 @@ function main() {
 /// field rather than sharing or dropping it.
 #[test]
 fn a_struct_crosses_into_any() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 struct Pair {
     let count: Int
@@ -94,7 +109,7 @@ function main() {
 /// An array crosses in, and its elements go with it.
 #[test]
 fn an_array_crosses_into_any() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 @Main
 function main() {
@@ -113,7 +128,7 @@ function main() {
 /// An enum crosses in, payload and all.
 #[test]
 fn an_enum_crosses_into_any() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 enum Shade {
     Dim
@@ -138,7 +153,7 @@ function main() {
 /// and the callee only ever sees the erased form.
 #[test]
 fn any_passes_through_a_call() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 function keep(value: Any) -> Any {
     return value
@@ -161,7 +176,7 @@ function main() {
 /// reads the array rather than anything about what it holds.
 #[test]
 fn an_array_of_any_holds_mixed_kinds() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 struct Pair {
     let count: Int
@@ -184,7 +199,7 @@ function main() {
 /// release it.
 #[test]
 fn a_struct_field_of_any_copies_and_drops() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 struct Slot {
     let name: String
@@ -205,11 +220,40 @@ function main() {
     assert_eq!(output, "first\nsecond\n");
 }
 
+/// Aggregate values inside `Any` fields survive a struct copy and compare by
+/// contents before every nested box is released.
+#[test]
+fn aggregate_any_fields_are_copied_compared_and_dropped() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Pair {
+    let count: Int
+    let label: String
+}
+
+struct Slot {
+    let payload: Any
+}
+@Main
+function main() {
+    let pair = Slot(payload: Pair(count: 3, label: "pair"))
+    let pairCopy = pair
+    let rows = Slot(payload: [[1, 2], [3]])
+    let rowsCopy = rows
+    print(pair.payload == pairCopy.payload)
+    print(rows.payload == rowsCopy.payload)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\n");
+}
+
 /// An `Any` enum payload: the erased value is boxed inside another box, so the
 /// nested release has to reach it.
 #[test]
 fn an_enum_payload_of_any_releases_its_box() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 enum Held {
     Nothing
@@ -233,7 +277,7 @@ function main() {
 /// before the new one lands, which is where a double free or a leak would show.
 #[test]
 fn reassigning_an_any_releases_what_it_held() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 @Main
 function main() {
@@ -258,7 +302,7 @@ function main() {
 /// scalar.
 #[test]
 fn any_crosses_at_every_kind_of_call_site() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 class Holder {
     let held: Any
@@ -297,11 +341,11 @@ function main() {
 /// A loop that erases repeatedly.
 ///
 /// Sized so that a per-crossing mistake in the box has a thousand chances to
-/// trap or diverge rather than one. It does not assert a balance — see the
-/// module header for why nothing here can yet.
+/// trap or diverge rather than one, while the native report checks every
+/// allocation is released.
 #[test]
 fn erasing_in_a_loop_stays_consistent() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 @Main
 function main() {
@@ -321,13 +365,11 @@ function main() {
 
 /// Two erased values compare by structure once their types agree.
 ///
-/// The half of `Any` that used to be missing. Nothing can read an erased value
-/// back — there is still no `is`, `as`, or downcast — but two of them can be
-/// asked whether they are the same value, which is what a test runner written
-/// in Kira needs to compare a case's result against its expectation.
+/// Erased values still have no `is`, `as`, or downcast operation, but equality
+/// can compare two values with the same erased shape.
 #[test]
 fn erased_values_compare_by_structure() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 struct Point { var x: Int = 0
     var y: Int = 0 }
@@ -387,7 +429,7 @@ function main() {
 /// than a wrong answer.
 #[test]
 fn two_types_with_one_shape_are_not_equal_erased() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 struct Point { var x: Int = 0
     var y: Int = 0 }
@@ -431,7 +473,7 @@ function main() {
 /// kind of difference this suite exists to hold to one behavior.
 #[test]
 fn a_widened_payload_equals_a_directly_erased_one() {
-    let output = assert_parity(
+    let output = assert_parity_with_heap_balance(
         r#"
 enum AppError { NotFound }
 enum Result<Value, Failure> { Ok(Value) Error(Failure) }
@@ -471,4 +513,187 @@ function main() {
 "#,
     );
     assert_eq!(output, "true\nfalse\ntrue\n");
+}
+
+/// An erased enum keeps a struct payload's nominal identity and owned fields.
+#[test]
+fn an_erased_enum_with_a_struct_payload_round_trips_and_projects() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Record {
+    let code: Int
+    let name: String
+}
+
+struct EnvelopePayload {
+    let record: Record
+    let rows: [[Int]]
+}
+
+enum Envelope {
+    Record(Record)
+    Nested(EnvelopePayload)
+    Empty
+}
+
+enum Carrier<Value> {
+    Some(Value)
+    None
+}
+
+function erase(value: Envelope) -> Any {
+    return move value
+}
+
+function widened() -> Carrier<Any> {
+    let narrow: Carrier<Record> = .Some(Record { code: 7, name: "kept" })
+    return narrow
+}
+
+function project(value: Carrier<Any>) -> Bool {
+    let expected: Any = Record { code: 7, name: "kept" }
+    match value {
+        Some(item) -> return item == expected
+        None -> return false
+    }
+}
+
+function projectEnvelope(value: Envelope) -> Bool {
+    match value {
+        Record(item) -> return item.code == 7 && item.name == "kept"
+        Nested(item) -> return item.record.code == 7 && item.rows.count == 2
+        Empty -> return false
+    }
+}
+
+function keep(value: Any) -> Any {
+    return value
+}
+
+@Main
+function main() {
+    let first: Any = Envelope.Record(Record { code: 7, name: "kept" })
+    let same: Any = Envelope.Record(Record { code: 7, name: "kept" })
+    let changed: Any = Envelope.Record(Record { code: 8, name: "kept" })
+    let nested: Any = Envelope.Nested(EnvelopePayload {
+        record: Record { code: 7, name: "kept" },
+        rows: [[1, 2], [3]]
+    })
+    let nestedSame: Any = Envelope.Nested(EnvelopePayload {
+        record: Record { code: 7, name: "kept" },
+        rows: [[1, 2], [3]]
+    })
+    let erased: Any = Envelope.Record(Record { code: 7, name: "kept" })
+    print(first == same)
+    print(first == changed)
+    print(keep(move first) == same)
+    print(nested == nestedSame)
+    print(erase(Envelope.Record(Record { code: 7, name: "kept" })) == erased)
+    print(project(widened()))
+    print(projectEnvelope(Envelope.Record(Record { code: 7, name: "kept" })))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+/// Nested arrays and structs retain their aggregate leaves through erasure.
+#[test]
+fn an_erased_enum_with_nested_array_payload_balances_and_projects() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Point {
+    let x: Int
+    let label: String
+}
+
+enum Item {
+    Point(Point)
+    Empty
+}
+
+enum Batch {
+    Points([Point])
+    Rows([[Int]])
+    Items([Item])
+    Empty
+}
+
+enum Carrier<Value> {
+    Some(Value)
+    None
+}
+
+function erase(value: Batch) -> Any {
+    return move value
+}
+
+function widened() -> Carrier<Any> {
+    let narrow: Carrier<[[Point]]> = .Some([
+        [Point { x: 1, label: "a" }],
+        [Point { x: 2, label: "b" }]
+    ])
+    return narrow
+}
+
+function project(value: Carrier<Any>) -> Bool {
+    let expected: Any = [
+        [Point { x: 1, label: "a" }],
+        [Point { x: 2, label: "b" }]
+    ]
+    match value {
+        Some(item) -> {
+            return item == expected
+        }
+        None -> return false
+    }
+}
+
+function projectBatch(value: Batch) -> Bool {
+    match value {
+        Points(items) -> return items.count == 2 && items[0].x == 1 && items[1].x == 2
+        Rows(rows) -> return rows.count == 2 && rows[0].count == 2 && rows[1].count == 1
+        Items(items) -> return items.count == 2
+        Empty -> return false
+    }
+}
+
+@Main
+function main() {
+    let first: Any = Batch.Points([
+        Point { x: 1, label: "a" },
+        Point { x: 2, label: "b" }
+    ])
+    let same: Any = Batch.Points([
+        Point { x: 1, label: "a" },
+        Point { x: 2, label: "b" }
+    ])
+    let changed: Any = Batch.Points([
+        Point { x: 1, label: "a" },
+        Point { x: 3, label: "b" }
+    ])
+    let nested: Any = Batch.Items([
+        Item.Point(Point { x: 1, label: "a" }),
+        Item.Empty
+    ])
+    let nestedSame: Any = Batch.Items([
+        Item.Point(Point { x: 1, label: "a" }),
+        Item.Empty
+    ])
+    let rows: Any = Batch.Rows([[1, 2], [3]])
+    print(first == same)
+    print(first == changed)
+    print(nested == nestedSame)
+    print(erase(Batch.Rows([[1, 2], [3]])) == rows)
+    print(project(widened()))
+    print(projectBatch(Batch.Points([
+        Point { x: 1, label: "a" },
+        Point { x: 2, label: "b" }
+    ])))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\nfalse\ntrue\ntrue\ntrue\ntrue\n");
 }

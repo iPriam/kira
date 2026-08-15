@@ -8,7 +8,7 @@
 //! The loop is small on purpose:
 //!
 //! ```text
-//! poll the watcher            -> nothing changed, almost always
+//! wait for a filesystem event -> nothing changed, almost always
 //! rebuild                     -> the compiler decides if the edit is even valid
 //! offer it to the session     -> which decides the tier and carries it out
 //! relaunch if it must         -> and say so, loudly
@@ -19,7 +19,6 @@
 //! watching worse than not watching. The diagnostics print and the old app keeps
 //! running, because the last bundle that built is still the best one there is.
 
-use std::path::Path;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -30,12 +29,12 @@ use kira_manifest::RunnerId;
 
 use crate::live::{LiveError, LiveOptions};
 
-/// How often the supervisor looks for a change.
+/// How often the supervisor services the runner while waiting for filesystem
+/// events and checks a session deadline.
 ///
-/// Fast enough that a save feels immediate, slow enough that a session is not a
-/// busy loop. A live session is a thing left running for hours in the background
-/// of someone's editor; it does not get to burn a core.
-const POLL_INTERVAL: Duration = Duration::from_millis(150);
+/// Filesystem changes wake the watcher directly; this interval is only the
+/// bounded handoff between the runner socket and the filesystem channel.
+const RUNNER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How long a runner gets to exit on its own before the session kills it.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -44,7 +43,15 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 ///
 /// `Ok(None)` means the program did not compile and its diagnostics have already
 /// been reported — a session keeps running on the last bundle that did.
-pub type Rebuild<'a> = &'a mut dyn FnMut() -> Result<Option<Bundle>, LiveError>;
+pub type Rebuild<'a> = &'a mut dyn FnMut() -> Result<Option<LiveBuild>, LiveError>;
+
+/// A successful build and the source roots that produced it.
+pub struct LiveBuild {
+    /// The bundle served to the runner.
+    pub bundle: Bundle,
+    /// The source and dependency roots to keep watching.
+    pub watch_set: WatchSet,
+}
 
 /// A runner child process that is killed if the supervisor unwinds.
 ///
@@ -89,16 +96,16 @@ impl Drop for RunnerProcess {
 }
 
 /// Runs a live session, optionally watching for changes until it is time to quit.
-pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result<(), LiveError> {
+pub fn run(options: &LiveOptions, rebuild: Rebuild<'_>) -> Result<(), LiveError> {
     if options.runner != RunnerId::Desktop {
         return Err(LiveError::NoRunnerClient {
             runner: options.runner.label(),
         });
     }
 
-    let bundle = rebuild()?.ok_or(LiveError::NothingToRun)?;
+    let initial = rebuild()?.ok_or(LiveError::NothingToRun)?;
     emit(&LiveEvent::BundleBuilt {
-        payloads: bundle.manifest().payloads.len(),
+        payloads: initial.bundle.manifest().payloads.len(),
     });
 
     // Port 0: the OS picks. A fixed port would collide with a previous session
@@ -107,7 +114,7 @@ pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result
         std::net::Ipv4Addr::LOCALHOST,
         0,
     ));
-    let server = LiveServer::bind(address, bundle.clone())?;
+    let server = LiveServer::bind(address, initial.bundle.clone())?;
     let bound = server.local_addr()?;
     emit(&LiveEvent::ServerStarted {
         address: bound.to_string(),
@@ -117,10 +124,17 @@ pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result
     // Headless: this runner has no window to present to, so the session's bar is
     // the entrypoint. That is a real bar, not a lowered one — presenting a frame
     // needs a window and a swapchain that this repo does not own.
-    let mut session = server.accept_session(bundle, true, &mut |event| emit(&event))?;
+    let mut session = server.accept_session(initial.bundle, true, &mut |event| emit(&event))?;
 
     if options.watch {
-        watch(options, source, &server, &mut session, &mut runner, rebuild)?;
+        watch(
+            options,
+            initial.watch_set,
+            &server,
+            &mut session,
+            &mut runner,
+            rebuild,
+        )?;
     } else {
         // An unwatched session is the app's, for as long as the app lasts. A
         // program that prints and returns ends it in milliseconds and an app
@@ -162,7 +176,7 @@ fn run_until_the_app_ends(
         if session.app_exited() {
             return Ok(());
         }
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(RUNNER_POLL_INTERVAL);
     }
     Ok(())
 }
@@ -170,7 +184,7 @@ fn run_until_the_app_ends(
 /// Watches for changes and gets each one into the running app.
 fn watch(
     options: &LiveOptions,
-    source: &Path,
+    watch_set: WatchSet,
     server: &LiveServer,
     session: &mut LiveSession,
     runner: &mut RunnerProcess,
@@ -186,7 +200,7 @@ fn watch(
     if options.runs_until_stopped() {
         eprintln!("kira: watching for changes; end the session with Ctrl-C");
     }
-    let mut watcher = SourceWatcher::new(watch_set(source));
+    let mut watcher = SourceWatcher::new(watch_set)?;
     // The baseline is now captured: from here on an edit will be seen. Announcing
     // it is what lets a tool — or a test — edit without racing the initial build.
     // A save that lands before this is folded into the baseline and lost, so the
@@ -208,9 +222,11 @@ fn watch(
         // discovered later, at whatever moment the session next reads.
         session.poll_runner(&mut |event| emit(&event))?;
 
-        let changes = watcher.poll();
+        let wait = deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or(RUNNER_POLL_INTERVAL);
+        let changes = watcher.wait_for(wait)?;
         if changes.is_empty() {
-            std::thread::sleep(POLL_INTERVAL);
             continue;
         }
         for change in &changes {
@@ -224,9 +240,10 @@ fn watch(
         let Some(rebuilt) = rebuild()? else {
             continue;
         };
+        watcher.update_set(rebuilt.watch_set)?;
         emit(&LiveEvent::BundleRebuilt);
 
-        match session.reload(rebuilt, hotpatch_disabled, &mut |event| emit(&event))? {
+        match session.reload(rebuilt.bundle, hotpatch_disabled, &mut |event| emit(&event))? {
             ReloadOutcome::Unchanged | ReloadOutcome::HotPatched => {}
             ReloadOutcome::NeedsRelaunch { .. } => {
                 relaunch(options, server, session, runner)?;
@@ -263,17 +280,6 @@ fn relaunch(
     Ok(())
 }
 
-/// The inputs a change to which rebuilds this program.
-///
-/// Whatever the invocation named: one file for a standalone program, and the
-/// package directory for a package — which the watcher walks, so a save
-/// anywhere under `app/` reloads rather than only a save to the entry. The
-/// watcher takes roots rather than a file precisely so that both are the same
-/// watching.
-fn watch_set(source: &Path) -> WatchSet {
-    WatchSet::new().root(source)
-}
-
 /// Prints one event.
 fn emit(event: &LiveEvent) {
     println!("{event}");
@@ -301,26 +307,12 @@ fn spawn_runner(
 mod tests {
     use super::*;
 
-    /// The watch set is what a session rebuilds from: the path the invocation
-    /// named, file or package directory alike.
+    /// A live session services the runner while the filesystem watcher blocks.
     #[test]
-    fn the_watch_set_is_the_program() {
-        let set = watch_set(Path::new("/tmp/app.kira"));
-        assert_eq!(set.roots(), [std::path::PathBuf::from("/tmp/app.kira")]);
-        let package = watch_set(Path::new("/tmp/liquid-glass-app"));
-        assert_eq!(
-            package.roots(),
-            [std::path::PathBuf::from("/tmp/liquid-glass-app")]
-        );
-    }
-
-    /// A live session polls in the background of somebody's editor for hours. It
-    /// must not spin.
-    #[test]
-    fn the_poll_interval_is_not_a_busy_loop() {
-        assert!(POLL_INTERVAL >= Duration::from_millis(50));
+    fn the_runner_service_interval_is_not_a_busy_loop() {
+        assert!(RUNNER_POLL_INTERVAL >= Duration::from_millis(50));
         assert!(
-            POLL_INTERVAL <= Duration::from_millis(500),
+            RUNNER_POLL_INTERVAL <= Duration::from_millis(500),
             "a save should feel immediate"
         );
     }

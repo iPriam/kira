@@ -15,7 +15,8 @@ pub use autobind::{
 };
 pub use native_libraries::{
     NativeLibraryPackage, NativeLibraryResolveError, NativeLinkResolution, declared_libraries,
-    resolve_native_libraries, resolve_native_library_packages,
+    resolve_native_libraries, resolve_native_libraries_with_policy,
+    resolve_native_library_packages,
 };
 pub use package_discovery::{
     BIND_TYPES_DIR_NAME, BIND_TYPES_FILE_SUFFIX, BUILD_DIR_NAME, DECLARATION_MANIFEST_FILE_NAME,

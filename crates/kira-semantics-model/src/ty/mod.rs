@@ -25,7 +25,7 @@ pub use erased::ErasedTypeId;
 pub use foreign_ptr::{ForeignPtrId, ForeignPtrTable};
 pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
-pub use structs::{FieldDef, StructDef, StructId, StructTable};
+pub use structs::{FieldDef, StructDef, StructId, StructOrigin, StructTable};
 pub use table::TypeTable;
 pub use tasks::TaskResult;
 
@@ -471,6 +471,18 @@ mod tests {
         assert!(Type::FLOAT.is_trivially_copyable());
         assert!(Type::Bool.is_trivially_copyable());
         assert!(Type::Void.is_trivially_copyable());
+    }
+
+    #[test]
+    fn pointer_words_and_capture_cells_are_trivially_copyable() {
+        let (mut table, target) = table_with_point();
+        let foreign = table.foreign_ptr_to(target);
+        let cell = table.cell_of(Type::String);
+        assert!(Type::RawPtr.is_trivially_copyable());
+        assert!(foreign.is_trivially_copyable());
+        assert!(cell.is_trivially_copyable());
+        assert!(!table.owns_heap(foreign));
+        assert!(table.owns_heap(cell));
     }
 
     #[test]

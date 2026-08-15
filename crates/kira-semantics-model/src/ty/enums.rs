@@ -172,6 +172,11 @@ impl EnumTable {
         &self.defs
     }
 
+    /// Every declared enum id, in declaration order.
+    pub fn ids(&self) -> impl Iterator<Item = EnumId> + '_ {
+        (0..self.defs.len()).map(|index| EnumId(index as u32))
+    }
+
     /// How many enums the program declares.
     pub fn len(&self) -> usize {
         self.defs.len()
@@ -209,7 +214,14 @@ impl EnumTable {
             def.variants.iter().any(|variant| {
                 matches!(
                     variant.payload,
-                    Some(Type::String | Type::Enum(_) | Type::Struct(_))
+                    Some(
+                        Type::String
+                            | Type::Array(_)
+                            | Type::Enum(_)
+                            | Type::Struct(_)
+                            | Type::Any
+                            | Type::Cell(_)
+                    )
                 )
             })
         })

@@ -58,9 +58,8 @@ pub struct WrapperSpec<'a> {
     pub content_hash: u64,
     /// The Kira checkout the generated crate takes its path dependencies from.
     ///
-    /// v1 resolves dependencies as paths into the toolchain that generated the
-    /// crate, which is why the crate is regenerated rather than committed.
-    /// Published crates are the eventual answer; see the generated README.
+    /// The generated crate resolves path dependencies into the toolchain that
+    /// generated it, so it is regenerated rather than committed.
     pub toolchain_root: &'a Path,
 }
 

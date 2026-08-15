@@ -1,6 +1,11 @@
-//! The `run`, `build`, and `check` command pipelines.
+//! What every compiling verb shares: options, discovery, the frontend, and the
+//! target each of them compiles for.
 //!
-//! All three resolve a `.kira` file or package directory, drive the salsa
+//! The verbs themselves live beside this: the ones that start a program in
+//! [`commands`], the ones that produce an artifact in [`artifacts`], the engine
+//! each of them runs on in [`execute`], and `lint` in [`lint`].
+//!
+//! All of them resolve a `.kira` file or package directory, drive the salsa
 //! frontend to collect diagnostics, and render any errors readably against the source. `check`
 //! stops there. `run` and `build` continue into the backend `--backend`
 //! selects, on the device `--device` selects.
@@ -28,28 +33,24 @@
 //! Every backend consumes the same [`IrProgram`], which is what makes their
 //! observable behavior comparable — and what the parity tests check.
 
-use kira_backend_api::BackendMode;
+use kira_backend_api::{BackendMode, WasmDevice};
 use kira_build::{Compiled, FrontendError};
 use kira_diagnostics::Diagnostic;
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_source::SourceMap;
 
-use kira_backend_api::WasmDevice;
-
-use crate::debugger;
-use crate::hybrid;
-use crate::hybrid_library;
-use crate::library;
-use crate::native;
-use crate::native_library;
 use crate::options::{CompileOptions, Device};
-use crate::progress::{err, out};
-use crate::wasm;
+use crate::progress::err;
 
+mod artifacts;
+mod commands;
 mod execute;
+mod lint;
 
-use self::execute::{build_native, run_hybrid, run_native, run_on_vm, run_web};
+pub use artifacts::{build, export, package};
+pub use commands::{check, debug, live, run, test};
+pub use lint::lint;
 
 /// Process exit code for a clean run.
 pub const EXIT_OK: i32 = 0;
@@ -57,279 +58,6 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILURE: i32 = 1;
 /// Process exit code for usage errors (missing arguments, unreadable file).
 pub const EXIT_USAGE: i32 = 2;
-
-mod lint;
-
-pub use lint::lint;
-
-/// Runs `kira check [file|dir]`: report diagnostics, never execute.
-///
-/// With no path, checks the package you are standing in — the same default
-/// `run` and `build` take.
-pub fn check(args: &[String]) -> i32 {
-    let surface = crate::progress::Surface::install("Checking");
-    let _guard = crate::progress::Finish(surface);
-    // Parsed like every other compiling verb, so a flag they share means the
-    // same thing here — `--timings` above all, which is asked of an analysis
-    // more often than of a build.
-    let options = match parse_options("check", args) {
-        Ok(options) => options,
-        Err(code) => return code,
-    };
-    crate::diagnostics::show_notes(options.show_notes);
-    let _timings = crate::timings::Timings::install(options.timings);
-    let path = options.path.as_str();
-    match compile(path, &compile_target(path, None)) {
-        Ok(compiled) => {
-            emit_diagnostics(&compiled.diagnostics, &compiled.sources);
-            if compiled.has_errors() {
-                EXIT_FAILURE
-            } else {
-                out!("ok: {path}");
-                EXIT_OK
-            }
-        }
-        Err(code) => code,
-    }
-}
-
-/// Runs `kira run [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-/// <file|dir>`: report diagnostics, then execute a clean program.
-///
-/// A wasm device does not run on this machine: it builds a module and serves it
-/// to a browser, which is what running a Kira program on the Web means.
-pub fn run(args: &[String]) -> i32 {
-    let surface = crate::progress::Surface::install("Running");
-    let _guard = crate::progress::Finish(surface);
-    let mut options = match parse_options("run", args) {
-        Ok(options) => options,
-        Err(code) => return code,
-    };
-    crate::diagnostics::show_notes(options.show_notes);
-    let _timings = crate::timings::Timings::install(options.timings);
-    options.path = match resolve_path(&options.path) {
-        Ok(path) => path,
-        Err(code) => return code,
-    };
-    let compiled = match verified(&options.path, &options_target(&options)) {
-        Ok(compiled) => compiled,
-        Err(code) => return code,
-    };
-    if let Err(code) = apply_manifest_defaults("run", &mut options, &compiled) {
-        return code;
-    }
-    let ir = match runnable_ir("run", compiled) {
-        Ok(ir) => ir,
-        Err(code) => return code,
-    };
-
-    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
-        Ok(foreign) => foreign,
-        Err(code) => return code,
-    };
-    let link = foreign_link(&foreign);
-
-    if let Device::Web(device) = options.device {
-        return run_web(&ir, &options, device, link);
-    }
-
-    match options.backend {
-        BackendMode::VmBytecode => run_on_vm(
-            &ir,
-            std::path::Path::new(&options.path),
-            link,
-            &options.program_arguments,
-        ),
-        BackendMode::LlvmNative => run_native(&ir, &options, link),
-        BackendMode::Hybrid => run_hybrid(&ir, &options, link, &options.program_arguments),
-    }
-}
-
-/// Runs `kira debug [file|dir]` with a VM, hybrid, or LLVM/LLDB debugger.
-pub fn debug(args: &[String]) -> i32 {
-    let surface = crate::progress::Surface::install("Debugging");
-    let _guard = crate::progress::Finish(surface);
-    let mut debug_options = match debugger::parse(args) {
-        Ok(options) => options,
-        Err(error) => {
-            err!("kira debug: {error}");
-            return EXIT_USAGE;
-        }
-    };
-    crate::diagnostics::show_notes(debug_options.compile.show_notes);
-    let _timings = crate::timings::Timings::install(debug_options.compile.timings);
-    debug_options.compile.path = match resolve_path(&debug_options.compile.path) {
-        Ok(path) => path,
-        Err(code) => return code,
-    };
-    let compiled = match verified(
-        &debug_options.compile.path,
-        &options_target(&debug_options.compile),
-    ) {
-        Ok(compiled) => compiled,
-        Err(code) => return code,
-    };
-    if let Err(code) = apply_manifest_defaults("debug", &mut debug_options.compile, &compiled) {
-        return code;
-    }
-    if !matches!(debug_options.compile.device, Device::Host) {
-        err!("kira debug: the debugger currently targets host VM/LLVM/hybrid runs");
-        return EXIT_USAGE;
-    }
-    let ir = match runnable_ir("debug", compiled) {
-        Ok(ir) => ir,
-        Err(code) => return code,
-    };
-    let source = std::path::Path::new(&debug_options.compile.path);
-    let info = kira_debug::DebugInfo::from_ir(
-        &ir,
-        source
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "program".to_owned()),
-        debugger::backend(debug_options.compile.backend),
-        Some(source),
-    )
-    .optimized(debug_options.compile.release);
-    let foreign = match resolve_foreign(&debug_options.compile.path, &ir, Device::Host) {
-        Ok(foreign) => foreign,
-        Err(code) => return code,
-    };
-    let link = foreign_link(&foreign);
-    match debug_options.compile.backend {
-        BackendMode::VmBytecode => debugger::run_vm(&ir, source, link, &debug_options, &info),
-        BackendMode::Hybrid => debugger::run_hybrid(&ir, source, link, &debug_options, &info),
-        BackendMode::LlvmNative => debugger::run_llvm(&ir, source, link, &debug_options, &info),
-    }
-}
-
-/// Runs a verified program through the VM instruction profiler.
-pub(crate) fn profile_vm(
-    mut options: CompileOptions,
-    max_functions: usize,
-    max_sites: usize,
-) -> i32 {
-    let surface = crate::progress::Surface::install("Profiling");
-    let _guard = crate::progress::Finish(surface);
-    crate::diagnostics::show_notes(options.show_notes);
-    let _timings = crate::timings::Timings::install(options.timings);
-    options.path = match resolve_path(&options.path) {
-        Ok(path) => path,
-        Err(code) => return code,
-    };
-    let compiled = match verified(&options.path, &options_target(&options)) {
-        Ok(compiled) => compiled,
-        Err(code) => return code,
-    };
-    if let Err(code) = apply_manifest_defaults("instruments", &mut options, &compiled) {
-        return code;
-    }
-    if !matches!(options.backend, BackendMode::VmBytecode) {
-        err!(
-            "kira instruments: instruction profiling currently requires `--backend vm`; \
-             native CPU sampling belongs to `kira debug --backend llvm`"
-        );
-        return EXIT_USAGE;
-    }
-    let ir = match runnable_ir("profile", compiled) {
-        Ok(ir) => ir,
-        Err(code) => return code,
-    };
-    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
-        Ok(foreign) => foreign,
-        Err(code) => return code,
-    };
-    debugger::run_profile_vm(
-        &ir,
-        std::path::Path::new(&options.path),
-        foreign_link(&foreign),
-        &options.program_arguments,
-        max_functions,
-        max_sites,
-    )
-}
-
-/// The function a `kira test` run enters.
-///
-/// Generated by Foundation's `TestRunner` collector macro, which is ordinary
-/// Kira: nothing in this compiler knows what a `Test` is, and this name is the
-/// whole of the agreement between the two sides.
-const TEST_ENTRY: &str = "kiraTestMain";
-
-/// Builds a program's tests and runs them, on the backend `--backend` selects.
-///
-/// The same pipeline `run` drives, with one difference: the entrypoint is the
-/// generated `kiraTestMain` rather than `@Main`. A suite therefore needs no
-/// `@Main` of its own, and one that has an application entrypoint keeps it —
-/// `kira run` on the same package still runs that.
-pub fn test(args: &[String]) -> i32 {
-    let surface = crate::progress::Surface::install("Testing");
-    let _guard = crate::progress::Finish(surface);
-    let mut options = match parse_options("test", args) {
-        Ok(options) => options,
-        Err(code) => return code,
-    };
-    crate::diagnostics::show_notes(options.show_notes);
-    let _timings = crate::timings::Timings::install(options.timings);
-    options.path = match resolve_path(&options.path) {
-        Ok(path) => path,
-        Err(code) => return code,
-    };
-    // Compiled as a test run, which neither requires an `@Main` nor refuses
-    // one: a suite is entered through the generated runner, and a package that
-    // is both an application and a suite keeps both entrypoints.
-    let compiled = match verified_as(
-        "test",
-        &options.path,
-        kira_semantics::BuildKind::Test,
-        &options_target(&options),
-    ) {
-        Ok(compiled) => compiled,
-        Err(code) => return code,
-    };
-    if let Err(code) = apply_manifest_defaults("test", &mut options, &compiled) {
-        return code;
-    }
-    let mut ir = compiled.ir;
-    // The entrypoint is retargeted before anything reads it, so every backend
-    // sees an ordinary program whose `main` happens to be the runner.
-    match ir
-        .functions
-        .iter()
-        .position(|function| function.name == TEST_ENTRY)
-    {
-        Some(index) => ir.main = Some(index as u32),
-        None => {
-            err!(
-                "kira test: this program has no tests to run\n\
-                 note: a test is a `Test` declaration, and `import Foundation` is what \
-                 brings the family and its runner into a package"
-            );
-            return EXIT_FAILURE;
-        }
-    }
-
-    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
-        Ok(foreign) => foreign,
-        Err(code) => return code,
-    };
-    let link = foreign_link(&foreign);
-
-    if let Device::Web(device) = options.device {
-        return run_web(&ir, &options, device, link);
-    }
-
-    match options.backend {
-        BackendMode::VmBytecode => run_on_vm(
-            &ir,
-            std::path::Path::new(&options.path),
-            link,
-            &options.program_arguments,
-        ),
-        BackendMode::LlvmNative => run_native(&ir, &options, link),
-        BackendMode::Hybrid => run_hybrid(&ir, &options, link, &options.program_arguments),
-    }
-}
 
 /// Resolves the program's `@FFI.Extern` imports to link inputs for `device`'s
 /// target, reporting a resolution failure as an exit code.
@@ -355,412 +83,17 @@ fn foreign_link(foreign: &Option<NativeLinkInputs>) -> &NativeLinkInputs {
 /// The inputs a program with no foreign imports links: nothing at all.
 static EMPTY_FOREIGN_LINK: NativeLinkInputs = NativeLinkInputs::EMPTY;
 
-/// Runs `kira live [runner] [file|dir] [--backend vm|hybrid]`: build a bundle,
-/// serve it, and run it on a runner client.
+/// Parses `args`, resolves the package they name, compiles it, and settles the
+/// backend and device the manifest asked for.
 ///
-/// Unlike `run`, this does not execute the program in this process: it builds a
-/// `.klbundle`, serves it over a socket, and a runner client runs it. That is
-/// what makes a live session a live session rather than a run — the app is
-/// hosted somewhere that can outlive the compiler and take a new bundle later.
-///
-/// With no path, this is the package you are standing in — the same default
-/// `run`, `build`, and `check` take.
-pub fn live(args: &[String]) -> i32 {
-    let options = match crate::live::LiveOptions::parse(args) {
-        Ok(options) => options,
-        Err(error) => {
-            err!("kira live: {error}");
-            return EXIT_USAGE;
-        }
-    };
-    // Two paths, because a package is a tree and a build has one entry. The
-    // watched path is what the user named — for a package, the whole directory,
-    // so a save anywhere in `app/` reloads. The source is the entry package
-    // discovery resolves it to, which is what names the build artifacts.
-    let watched = std::path::PathBuf::from(&options.path);
-    let entry = match resolve_path(&options.path) {
-        Ok(entry) => entry,
-        Err(code) => return code,
-    };
-    let source = std::path::Path::new(&entry);
-
-    // Compiling is a closure rather than a value, because a watched session
-    // rebuilds: the frontend runs again for every save, and a save that does not
-    // compile yields `None` rather than an error, so the session keeps the app
-    // that is already running. The frontend itself stays alive in this closure;
-    // its Salsa queries are deliberately incremental across these calls.
-    let mut frontend = kira_build::FrontendSession::new();
-    let mut rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        let Ok(ir) = runnable_path_ir_with_frontend(
-            "live",
-            &entry,
-            &crate::foreign_libs::target_for_device(Device::Host),
-            &mut frontend,
-        ) else {
-            return Ok(None);
-        };
-        // A live session runs on the machine the runner runs on, so the foreign
-        // libraries it links are the host's — resolved on every rebuild, because
-        // a save can add an import that needs one. A resolution failure is a
-        // failed build like any other: the session keeps the app it is running
-        // and the diagnostic is already on stderr.
-        let Ok(foreign) = resolve_foreign(&entry, &ir, Device::Host) else {
-            return Ok(None);
-        };
-        crate::live::build_bundle(
-            &ir,
-            source,
-            options.runner,
-            options.backend,
-            foreign_link(&foreign),
-        )
-        .map(Some)
-    };
-
-    match crate::supervisor::run(&options, &watched, &mut rebuild) {
-        Ok(()) => EXIT_OK,
-        Err(error) => {
-            err!("kira live: {error}");
-            EXIT_FAILURE
-        }
-    }
-}
-
-/// Whether the engine `backend` selects can build a library's `@Export`
-/// surface, reporting it by name when it cannot.
-///
-/// **All three host engines can**, and each produces the same generated Rust
-/// API over a different engine underneath — which is where this feature's parity
-/// is measured. The VM engine is the default and embeds a `.kbc`; the native
-/// engine emits `kira_lib_*` trampolines into an archive; the hybrid engine
-/// embeds a `.kbc` plus the `.khm` describing the `@Runtime`/`@Native` split and
-/// loads a shared library beside it.
-///
-/// What remains refused is the **wasm library artifact**, and it is refused for
-/// the artifact rather than for any engine: see the arm below. A Rust program
-/// that embeds a Kira library and is *itself* compiled to wasm is a different
-/// thing and works.
-fn export_engine_is_built(
+/// The four steps every verb that compiles a named program takes, in the one
+/// order that works: the target is decided before the frontend runs, and the
+/// manifest's defaults are applied after it, because they are read out of the
+/// program it produced.
+pub(crate) fn command_inputs(
     verb: &str,
-    backend: BackendMode,
-    device: Device,
-    ir: &IrProgram,
-) -> Result<(), i32> {
-    if ir.exports.is_empty() {
-        return Ok(());
-    }
-    let names: Vec<&str> = ir
-        .exports
-        .iter()
-        .map(|export| export.exported_name.as_str())
-        .collect();
-    let missing = match device {
-        // The wasm refusal is about the artifact, not the engine: one module,
-        // one export, and an undesigned string/allocator contract across a
-        // module boundary. It stands whether or not the library declares
-        // exports, and this names the export half of it.
-        //
-        // A Rust *application* compiled to wasm that embeds the library is a
-        // different thing entirely, and it works: the generated crate builds for
-        // `wasm32-unknown-unknown` because everything under it does.
-        Device::Web(_) => {
-            "the wasm backend emits one self-contained module with a single \
-             entrypoint, and the string/allocator contract across a wasm module \
-             boundary is undesigned\n\
-             note: a Rust program that embeds this library and is itself compiled \
-             to wasm needs none of that — build with `--backend vm` and depend on \
-             the generated crate"
-        }
-        // Every host engine builds this surface. Matched exhaustively rather
-        // than waved through with a wildcard, so a fourth backend has to decide
-        // what it does here instead of inheriting a yes.
-        Device::Host => match backend {
-            // Embeds the `.kbc` and runs it on a persistent instance.
-            BackendMode::VmBytecode => return Ok(()),
-            // Stable `kira_lib_*` trampolines, a destructor per exported class,
-            // and the per-library ABI marker, in an archive the consumer links.
-            BackendMode::LlvmNative => return Ok(()),
-            // The consumer enters the bytecode half, which calls into the native
-            // half through the seam an application already uses — so this is the
-            // one engine where a library's own `@Runtime`/`@Native` annotations
-            // still mean something.
-            BackendMode::Hybrid => return Ok(()),
-        },
-    };
-    err!(
-        "kira {verb}: `--backend {}` on `--device {}`: library export is not built yet: \
-         {missing}\n\
-         note: this package exports {}\n\
-         note: `--backend vm` builds this library's export surface today, into \
-         `.kira-build/rust/<package>/`",
-        backend.label(),
-        device.label(),
-        names.join(", "),
-    );
-    out!("Failed to {verb}");
-    Err(EXIT_FAILURE)
-}
-
-/// Runs `kira build [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-/// <file|dir>`: compile to artifacts under `.kira-build/`, without executing
-/// anything.
-pub fn build(args: &[String]) -> i32 {
-    let surface = crate::progress::Surface::install("Building");
-    let _guard = crate::progress::Finish(surface);
-    let mut options = match parse_options("build", args) {
-        Ok(options) => options,
-        Err(code) => return code,
-    };
-    crate::diagnostics::show_notes(options.show_notes);
-    let _timings = crate::timings::Timings::install(options.timings);
-    options.path = match resolve_path(&options.path) {
-        Ok(path) => path,
-        Err(code) => return code,
-    };
-    let compiled = match verified(&options.path, &options_target(&options)) {
-        Ok(compiled) => compiled,
-        Err(code) => return code,
-    };
-    if let Err(code) = apply_manifest_defaults("build", &mut options, &compiled) {
-        return code;
-    }
-    let ir = &compiled.ir;
-    if let Err(code) = export_engine_is_built("build", options.backend, options.device, ir) {
-        return code;
-    }
-    // A library and a program are built by different paths on every backend:
-    // one produces something a consumer depends on, the other something the OS
-    // can start.
-    let is_library = ir.main.is_none();
-
-    // Resolve the program's foreign imports to link inputs for the selected target
-    // once, and thread them into whichever backend runs. A library's foreign
-    // surface is not built in this milestone, so only program arms link them.
-    let foreign = match resolve_foreign(&options.path, ir, options.device) {
-        Ok(foreign) => foreign,
-        Err(_) => {
-            out!("Failed to build");
-            return EXIT_FAILURE;
-        }
-    };
-    let link = foreign_link(&foreign);
-
-    if let Device::Web(device) = options.device {
-        return match wasm::build(ir, std::path::Path::new(&options.path), device, link) {
-            Ok(artifacts) => {
-                out!("Successfully built {}", artifacts.wasm.display());
-                EXIT_OK
-            }
-            Err(error) => {
-                err!("kira: {error}");
-                out!("Failed to build");
-                EXIT_FAILURE
-            }
-        };
-    }
-
-    match options.backend {
-        BackendMode::VmBytecode if is_library => {
-            // The VM engine is the one that serves a consumer today: the
-            // artifact is the bytecode *plus* the Rust crate that embeds and
-            // calls it, because a `.kbc` on its own is nothing a Rust program
-            // can depend on.
-            match library::build(&compiled, std::path::Path::new(&options.path)) {
-                Ok(artifacts) => {
-                    library::report(&artifacts);
-                    EXIT_OK
-                }
-                Err(error) => {
-                    err!("kira: {error}");
-                    out!("Failed to build");
-                    EXIT_FAILURE
-                }
-            }
-        }
-        BackendMode::VmBytecode => {
-            // A program's VM artifact is the bytecode module itself; compiling
-            // it is the whole build. A program with foreign imports also emits
-            // the adapter sidecar a VM run loads, so `build` and `run` produce
-            // the same artifacts.
-            kira_diagnostics::progress!("compiling bytecode");
-            match kira_bytecode::compile(ir) {
-                Ok(module) => {
-                    if !ir.foreign_imports.is_empty()
-                        && let Err(error) = native::build_adapter_sidecar(
-                            ir,
-                            std::path::Path::new(&options.path),
-                            link,
-                        )
-                    {
-                        err!("kira: {error}");
-                        out!("Failed to build");
-                        return EXIT_FAILURE;
-                    }
-                    // The module the compile just produced, written where every
-                    // other backend writes. It used to be dropped on the floor:
-                    // the match bound `Ok(_)`, nothing reached the disk, and
-                    // the command still said it had built something — so `kira
-                    // build` on the default backend reported success and left
-                    // the directory exactly as it found it.
-                    let artifacts =
-                        match native::Artifacts::for_source(std::path::Path::new(&options.path)) {
-                            Ok(artifacts) => artifacts,
-                            Err(error) => {
-                                err!("kira: {error}");
-                                out!("Failed to build");
-                                return EXIT_FAILURE;
-                            }
-                        };
-                    let bytecode = artifacts.bytecode();
-                    if let Err(error) = std::fs::write(&bytecode, module.to_bytes()) {
-                        err!("kira: cannot write {}: {error}", bytecode.display());
-                        out!("Failed to build");
-                        return EXIT_FAILURE;
-                    }
-                    out!("Successfully built {}", bytecode.display());
-                    EXIT_OK
-                }
-                Err(error) => {
-                    err!("kira: bytecode compilation failed: {error}");
-                    out!("Failed to build");
-                    EXIT_FAILURE
-                }
-            }
-        }
-        BackendMode::LlvmNative if is_library => {
-            // The native engine's artifact is the archive *plus* the Rust crate
-            // that links and calls it, for the same reason the VM engine's is
-            // the bytecode plus the crate that embeds it: an archive on its own
-            // is nothing a Rust program can depend on.
-            match native_library::build(
-                &compiled,
-                std::path::Path::new(&options.path),
-                options.emit_llvm_ir,
-            ) {
-                Ok(artifacts) => {
-                    native_library::report(&artifacts);
-                    EXIT_OK
-                }
-                Err(error) => {
-                    err!("kira: {error}");
-                    out!("Failed to build");
-                    EXIT_FAILURE
-                }
-            }
-        }
-        BackendMode::LlvmNative => match build_native(ir, &options, link) {
-            Some(_) => {
-                out!("Successfully built");
-                EXIT_OK
-            }
-            None => {
-                out!("Failed to build");
-                EXIT_FAILURE
-            }
-        },
-        BackendMode::Hybrid if is_library => {
-            // Three artifacts plus the crate, and the only engine that keeps the
-            // author's `@Runtime`/`@Native` split meaningful in a library: the
-            // consumer enters the bytecode half, which calls into the native
-            // half through the seam an application already uses.
-            match hybrid_library::build(
-                &compiled,
-                std::path::Path::new(&options.path),
-                options.emit_llvm_ir,
-            ) {
-                Ok(artifacts) => {
-                    hybrid_library::report(&artifacts);
-                    EXIT_OK
-                }
-                Err(error) => {
-                    err!("kira: {error}");
-                    out!("Failed to build");
-                    EXIT_FAILURE
-                }
-            }
-        }
-        BackendMode::Hybrid => match hybrid::build(
-            ir,
-            std::path::Path::new(&options.path),
-            options.emit_llvm_ir,
-            link,
-        ) {
-            Ok(_) => {
-                out!("Successfully built");
-                EXIT_OK
-            }
-            Err(error) => {
-                err!("kira: {error}");
-                out!("Failed to build");
-                EXIT_FAILURE
-            }
-        },
-    }
-}
-
-/// Runs `kira package`: the distribution-facing library build.
-///
-/// Library artifacts already contain the complete consumer contract — the VM
-/// bytecode plus wrapper crate, the LLVM archive plus wrapper, or the hybrid
-/// bundle plus wrapper. This verb adds the important precondition that an
-/// application cannot accidentally be published as a package, then delegates
-/// the artifact work to the same build paths `kira build` uses.
-pub fn package(args: &[String]) -> i32 {
-    let (options, compiled) = match library_command_inputs("package", args) {
-        Ok(inputs) => inputs,
-        Err(code) => return code,
-    };
-    if !matches!(options.device, Device::Host) {
-        err!(
-            "kira package: library distribution currently targets host consumers; \
-             wasm application artifacts use `kira build --device wasm32`"
-        );
-        return EXIT_USAGE;
-    }
-    if compiled.ir.main.is_some() {
-        err!(
-            "kira package: `{}` is an application, not a library; \
-             set `let kind = .Library` and provide a consumer-facing package",
-            options.path
-        );
-        return EXIT_FAILURE;
-    }
-    build(args)
-}
-
-/// Runs `kira export`: build a library that actually exposes an embedding API.
-pub fn export(args: &[String]) -> i32 {
-    let (options, compiled) = match library_command_inputs("export", args) {
-        Ok(inputs) => inputs,
-        Err(code) => return code,
-    };
-    if !matches!(options.device, Device::Host) {
-        err!(
-            "kira export: exported library surfaces currently target host consumers; \
-             wasm export ABI is not defined"
-        );
-        return EXIT_USAGE;
-    }
-    if compiled.ir.main.is_some() {
-        err!(
-            "kira export: `{}` is an application, not a library",
-            options.path
-        );
-        return EXIT_FAILURE;
-    }
-    if compiled.ir.exports.is_empty() {
-        err!(
-            "kira export: `{}` declares no `@Export` functions; add at least one \
-             consumer-facing export before building the wrapper",
-            options.path
-        );
-        return EXIT_FAILURE;
-    }
-    build(args)
-}
-
-/// Parses and verifies the common library-command precondition once.
-fn library_command_inputs(verb: &str, args: &[String]) -> Result<(CompileOptions, Compiled), i32> {
+    args: &[String],
+) -> Result<(CompileOptions, Compiled), i32> {
     let mut options = parse_options(verb, args)?;
     options.path = resolve_path(&options.path)?;
     let compiled = verified(&options.path, &options_target(&options))?;
@@ -768,12 +101,36 @@ fn library_command_inputs(verb: &str, args: &[String]) -> Result<(CompileOptions
     Ok((options, compiled))
 }
 
+/// A compiled program's IR, refusing a library that has no entrypoint.
+pub(crate) fn entrypoint_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
+    runnable_ir(verb, compiled)
+}
+
+/// The link inputs a program's `@FFI.Extern` imports resolve to.
+pub(crate) fn foreign_inputs(
+    source: &str,
+    ir: &IrProgram,
+    device: Device,
+) -> Result<Option<NativeLinkInputs>, i32> {
+    resolve_foreign(source, ir, device)
+}
+
+/// The link inputs to pass a backend, empty when there are no foreign imports.
+pub(crate) fn foreign_link_of(foreign: &Option<NativeLinkInputs>) -> &NativeLinkInputs {
+    foreign_link(foreign)
+}
+
 /// Parses shared options, reporting usage errors against `verb`.
 fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
-    CompileOptions::parse(args).map_err(|error| {
+    let options = CompileOptions::parse(args).map_err(|error| {
         err!("kira {verb}: {error}");
         EXIT_USAGE
-    })
+    })?;
+    if options.quit_after.is_some() && verb != "run" {
+        err!("kira {verb}: `--quit-after` bounds a running program, and `{verb}` does not run one");
+        return Err(EXIT_USAGE);
+    }
+    Ok(options)
 }
 
 /// Resolves a package directory to the source file that seeds compilation.
@@ -954,14 +311,15 @@ fn verified_with_frontend(
     Ok(compiled)
 }
 
-/// Compiles a live path against the frontend session retained by the watcher.
-fn runnable_path_ir_with_frontend(
-    verb: &str,
+/// Compiles a live path while retaining the source map that defines its watch
+/// roots. The caller still applies the runnable-program check after it has
+/// collected those roots.
+pub(crate) fn runnable_path_compiled_with_frontend(
     path: &str,
     target: &kira_native_lib_definition::TargetTriple,
     frontend: &mut kira_build::FrontendSession,
-) -> Result<IrProgram, i32> {
-    runnable_ir(verb, verified_with_frontend(path, target, frontend)?)
+) -> Result<Compiled, i32> {
+    verified_with_frontend(path, target, frontend)
 }
 
 /// Returns a compiled program's IR, refusing a library by name.
@@ -970,7 +328,7 @@ fn runnable_path_ir_with_frontend(
 /// entrypoint by construction, so there is nothing to start — said plainly,
 /// with the reason, rather than by failing somewhere further down where the
 /// missing entrypoint looks like a compiler fault.
-fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
+pub(crate) fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
     let ir = compiled.ir;
     if ir.main.is_none() {
         err!(

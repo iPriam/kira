@@ -30,7 +30,7 @@ impl FunctionLowering<'_, '_> {
             IrCallee::Print => {
                 let argument = *args
                     .first()
-                    .ok_or(LlvmError::Unsupported("a print with no argument"))?;
+                    .ok_or(LlvmError::internal("a print with no argument"))?;
                 let ty = self.type_of(argument);
                 let mut value = self.lower_expr(argument)?;
                 let helper = match ty {
@@ -38,10 +38,10 @@ impl FunctionLowering<'_, '_> {
                     // none has a rendering the language pins — so a program that
                     // type-checked never reaches any of these arms.
                     Type::Array(_) => {
-                        return Err(LlvmError::Unsupported("a print of an array"));
+                        return Err(LlvmError::internal("a print of an array"));
                     }
                     Type::Enum(_) => {
-                        return Err(LlvmError::Unsupported("a print of an enum"));
+                        return Err(LlvmError::internal("a print of an enum"));
                     }
                     Type::Int(_) => self.codegen.runtime.print_int,
                     Type::Float(_) => self.codegen.runtime.print_float,
@@ -65,7 +65,7 @@ impl FunctionLowering<'_, '_> {
                     // not pinned by the language — so this is unreachable from
                     // a program that type-checked.
                     Type::Struct(_) => {
-                        return Err(LlvmError::Unsupported("a print of a struct"));
+                        return Err(LlvmError::internal("a print of a struct"));
                     }
                     // Analysis rejects `print` of a raw pointer (an opaque
                     // foreign word has no pinned rendering) and `CString` is
@@ -76,16 +76,16 @@ impl FunctionLowering<'_, '_> {
                     | Type::NativeState(_)
                     | Type::Task(_)
                     | Type::Cell(_) => {
-                        return Err(LlvmError::Unsupported("a print of a raw pointer"));
+                        return Err(LlvmError::internal("a print of a raw pointer"));
                     }
                     // Analysis rejects `print` of an erased value for the same
                     // reason it rejects a struct or an array: no rendering is
                     // pinned, and here there is not even a type to pin one for.
                     Type::Any => {
-                        return Err(LlvmError::Unsupported("a print of an erased value"));
+                        return Err(LlvmError::internal("a print of an erased value"));
                     }
                     Type::Void | Type::Error => {
-                        return Err(LlvmError::Unsupported("printing a value with no type"));
+                        return Err(LlvmError::internal("printing a value with no type"));
                     }
                 };
                 Ok(self.call(helper, &mut [value], c""))
@@ -95,7 +95,7 @@ impl FunctionLowering<'_, '_> {
                     .codegen
                     .functions
                     .get(index as usize)
-                    .ok_or(LlvmError::Unsupported("a call to an unknown function"))?;
+                    .ok_or(LlvmError::internal("a call to an unknown function"))?;
                 // A written-through parameter is taken by reference: the caller
                 // hands over a pointer into its place, so the callee's writes
                 // land in the caller's storage.
@@ -249,7 +249,7 @@ impl FunctionLowering<'_, '_> {
             .get(index as usize)
             .copied()
             .flatten()
-            .ok_or(LlvmError::Unsupported(
+            .ok_or(LlvmError::internal(
                 "a writeback call to a function not in this half",
             ))?;
         let mut pointers: Vec<(u32, LLVMValueRef)> = Vec::with_capacity(writebacks.len());
@@ -407,7 +407,7 @@ impl FunctionLowering<'_, '_> {
                 .functions
                 .get(index as usize)
                 .and_then(|callee| callee.param_type(writeback.param))
-                .ok_or(LlvmError::Unsupported(
+                .ok_or(LlvmError::internal(
                     "a writeback naming a parameter the callee does not have",
                 ))?;
             // SAFETY: `argv` holds `values.len()` slots, and a writeback's

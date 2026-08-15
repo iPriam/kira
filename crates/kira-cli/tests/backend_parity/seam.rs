@@ -1,6 +1,6 @@
 //! Parity across the hybrid seam: crossings, traps, and bridge types.
 
-use crate::{assert_parity, assert_trap_parity};
+use crate::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
 
 /// The simplest crossing: the VM half reaches a native callee and gets a value
 /// back.
@@ -86,6 +86,154 @@ function main() {
 "#,
     );
     assert_eq!(output, "42\n");
+}
+
+/// `Any` crosses directly in both seam directions. The native caller invokes
+/// the runtime callee, while the runtime caller invokes the native callee, so
+/// both the argument tree and the returned tree are exercised.
+#[test]
+fn any_crosses_directly_in_both_seam_directions() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+@Native
+function native_echo(value: Any) -> Any {
+    return value
+}
+
+@Runtime
+function runtime_echo(value: Any) -> Any {
+    return value
+}
+
+@Native
+function native_calls_runtime(value: Any) -> Any {
+    return runtime_echo(move value)
+}
+
+@Runtime
+function runtime_calls_native(value: Any) -> Any {
+    return native_echo(move value)
+}
+
+@Main
+@Runtime
+function main() {
+    let expectedNumber: Any = 7
+    let expectedText: Any = "runtime"
+    print(runtime_calls_native(7) == expectedNumber)
+    print(native_calls_runtime("runtime") == expectedText)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\n");
+}
+
+/// An `Any` nested in a struct and in two array levels survives both seam
+/// directions. Comparing the returned fields proves the recursive payload was
+/// rebuilt rather than merely carrying an opaque root handle.
+#[test]
+fn nested_any_crosses_both_seam_directions_and_releases() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Envelope {
+    let direct: Any
+    let layers: [[Any]]
+}
+
+@Runtime
+function runtime_envelope(value: Envelope) -> Envelope {
+    return value
+}
+
+@Native
+function native_through_runtime(value: Envelope) -> Envelope {
+    return runtime_envelope(move value)
+}
+
+@Native
+function native_envelope(value: Envelope) -> Envelope {
+    return value
+}
+
+@Runtime
+function runtime_through_native(value: Envelope) -> Envelope {
+    return native_envelope(move value)
+}
+
+@Main
+@Runtime
+function main() {
+    let value = Envelope {
+        direct: "payload",
+        layers: [[1, "one"], [true, 3.5]]
+    }
+    let first = native_through_runtime(copy value)
+    let second = runtime_through_native(copy value)
+    let text: Any = "payload"
+    let one: Any = "one"
+    let truth: Any = true
+    print(first.direct == text)
+    print(first.layers[0][1] == one)
+    print(first.layers[1][0] == truth)
+    print(second.direct == text)
+    print(second.layers[0][1] == one)
+    print(second.layers[1][0] == truth)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+#[test]
+fn any_aggregate_payloads_cross_both_seams_with_their_dynamic_identity() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Point {
+    let x: Int
+    let label: String
+}
+
+enum Choice {
+    Point(Point)
+    Empty
+}
+
+@Native
+function native_echo(value: Any) -> Any {
+    return value
+}
+
+@Runtime
+function runtime_echo(value: Any) -> Any {
+    return value
+}
+
+@Native
+function native_calls_runtime(value: Any) -> Any {
+    return runtime_echo(move value)
+}
+
+@Runtime
+function runtime_calls_native(value: Any) -> Any {
+    return native_echo(move value)
+}
+
+@Main
+@Runtime
+function main() {
+    let expectedPoint: Any = Point(x: 3, label: "point")
+    let expectedNumbers: Any = [1, 2, 3]
+    let expectedChoice: Any = Choice.Point(Point(x: 4, label: "choice"))
+    print(runtime_calls_native(Point(x: 3, label: "point")) == expectedPoint)
+    print(native_calls_runtime([1, 2, 3]) == expectedNumbers)
+    print(runtime_calls_native(Choice.Point(Point(x: 4, label: "choice"))) == expectedChoice)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\n");
 }
 
 /// A string crossing into native code and back out again. This is the case the

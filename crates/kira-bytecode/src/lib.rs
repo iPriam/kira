@@ -19,7 +19,7 @@ pub mod validate;
 
 pub use compile::{CompileError, compile, compile_hybrid};
 pub use exports::{ExportTable, ExportType, ModuleExport};
-pub use module::{FrameRelease, FuncProto, MAGIC, Module, ModuleDecodeError};
+pub use module::{FrameRelease, FuncProto, LEGACY_MAGIC, MAGIC, Module, ModuleDecodeError};
 pub use op::{DecodeError, Instruction, decode, encode};
 pub use validate::ModuleValidateError;
 
@@ -325,27 +325,20 @@ mod tests {
     }
 
     #[test]
-    fn too_many_locals_is_a_typed_error() {
-        // 70_000 locals exceed the format's u16 slot operand.
-        let program = single_main(
-            vec![IrStmt::Return { value: None }],
-            la_arena::Arena::new(),
-            70_000,
-        );
-        assert!(matches!(
-            compile(&program),
-            Err(CompileError::TooManyLocals { count: 70_000, .. })
-        ));
-    }
-
-    #[test]
-    fn out_of_range_local_slot_is_a_typed_error() {
+    fn locals_beyond_the_legacy_slot_limit_compile_and_round_trip() {
         let mut exprs = la_arena::Arena::new();
         let read = exprs.alloc(IrExpr::Local(70_000));
-        let program = single_main(vec![IrStmt::Eval { expr: read }], exprs, 1);
-        assert!(matches!(
-            compile(&program),
-            Err(CompileError::LocalSlotOutOfRange { slot: 70_000, .. })
-        ));
+        let program = single_main(vec![IrStmt::Eval { expr: read }], exprs, 70_001);
+        let module = compile(&program).expect("wide local slots compile");
+        assert_eq!(module.functions[0].local_count, 70_001);
+        assert!(
+            module.functions[0]
+                .code
+                .contains(&Instruction::LoadLocal(70_000))
+        );
+        assert_eq!(
+            Module::from_bytes(&module.to_bytes()).expect("round trips"),
+            module
+        );
     }
 }

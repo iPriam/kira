@@ -1,4 +1,4 @@
-//! The KBC1 foreign-import section: the `@FFI.Extern` rows a `CallForeign` id
+//! The foreign-import section: the `@FFI.Extern` rows a `CallForeign` id
 //! indexes, and the C-layout aggregate table those rows index in turn.
 //!
 //! Appended after the exports section, with the same append-only discipline:
@@ -20,29 +20,29 @@ use kira_runtime_abi::{
     ForeignCallback, ForeignImport, ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 
-use crate::module::{ModuleDecodeError, Reader, write_bytes, write_u32};
+use crate::module::{Format, ModuleDecodeError, Reader, write_bytes, write_count, write_u32};
 
 /// The member byte that introduces a nested aggregate; anything else is a
 /// scalar's own foreign-type tag.
 const NESTED_MEMBER_TAG: u8 = 0xff;
 
 /// The member byte that introduces an inline fixed-size array: the element's own
-/// member byte (with its index when nested) follows, then a `u32` count.
+/// member byte (with its index when nested) follows, then an external count.
 const ARRAY_MEMBER_TAG: u8 = 0xfe;
 
 /// Writes the foreign-import section: a count, then one row per import.
 ///
 /// Each row is the library name, the C symbol, the ABI tag byte, the parameter
 /// count, one type-spec per parameter, and the result spec. A spec is one tag
-/// byte, followed by a `u32` table index when the tag names an aggregate.
+/// byte, followed by an external table index when the tag names an aggregate.
 pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
-    write_u32(out, imports.len() as u32);
+    write_count(out, imports.len());
     for import in imports {
         write_bytes(out, import.library().as_bytes());
         write_bytes(out, import.symbol().as_bytes());
         out.push(import.abi().tag());
         let signature = import.signature();
-        write_u32(out, signature.parameters().len() as u32);
+        write_count(out, signature.parameters().len());
         for parameter in signature.parameters() {
             write_spec(out, *parameter);
         }
@@ -54,13 +54,13 @@ pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
 /// declaration order.
 ///
 /// A member is one byte — a scalar's foreign-type tag, [`NESTED_MEMBER_TAG`]
-/// followed by a `u32` index, or [`ARRAY_MEMBER_TAG`] followed by the element's
-/// own member bytes and a `u32` count. The tags are unambiguous because no
+/// followed by an external index, or [`ARRAY_MEMBER_TAG`] followed by the
+/// element's own member bytes and an external count. The tags are unambiguous because no
 /// scalar tag reaches `0xfe`.
 pub(crate) fn write_foreign_aggregates(out: &mut Vec<u8>, aggregates: &ForeignAggregates) {
-    write_u32(out, aggregates.len() as u32);
+    write_count(out, aggregates.len());
     for aggregate in aggregates.iter() {
-        write_u32(out, aggregate.members().len() as u32);
+        write_count(out, aggregate.members().len());
         for member in aggregate.members() {
             match member {
                 ForeignMember::Scalar(ty) => out.push(ty.tag()),
@@ -92,22 +92,23 @@ pub(crate) fn write_foreign_aggregates(out: &mut Vec<u8>, aggregates: &ForeignAg
 /// guessed value.
 pub(crate) fn read_foreign(
     reader: &mut Reader<'_>,
+    format: Format,
 ) -> Result<Vec<ForeignImport>, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(Vec::new());
     }
-    let count = reader.read_u32()?;
+    let count = reader.read_index_count(format, "foreign import")?;
     let mut imports = Vec::new();
     for _ in 0..count {
-        let library = reader.read_string()?;
-        let symbol = reader.read_string()?;
+        let library = reader.read_string(format)?;
+        let symbol = reader.read_string(format)?;
         let abi_byte = reader.take(1)?[0];
         let abi =
             ForeignAbi::from_tag(abi_byte).ok_or_else(|| ModuleDecodeError::UnknownForeignAbi {
                 import: symbol.clone(),
                 tag: abi_byte,
             })?;
-        let param_count = reader.read_u32()?;
+        let param_count = reader.read_count(format)?;
         let mut parameters = Vec::new();
         for _ in 0..param_count {
             parameters.push(read_spec(reader, &symbol)?);
@@ -128,13 +129,14 @@ pub(crate) fn read_foreign(
 pub(crate) fn read_foreign_aggregates(
     reader: &mut Reader<'_>,
     imports: &[ForeignImport],
+    format: Format,
 ) -> Result<ForeignAggregates, ModuleDecodeError> {
     let mut aggregates = ForeignAggregates::new();
     if !reader.is_at_end() {
-        let count = reader.read_u32()?;
+        let count = reader.read_index_count(format, "foreign aggregate")?;
         for index in 0..count {
-            let member_count = reader.read_u32()?;
-            let mut members = Vec::with_capacity(member_count as usize);
+            let member_count = reader.read_count(format)?;
+            let mut members = Vec::new();
             for _ in 0..member_count {
                 members.push(read_member(reader, index)?);
             }
@@ -170,11 +172,11 @@ pub(crate) fn read_foreign_aggregates(
 /// Appended after the aggregate table, which a callback signature may index
 /// exactly as an import's does.
 pub(crate) fn write_foreign_callbacks(out: &mut Vec<u8>, callbacks: &[ForeignCallback]) {
-    write_u32(out, callbacks.len() as u32);
+    write_count(out, callbacks.len());
     for callback in callbacks {
         write_u32(out, callback.function());
         let signature = callback.signature();
-        write_u32(out, signature.parameters().len() as u32);
+        write_count(out, signature.parameters().len());
         for parameter in signature.parameters() {
             write_spec(out, *parameter);
         }
@@ -185,19 +187,20 @@ pub(crate) fn write_foreign_callbacks(out: &mut Vec<u8>, callbacks: &[ForeignCal
 /// Reads the callback table, or an empty one when the stream ends first.
 pub(crate) fn read_foreign_callbacks(
     reader: &mut Reader<'_>,
+    format: Format,
 ) -> Result<Vec<ForeignCallback>, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(Vec::new());
     }
-    let count = reader.read_u32()?;
-    let mut callbacks = Vec::with_capacity(count as usize);
+    let count = reader.read_index_count(format, "foreign callback")?;
+    let mut callbacks = Vec::new();
     for index in 0..count {
         let function = reader.read_u32()?;
         // A callback row names no symbol, so a malformed type tag is reported
         // against the row's own index rather than an import's name.
         let named = format!("callback {index}");
-        let param_count = reader.read_u32()?;
-        let mut parameters = Vec::with_capacity(param_count as usize);
+        let param_count = reader.read_count(format)?;
+        let mut parameters = Vec::new();
         for _ in 0..param_count {
             parameters.push(read_spec(reader, &named)?);
         }
@@ -237,7 +240,7 @@ fn read_spec(reader: &mut Reader<'_>, import: &str) -> Result<ForeignTypeSpec, M
 
 /// Reads one aggregate member, naming the containing aggregate on an unknown
 /// scalar tag.
-fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, ModuleDecodeError> {
+fn read_member(reader: &mut Reader<'_>, index: u64) -> Result<ForeignMember, ModuleDecodeError> {
     let tag = reader.take(1)?[0];
     if tag == NESTED_MEMBER_TAG {
         return Ok(ForeignMember::Aggregate(ForeignAggregateId(
@@ -263,7 +266,7 @@ fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, Mod
 /// here is as unknown as any other tag the writer never emits.
 fn read_array_element(
     reader: &mut Reader<'_>,
-    index: u32,
+    index: u64,
 ) -> Result<ForeignArrayElement, ModuleDecodeError> {
     let tag = reader.take(1)?[0];
     if tag == NESTED_MEMBER_TAG {
@@ -371,7 +374,7 @@ mod tests {
         let mut bare = foreign_module();
         bare.foreign_imports = Vec::new();
         let functions_end = bare.to_bytes().len();
-        let foreign_start = functions_end + 8;
+        let foreign_start = functions_end + 16;
 
         let bytes = foreign_module().to_bytes();
         let complete = bytes.len();
@@ -423,7 +426,7 @@ mod tests {
     #[test]
     fn an_unknown_abi_tag_is_a_typed_error() {
         let mut bytes = single_import_module().to_bytes();
-        let abi_index = bytes.len() - 7;
+        let abi_index = bytes.len() - 11;
         bytes[abi_index] = 0x7f;
         assert!(matches!(
             Module::from_bytes(&bytes),

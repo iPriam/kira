@@ -423,6 +423,9 @@ impl Analyzer<'_> {
                 if let Some(call) = self.analyze_string_conversion(ctx, &name, &args, callee_span) {
                     return call;
                 }
+                if let Some(call) = self.analyze_raw_pointer_word(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 // `taskYield()` / `taskSleep(ms)` are the executor's two
                 // suspend points. They are builtins rather than library
                 // functions because the compiler has to *see* them: a call to
@@ -623,13 +626,28 @@ impl Analyzer<'_> {
                 args,
                 ..
             } => self.analyze_method_call(ctx, receiver, method, method_span, &args, expected),
+            // A bare `{ … }` block is the anonymous spelling of a named child
+            // fill, so it is a value nowhere else. Its children are analyzed so
+            // their own mistakes surface before it is refused.
+            Expr::Content { ref children, span } => {
+                let children = children.clone();
+                for &child in &children {
+                    self.analyze_expr(ctx, child);
+                }
+                self.emit(
+                    span,
+                    "KSEM273",
+                    "a `{ … }` content block fills a child slot by name, so it is not a value here",
+                );
+                self.program.exprs.alloc(HirExpr::Error)
+            }
             // A `For`/`if` builder only ever reaches analysis as a construction's
-            // content child, where [`fill_content_slots`] expands it or refuses
-            // the surrounding block (`KSEM229`/`KSEM230`/`KSEM242`). Reaching
-            // ordinary expression analysis means the surrounding construction
-            // was already rejected for another reason; its sub-expressions are
-            // still analyzed so their own mistakes surface, then it stands in
-            // with an error value rather than adding a second, vaguer message.
+            // content child, where [`fill_child_slots`] expands it or refuses
+            // the surrounding block (`KSEM229`/`KSEM242`). Reaching ordinary
+            // expression analysis means the surrounding construction was already
+            // rejected for another reason; its sub-expressions are still
+            // analyzed so their own mistakes surface, then it stands in with an
+            // error value rather than adding a second, vaguer message.
             Expr::ContentFor {
                 iterable, ref body, ..
             } => {

@@ -22,6 +22,28 @@ impl StructId {
     }
 }
 
+/// Where a struct in the table came from.
+///
+/// One question depends on the answer: whether the field list is part of the
+/// type's identity. For everything an author declares it is — a field added or
+/// retyped is a different shape. For a function type's representation it is not,
+/// and cannot be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StructOrigin {
+    /// Written in source, or minted for a class or a construct-backed type.
+    #[default]
+    Declared,
+    /// Minted by the closure desugar as a function type's representation.
+    ///
+    /// Its fields are the captures of every closure literal of that type the
+    /// compilation found, so the list grows with the *program* rather than with
+    /// the type: two compilations that see different literals of one function
+    /// type build different field lists for it. The name is the signature, and
+    /// the signature is the type, so anything that has to identify this across
+    /// compilations reads the name and stops.
+    FunctionType,
+}
+
 /// One declared struct: its name and its stored fields, in declaration order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
@@ -76,6 +98,8 @@ pub struct StructTable {
     defs: Vec<StructDef>,
     // Kept in step with `defs` by `declare_owned`, the only way to add one.
     index: std::collections::HashMap<String, StructId>,
+    // Index-aligned with `defs`, and written by the same one place.
+    origins: Vec<StructOrigin>,
 }
 
 /// The index key a declaration sits under.
@@ -106,6 +130,28 @@ impl StructTable {
         self.declare_owned(None, def)
     }
 
+    /// Adds the representation struct of a function type.
+    ///
+    /// Recorded as such because its field list is not part of the type's
+    /// identity; see [`StructOrigin::FunctionType`].
+    pub fn declare_function_type(&mut self, def: StructDef) -> Option<StructId> {
+        let id = self.declare_owned(None, def)?;
+        self.origins[id.0 as usize] = StructOrigin::FunctionType;
+        Some(id)
+    }
+
+    /// Where the struct at `id` came from.
+    ///
+    /// [`StructOrigin::Declared`] for an id this table never minted, which is
+    /// the answer that treats an unknown row as an ordinary shape rather than
+    /// as one whose fields may be ignored.
+    pub fn origin(&self, id: StructId) -> StructOrigin {
+        self.origins
+            .get(id.0 as usize)
+            .copied()
+            .unwrap_or(StructOrigin::Declared)
+    }
+
     /// Adds a struct `owner` declares, returning its id, or `None` when that
     /// package already declares the name.
     ///
@@ -120,6 +166,7 @@ impl StructTable {
         let id = StructId(u32::try_from(self.defs.len()).ok()?);
         self.index.insert(key, id);
         self.defs.push(def);
+        self.origins.push(StructOrigin::Declared);
         Some(id)
     }
 

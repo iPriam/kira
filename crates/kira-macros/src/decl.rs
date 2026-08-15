@@ -575,6 +575,23 @@ fn scan_variants(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
             let end = payload_end(file, index + 2, close);
             type_text = file.slice(file.span_of(index + 2, end)).trim().to_owned();
             last = end;
+        } else if file.kind(index + 1) == TokenKind::LParen {
+            // `Rank(Int)` — the payload form with no default. Scanning only the
+            // `Name: Type` form left the parenthesized payload unread AND the
+            // scan positioned inside the parentheses, so the payload's TYPE was
+            // then reflected as a variant of its own: `Note { Rank(Int) }` came
+            // back as two variants, `Rank` and `Int`, and every derive built
+            // over `target.fields` emitted an arm for a variant that does not
+            // exist.
+            if let Some(end) = file.match_close(index + 1) {
+                if end > index + 2 {
+                    type_text = file
+                        .slice(file.span_of(index + 2, end - 1))
+                        .trim()
+                        .to_owned();
+                }
+                last = end;
+            }
         }
         let span = file.span_of(index, last);
         fields.push(Field {
@@ -764,6 +781,31 @@ mod tests {
         let declaration = scan_text("enum Outcome {\n    Ok: Int\n    Error: AppError\n}\n");
         assert_eq!(declaration.fields[0].type_text, "Int");
         assert_eq!(declaration.fields[1].type_text, "AppError");
+    }
+
+    #[test]
+    fn a_parenthesized_payload_is_the_variants_type_not_a_variant() {
+        // The `Name(Type)` form went unscanned, so the payload type came back as
+        // a variant of its own and every derive emitted an arm for it.
+        let declaration =
+            scan_text("enum Note {\n    Blank\n    Rank(Int)\n    Tag(String)\n}\n");
+        let names: Vec<&str> = declaration
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Blank", "Rank", "Tag"]);
+        assert_eq!(declaration.fields[0].type_text, "");
+        assert_eq!(declaration.fields[1].type_text, "Int");
+        assert_eq!(declaration.fields[2].type_text, "String");
+    }
+
+    #[test]
+    fn an_empty_payload_list_is_a_payload_less_variant() {
+        let declaration = scan_text("enum Flag {\n    On()\n    Off\n}\n");
+        assert_eq!(declaration.fields.len(), 2);
+        assert_eq!(declaration.fields[0].name, "On");
+        assert_eq!(declaration.fields[0].type_text, "");
     }
 
     #[test]

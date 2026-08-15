@@ -1,0 +1,56 @@
+// Callback state created before a crossing into C, recovered on the other side.
+//
+// This is the shape every windowed application has: state is boxed once, its
+// token goes to a library as a userdata word, and every event the library
+// delivers recovers it. What makes it worth pinning is that the callback runs
+// in a *nested* run of the engine — the interpreter is already borrowed by the
+// foreign call C was reached from, so the callback gets a fresh heap and
+// operand stack. Callback state therefore outlives any one of them, and an
+// engine that kept it anywhere heap-local would lose it exactly here: the outer
+// run would box it, the callback would find nothing, and the failure would be a
+// trap inside a library's event loop rather than at the line that boxed it.
+
+@FFI.Callback { abi: c; params: [U64, I32]; result: I32; }
+struct UserdataTaker {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_call_userdata_twice; abi: c; }
+function callUserdataTwice(take: UserdataTaker, userdata: U64, n: I32) -> I32;
+
+struct FrameCounter {
+    var hits: Int = 0
+    var label: String = ""
+    var marks: [Int] = []
+}
+
+// What C calls. It recovers the state its userdata names, writes through it,
+// and reads a field back — all inside the nested run.
+function onFrame(userdata: U64, n: I32) -> I32 {
+    var state = nativeRecover<FrameCounter>(RawPtr(userdata))
+    state.hits = state.hits + 1
+    state.marks.append(Int(n))
+    // Read back through the same view: what this run wrote has to be readable
+    // by this run, and the string boxed by the *outer* run has to still be here.
+    if state.label != "kept" {
+        return 0 - 1
+    }
+    return Int32(state.hits * 100 + Int(n))
+}
+
+@Main function main() {
+    let boxed = nativeState(FrameCounter { label: "kept" })
+    let handle = nativeUserData(boxed)
+
+    let taker: UserdataTaker = onFrame
+    // 1 * 100 + 7 = 107 on the first crossing, then 2 * 100 + 107 = 307.
+    print(callUserdataTwice(taker, U64(rawPointerWord(handle)), 7))
+
+    // Back in the outer run: both crossings' writes are here.
+    var after = nativeRecover<FrameCounter>(handle)
+    print(after.hits)
+    print(after.label)
+    print(after.marks.count)
+    print(after.marks[0])
+    print(after.marks[1])
+    nativeStateFree(boxed)
+    return
+}

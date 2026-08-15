@@ -141,6 +141,96 @@ impl Parser<'_> {
         children
     }
 
+    /// Whether the cursor sits on a **named child fill**: the `detail:` of
+    /// `NavigationSplitView { … } detail: { … }`.
+    ///
+    /// A fill binds to the construction it is written *after*; an override
+    /// binds to the construction it is written *inside*. When both readings fit
+    /// — a fill written directly after a child that closed its own block — the
+    /// nearer construction wins, and `let name = value` remains the spelling
+    /// that names the enclosing one unambiguously.
+    pub(crate) fn at_named_fill(&self) -> bool {
+        !self.no_named_fill
+            && !self.no_struct_literal
+            && self.at(TokenKind::Identifier)
+            && self.peek(1).kind == TokenKind::Colon
+    }
+
+    /// Whether the construction just parsed closed with a `}` of its own, which
+    /// is what admits the named fills that follow it.
+    ///
+    /// Without this, a bare `Text("a")` inside a content block would swallow the
+    /// `spacing: 8` override written after it, which belongs to the enclosing
+    /// construction instead.
+    pub(crate) fn at_fillable_construction(&self, base: ExprId) -> bool {
+        self.previous_kind() == TokenKind::RBrace
+            && matches!(self.tree.expr(base), Expr::Call { .. })
+    }
+
+    /// Parses the run of named child fills closing a construction, folding each
+    /// into the call's arguments; analysis routes a fill whose label names a
+    /// child slot to that slot.
+    pub(super) fn attach_named_fills(&mut self, mut base: ExprId) -> ExprId {
+        while self.at_named_fill() {
+            let Expr::Call {
+                callee,
+                callee_span,
+                braced,
+                type_args,
+                args,
+                children,
+                span: base_span,
+            } = self.tree.expr(base).clone()
+            else {
+                break;
+            };
+            let mut args = args;
+            args.push(self.parse_named_fill());
+            let span = Span::from_bounds(base_span.start, self.previous_end());
+            base = self.tree.add_expr(Expr::Call {
+                callee,
+                callee_span,
+                braced,
+                type_args,
+                args,
+                children,
+                span,
+            });
+        }
+        base
+    }
+
+    /// Parses one `name: <fill>` with the cursor on the name.
+    fn parse_named_fill(&mut self) -> CallArg {
+        let label_span = self.current().span;
+        let label = self.intern_span(label_span);
+        self.bump(); // name
+        self.bump(); // `:`
+        let value = self.parse_fill_value();
+        CallArg {
+            label: Some(label),
+            label_span: Some(label_span),
+            value,
+            span: Span::from_bounds(label_span.start, self.previous_end()),
+        }
+    }
+
+    /// Parses what a named fill or a construction override binds to.
+    ///
+    /// A bare `{ … }` is a content block rather than a value — the anonymous
+    /// form that fills a child slot with the children it holds. Anything else
+    /// is an ordinary expression, which covers both a narrowing construction
+    /// (`detail: DetailView { … }`) and a plain value (`detail: view`).
+    fn parse_fill_value(&mut self) -> ExprId {
+        if self.at(TokenKind::LBrace) && !self.at_closure_start() {
+            let start = self.current().span;
+            let children = self.with_struct_literals(|parser| parser.parse_content_block());
+            let span = Span::from_bounds(start.start, self.previous_end());
+            return self.tree.add_expr(Expr::Content { children, span });
+        }
+        self.without_named_fills(|parser| parser.parse_expr())
+    }
+
     /// Parses `let field[.nested] = value` or the canonical
     /// `field.nested: value` spelling as a labeled argument, or nothing.
     ///
@@ -186,7 +276,7 @@ impl Parser<'_> {
         if !self.eat(TokenKind::Colon) {
             self.expect(TokenKind::Equals);
         }
-        let value = self.parse_expr();
+        let value = self.parse_fill_value();
         Some(CallArg {
             label: Some(label),
             label_span: Some(label_span),

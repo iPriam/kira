@@ -4,6 +4,11 @@ use kira_live::{NamedPayload, PayloadKind};
 use kira_manifest::{BuildProfile, RunnerId};
 use kira_runtime_abi::Execution;
 use std::fs;
+#[cfg(windows)]
+use std::process::Command;
+
+#[path = "host_foreign_tests.rs"]
+mod foreign_tests;
 
 /// A scratch directory that removes itself.
 struct TempDir(PathBuf);
@@ -409,4 +414,133 @@ fn linking_twice_is_idempotent() {
     host.link().expect("link");
     host.link().expect("link again");
     host.start().expect("start");
+}
+
+#[cfg(windows)]
+struct NativeClosureFixture {
+    directory: PathBuf,
+    entry: PathBuf,
+    sibling: PathBuf,
+}
+
+#[cfg(windows)]
+impl NativeClosureFixture {
+    fn build() -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "kira-desktop-runner-native-closure-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("native fixture directory");
+
+        let sibling_source = directory.join("sibling.c");
+        let sibling = directory.join("sibling.dll");
+        let sibling_import = directory.join("sibling.lib");
+        fs::write(
+            &sibling_source,
+            r#"__declspec(dllexport) int kira_test_sibling(void) { return 42; }
+"#,
+        )
+        .expect("sibling source");
+        clang_shared(&sibling_source, &sibling, Some(&sibling_import), &[]);
+
+        let entry_source = directory.join("entry.c");
+        let entry = directory.join("entry.dll");
+        fs::write(
+            &entry_source,
+            r#"__declspec(dllimport) int kira_test_sibling(void);
+__declspec(dllexport) int kira_live_entry(void) {
+    return kira_test_sibling() == 42 ? 0 : 1;
+}
+"#,
+        )
+        .expect("entry source");
+        clang_shared(&entry_source, &entry, None, &[sibling_import.as_path()]);
+
+        Self {
+            directory,
+            entry,
+            sibling,
+        }
+    }
+
+    fn bundle(&self, include_sibling: bool) -> Bundle {
+        let mut payloads = vec![NamedPayload {
+            name: "entry.dll".to_owned(),
+            kind: PayloadKind::NativeLibrary,
+            bytes: fs::read(&self.entry).expect("entry DLL"),
+        }];
+        if include_sibling {
+            payloads.push(NamedPayload {
+                name: "sibling.dll".to_owned(),
+                kind: PayloadKind::NativeDependency,
+                bytes: fs::read(&self.sibling).expect("sibling DLL"),
+            });
+        }
+        Bundle::build(RunnerId::Desktop, BuildProfile::Debug, payloads, 0)
+            .expect("native closure bundle")
+    }
+}
+
+#[cfg(windows)]
+impl Drop for NativeClosureFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+#[cfg(windows)]
+fn clang_shared(source: &Path, output: &Path, import_library: Option<&Path>, inputs: &[&Path]) {
+    let llvm = kira_toolchain::discover(None).expect("managed LLVM");
+    let mut command = Command::new(llvm.clang());
+    command.arg("-shared").arg(source);
+    for input in inputs {
+        command.arg(input);
+    }
+    if let Some(import_library) = import_library {
+        command.arg(format!("-Wl,/IMPLIB:{}", import_library.display()));
+    }
+    let result = command.arg("-o").arg(output).output().expect("clang");
+    assert!(
+        result.status.success(),
+        "building {} failed: {}",
+        output.display(),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_native_entry_requires_and_loads_its_staged_transitive_sibling_dll() {
+    let fixture = NativeClosureFixture::build();
+
+    let missing_dir = TempDir::new("native-closure-missing");
+    let mut missing = DesktopHost::new(missing_dir.0.clone());
+    missing
+        .load(&fixture.bundle(false))
+        .expect("missing-dependency bundle stages");
+    let error = missing
+        .link()
+        .expect_err("a missing transitive DLL must fail before the entry runs");
+    assert!(
+        matches!(error, DesktopRunnerError::Native(_)),
+        "the loader failure must identify the native artifact: {error:?}"
+    );
+
+    let complete_dir = TempDir::new("native-closure-complete");
+    let mut complete = DesktopHost::new(complete_dir.0.clone());
+    let bundle = fixture.bundle(true);
+    complete.load(&bundle).expect("complete bundle stages");
+    assert_eq!(
+        fs::read(
+            complete_dir
+                .0
+                .join(kira_live::PAYLOAD_DIR)
+                .join("sibling.dll")
+        )
+        .expect("staged sibling DLL"),
+        fs::read(&fixture.sibling).expect("source sibling DLL")
+    );
+    complete.link().expect("staged sibling DLL loads");
+    complete.start().expect("native entry returns success");
 }

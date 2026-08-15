@@ -85,15 +85,10 @@ fn an_old_manifest_without_a_foreign_section_decodes_with_none() {
 }
 
 #[test]
-fn a_foreign_import_without_an_adapter_symbol_is_rejected() {
+fn an_unavailable_foreign_binding_round_trips_with_an_empty_locator() {
     let mut broken = foreign_manifest();
     broken.foreign[0].adapter_symbol.clear();
-    assert_eq!(
-        HybridManifest::from_bytes(&broken.to_bytes()),
-        Err(ManifestDecodeError::ForeignWithoutAdapter(
-            "kira_ffi_add".to_owned()
-        ))
-    );
+    assert_eq!(HybridManifest::from_bytes(&broken.to_bytes()), Ok(broken));
 }
 
 #[test]
@@ -128,11 +123,9 @@ fn an_unknown_foreign_type_byte_is_rejected() {
 fn a_count_larger_than_the_input_is_typed_rather_than_reserved() {
     // Every counted run in this format spends at least a byte per element,
     // so a count past the end of the stream is malformed on its face. It
-    // has to be REJECTED rather than reserved for: the decoder used to hand
-    // the number straight to `Vec::with_capacity`, and one corrupted high
-    // byte is then a two-billion-element reservation — which a host that
-    // refuses to overcommit answers by aborting the process, taking the
-    // caller with it instead of returning an error it could handle.
+    // has to be rejected before allocation. Passing a corrupted high byte to
+    // `Vec::with_capacity` could request billions of elements and abort the
+    // process instead of returning a typed error.
     //
     // Every count in the manifest gets the same treatment, so this walks
     // them: the function count, a function's parameter count, the foreign
@@ -319,11 +312,21 @@ fn an_unknown_engine_byte_is_rejected() {
 #[test]
 fn a_native_function_without_a_symbol_is_rejected() {
     let mut broken = manifest();
+    broken.entry = None;
     broken.functions[1].exported_name = None;
     assert_eq!(
         HybridManifest::from_bytes(&broken.to_bytes()),
         Err(ManifestDecodeError::NativeWithoutSymbol("hot".to_owned()))
     );
+}
+
+#[test]
+fn an_unreachable_native_application_function_may_omit_its_symbol() {
+    let mut application = manifest();
+    application.functions[1].exported_name = None;
+    let decoded =
+        HybridManifest::from_bytes(&application.to_bytes()).expect("the application is valid");
+    assert_eq!(decoded.functions[1].exported_name, None);
 }
 
 #[test]

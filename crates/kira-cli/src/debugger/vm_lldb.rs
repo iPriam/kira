@@ -11,10 +11,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kira_bytecode::Module;
-use kira_debug::{Breakpoint, DebugInfo, LldbDapBreakpoint, LldbDapLaunch, LldbLaunch};
+use kira_debug::{
+    Breakpoint, DebugInfo, LldbDapBreakpoint, LldbDapLaunch, LldbLaunch, VM_PROBE_SYMBOL,
+    VM_TEXT_SYMBOL, VmProbe,
+};
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
-use kira_main::{ForeignBinding, ForeignSession, StdoutHost};
+use kira_main::{ForeignSession, StdoutHost};
 use kira_runtime_abi::{NativeStateHost, env};
 use kira_vm_runtime::{VmLldbBreakpoint, VmLldbObserver};
 
@@ -23,8 +26,10 @@ use crate::native;
 use crate::pipeline::{EXIT_FAILURE, EXIT_OK};
 use crate::progress::{err, out};
 
-const VM_PROBE_SYMBOL: &str = "kira_vm_debug_probe";
-const VM_TEXT_COMMAND: &str = "memory read --format c --size 1 --count 512 &KIRA_VM_DEBUG_TEXT";
+/// Reads the decoded stop state from the process, without calling into it.
+fn vm_text_command() -> String {
+    format!("memory read --format c --size 1 --count 512 &{VM_TEXT_SYMBOL}")
+}
 
 /// Runs a compiled VM module under a real LLDB process.
 pub(super) fn run_under_lldb(
@@ -44,16 +49,12 @@ pub(super) fn run_under_lldb(
         return EXIT_FAILURE;
     }
 
-    let sidecar = if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
-        None
-    } else {
-        match native::build_adapter_sidecar(ir, source, foreign_link) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                let _ = std::fs::remove_file(&module_path);
-                err!("kira: {error}");
-                return EXIT_FAILURE;
-            }
+    let binding_paths = match prepare_binding_paths(ir, source, foreign_link) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_file(&module_path);
+            err!("kira: {error}");
+            return EXIT_FAILURE;
         }
     };
     let target = match std::env::current_exe() {
@@ -85,7 +86,7 @@ pub(super) fn run_under_lldb(
     // automatic text command is batch-only; interactive users can issue raw
     // memory-read commands as often as they like.
     if options.batch {
-        launch.add_breakpoint_command(1, VM_TEXT_COMMAND);
+        launch.add_breakpoint_command(1, vm_text_command());
     }
     launch.disassemble = options.disassemble;
     launch.batch = options.batch;
@@ -93,7 +94,7 @@ pub(super) fn run_under_lldb(
     // frame, just as it does for hybrid DLL frames. Register inspection and
     // disassembly remain valid at the probe entry, so omit only this query.
     launch.thread_backtrace = false;
-    launch.arguments = vm_host_arguments(&module_path, sidecar.as_deref(), options);
+    launch.arguments = vm_host_arguments(&module_path, binding_paths.as_deref(), options);
     print_vm_source_context(source, info, module.main, &options.breakpoints);
     out!("LLDB VM host: {}", target.display());
     out!("LLDB VM probe: {VM_PROBE_SYMBOL}");
@@ -139,16 +140,12 @@ pub(super) fn run_under_lldb_dap(
         );
         return EXIT_FAILURE;
     }
-    let sidecar = if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
-        None
-    } else {
-        match native::build_adapter_sidecar(ir, source, foreign_link) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                let _ = std::fs::remove_file(&module_path);
-                err!("kira: {error}");
-                return EXIT_FAILURE;
-            }
+    let binding_paths = match prepare_binding_paths(ir, source, foreign_link) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_file(&module_path);
+            err!("kira: {error}");
+            return EXIT_FAILURE;
         }
     };
     let target = match std::env::current_exe() {
@@ -169,10 +166,10 @@ pub(super) fn run_under_lldb_dap(
     // calls the probe. Keep the native DAP breakpoint unconditional so every
     // later `continue` reaches the next VM instruction as well.
     launch.add_breakpoint(LldbDapBreakpoint::new(VM_PROBE_SYMBOL));
-    launch.set_text_symbol("KIRA_VM_DEBUG_TEXT");
+    launch.set_text_symbol(VM_TEXT_SYMBOL);
     launch.set_disassemble(options.disassemble);
     launch.set_continue_count(options.dap_continues);
-    launch.arguments = vm_host_arguments(&module_path, sidecar.as_deref(), options);
+    launch.arguments = vm_host_arguments(&module_path, binding_paths.as_deref(), options);
     print_vm_source_context(source, info, module.main, &options.breakpoints);
     out!("LLDB DAP VM host: {}", target.display());
     let result = match launch.launch() {
@@ -228,11 +225,15 @@ pub(crate) fn run_host(args: &[String]) -> i32 {
         }
     };
     let mut observer = VmLldbObserver::with_breakpoints(breakpoints);
-    let result = match options.sidecar.as_deref() {
-        Some(sidecar) => {
-            run_with_sidecar(module, sidecar, &options.program_arguments, &mut observer)
-        }
-        None => run_without_sidecar(module, &options.program_arguments, &mut observer),
+    let result = if module.foreign_imports.is_empty() && module.foreign_callbacks.is_empty() {
+        run_without_bindings(module, &options.program_arguments, &mut observer)
+    } else {
+        run_with_bindings(
+            module,
+            options.binding_paths.as_deref(),
+            &options.program_arguments,
+            &mut observer,
+        )
     };
     match result {
         Ok(()) => EXIT_OK,
@@ -243,7 +244,7 @@ pub(crate) fn run_host(args: &[String]) -> i32 {
     }
 }
 
-fn run_without_sidecar(
+fn run_without_bindings(
     module: Module,
     arguments: &[String],
     observer: &mut VmLldbObserver,
@@ -259,29 +260,56 @@ fn run_without_sidecar(
     .map_err(|error| error.to_string())
 }
 
-fn run_with_sidecar(
+fn run_with_bindings(
     module: Module,
-    sidecar: &Path,
+    binding_paths: Option<&Path>,
     arguments: &[String],
     observer: &mut VmLldbObserver,
 ) -> Result<(), String> {
+    let paths = binding_paths
+        .map(native::read_foreign_binding_paths)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| vec![None; module.foreign_imports.len()]);
+    if paths.len() != module.foreign_imports.len() {
+        return Err(format!(
+            "foreign binding manifest has {} paths for {} imports",
+            paths.len(),
+            module.foreign_imports.len()
+        ));
+    }
     let imports = module
         .foreign_imports
         .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            ForeignBinding::new(
-                kira_llvm_backend::adapter_name(index),
-                entry.signature().clone(),
+        .zip(paths)
+        .map(|(entry, path)| {
+            path.map_or_else(
+                || kira_main::ForeignBinding::unavailable(entry.signature().clone()),
+                |path| {
+                    if native::is_process_binding_path(&path) {
+                        kira_main::ForeignBinding::process(
+                            entry.symbol(),
+                            entry.signature().clone(),
+                        )
+                    } else {
+                        kira_main::ForeignBinding::dynamic(
+                            path,
+                            entry.symbol(),
+                            entry.signature().clone(),
+                        )
+                    }
+                },
             )
         })
         .collect();
-    let callbacks = (0..module.foreign_callbacks.len())
-        .map(kira_llvm_backend::callback_name)
+    let callbacks = module
+        .foreign_callbacks
+        .iter()
+        .map(|callback| callback.signature().clone())
         .collect();
     let aggregates = module.foreign_aggregates.clone();
     let program = kira_vm_runtime::Program::load(module).map_err(|error| error.to_string())?;
-    let session = ForeignSession::load(program, sidecar, imports, callbacks, aggregates)
+    let session = ForeignSession::load_dynamic(program, imports, callbacks, aggregates)
         .map_err(|error| error.to_string())?;
     // SAFETY: this private LLDB host owns the process-environment boundary and
     // does not access it from another thread while the VM executes.
@@ -292,14 +320,14 @@ fn run_with_sidecar(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VmHostOptions {
     module: PathBuf,
-    sidecar: Option<PathBuf>,
+    binding_paths: Option<PathBuf>,
     breakpoints: Vec<String>,
     program_arguments: Vec<String>,
 }
 
 fn parse_host_args(args: &[String]) -> Result<VmHostOptions, String> {
     let mut module = None;
-    let mut sidecar = None;
+    let mut binding_paths = None;
     let mut breakpoints = Vec::new();
     let mut program_arguments = Vec::new();
     let mut index = 0;
@@ -312,11 +340,11 @@ fn parse_host_args(args: &[String]) -> Result<VmHostOptions, String> {
                 module = Some(PathBuf::from(value));
                 index += 1;
             }
-            "--sidecar" => {
+            "--bindings" => {
                 let value = args
                     .get(index + 1)
-                    .ok_or_else(|| "`--sidecar` expects a path".to_owned())?;
-                sidecar = Some(PathBuf::from(value));
+                    .ok_or_else(|| "`--bindings` expects a path".to_owned())?;
+                binding_paths = Some(PathBuf::from(value));
                 index += 1;
             }
             "--vm-break" => {
@@ -336,21 +364,25 @@ fn parse_host_args(args: &[String]) -> Result<VmHostOptions, String> {
     }
     Ok(VmHostOptions {
         module: module.ok_or_else(|| "LLDB VM host needs `--module`".to_owned())?,
-        sidecar,
+        binding_paths,
         breakpoints,
         program_arguments,
     })
 }
 
-fn vm_host_arguments(module: &Path, sidecar: Option<&Path>, options: &DebugOptions) -> Vec<String> {
+pub(super) fn vm_host_arguments(
+    module: &Path,
+    binding_paths: Option<&Path>,
+    options: &DebugOptions,
+) -> Vec<String> {
     let mut arguments = vec![
         super::VM_DEBUG_HOST.to_owned(),
         "--module".to_owned(),
         module.display().to_string(),
     ];
-    if let Some(sidecar) = sidecar {
-        arguments.push("--sidecar".to_owned());
-        arguments.push(sidecar.display().to_string());
+    if let Some(binding_paths) = binding_paths {
+        arguments.push("--bindings".to_owned());
+        arguments.push(binding_paths.display().to_string());
     }
     for breakpoint in &options.breakpoints {
         arguments.push("--vm-break".to_owned());
@@ -365,22 +397,38 @@ fn vm_lldb_breakpoints(
     requested: &[String],
     module: &Module,
 ) -> Result<Vec<VmLldbBreakpoint>, String> {
+    let functions = module
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(id, function)| (id as u32, function.name.as_str()))
+        .collect::<Vec<_>>();
+    probe_breakpoints(requested, &functions)
+}
+
+/// Resolves breakpoint spellings against a function table for the VM probe.
+///
+/// Shared by both hosts: the VM's table comes from its bytecode module and the
+/// hybrid host's from its manifest, but a breakpoint means the same thing to
+/// the probe either way.
+pub(super) fn probe_breakpoints(
+    requested: &[String],
+    functions: &[(u32, &str)],
+) -> Result<Vec<VmLldbBreakpoint>, String> {
     requested
         .iter()
         .map(|value| {
             let breakpoint =
                 Breakpoint::parse(value).ok_or_else(|| format!("invalid breakpoint `{value}`"))?;
-            let function = module.functions.iter().enumerate().find(|(id, function)| {
-                function.name == breakpoint.function_name
-                    || id.to_string() == breakpoint.function_name
+            let function = functions.iter().find(|(id, name)| {
+                *name == breakpoint.function_name || id.to_string() == breakpoint.function_name
             });
-            let Some((id, _)) = function else {
+            let Some((function_id, _)) = function else {
                 return Err(format!("no VM function matches breakpoint `{value}`"));
             };
             let pc = breakpoint.pc.unwrap_or(0);
             Ok(VmLldbBreakpoint {
-                function_id: u32::try_from(id)
-                    .map_err(|_| format!("VM function id for `{value}` is too large"))?,
+                function_id: *function_id,
                 pc: u32::try_from(pc).map_err(|_| {
                     format!("VM breakpoint `{value}` has an instruction index too large")
                 })?,
@@ -393,12 +441,10 @@ fn vm_breakpoint_condition(
     requested: &[String],
     info: &DebugInfo,
 ) -> Result<Option<String>, String> {
-    let Some((function_register, pc_register)) = vm_probe_registers() else {
-        return Ok(None);
-    };
     if requested.is_empty() {
         return Ok(None);
     }
+    let probe = VmProbe::host();
     let mut conditions = Vec::with_capacity(requested.len());
     for value in requested {
         let breakpoint =
@@ -413,24 +459,12 @@ fn vm_breakpoint_condition(
         let pc = breakpoint.pc.unwrap_or(0);
         let pc = u32::try_from(pc)
             .map_err(|_| format!("VM breakpoint `{value}` has an instruction index too large"))?;
-        conditions.push(format!(
-            "({function_register} == {} && {pc_register} == {pc})",
-            function.id
-        ));
+        let Some(condition) = probe.condition(function.id, pc) else {
+            return Ok(None);
+        };
+        conditions.push(condition);
     }
     Ok(Some(conditions.join(" || ")))
-}
-
-fn vm_probe_registers() -> Option<(&'static str, &'static str)> {
-    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        Some(("$rcx", "$rdx"))
-    } else if cfg!(all(unix, target_arch = "x86_64")) {
-        Some(("$rdi", "$rsi"))
-    } else if cfg!(target_arch = "aarch64") {
-        Some(("$x0", "$x1"))
-    } else {
-        None
-    }
 }
 
 fn print_vm_source_context(
@@ -480,7 +514,7 @@ fn print_vm_source_context(
     }
 }
 
-fn temporary_module_path(source: &Path) -> PathBuf {
+pub(super) fn temporary_module_path(source: &Path) -> PathBuf {
     let parent = source.parent().unwrap_or_else(|| Path::new("."));
     let stem = source.file_stem().map_or_else(
         || "program".to_owned(),
@@ -491,6 +525,36 @@ fn temporary_module_path(source: &Path) -> PathBuf {
         .map_or(0, |duration| duration.as_nanos());
     parent.join(format!(
         ".kira-vm-debug-{stem}-{}-{nanos}.kbc",
+        std::process::id()
+    ))
+}
+
+fn prepare_binding_paths(
+    ir: &IrProgram,
+    source: &Path,
+    foreign_link: &NativeLinkInputs,
+) -> Result<Option<PathBuf>, String> {
+    if ir.foreign_imports.is_empty() {
+        return Ok(None);
+    }
+    let bindings = native::direct_foreign_bindings(ir, source, foreign_link)
+        .map_err(|error| error.to_string())?;
+    let path = temporary_binding_path(source);
+    native::write_foreign_binding_paths(&path, &bindings).map_err(|error| error.to_string())?;
+    Ok(Some(path))
+}
+
+pub(super) fn temporary_binding_path(source: &Path) -> PathBuf {
+    let parent = source.parent().unwrap_or_else(|| Path::new("."));
+    let stem = source.file_stem().map_or_else(
+        || "program".to_owned(),
+        |stem| stem.to_string_lossy().into_owned(),
+    );
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    parent.join(format!(
+        ".kira-vm-debug-{stem}-{}-{nanos}.ffi",
         std::process::id()
     ))
 }

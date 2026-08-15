@@ -17,7 +17,7 @@ impl Heap {
     /// something owned has no one-word form to cross as.
     pub fn enum_seam_tag(&self, id: EnumId) -> Option<i64> {
         match (self.enum_tag(id), self.enum_payload_ref(id)) {
-            (Some(tag), None) => Some(i64::from(tag)),
+            (Some(tag), None) => i64::try_from(tag).ok(),
             _ => None,
         }
     }
@@ -101,7 +101,7 @@ impl Heap {
             // whole value is the number. A tag too large for the VM's own
             // representation is refused rather than truncated — a wrong tag is
             // a wrong *variant*, which is a silently different program.
-            NativeArg::Enum(tag) => match u32::try_from(tag) {
+            NativeArg::Enum(tag) => match u64::try_from(tag) {
                 Ok(tag) => Value::Enum(self.alloc_enum(tag, None)),
                 Err(_) => return None,
             },
@@ -130,7 +130,7 @@ impl Heap {
             NativeResult::RawPtr(value) => Value::RawPtr(value),
             // Rebuilt from the tag, exactly as in `lower`: there is no owned
             // storage to move in, which is the whole difference from `Str`.
-            NativeResult::Enum(tag) => match u32::try_from(tag) {
+            NativeResult::Enum(tag) => match u64::try_from(tag) {
                 Ok(tag) => Value::Enum(self.alloc_enum(tag, None)),
                 Err(_) => return None,
             },
@@ -176,8 +176,8 @@ impl Heap {
             // a copy, not a move: the caller still owns `value` and drops it
             // itself, exactly as it does for the string case above.
             Value::Struct(_) | Value::Array(_) => NativeResult::Aggregate(self.seam_tree(value)?),
-            Value::Erased(_)
-            | Value::NativeState(_)
+            Value::Erased(_) => NativeResult::Aggregate(self.seam_tree(value)?),
+            Value::NativeState(_)
             | Value::Cell(_)
             | Value::NativeView { .. }
             | Value::NativeSnapshot(_) => return None,

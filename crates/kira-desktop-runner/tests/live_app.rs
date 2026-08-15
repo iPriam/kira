@@ -182,9 +182,8 @@ fn a_running_app_reaches_a_ready_session() {
     );
 }
 
-/// A swap under a running app would pull the module out from under a live call
-/// stack. The runner refuses in its own words, and the session relaunches — which
-/// is the whole reload story for an app until a swap point exists inside one.
+/// A changed module has no live-value compatibility evidence, so the session
+/// relaunches before offering a swap to the running app.
 #[test]
 fn a_reload_under_a_running_app_relaunches_rather_than_swapping() {
     let bundle = app_bundle("first");
@@ -203,11 +202,8 @@ fn a_reload_under_a_running_app_relaunches_rather_than_swapping() {
 
     match outcome {
         ReloadOutcome::NeedsRelaunch {
-            reason: RelaunchReason::RunnerRefused { reason },
-        } => assert!(
-            reason.contains("still running"),
-            "the refusal must name the running entrypoint, got `{reason}`"
-        ),
+            reason: RelaunchReason::BytecodeChanged { payload },
+        } => assert_eq!(payload, "app.kbc"),
         other => panic!("a running app cannot be hot patched, got {other:?}"),
     }
 }

@@ -71,8 +71,8 @@ fn bridge_tag_of(
         // A payload-less enum *is* its tag, so the tag crosses and the far side
         // rebuilds its own value from it: nothing is owned, nothing is freed,
         // and neither side's representation travels. One carrying a payload is
-        // a tag plus something owned, which does not fit one word and whose
-        // ownership across the seam is undecided. See `BridgeValueTag::ENUM`.
+        // a tag plus something owned, which does not fit one word. See
+        // `BridgeValueTag::ENUM`.
         Type::Enum(id) if enums.is_fieldless(id) => {
             (BridgeValueTag::ENUM.0, Some(PayloadForm::EnumTag))
         }
@@ -83,15 +83,15 @@ fn bridge_tag_of(
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
         Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
-            return Err(LlvmError::Unsupported(
+            return Err(LlvmError::internal(
                 "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
             ));
         }
-        // `Any` is one word, so size is not what stops it: the hybrid seam
-        // carries a tag the *other* side must be able to interpret, and an
-        // erased value has no type for it to interpret the payload as.
-        Type::Any => return Err(LlvmError::AnyAtSeam),
-        Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
+        // An erased value carries its dynamic identity and payload in a node
+        // tree. The bridge tag distinguishes that root from an ordinary
+        // aggregate, while the node retains the recursively owned value.
+        Type::Any => (BridgeValueTag::ANY.0, Some(PayloadForm::Node)),
+        Type::Error => return Err(LlvmError::internal("a value with no type")),
     })
 }
 
@@ -157,15 +157,19 @@ impl Codegen<'_> {
                         LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.node".as_ptr());
                     self.decode_native_state_value(node, ty)?
                 }
-                Type::Any => return Err(LlvmError::AnyAtSeam),
+                Type::Any => {
+                    let node =
+                        LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.any".as_ptr());
+                    self.decode_native_state_value(node, ty)?
+                }
                 Type::RawPtr | Type::ForeignPtr(_) => payload,
                 Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
                     ));
                 }
                 Type::Void | Type::Error => {
-                    return Err(LlvmError::Unsupported("a parameter with no runtime value"));
+                    return Err(LlvmError::internal("a parameter with no runtime value"));
                 }
             })
         }
@@ -294,6 +298,60 @@ mod tests {
         assert!(
             text.contains("store [7 x i8] zeroinitializer"),
             "the @Native trampoline must zero the BridgeValue reserved bytes; IR:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_hybrid_app_omits_an_unreachable_native_function() {
+        let mut program = HirProgram::default();
+        let main_value = program.exprs.alloc(HirExpr::Int(0));
+        let main_return = program.stmts.alloc(HirStmt::Return {
+            value: Some(main_value),
+        });
+        program.functions.push(HirFunction {
+            name: "main".to_owned(),
+            param_count: 0,
+            return_type: Type::INT,
+            locals: Vec::new(),
+            body: vec![main_return],
+            is_main: true,
+            is_async: false,
+            execution: Execution::Runtime,
+            mutates_self: false,
+            name_span: Span::new(0, 4),
+        });
+        let unused_value = program.exprs.alloc(HirExpr::Int(7));
+        let unused_return = program.stmts.alloc(HirStmt::Return {
+            value: Some(unused_value),
+        });
+        program.functions.push(HirFunction {
+            name: "unused_native".to_owned(),
+            param_count: 0,
+            return_type: Type::INT,
+            locals: Vec::new(),
+            body: vec![unused_return],
+            is_main: false,
+            is_async: false,
+            execution: Execution::Native,
+            mutates_self: false,
+            name_span: Span::new(5, 17),
+        });
+        program.main = Some(kira_semantics_model::hir::FuncId(0));
+        let ir = kira_ir::lower(&program);
+
+        let module =
+            Module::build_hybrid(&ir, "unreachable_native", &[]).expect("the hybrid half builds");
+        let directory =
+            std::env::temp_dir().join(format!("kira-hybrid-reachability-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("the temp directory is creatable");
+        let ir_path = directory.join("unreachable_native.ll");
+        module.write_ir(&ir_path).expect("the IR is emitted");
+        let text = std::fs::read_to_string(&ir_path).expect("the IR is readable");
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert!(
+            !text.contains("kira_fn_1_unused_native"),
+            "an unreachable native body was emitted; IR:\n{text}"
         );
     }
 }

@@ -15,7 +15,7 @@ impl FnCompiler<'_> {
             IrExpr::Float(value) => self.code.push(Instruction::ConstFloat(*value)),
             IrExpr::Bool(value) => self.code.push(Instruction::ConstBool(*value)),
             IrExpr::Str(value) => {
-                let pool = self.strings.intern(value)?;
+                let pool = self.strings.intern(value);
                 self.code.push(Instruction::ConstStr(pool));
             }
             IrExpr::RawPtrNull => self.code.push(Instruction::ConstRawPtrNull),
@@ -31,6 +31,7 @@ impl FnCompiler<'_> {
                 self.compile_expr(value)?;
                 self.code.push(Instruction::NewCell);
             }
+            IrExpr::CellNull { .. } => self.code.push(Instruction::ConstRawPtrNull),
             IrExpr::CellGet { slot, .. } => {
                 let slot = self.local_slot(*slot)?;
                 self.code.push(Instruction::CellGet(slot));
@@ -50,11 +51,7 @@ impl FnCompiler<'_> {
             } => self.compile_select(*cond, *then, *otherwise)?,
             IrExpr::StructNew { fields, .. } => {
                 let fields = fields.clone();
-                let count =
-                    u16::try_from(fields.len()).map_err(|_| CompileError::TooManyFields {
-                        function: self.function_name.to_owned(),
-                        count: fields.len(),
-                    })?;
+                let count = fields.len() as u64;
                 // Fields are pushed in declaration order, so the struct the VM
                 // builds has them in layout order with no reordering.
                 for field in fields {
@@ -144,11 +141,7 @@ impl FnCompiler<'_> {
             }
             IrExpr::ArrayNew { elements, .. } => {
                 let elements = elements.clone();
-                let count =
-                    u32::try_from(elements.len()).map_err(|_| CompileError::TooManyElements {
-                        function: self.function_name.to_owned(),
-                        count: elements.len(),
-                    })?;
+                let count = elements.len() as u64;
                 // Elements are pushed in written order, so the array the VM
                 // builds is in that order with no reordering.
                 for element in elements {
@@ -292,6 +285,12 @@ impl FnCompiler<'_> {
                 // two cross-representation conversions have an instruction.
                 match kind {
                     ConvertKind::IntToInt | ConvertKind::FloatToFloat => {}
+                    ConvertKind::IntToRawPtr => {
+                        self.code.push(Instruction::ConvertIntToRawPtr);
+                    }
+                    ConvertKind::RawPtrToInt => {
+                        self.code.push(Instruction::ConvertRawPtrToInt);
+                    }
                     ConvertKind::IntToFloat => self.code.push(Instruction::ConvertIntToFloat),
                     ConvertKind::FloatToInt => self.code.push(Instruction::ConvertFloatToInt),
                     ConvertKind::FloatToBits => self.code.push(Instruction::ConvertFloatToBits),
@@ -359,10 +358,6 @@ impl FnCompiler<'_> {
             }
             IrExpr::EnumNew { tag, payload, .. } => {
                 let (tag, payload) = (*tag, *payload);
-                let tag = u16::try_from(tag).map_err(|_| CompileError::TooManyVariants {
-                    function: self.function_name.to_owned(),
-                    tag,
-                })?;
                 // The payload, when present, is pushed first so it is on top of
                 // the stack for `NewEnum` to take, exactly as a struct's fields
                 // are pushed before `NewStruct`.
@@ -370,7 +365,7 @@ impl FnCompiler<'_> {
                     self.compile_expr(payload)?;
                 }
                 self.code.push(Instruction::NewEnum {
-                    tag,
+                    tag: u64::from(tag),
                     has_payload: payload.is_some(),
                 });
             }
@@ -427,7 +422,7 @@ impl FnCompiler<'_> {
                         self.code.push(if native {
                             Instruction::CallNative(index)
                         } else {
-                            Instruction::Call(index)
+                            Instruction::Call(u64::from(index))
                         });
                     }
                     // A foreign call names a foreign-import id; arguments are
@@ -474,11 +469,7 @@ impl FnCompiler<'_> {
         for writeback in writebacks {
             let slot = self.local_slot(writeback.place.local)?;
             let path = self.compile_place_indices(&writeback.place)?;
-            let param =
-                u16::try_from(writeback.param).map_err(|_| CompileError::LocalSlotOutOfRange {
-                    function: self.function_name.to_owned(),
-                    slot: writeback.param,
-                })?;
+            let param = u64::from(writeback.param);
             targets.push(WritebackTarget { param, slot, path });
         }
         // A seam crossing takes the general form even for a single slot-0
@@ -494,12 +485,12 @@ impl FnCompiler<'_> {
         }
         match targets.as_slice() {
             [target] if target.param == 0 => self.code.push(Instruction::CallMut {
-                func: index,
+                func: u64::from(index),
                 slot: target.slot,
                 path: target.path.clone(),
             }),
             _ => self.code.push(Instruction::CallWriteback {
-                func: index,
+                func: u64::from(index),
                 targets,
             }),
         }

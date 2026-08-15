@@ -15,7 +15,7 @@ pub enum Command {
     Test,
     Build,
     Ffi,
-    Instruments,
+    Profile,
     Shader,
     New,
     Sync,
@@ -47,7 +47,7 @@ pub const ALL: [Command; 22] = [
     Command::Test,
     Command::Build,
     Command::Ffi,
-    Command::Instruments,
+    Command::Profile,
     Command::Shader,
     Command::New,
     Command::Sync,
@@ -86,7 +86,7 @@ impl Command {
             Self::Test => "test",
             Self::Build => "build",
             Self::Ffi => "ffi",
-            Self::Instruments => "instruments",
+            Self::Profile => "profile",
             Self::Shader => "shader",
             Self::New => "new",
             Self::Sync => "sync",
@@ -113,24 +113,27 @@ impl Command {
     /// means the package directory you are standing in.
     pub fn arguments(self) -> &'static str {
         match self {
-            Self::Run | Self::Build => {
+            Self::Run => {
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--quit-after 5s] [--timings] [--show-notes] [-- <args...>]"
+            }
+            Self::Build => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Debug => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [-- <args...>]"
+                " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [--prepare] [-- <args...>]"
             }
             Self::Check => " [file|dir] [--timings] [--show-notes]",
             Self::Shader => " build [--target <name>] [--emit <name>]",
             Self::Lint | Self::Sync | Self::Update => " [file|dir]",
             Self::Ffi => " [file|dir] [--device host|wasm32|wasm64]",
-            Self::Instruments => " [file|dir] [--limit <n>] [--sites <n>]",
+            Self::Profile => " record|report|annotate|script|stat|diff [...]",
             Self::Package | Self::Export => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]"
             }
             Self::Add => " <name> (--path <dir>|--version <version>|--git <url>) [dir]",
             Self::Remove => " <name> [dir]",
             Self::MigrateManifest => " [dir]",
-            Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch|--no-watch]",
+            Self::Live => " [runner] <file> [--backend vm|llvm|hybrid] [--watch|--no-watch]",
             Self::Tokens | Self::Ast => " <file>",
             Self::Doc => " [file|dir]",
             Self::New => " [--app|--library] <dir>",
@@ -152,7 +155,7 @@ impl Command {
             Self::Test => "build and run a program's tests",
             Self::Build => "compile to an application or library artifact",
             Self::Ffi => "inspect and bind native libraries",
-            Self::Instruments => "profile a running program",
+            Self::Profile => "record and read a sampled profile of a run",
             Self::Shader => "build every KSL shader and report what each target emitted",
             Self::New => "scaffold a new project",
             Self::Sync => "write `kira.lock` from the package manifests",

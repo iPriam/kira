@@ -1,0 +1,21 @@
+// FFI / native-bridge test harness with its own `Test` construct shape.
+//
+// Every test exercises the @Native and @Runtime bridge and reduces the result
+// to a scalar asserted via `.Ok(...)`. The suite runs through the pure-Kira
+// test driver on VM, LLVM, and hybrid, so the @Native calls bridge and the
+// verdict is backend-independent:
+//
+//   kira test --backend vm tests-kik/ffi-harness
+//   kira test --backend llvm tests-kik/ffi-harness
+//   kira test --backend hybrid tests-kik/ffi-harness
+//
+// main is trivial; the driver synthesized in test mode is the real entry. Each
+// app/<purpose>/ module contributes Test declarations with a unique prefix.
+
+import Foundation
+
+@Main
+@Runtime
+function main() {
+    return
+}

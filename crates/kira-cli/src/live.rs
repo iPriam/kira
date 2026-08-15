@@ -1,7 +1,7 @@
 //! `kira live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kira live [runner] [file|dir] [--backend vm|hybrid] [--watch|--no-watch] [--quit-after 5s]
+//! kira live [runner] [file|dir] [--backend vm|llvm|hybrid] [--watch|--no-watch] [--quit-after 5s]
 //! ```
 //!
 //! The session itself — the server, the runner process, the watching, the
@@ -18,24 +18,23 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kira_ir::IrProgram;
-use kira_live::{Bundle, BundleError, NamedPayload, PayloadKind, ServerError};
-use kira_llvm_backend::NativeLinkInputs;
-use kira_manifest::{BuildProfile, RunnerId};
-use kira_runtime_abi::Execution;
+use kira_live::{BundleError, ServerError, WatchError, WatchSet};
+use kira_manifest::RunnerId;
 
-use crate::hybrid;
-use crate::native::Artifacts;
+mod bundle;
+
+pub(crate) use bundle::build_bundle;
 
 /// The backend a live session builds its bundle with.
 ///
-/// A live bundle is either bytecode alone or a hybrid pair. There is no
-/// LLVM-executable option: a live runner loads a bundle into its own process, so
-/// the native half must be a library it can link, which is what hybrid is.
+/// A live bundle can be VM bytecode, a whole native program library, or a hybrid
+/// pair. The runner owns each entrypoint's execution process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveBackend {
     /// The VM half only: one bytecode payload.
     Vm,
+    /// The whole program as a native library with a fixed runner entry symbol.
+    Llvm,
     /// Both halves: a hybrid manifest, its bytecode, and its native library.
     Hybrid,
 }
@@ -45,6 +44,7 @@ impl LiveBackend {
     fn parse(value: &str) -> Option<LiveBackend> {
         match value {
             "vm" => Some(Self::Vm),
+            "llvm" => Some(Self::Llvm),
             "hybrid" => Some(Self::Hybrid),
             _ => None,
         }
@@ -54,6 +54,7 @@ impl LiveBackend {
     fn label(self) -> &'static str {
         match self {
             Self::Vm => "vm",
+            Self::Llvm => "llvm",
             Self::Hybrid => "hybrid",
         }
     }
@@ -101,7 +102,7 @@ pub enum LiveOptionsError {
     #[error("`{0}` needs a value")]
     MissingValue(String),
     /// A `--backend` value named no live backend.
-    #[error("unknown backend `{0}`; live sessions run `vm` or `hybrid`")]
+    #[error("unknown backend `{0}`; live sessions run `vm`, `llvm`, or `hybrid`")]
     UnknownBackend(String),
     /// A `--quit-after` value was not a duration.
     #[error("`{0}` is not a duration; try `5s`, `500ms`, or `2m`")]
@@ -219,24 +220,11 @@ impl LiveOptions {
 
 /// Parses `5s`, `500ms`, or `2m` into a duration.
 ///
-/// Hand-written rather than pulled in: the workspace treats dependencies as
-/// frozen, and three suffixes do not justify one.
+/// One spelling for both verbs that bound a program: `live --quit-after` and
+/// `run --quit-after` mean the same thing to the person typing them.
 fn parse_duration(value: &str) -> Result<Duration, LiveOptionsError> {
-    let bad = || LiveOptionsError::BadDuration(value.to_owned());
-    // Longest suffix first: `ms` ends in `s`, so checking `s` first would read
-    // `500ms` as 500-something-seconds and silently mean something else.
-    let (number, scale) = if let Some(number) = value.strip_suffix("ms") {
-        (number, 1u64)
-    } else if let Some(number) = value.strip_suffix('s') {
-        (number, 1_000)
-    } else if let Some(number) = value.strip_suffix('m') {
-        (number, 60_000)
-    } else {
-        return Err(bad());
-    };
-    let amount: u64 = number.parse().map_err(|_| bad())?;
-    let millis = amount.checked_mul(scale).ok_or_else(bad)?;
-    Ok(Duration::from_millis(millis))
+    crate::options::parse_duration(value)
+        .map_err(|_| LiveOptionsError::BadDuration(value.to_owned()))
 }
 
 /// Whether `value` is shaped like a path rather than a bare runner id.
@@ -278,6 +266,9 @@ pub enum LiveError {
     /// The live server failed.
     #[error("live server failed: {0}")]
     Server(#[from] ServerError),
+    /// The live file watcher failed.
+    #[error("live watcher failed: {0}")]
+    Watch(#[from] WatchError),
     /// The runner client binary could not be found or started.
     ///
     /// Nothing depends on the runner, so only a build that names it produces
@@ -341,122 +332,45 @@ impl LiveError {
     }
 }
 
-/// Builds `program` into a live bundle for `runner`.
-///
-/// The bundle is what the runner gets, so this is where a backend choice stops
-/// mattering: a VM bundle and a hybrid bundle are both just payloads by the time
-/// they reach the wire.
-///
-/// `foreign_link` is what a program's `@FFI.Extern` imports resolved to. A
-/// program with none links nothing and the value is empty; a program with them
-/// gets a native half either way, because reaching C needs generated adapters
-/// and a library to hold them — on the VM exactly as much as in a hybrid build.
-pub fn build_bundle(
-    program: &IrProgram,
-    source: &Path,
-    runner: RunnerId,
-    backend: LiveBackend,
-    foreign_link: &NativeLinkInputs,
-) -> Result<Bundle, LiveError> {
-    match backend {
-        // A VM program that reaches C is still a VM program: every function runs
-        // on the VM, and the native half exists only to hold the adapters the
-        // foreign calls go through. That is a hybrid bundle whose split is
-        // entirely on one side, so it is built as one rather than as a second
-        // artifact shape the runner would have to learn.
-        LiveBackend::Vm if reaches_foreign_code(program) => {
-            build_hybrid_bundle(&on_the_vm(program), source, runner, backend, foreign_link)
+/// Builds the watch set from the invocation and every source the frontend
+/// actually assembled, including dependency packages and shader inputs.
+pub(crate) fn watch_set(invocation: &Path, sources: &kira_source::SourceMap) -> WatchSet {
+    let mut set = WatchSet::new().root(invocation.to_owned());
+    let has_package = package_root(invocation).is_some();
+
+    for source in sources.iter() {
+        let path = Path::new(&source.path);
+        if let Some(root) = package_root(path) {
+            set = set.root(root);
+        } else if path.exists() {
+            set = set.root(path.to_owned());
         }
-        LiveBackend::Vm => {
-            let module = kira_bytecode::compile(program)
-                .map_err(|error| LiveError::build(backend, &error))?;
-            Ok(Bundle::build(
-                runner,
-                BuildProfile::Debug,
-                vec![NamedPayload {
-                    name: "app.kbc".to_owned(),
-                    kind: PayloadKind::VmBytecode,
-                    bytes: module.to_bytes(),
-                }],
-                0,
-            )?)
+    }
+
+    // A bare file has no manifest from which to discover adjacent shader and
+    // asset inputs. Its containing directory is the only honest source root.
+    if !has_package
+        && invocation.is_file()
+        && let Some(parent) = invocation.parent()
+    {
+        set = set.root(parent.to_owned());
+    }
+    set
+}
+
+/// Finds the nearest package root governing `path`.
+fn package_root(path: &Path) -> Option<PathBuf> {
+    let mut directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    loop {
+        if directory.join("package.kira").is_file() {
+            return Some(directory);
         }
-        LiveBackend::Hybrid => build_hybrid_bundle(program, source, runner, backend, foreign_link),
+        directory = directory.parent()?.to_path_buf();
     }
-}
-
-/// Whether this program calls out to C, in either direction.
-///
-/// A callback counts: handing a Kira function to C needs the same generated
-/// entry thunk an import needs, and it lives in the same native half.
-fn reaches_foreign_code(program: &IrProgram) -> bool {
-    !program.foreign_imports.is_empty() || !program.foreign_callbacks.is_empty()
-}
-
-/// The same program with every function assigned to the VM.
-///
-/// `@Native` is a boundary a VM build does not have — `kira run --backend vm`
-/// compiles every function to bytecode whatever it was annotated with, and this
-/// is that decision made once, up front, so the bytecode, the manifest, and the
-/// native half all describe the same program. Without it the manifest would
-/// claim a trampoline for each `@Native` function and the native half would be
-/// asked to carry bodies the VM is already running.
-fn on_the_vm(program: &IrProgram) -> IrProgram {
-    let mut program = program.clone();
-    for function in &mut program.functions {
-        function.execution = Execution::Runtime;
-    }
-    program
-}
-
-/// Builds a hybrid bundle: the manifest, its bytecode, and its native library.
-///
-/// The manifest is the entrypoint, and the other two are the halves it names.
-/// A `KHM1` manifest names them as plain file names beside itself, and a
-/// bundle's payloads are staged flat in one directory — so the manifest resolves
-/// inside the runner's cache exactly as it did in the build directory.
-fn build_hybrid_bundle(
-    program: &IrProgram,
-    source: &Path,
-    runner: RunnerId,
-    backend: LiveBackend,
-    foreign_link: &NativeLinkInputs,
-) -> Result<Bundle, LiveError> {
-    let bundle = hybrid::build(program, source, false, foreign_link)
-        .map_err(|error| LiveError::build(backend, &error))?;
-    let artifacts = Artifacts::for_source(source).map_err(|source| LiveError::Io {
-        path: PathBuf::from("."),
-        source,
-    })?;
-
-    let manifest_path = bundle.manifest;
-    let bytecode_path = artifacts.bytecode();
-    let library_path = artifacts.shared_library();
-
-    let payloads = vec![
-        named_payload(&manifest_path, PayloadKind::HybridManifest)?,
-        named_payload(&bytecode_path, PayloadKind::VmBytecode)?,
-        named_payload(&library_path, PayloadKind::NativeLibrary)?,
-    ];
-    // The manifest is payload 0, and it is the entrypoint: it is the only payload
-    // that knows how the other two fit together.
-    Ok(Bundle::build(runner, BuildProfile::Debug, payloads, 0)?)
-}
-
-/// Reads `path` into a payload named by its file name.
-fn named_payload(path: &Path, kind: PayloadKind) -> Result<NamedPayload, LiveError> {
-    let bytes = std::fs::read(path).map_err(|source| LiveError::Io {
-        path: path.to_owned(),
-        source,
-    })?;
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| LiveError::Build {
-            backend: LiveBackend::Hybrid.label(),
-            reason: format!("built artifact `{}` has no file name", path.display()),
-        })?;
-    Ok(NamedPayload { name, kind, bytes })
 }
 
 /// Where the runner client for `runner` lives.
@@ -544,10 +458,11 @@ mod tests {
     /// rather than the flag.
     #[test]
     fn a_live_session_no_terminal_asked_for_ends_on_its_own() {
-        let invocations: [&[&str]; 6] = [
+        let invocations: [&[&str]; 7] = [
             &[],
             &["app.kira"],
             &["--backend", "vm", "app.kira"],
+            &["--backend", "llvm", "app.kira"],
             &["--backend", "hybrid", "app.kira"],
             &["desktop", "app.kira"],
             &["--no-watch", "app.kira"],
@@ -611,10 +526,17 @@ mod tests {
     }
 
     #[test]
+    fn the_llvm_backend_is_parsed() {
+        let options =
+            LiveOptions::parse(&args(&["--backend", "llvm", "app.kira"])).expect("parses");
+        assert_eq!(options.backend, LiveBackend::Llvm);
+    }
+
+    #[test]
     fn an_unknown_backend_is_a_usage_error() {
         assert_eq!(
-            LiveOptions::parse(&args(&["--backend", "llvm", "app.kira"])),
-            Err(LiveOptionsError::UnknownBackend("llvm".to_owned()))
+            LiveOptions::parse(&args(&["--backend", "wasm", "app.kira"])),
+            Err(LiveOptionsError::UnknownBackend("wasm".to_owned()))
         );
     }
 
@@ -686,8 +608,38 @@ mod tests {
 
     #[test]
     fn backend_labels_round_trip() {
-        for backend in [LiveBackend::Vm, LiveBackend::Hybrid] {
+        for backend in [LiveBackend::Vm, LiveBackend::Llvm, LiveBackend::Hybrid] {
             assert_eq!(LiveBackend::parse(backend.label()), Some(backend));
         }
+    }
+
+    #[test]
+    fn watch_set_includes_bare_file_inputs_and_dependency_package_roots() {
+        let root = std::env::temp_dir().join(format!("kira-live-watch-set-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dependency = root.join("core");
+        let entry = root.join("app.kira");
+        std::fs::create_dir_all(dependency.join("app")).expect("dependency tree");
+        std::fs::write(dependency.join("package.kira"), "Package Core {}").expect("manifest");
+        std::fs::write(&entry, "@Main function main() { return }").expect("entry");
+
+        let mut sources = kira_source::SourceMap::new();
+        sources
+            .insert(
+                dependency.join("app/Values.kira").display().to_string(),
+                "function value() { return }".to_owned(),
+            )
+            .expect("source map");
+        let set = watch_set(&entry, &sources);
+
+        assert!(
+            set.roots().contains(&root),
+            "bare-file sibling root is watched"
+        );
+        assert!(
+            set.roots().contains(&dependency),
+            "the dependency package root is watched"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

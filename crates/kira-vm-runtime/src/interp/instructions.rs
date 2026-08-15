@@ -9,7 +9,7 @@ use kira_bytecode::op::Instruction;
 use kira_runtime_abi::NativeStatePathStep;
 
 use super::frames::Frame;
-use super::{Vm, foreign_scalar_value, write_seam_scalar};
+use super::{Vm, foreign_scalar_value};
 use crate::error::{NativeStateOperation, VmError};
 use crate::value::Value;
 
@@ -17,8 +17,12 @@ impl Vm<'_> {
     /// Pushes a local's value onto the operand stack, copying only when the
     /// value actually owns heap storage.
     #[inline(always)]
-    pub(super) fn load_local(&mut self, frame: &Frame, slot: u16) {
-        let value = frame.locals[slot as usize];
+    pub(super) fn load_local(&mut self, frame: &Frame, slot: u64) -> Result<(), VmError> {
+        let slot = usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?;
+        let value = *frame
+            .locals
+            .get(slot)
+            .ok_or(VmError::LocalSlotOutOfRange(slot as u64))?;
         // Scalars and opaque seam words are already independent values. Avoid
         // entering the heap copier for the overwhelmingly common loop-local
         // case; heap-backed values still take the deep/value-semantic copy
@@ -33,18 +37,24 @@ impl Vm<'_> {
             | Value::Void => self.stack.push(value),
             _ => self.stack.push(self.heap.copy_value(value)),
         }
+        Ok(())
     }
 
     /// Stores an operand into a local, including the special write-through
     /// behavior of a recovered native-state view.
     #[inline(always)]
-    pub(super) fn store_local(&mut self, frame: &mut Frame, slot: u16) -> Result<(), VmError> {
+    pub(super) fn store_local(&mut self, frame: &mut Frame, slot: u64) -> Result<(), VmError> {
+        let slot = usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?;
         let value = self.pop()?;
+        let Some(current) = frame.locals.get(slot).copied() else {
+            self.heap.drop_value(value);
+            return Err(VmError::LocalSlotOutOfRange(slot as u64));
+        };
         // Storing into a local that holds a recovered view writes THROUGH it
         // into the callback state — except when the incoming value is itself a
         // view. Rebinding a view replaces what the local names.
         let rebinding_a_view = matches!(value, Value::NativeView { .. });
-        if let Value::NativeView { token, type_id } = frame.locals[slot as usize]
+        if let Value::NativeView { token, type_id } = current
             && !rebinding_a_view
         {
             let stored = self.heap.into_native_state(value).map_err(|kind| {
@@ -57,7 +67,13 @@ impl Vm<'_> {
                 .native_state_replace(token, type_id, stored)
                 .map_err(VmError::NativeState)?;
         } else {
-            let old = std::mem::replace(&mut frame.locals[slot as usize], value);
+            let old = std::mem::replace(
+                frame
+                    .locals
+                    .get_mut(slot)
+                    .ok_or(VmError::LocalSlotOutOfRange(slot as u64))?,
+                value,
+            );
             // Loop-shaped assignment constantly replaces scalar locals. Those
             // values own no heap storage, so skip the general recursive drop
             // walk and retain it for heap-backed values and snapshots.
@@ -83,6 +99,11 @@ impl Vm<'_> {
         frame: &mut Frame,
         instruction: &Instruction,
     ) -> Result<(), VmError> {
+        // A callback-state tree can let go of a capture cell anywhere — a store
+        // write unsharing a level, a snapshot going away — and none of those
+        // places holds this heap. Each is recorded and released here, so a cell
+        // outlives the tree's last share by at most one instruction.
+        self.heap.drain_released_cells();
         match instruction {
             Instruction::ConstInt(value) => self.stack.push(Value::Int(*value)),
             Instruction::ConstFloat(value) => self.stack.push(Value::Float(*value)),
@@ -91,11 +112,18 @@ impl Vm<'_> {
             Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
             Instruction::ForeignCallback(id) => self.foreign_callback(module, *id)?,
             Instruction::ConstStr(index) => {
-                let text = module.strings[*index as usize].clone();
+                let text = module
+                    .strings
+                    .get(
+                        usize::try_from(*index)
+                            .map_err(|_| VmError::StringConstantOutOfRange(*index))?,
+                    )
+                    .ok_or(VmError::StringConstantOutOfRange(*index))?
+                    .clone();
                 let id = self.heap.alloc(text);
                 self.stack.push(Value::Str(id));
             }
-            Instruction::LoadLocal(slot) => self.load_local(frame, *slot),
+            Instruction::LoadLocal(slot) => self.load_local(frame, *slot)?,
             Instruction::StoreLocal(slot) => self.store_local(frame, *slot)?,
             Instruction::Pop => {
                 let value = self.pop()?;
@@ -115,10 +143,11 @@ impl Vm<'_> {
                 self.stack.push(Value::Void);
             }
             Instruction::NewStruct(count) => {
+                let count = usize::try_from(*count).map_err(|_| VmError::ArrayTooLong)?;
                 let first = self
                     .stack
                     .len()
-                    .checked_sub(*count as usize)
+                    .checked_sub(count)
                     .ok_or(VmError::StackUnderflow)?;
                 // The fields were pushed in declaration order, so splitting
                 // them off preserves layout order — and moves them, so nothing
@@ -140,7 +169,10 @@ impl Vm<'_> {
                         .native_state_read(
                             token,
                             type_id,
-                            &[NativeStatePathStep::Field((*index).into())],
+                            &[NativeStatePathStep::Field(
+                                u32::try_from(*index)
+                                    .map_err(|_| VmError::NoSuchField { index: *index })?,
+                            )],
                         )
                         .map_err(VmError::NativeState)?;
                     // An aggregate stops here as the node it already is. A whole
@@ -153,7 +185,10 @@ impl Vm<'_> {
                 if let Value::NativeSnapshot(id) = base {
                     let field = self.read_snapshot_child(
                         id,
-                        NativeStatePathStep::Field((*index).into()),
+                        NativeStatePathStep::Field(
+                            u32::try_from(*index)
+                                .map_err(|_| VmError::NoSuchField { index: *index })?,
+                        ),
                         VmError::NoSuchField { index: *index },
                     )?;
                     self.stack.push(field);
@@ -303,7 +338,7 @@ impl Vm<'_> {
                 } else {
                     None
                 };
-                let id = self.heap.alloc_enum(u32::from(*tag), payload);
+                let id = self.heap.alloc_enum(*tag, payload);
                 self.stack.push(Value::Enum(id));
             }
             Instruction::Erase(type_id) => {
@@ -321,7 +356,9 @@ impl Vm<'_> {
                 let base = self.pop()?;
                 if let Value::NativeSnapshot(id) = base {
                     let tag = self.snapshot_enum_tag(id)?;
-                    self.stack.push(Value::Int(i64::from(tag)));
+                    self.stack.push(Value::Int(
+                        i64::try_from(tag).map_err(|_| VmError::ArrayTooLong)?,
+                    ));
                     return Ok(());
                 }
                 let Value::Enum(id) = base else {
@@ -332,7 +369,9 @@ impl Vm<'_> {
                 // The box is freed on every path out, not just the one that
                 // found a tag.
                 self.heap.drop_value(base);
-                self.stack.push(Value::Int(i64::from(tag?)));
+                self.stack.push(Value::Int(
+                    i64::try_from(tag?).map_err(|_| VmError::ArrayTooLong)?,
+                ));
             }
             Instruction::EnumPayload => {
                 // The same shape as `EnumTag`: the enum is consumed, an owned
@@ -386,6 +425,14 @@ impl Vm<'_> {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(value as f64));
             }
+            Instruction::ConvertIntToRawPtr => {
+                let value = self.pop_int()?;
+                self.stack.push(Value::RawPtr(value as u64));
+            }
+            Instruction::ConvertRawPtrToInt => {
+                let value = self.pop_foreign_pointer()?;
+                self.stack.push(Value::Int(value as i64));
+            }
             Instruction::ConvertFloatToBits => {
                 // A reinterpretation: the IEEE-754 bit pattern, unchanged. The
                 // native backend bitcasts, which is the same 64 bits.
@@ -403,20 +450,7 @@ impl Vm<'_> {
                 self.stack.push(Value::RawPtr(word));
             }
             Instruction::ArrayElements(element) => {
-                let value = self.pop()?;
-                let Value::Array(id) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::NotAnArray);
-                };
-                let mut bytes = Vec::new();
-                for &item in self.heap.elements(id) {
-                    write_seam_scalar(&mut bytes, *element, item)?;
-                }
-                self.heap.drop_value(value);
-                self.stack
-                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
-                        &bytes,
-                    )));
+                self.array_elements(*element)?;
             }
             Instruction::ScalarText => {
                 let value = self.pop()?;

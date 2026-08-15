@@ -143,6 +143,10 @@ struct Parser<'a> {
     /// Whether a `{` at expression position opens a block rather than a struct
     /// literal. Set only while parsing an `if`/`while` condition.
     no_struct_literal: bool,
+    /// Whether a `name:` following a construction binds to that construction as
+    /// a named child fill. Cleared in the value positions where the same tokens
+    /// belong to an enclosing initializer instead.
+    no_named_fill: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -163,6 +167,7 @@ impl<'a> Parser<'a> {
             interner: Interner::with_base(symbol_base),
             diagnostics: Vec::new(),
             no_struct_literal: false,
+            no_named_fill: false,
         }
     }
 
@@ -329,6 +334,20 @@ impl<'a> Parser<'a> {
         value
     }
 
+    /// Runs `body` with named child fills disabled, for a value position whose
+    /// enclosing initializer list separates its entries by nothing.
+    ///
+    /// `Style { primary: Color { } secondary: Color { } }` is the case: without
+    /// this, `secondary:` would attach to the `Color` just closed rather than
+    /// opening the next field of the literal.
+    fn without_named_fills<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.no_named_fill;
+        self.no_named_fill = true;
+        let value = body(self);
+        self.no_named_fill = saved;
+        value
+    }
+
     /// Consumes a balanced `open`..`close` group, assuming the cursor sits on
     /// `open`. Nested groups of the same delimiter are tracked by depth.
     fn skip_balanced(&mut self, open: TokenKind, close: TokenKind) {
@@ -356,6 +375,16 @@ impl<'a> Parser<'a> {
             0
         } else {
             self.tokens[self.pos - 1].span.end()
+        }
+    }
+
+    /// The kind of the token already consumed, or [`TokenKind::Eof`] at the
+    /// start of the file.
+    fn previous_kind(&self) -> TokenKind {
+        if self.pos == 0 {
+            TokenKind::Eof
+        } else {
+            self.tokens[self.pos - 1].kind
         }
     }
 }

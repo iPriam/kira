@@ -1,45 +1,59 @@
 //! Watching a program's inputs for a change worth rebuilding.
 //!
-//! A live session polls rather than subscribing to the OS. Polling is
-//! unglamorous and portable, and a live session's watch set is a program's
-//! sources — small enough that a stat per file every few hundred milliseconds is
-//! not worth a platform-specific API and its edge cases.
-//!
-//! The interesting part is not the polling; it is **what is not watched**. A
-//! watcher that notices its own build output rebuilds forever: the build writes,
-//! the watcher sees a change, it rebuilds, the build writes. So build outputs are
-//! excluded, and so is editor noise — an editor that writes `app.kira~` and
-//! `.app.kira.swp` on the way to saving would otherwise trigger three rebuilds
-//! per save, two of them of an unchanged program.
-//!
-//! Both exclusion lists are matched on every host rather than on the one that
-//! produces them: a session is run on a machine whose editor and toolchain are
-//! not knowable from here.
+//! The operating system owns change notification. The watcher registers the
+//! relevant directories once, drains a short burst of notifications into one
+//! batch, and snapshots only after that batch says there may be a source change.
+//! Build output and editor scratch still go through the same source-set filter,
+//! so a build cannot wake its own rebuild loop.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf, absolute};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, SystemTime};
+
+use notify::event::{CreateKind, RemoveKind};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
 
 /// Directory names whose contents are never watched.
-///
-/// Every one of these is somewhere a build writes. Watching any of them makes a
-/// session rebuild in a loop, which is the failure this list exists to prevent.
-const IGNORED_DIRECTORIES: [&str; 5] = [".kira-build", "exports", "zig-out", "generated", "target"];
+const IGNORED_DIRECTORIES: [&str; 11] = [
+    ".git",
+    ".hg",
+    ".svn",
+    ".bzr",
+    ".jj",
+    ".kira-build",
+    "exports",
+    "generated",
+    "target",
+    "zig-out",
+    "build",
+];
 
 /// File suffixes that are never watched.
-///
-/// Editors write these on the way to saving a file. They are noise: the real
-/// save arrives as a change to the real file a moment later.
-const IGNORED_SUFFIXES: [&str; 4] = ["~", ".swp", ".swx", ".tmp"];
+const IGNORED_SUFFIXES: [&str; 10] = [
+    "~",
+    ".swp",
+    ".swo",
+    ".swx",
+    ".tmp",
+    ".bak",
+    ".orig",
+    ".rej",
+    ".crdownload",
+    ".part",
+];
+
+/// The quiet period that closes one editor save into one rebuild batch.
+pub const DEBOUNCE_WINDOW: Duration = Duration::from_millis(75);
+
+/// The maximum time one burst may remain open while an editor keeps reporting.
+const MAX_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// What a file looked like last time it was checked.
 ///
-/// Modification time and size together: a change that moves neither is a change
-/// no poller can see, and the alternative — hashing every input every tick —
-/// costs more than it is worth for a watch set that is mostly source files. A
-/// filesystem with coarse timestamps could hide an edit that also preserved the
-/// size; on the platforms this runs on, timestamps are nanosecond-resolution and
-/// that case does not arise.
+/// Metadata remains useful for rescan notifications and for changes that arrive
+/// without a file-specific event. A file-specific write event is authoritative,
+/// which is what makes a same-size edit on a coarse-mtime filesystem visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
     modified: Option<SystemTime>,
@@ -88,12 +102,74 @@ impl ChangeKind {
     }
 }
 
+/// An operating-system watcher could not start or stopped delivering events.
+#[derive(Debug, thiserror::Error)]
+pub enum WatchError {
+    /// The platform watcher could not be initialized.
+    #[error("could not initialize the live file watcher: {0}")]
+    Initialize(#[source] notify::Error),
+    /// A watch root could not be registered.
+    #[error("could not watch live path `{path}`: {source}")]
+    Register {
+        /// The path registration failed for.
+        path: PathBuf,
+        /// The platform error.
+        #[source]
+        source: notify::Error,
+    },
+    /// A watch root could not be removed from the platform watcher.
+    #[error("could not stop watching live path `{path}`: {source}")]
+    Unregister {
+        /// The path removal failed for.
+        path: PathBuf,
+        /// The platform error.
+        #[source]
+        source: notify::Error,
+    },
+    /// The platform watcher stopped sending notifications.
+    #[error("the live file watcher stopped delivering notifications")]
+    Disconnected,
+    /// The platform reported an event error.
+    #[error("the live file watcher reported an error for {paths:?}: {source}")]
+    Event {
+        /// Paths associated with the platform error.
+        paths: Vec<PathBuf>,
+        /// The platform error.
+        #[source]
+        source: notify::Error,
+    },
+}
+
+impl WatchError {
+    /// Whether the watcher can be recreated without ending the live session.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Register { source, .. }
+            | Self::Unregister { source, .. }
+            | Self::Event { source, .. } => is_transient_notify_error(source),
+            Self::Disconnected => true,
+            Self::Initialize(_) => false,
+        }
+    }
+}
+
+/// Whether a platform error describes a path that can disappear during a save.
+fn is_transient_notify_error(error: &notify::Error) -> bool {
+    match &error.kind {
+        notify::ErrorKind::PathNotFound | notify::ErrorKind::WatchNotFound => true,
+        notify::ErrorKind::Io(source) => source.kind() == std::io::ErrorKind::NotFound,
+        notify::ErrorKind::Generic(_)
+        | notify::ErrorKind::InvalidConfig(_)
+        | notify::ErrorKind::MaxFilesWatch => false,
+    }
+}
+
 /// The inputs a live session rebuilds from.
 ///
 /// Roots are files and directories; a directory root is walked, and everything
-/// under it that is not excluded is watched. A session names its roots once and
-/// the watcher re-walks them each poll, so a file created after the session
-/// started is picked up rather than needing a restart.
+/// under it that is not excluded is watched. The operating-system watcher is
+/// registered against the containing directory, so a file root survives an
+/// atomic replacement and a directory root sees files created after startup.
 #[derive(Debug, Clone, Default)]
 pub struct WatchSet {
     roots: Vec<PathBuf>,
@@ -107,7 +183,10 @@ impl WatchSet {
 
     /// Adds a root — a file to watch, or a directory to walk.
     pub fn root(mut self, path: impl Into<PathBuf>) -> WatchSet {
-        self.roots.push(path.into());
+        let path = normalize_path(&path.into());
+        if !self.roots.iter().any(|root| same_path(root, &path)) {
+            self.roots.push(path);
+        }
         self
     }
 
@@ -118,143 +197,186 @@ impl WatchSet {
 
     /// Every watchable file under the roots, walked fresh.
     ///
-    /// Sorted, because the order two directory reads come back in is the
-    /// filesystem's business, and a session that reported its changes in a
-    /// different order each run would be a session nobody could test.
+    /// Sorted because directory iteration order belongs to the filesystem.
     pub fn files(&self) -> Vec<PathBuf> {
-        let mut found = Vec::new();
+        let mut found: Vec<PathBuf> = Vec::new();
         for root in &self.roots {
             collect(root, &mut found);
         }
-        found.sort();
-        found.dedup();
+        found.sort_by_key(|left| path_key(left));
+        found.dedup_by(|left, right| same_path(left, right));
+        found
+    }
+
+    /// Directories against which the platform watcher can register.
+    fn event_roots(&self) -> Vec<(PathBuf, RecursiveMode)> {
+        let mut found: Vec<(PathBuf, RecursiveMode)> = Vec::new();
+        for root in &self.roots {
+            if root.is_dir() {
+                add_event_root(&mut found, root.clone(), RecursiveMode::Recursive);
+                if let Some(parent) = root.parent() {
+                    add_event_root(
+                        &mut found,
+                        parent.to_path_buf(),
+                        RecursiveMode::NonRecursive,
+                    );
+                }
+                continue;
+            }
+
+            let Some(parent) = root.parent() else {
+                continue;
+            };
+            if parent.is_dir() {
+                add_event_root(
+                    &mut found,
+                    parent.to_path_buf(),
+                    RecursiveMode::NonRecursive,
+                );
+            } else if let Some(ancestor) = existing_directory(parent) {
+                // A missing root still needs a notification when its first
+                // directory is created. The fallback watches the nearest
+                // existing ancestor and relies on the source-set filter.
+                add_event_root(&mut found, ancestor, RecursiveMode::Recursive);
+            }
+        }
         found
     }
 }
 
-/// Walks `path`, pushing every watchable file into `found`.
-///
-/// Errors are silence rather than failure: a directory that cannot be read this
-/// tick is a directory with no watchable files this tick, and a live session must
-/// not die because an editor replaced a directory while it was being walked.
-fn collect(path: &Path, found: &mut Vec<PathBuf>) {
-    // Depth is what stops a symlink cycle. `is_dir` follows links, so a single
-    // `a -> .` inside a watched tree makes the walk descend forever — and two of
-    // them make it branch, so the work doubles per level until the path outgrows
-    // the platform's limit. That is not a hang anyone diagnoses quickly: the
-    // session simply never starts. A tree deeper than this is not a source tree.
-    const MAX_DEPTH: usize = 32;
+/// Adds one existing platform root, merging duplicate registrations.
+fn add_event_root(
+    found: &mut Vec<(PathBuf, RecursiveMode)>,
+    candidate: PathBuf,
+    mode: RecursiveMode,
+) {
+    if !candidate.is_dir() {
+        return;
+    }
+    if let Some((_, existing_mode)) = found
+        .iter_mut()
+        .find(|(existing, _)| same_path(existing, &candidate))
+    {
+        if mode == RecursiveMode::Recursive {
+            *existing_mode = mode;
+        }
+    } else {
+        found.push((normalize_path(&candidate), mode));
+    }
+}
 
-    fn walk(path: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-        if path.is_file() {
+/// Finds the nearest directory that still exists above `path`.
+fn existing_directory(path: &Path) -> Option<PathBuf> {
+    let mut candidate = Some(normalize_path(path));
+    while let Some(path) = candidate {
+        let parent = path.parent().map(Path::to_path_buf);
+        if path.is_dir() && parent.as_deref().is_some_and(|parent| parent != path) {
+            return Some(path);
+        }
+        candidate = parent.filter(|parent| parent != &path);
+    }
+    None
+}
+
+/// Walks `path`, pushing every watchable file into `found`.
+fn collect(path: &Path, found: &mut Vec<PathBuf>) {
+    const MAX_DEPTH: usize = 64;
+    const MAX_SYMLINK_DEPTH: usize = 8;
+
+    fn walk(
+        path: &Path,
+        depth: usize,
+        symlink_depth: usize,
+        directories: &mut BTreeSet<String>,
+        found: &mut Vec<PathBuf>,
+    ) {
+        let Ok(link_metadata) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        let is_symlink = link_metadata.file_type().is_symlink();
+        if is_symlink && symlink_depth >= MAX_SYMLINK_DEPTH {
+            return;
+        }
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return;
+        };
+        if metadata.is_file() {
             if is_watchable_file(path) {
                 found.push(path.to_owned());
             }
             return;
         }
-        if depth >= MAX_DEPTH || !path.is_dir() || !is_watchable_directory(path) {
+        if depth >= MAX_DEPTH || !metadata.is_dir() || !is_watchable_directory(path) {
+            return;
+        }
+        if !directories.insert(path_key(path)) {
             return;
         }
         let Ok(entries) = std::fs::read_dir(path) else {
             return;
         };
         for entry in entries.flatten() {
-            walk(&entry.path(), depth + 1, found);
+            walk(
+                &entry.path(),
+                depth + 1,
+                symlink_depth + usize::from(is_symlink),
+                directories,
+                found,
+            );
         }
     }
 
-    walk(path, 0, found);
+    walk(path, 0, 0, &mut BTreeSet::new(), found);
 }
 
 /// Whether a directory's contents are watched.
-///
-/// Excludes build outputs and every dot-directory. Dot-directories go wholesale
-/// rather than by name: `.git`, `.svn`, and an editor's private directory are all
-/// churn a program's behavior does not depend on, and naming them one at a time
-/// is a list that is always one entry out of date.
 pub fn is_watchable_directory(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    !is_ignored_directory_name(name)
+}
+
+/// Whether a file is watched.
+pub fn is_watchable_file(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return true;
     };
     if name.starts_with('.') {
         return false;
     }
-    !IGNORED_DIRECTORIES.contains(&name)
-}
-
-/// Whether a file is watched.
-///
-/// Excludes dotfiles and editor scratch. A dotfile is not a program input; an
-/// editor's scratch file is the same save arriving twice.
-pub fn is_watchable_file(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    if name.starts_with('.') {
+    let name = name.to_ascii_lowercase();
+    if IGNORED_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)) {
         return false;
     }
-    !IGNORED_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+    !(name.starts_with('#') && name.ends_with('#'))
 }
 
-/// Watches a [`WatchSet`], reporting what changed since the last look.
-///
-/// The watcher is a snapshot and a comparison, with no thread and no channel: a
-/// session asks when it is ready to rebuild, which means a burst of saves during
-/// a build collapses into one rebuild rather than queueing three.
-#[derive(Debug, Clone)]
+/// Whether a path component names a directory excluded from a watch tree.
+fn is_ignored_directory_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with('.') || IGNORED_DIRECTORIES.contains(&name.as_str())
+}
+
+/// Watches a [`WatchSet`], reporting what changed since the last event batch.
 pub struct SourceWatcher {
     set: WatchSet,
     seen: BTreeMap<PathBuf, Stamp>,
+    _watcher: RecommendedWatcher,
+    events: Receiver<notify::Result<Event>>,
+    registered: Vec<(PathBuf, RecursiveMode)>,
 }
 
-impl SourceWatcher {
-    /// Starts watching `set`, taking the current state as the baseline.
-    ///
-    /// The baseline is taken now, so the files that already exist are not
-    /// reported as added the first time [`SourceWatcher::poll`] is called — a
-    /// session must not rebuild immediately because its program exists.
-    pub fn new(set: WatchSet) -> SourceWatcher {
-        let seen = snapshot(&set);
-        SourceWatcher { set, seen }
-    }
-
-    /// The set being watched.
-    pub fn set(&self) -> &WatchSet {
-        &self.set
-    }
-
-    /// Everything that changed since the last poll, and adopts the new state.
-    ///
-    /// Empty when nothing changed, which is the answer almost every time.
-    pub fn poll(&mut self) -> Vec<Change> {
-        let now = snapshot(&self.set);
-        let mut changes = Vec::new();
-
-        for (path, stamp) in &now {
-            match self.seen.get(path) {
-                None => changes.push(Change {
-                    path: path.clone(),
-                    kind: ChangeKind::Added,
-                }),
-                Some(before) if before != stamp => changes.push(Change {
-                    path: path.clone(),
-                    kind: ChangeKind::Modified,
-                }),
-                Some(_) => {}
-            }
-        }
-        for path in self.seen.keys() {
-            if !now.contains_key(path) {
-                changes.push(Change {
-                    path: path.clone(),
-                    kind: ChangeKind::Removed,
-                });
-            }
-        }
-
-        self.seen = now;
-        changes
-    }
+/// Events that can represent a file becoming, remaining, or ceasing to exist.
+fn event_kind_can_change_files(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Any
+            | EventKind::Create(_)
+            | EventKind::Modify(_)
+            | EventKind::Remove(_)
+            | EventKind::Other
+    )
 }
 
 /// Stamps every watchable file under `set`.
@@ -265,280 +387,101 @@ fn snapshot(set: &WatchSet) -> BTreeMap<PathBuf, Stamp> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    /// A scratch directory that removes itself.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(tag: &str) -> TempDir {
-            let path =
-                std::env::temp_dir().join(format!("kira-watch-{}-{tag}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).expect("scratch dir");
-            TempDir(path)
-        }
-
-        fn write(&self, name: &str, contents: &str) -> PathBuf {
-            let path = self.0.join(name);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("parent");
-            }
-            fs::write(&path, contents).expect("write");
-            path
-        }
+/// A path spelling used only for identity comparisons.
+fn path_key(path: &Path) -> String {
+    let mut key = canonicalize_existing_prefix(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if cfg!(windows) {
+        key = key.to_lowercase();
     }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
+    while key.len() > 1 && key.ends_with('/') {
+        key.pop();
     }
-
-    /// Makes a later write land on a different modification time.
-    ///
-    /// A same-size write in the same timestamp tick is invisible to a stat-based
-    /// watcher. The tests are about the watcher's logic, not the filesystem's
-    /// clock, so they set the stamp rather than racing it.
-    fn touch_distinctly(path: &Path, contents: &str) {
-        fs::write(path, contents).expect("write");
-        let later = SystemTime::now() + std::time::Duration::from_secs(2);
-        let _ = filetime_set(path, later);
-    }
-
-    /// Sets a file's modification time.
-    ///
-    /// Hand-rolled rather than a dependency: the workspace treats dependencies as
-    /// frozen, and a test helper is not a reason to add one.
-    fn filetime_set(path: &Path, time: SystemTime) -> std::io::Result<()> {
-        let file = fs::OpenOptions::new().write(true).open(path)?;
-        file.set_modified(time)
-    }
-
-    #[test]
-    fn a_new_file_is_added() {
-        let dir = TempDir::new("added");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-        assert!(watcher.poll().is_empty(), "nothing changed yet");
-
-        let path = dir.write("app.kira", "@Main function main() { return }");
-        let changes = watcher.poll();
-        assert_eq!(
-            changes,
-            vec![Change {
-                path,
-                kind: ChangeKind::Added
-            }]
-        );
-    }
-
-    #[test]
-    fn an_edited_file_is_modified() {
-        let dir = TempDir::new("modified");
-        let path = dir.write("app.kira", "before");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        touch_distinctly(&path, "after!");
-        let changes = watcher.poll();
-        assert_eq!(
-            changes,
-            vec![Change {
-                path,
-                kind: ChangeKind::Modified
-            }]
-        );
-    }
-
-    #[test]
-    fn a_deleted_file_is_removed() {
-        let dir = TempDir::new("removed");
-        let path = dir.write("app.kira", "x");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        fs::remove_file(&path).expect("remove");
-        assert_eq!(
-            watcher.poll(),
-            vec![Change {
-                path,
-                kind: ChangeKind::Removed
-            }]
-        );
-    }
-
-    /// The baseline is taken at construction, so a session does not rebuild the
-    /// instant it starts just because its program is on disk.
-    #[test]
-    fn an_untouched_watch_set_reports_nothing() {
-        let dir = TempDir::new("quiet");
-        dir.write("app.kira", "x");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-        assert!(watcher.poll().is_empty());
-        assert!(watcher.poll().is_empty(), "and it stays quiet");
-    }
-
-    /// A change is reported once. A watcher that re-reported it would rebuild
-    /// forever off one save.
-    #[test]
-    fn a_change_is_reported_once() {
-        let dir = TempDir::new("once");
-        let path = dir.write("app.kira", "before");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        touch_distinctly(&path, "after!");
-        assert_eq!(watcher.poll().len(), 1);
-        assert!(watcher.poll().is_empty(), "the same change came back");
-    }
-
-    /// The rule that keeps a session from rebuilding itself to death: a build
-    /// writing into its own output directory is not a source change.
-    #[test]
-    fn build_output_never_triggers_a_rebuild() {
-        let dir = TempDir::new("output");
-        dir.write("app.kira", "x");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        for output in [
-            ".kira-build/app.o",
-            "exports/app.zip",
-            "zig-out/bin/app",
-            "generated/bindings.kira",
-            "target/debug/app",
-        ] {
-            dir.write(output, "build output");
-        }
-
-        assert!(
-            watcher.poll().is_empty(),
-            "a build's own output triggered a rebuild"
-        );
-    }
-
-    /// An editor writing scratch files on the way to a save must produce one
-    /// rebuild, not three.
-    #[test]
-    fn editor_noise_never_triggers_a_rebuild() {
-        let dir = TempDir::new("noise");
-        dir.write("app.kira", "x");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        for noise in [
-            "app.kira~",
-            ".app.kira.swp",
-            "app.kira.swx",
-            "app.kira.tmp",
-            ".DS_Store",
-            ".hidden",
-        ] {
-            dir.write(noise, "noise");
-        }
-
-        assert!(
-            watcher.poll().is_empty(),
-            "editor noise triggered a rebuild"
-        );
-    }
-
-    /// A dot-directory is excluded wholesale: `.git` churns constantly and none
-    /// of it is a program input.
-    #[test]
-    fn dot_directories_are_not_watched() {
-        let dir = TempDir::new("dotdir");
-        dir.write("app.kira", "x");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        dir.write(".git/HEAD", "ref: refs/heads/main");
-        dir.write(".kira-build/nested/deep/thing.o", "output");
-
-        assert!(watcher.poll().is_empty());
-    }
-
-    /// A real source edit still gets through, with all that filtering in place.
-    /// Without this, a watcher that ignored everything would pass every test
-    /// above.
-    #[test]
-    fn a_real_source_edit_still_gets_through() {
-        let dir = TempDir::new("real");
-        let source = dir.write("app.kira", "before");
-        dir.write("shader.ksl", "shader");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        // Noise and output alongside the real edit: the real one must survive.
-        dir.write("app.kira~", "noise");
-        dir.write(".kira-build/app.o", "output");
-        touch_distinctly(&source, "after!");
-
-        let changes = watcher.poll();
-        assert_eq!(
-            changes,
-            vec![Change {
-                path: source,
-                kind: ChangeKind::Modified
-            }],
-            "the real edit must be the only change reported"
-        );
-    }
-
-    /// Shaders and assets are program inputs too, not just `.kira` files.
-    #[test]
-    fn shaders_and_assets_are_watched() {
-        let dir = TempDir::new("inputs");
-        let shader = dir.write("shaders/main.ksl", "before");
-        let asset = dir.write("assets/logo.png", "before");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&dir.0));
-
-        touch_distinctly(&shader, "after!");
-        touch_distinctly(&asset, "after!");
-
-        let mut changed: Vec<PathBuf> = watcher.poll().into_iter().map(|c| c.path).collect();
-        changed.sort();
-        let mut expected = vec![shader, asset];
-        expected.sort();
-        assert_eq!(changed, expected);
-    }
-
-    /// A single file is a legitimate watch set: it is what a session watching one
-    /// program has.
-    #[test]
-    fn a_single_file_root_is_watched() {
-        let dir = TempDir::new("single");
-        let source = dir.write("app.kira", "before");
-        dir.write("other.kira", "untouched");
-        let mut watcher = SourceWatcher::new(WatchSet::new().root(&source));
-
-        touch_distinctly(&source, "after!");
-        assert_eq!(watcher.poll().len(), 1);
-
-        // A file outside the set is not the session's business.
-        touch_distinctly(&dir.0.join("other.kira"), "changed");
-        assert!(watcher.poll().is_empty());
-    }
-
-    #[test]
-    fn a_missing_root_is_not_an_error() {
-        let mut watcher =
-            SourceWatcher::new(WatchSet::new().root("/nonexistent/path/to/nowhere.kira"));
-        assert!(watcher.poll().is_empty());
-    }
-
-    #[test]
-    fn files_are_reported_in_a_stable_order() {
-        let dir = TempDir::new("order");
-        for name in ["c.kira", "a.kira", "b.kira"] {
-            dir.write(name, "x");
-        }
-        let set = WatchSet::new().root(&dir.0);
-        let mut sorted = set.files();
-        sorted.sort();
-        assert_eq!(set.files(), sorted);
-    }
-
-    #[test]
-    fn change_kinds_have_labels() {
-        assert_eq!(ChangeKind::Added.label(), "added");
-        assert_eq!(ChangeKind::Modified.label(), "modified");
-        assert_eq!(ChangeKind::Removed.label(), "removed");
-    }
+    key
 }
+
+/// Resolves the existing part of a path while retaining missing trailing
+/// components. This makes aliases through a symlinked source root compare as
+/// one path without making a missing source impossible to watch.
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let normalized = normalize_path(path);
+    let mut missing = Vec::new();
+    let mut candidate = normalized.clone();
+
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(&candidate) {
+            let mut result = canonical;
+            for component in missing.iter().rev() {
+                result.push(component);
+            }
+            return normalize_path(&result);
+        }
+
+        let Some(name) = candidate.file_name() else {
+            break;
+        };
+        missing.push(name.to_owned());
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_owned();
+    }
+
+    normalized
+}
+
+/// Makes a path absolute and lexically removes `.` and `..` components.
+///
+/// This deliberately does not canonicalize: a missing path must remain
+/// watchable through its existing parent, and resolving symlinks here would
+/// change the source tree that the watcher is meant to filter.
+fn normalize_path(path: &Path) -> PathBuf {
+    let absolute = absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut normalized = PathBuf::new();
+    let mut normal_components = 0usize;
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normal_components > 0 {
+                    let _ = normalized.pop();
+                    normal_components -= 1;
+                }
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(part) => {
+                normalized.push(part);
+                normal_components += 1;
+            }
+        }
+    }
+    normalized
+}
+
+/// Whether two path spellings identify the same file on this host.
+fn same_path(left: &Path, right: &Path) -> bool {
+    path_key(left) == path_key(right)
+}
+
+/// Returns `path` relative to `root` using host path identity rules.
+fn relative_path(path: &Path, root: &Path) -> Option<String> {
+    let path = path_key(path);
+    let root = path_key(root);
+    if path == root {
+        return Some(String::new());
+    }
+    let rest = path.strip_prefix(&root)?.strip_prefix('/')?;
+    Some(rest.to_owned())
+}
+
+#[path = "watch_runtime.rs"]
+mod runtime;
+
+#[cfg(test)]
+#[path = "watch_tests.rs"]
+mod tests;

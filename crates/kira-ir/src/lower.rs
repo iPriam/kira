@@ -61,9 +61,8 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         foreign_callbacks: program.foreign_callbacks.clone(),
         exprs: la_arena::Arena::new(),
     };
-    // The task spine's functions are *appended*, so the row each one lands at
-    // is known before a single body is lowered — which is what lets a `.await`
-    // lower to a call to a function that does not exist yet.
+    // Task functions are appended after source functions. Reserve their base
+    // index before lowering so `.await` can reference their eventual rows.
     let task_base = program.functions.len() as u32;
     let mut lowerer = Lowerer {
         hir: program,
@@ -285,6 +284,7 @@ impl Lowerer<'_> {
                 value: self.lower_expr(value),
                 ty,
             },
+            HirExpr::CellNull { ty } => IrExpr::CellNull { ty },
             HirExpr::CellGet { local, ty } => IrExpr::CellGet {
                 slot: self.slot(local.0),
                 ty,

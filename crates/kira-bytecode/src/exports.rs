@@ -209,7 +209,12 @@ fn export_type(
                 }
             };
             ExportType::Handle {
-                class: class as u32,
+                class: u32::try_from(class).map_err(|_| {
+                    CompileError::ExportClassIndexTooLarge {
+                        export: export.to_owned(),
+                        class,
+                    }
+                })?,
             }
         }
         // `RawPtr` and `CString` are the C-FFI seam types. `CString` is

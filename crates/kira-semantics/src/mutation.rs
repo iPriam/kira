@@ -194,6 +194,9 @@ impl<'a> Analyzer<'a> {
                 self.expr_mutates_self(*iterable, owner)
                     || body.iter().any(|&item| self.expr_mutates_self(item, owner))
             }
+            Expr::Content { children, .. } => children
+                .iter()
+                .any(|&child| self.expr_mutates_self(child, owner)),
             Expr::ContentIf {
                 cond,
                 then_body,

@@ -26,6 +26,7 @@ use crate::progress::SessionPhase;
 use crate::protocol::{
     ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
 };
+use crate::reload::{ReloadDecision, decide};
 use crate::store::{Bundle, BundleError};
 
 pub use host::{AppOutcome, RunnerHost};
@@ -425,10 +426,26 @@ impl RunnerClient {
         }
 
         let manifest = BundleManifest::from_bytes(manifest)?;
-        // Only what actually changed comes over the wire. A hot patch's whole
-        // premise is that the native library is byte-identical, so re-sending it
-        // would mean shipping megabytes to prove they are the same megabytes —
-        // the payload hashes exist exactly so that nobody has to.
+        let Some(loaded) = self.loaded.as_ref() else {
+            self.restart_required("the runner has no loaded bundle to compare against")?;
+            return Ok(());
+        };
+        // The reload mode is a request, not proof. Recheck the manifest before
+        // downloading or handing anything to the host.
+        match decide(loaded.manifest(), &manifest, false) {
+            ReloadDecision::HotPatch => {}
+            ReloadDecision::Unchanged => {
+                self.restart_required("the server requested a hot patch for an unchanged bundle")?;
+                return Ok(());
+            }
+            ReloadDecision::Relaunch { reason } => {
+                self.restart_required(&reason.to_string())?;
+                return Ok(());
+            }
+        }
+        // Only payloads whose manifest identity changed come over the wire. The
+        // hash and size let the client reuse verified bytes without resending
+        // them.
         let bundle = match self.download_reusing(manifest) {
             Ok(bundle) => bundle,
             // A bundle that will not download is not a bundle to swap to, and
@@ -474,16 +491,15 @@ impl RunnerClient {
 
     /// Downloads `manifest`'s payloads, reusing any the runner already holds.
     ///
-    /// A payload is reused only when its hash matches, and the reused bytes go
-    /// through the same verification as downloaded ones — so a reused payload is
-    /// exactly the payload the manifest names, or the bundle is refused.
+    /// A payload is reused only when its complete manifest row matches, and the
+    /// reused bytes go through the same verification as downloaded ones.
     fn download_reusing(&mut self, manifest: BundleManifest) -> Result<Bundle, ClientError> {
         let held = self.loaded.take();
         let mut payloads = Vec::with_capacity(manifest.payloads.len());
         for entry in &manifest.payloads {
             let reused = held.as_ref().and_then(|bundle| {
                 let previous = bundle.manifest().payload(&entry.name)?;
-                (previous.hash == entry.hash)
+                (previous == entry)
                     .then(|| bundle.payload_by_name(&entry.name))
                     .flatten()
                     .map(<[u8]>::to_vec)

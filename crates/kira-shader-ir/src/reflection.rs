@@ -654,11 +654,25 @@ words!(builtin_word, builtin_from, Builtin,
 ///
 /// The resource name comes last in the records that carry one, so a reader can
 /// split the fixed fields on `:` without a name having to avoid the separator.
+/// The one field after it is the **group**, appended last so a reader that
+/// predates it reads every field it knows at the index it always did. A GLSL
+/// name is an identifier and carries no `:`, so the split stays unambiguous
+/// where a name precedes it.
+///
+/// The group is what makes a binding unique. A binding index is numbered from
+/// zero *within* its group, so two resources in two groups routinely share one —
+/// and a host that read the binding alone would see one resource where the
+/// shader declares two.
 #[must_use]
 pub fn resource_digest(reflection: &Reflection) -> String {
     let mut out = String::new();
     for resource in &reflection.resources {
         let binding = target_binding(resource, BackendTarget::Wgsl);
+        let group = resource
+            .backend_bindings
+            .iter()
+            .find(|entry| entry.target == BackendTarget::Wgsl)
+            .map_or(0, |entry| entry.group_index);
         let mut mask = 0u32;
         for stage in &resource.visibility {
             mask |= match stage {
@@ -697,15 +711,17 @@ pub fn resource_digest(reflection: &Reflection) -> String {
                     kinds.push(member.map_or('f', |member| scalar_kind(&member.type_name)));
                     out.push_str(&format!("{}@{}#{natural}", field.name, field.offset));
                 }
-                if !kinds.is_empty() {
-                    out.push(':');
-                    out.push_str(&kinds);
-                }
+                // Written even when it is empty, so the field after it keeps one
+                // index: a reader that counted on `kinds` being absent for a
+                // block with no members would find the group where the kinds go.
+                out.push(':');
+                out.push_str(&kinds);
+                out.push_str(&format!(":{group}"));
             }
             ResourceKind::Storage => {
                 let readonly = u32::from(resource.access != Some(AccessMode::ReadWrite));
                 out.push_str(&format!(
-                    "s|{}:{binding}:{mask}:{}:{readonly}",
+                    "s|{}:{binding}:{mask}:{}:{readonly}:{group}",
                     resource.resource_name,
                     target_binding(resource, BackendTarget::Glsl430)
                 ));
@@ -721,7 +737,7 @@ pub fn resource_digest(reflection: &Reflection) -> String {
             {
                 let writeonly = u32::from(resource.access == Some(AccessMode::Write));
                 out.push_str(&format!(
-                    "i|{}:{binding}:{mask}:{}:{writeonly}",
+                    "i|{}:{binding}:{mask}:{}:{writeonly}:{group}",
                     resource.resource_name,
                     target_binding(resource, BackendTarget::Glsl430)
                 ));
@@ -744,12 +760,15 @@ pub fn resource_digest(reflection: &Reflection) -> String {
                     .and_then(|entry| entry.glsl_name.clone())
                     .unwrap_or_else(|| resource.resource_name.clone());
                 out.push_str(&format!(
-                    "t|{}:{binding}:{mask}:{sampler}:{glsl_name}",
+                    "t|{}:{binding}:{mask}:{sampler}:{glsl_name}:{group}",
                     resource.resource_name
                 ));
             }
             ResourceKind::Sampler => {
-                out.push_str(&format!("m|{}:{binding}:{mask}", resource.resource_name));
+                out.push_str(&format!(
+                    "m|{}:{binding}:{mask}:{group}",
+                    resource.resource_name
+                ));
             }
         }
         out.push(';');

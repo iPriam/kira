@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 [lib]
 name = "kira_desktop_runner"
@@ -19,8 +20,15 @@ kira-manifest.workspace = true
 kira-bytecode.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
+kira-main.workspace = true
+kira-dynamic-ffi.workspace = true
+kira-libffi.workspace = true
 kira-hybrid-runtime.workspace = true
+kira-native-bridge.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+kira-toolchain.workspace = true
 
 [lints]
 workspace = true

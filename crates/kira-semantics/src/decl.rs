@@ -16,14 +16,16 @@
 //!
 //! # Why a cycle still has to be caught
 //!
-//! Resolving in declaration order used to make a value cycle unrepresentable:
-//! a field could only name a struct declared before it, so a struct could not
-//! reach itself. Two-phase collection lifts that ordering, so the cycle has to
-//! be caught outright instead — a struct that reaches itself through by-value
-//! fields would have no finite size. [`Analyzer::break_struct_value_cycles`]
-//! finds each such cycle, breaks its closing field to `Error`, and reports it,
-//! which is what keeps [`kira_semantics_model::TypeTable::owns_heap`] and
-//! `default_value` recursing without a visited set.
+//! Two-phase collection permits forward references, so a struct can reach itself
+//! through by-value fields. Such a cycle has no finite size.
+//! [`Analyzer::break_struct_value_cycles`] finds each cycle, breaks its closing
+//! field to `Error`, and reports it, which keeps
+//! [`kira_semantics_model::TypeTable::owns_heap`] total without a visited set.
+//!
+//! The escape that diagnostic recommends is an enum, and a type may reach itself
+//! through one, so a walk that builds a *value* rather than measuring a size
+//! still needs a visited set. `Analyzer::check_enum_terminates` reports the enum
+//! that leaves it no way out.
 
 use std::collections::HashMap;
 

@@ -236,11 +236,12 @@ impl Analyzer<'_> {
                 }
                 match site.capture_fields.iter().position(|&field| field == index) {
                     Some(slot) => fields.push(site.capture_values[slot]),
-                    // A field another literal of the same type owns. This value
-                    // never reads it, and the dispatcher only ever reads the
-                    // fields its own tag names, so any value of the right type
-                    // does.
-                    None => fields.push(self.default_value(ty)),
+                    // A field another literal of the same type owns. The
+                    // dispatcher never reads it for this tag.
+                    None => fields.push(match ty {
+                        Type::Cell(_) => self.program.exprs.alloc(HirExpr::CellNull { ty }),
+                        _ => self.default_value(ty),
+                    }),
                 }
             }
             if let HirExpr::StructNew { fields: slot, .. } = &mut self.program.exprs[site.expr] {
@@ -313,11 +314,44 @@ impl Analyzer<'_> {
     /// `String` passes the VM and is rejected by the LLVM verifier, which is
     /// exactly the parity break this exists to make impossible.
     ///
-    /// The recursion terminates because a value type cannot reach itself: a
-    /// struct that would contain itself by value is broken to `Error` and
-    /// reported (`KSEM052`), and an enum payload of the enum's own type is
-    /// `KSEM050`.
+    /// A struct cannot contain itself by value — `KSEM052` breaks that cycle
+    /// and reports it — but a type may still reach itself *through an enum*,
+    /// which is the very escape `KSEM052` tells an author to use. So the walk
+    /// carries the types it is inside of and an enum picks the first variant
+    /// that does not lead back into one of them, rather than picking variant
+    /// zero and recursing until the stack is gone. A widget tree whose first
+    /// variant is the branching one is exactly that shape.
     pub(crate) fn default_value(&mut self, ty: Type) -> HirExprId {
+        match self.default_value_inside(ty, &mut Vec::new()) {
+            Some(value) => value,
+            // Every variant led back into the cycle, so the type has no finite
+            // value at all. [`Analyzer::check_enum_terminates`] runs before this
+            // and has already reported the enum against its declaration and
+            // broken its payloads — except for an enum with no variants at all,
+            // which is uninhabited by declaration and reaches here silently.
+            None => self.program.exprs.alloc(HirExpr::Error),
+        }
+    }
+
+    /// Whether a finite value of `ty` can be built at all.
+    ///
+    /// Answered by building one and discarding it, rather than by a second walk
+    /// over the same shape beside [`Analyzer::default_value`]: two answers to
+    /// one question, with nothing checking they agree, is the shape this
+    /// repository removes wherever it finds it. What it costs is a few arena
+    /// nodes for each enum [`Analyzer::check_enum_terminates`] asks about.
+    pub(crate) fn has_finite_value(&mut self, ty: Type) -> bool {
+        self.default_value_inside(ty, &mut Vec::new()).is_some()
+    }
+
+    /// [`Analyzer::default_value`], tracking the types the walk is inside of.
+    ///
+    /// `None` means no finite value of `ty` can be built along this path,
+    /// which an enum's variant search reads as "try the next variant".
+    fn default_value_inside(&mut self, ty: Type, visiting: &mut Vec<Type>) -> Option<HirExprId> {
+        if visiting.contains(&ty) {
+            return None;
+        }
         let node = match ty {
             Type::Float(_) => HirExpr::Float(0.0),
             Type::Bool => HirExpr::Bool(false),
@@ -331,29 +365,51 @@ impl Analyzer<'_> {
                     Some(def) => def.fields.iter().map(|field| field.ty).collect(),
                     None => Vec::new(),
                 };
-                let fields = field_types
-                    .into_iter()
-                    .map(|field_ty| self.default_value(field_ty))
-                    .collect();
+                visiting.push(ty);
+                let mut fields = Vec::with_capacity(field_types.len());
+                for field_ty in field_types {
+                    // A field with no finite value makes the whole struct one:
+                    // there is no other field to fall back on.
+                    let Some(field) = self.default_value_inside(field_ty, visiting) else {
+                        visiting.pop();
+                        return None;
+                    };
+                    fields.push(field);
+                }
+                visiting.pop();
                 HirExpr::StructNew {
                     struct_id: id,
                     fields,
                 }
             }
             Type::Enum(id) => {
-                // The first variant, because an enum's variants are ordered and
-                // the first one always exists for any enum a value can have.
-                let payload_ty = self
-                    .program
-                    .types
-                    .enums()
-                    .get(id)
-                    .and_then(|def| def.variant(0))
-                    .and_then(|variant| variant.payload);
-                let payload = payload_ty.map(|payload_ty| self.default_value(payload_ty));
+                // The first variant that terminates, not simply the first one.
+                // A payload-less variant always does; a variant carrying the
+                // enum's own tree does not, and taking it would recurse for as
+                // long as there is stack.
+                let variants: Vec<Option<Type>> = match self.program.types.enums().get(id) {
+                    Some(def) => (0..def.variants.len() as u32)
+                        .filter_map(|tag| def.variant(tag))
+                        .map(|variant| variant.payload)
+                        .collect(),
+                    None => Vec::new(),
+                };
+                visiting.push(ty);
+                let chosen =
+                    variants
+                        .into_iter()
+                        .enumerate()
+                        .find_map(|(tag, payload)| match payload {
+                            None => Some((tag as u32, None)),
+                            Some(payload_ty) => self
+                                .default_value_inside(payload_ty, visiting)
+                                .map(|value| (tag as u32, Some(value))),
+                        });
+                visiting.pop();
+                let (tag, payload) = chosen?;
                 HirExpr::EnumNew {
                     enum_id: id,
-                    tag: 0,
+                    tag,
                     payload,
                 }
             }
@@ -364,8 +420,10 @@ impl Analyzer<'_> {
             // allocation.
             Type::Cell(id) => {
                 let inner = self.program.types.cells().inner(id).unwrap_or(Type::Error);
-                let value = self.default_value(inner);
-                HirExpr::CellNew { value, ty }
+                visiting.push(ty);
+                let value = self.default_value_inside(inner, visiting);
+                visiting.pop();
+                HirExpr::CellNew { value: value?, ty }
             }
             // `Void` never reaches here (its callers return without a value)
             // and `Error` means the program is already rejected. `RawPtr` and
@@ -388,7 +446,7 @@ impl Analyzer<'_> {
             | Type::Task(_)
             | Type::NativeState(_) => HirExpr::Int(0),
         };
-        self.program.exprs.alloc(node)
+        Some(self.program.exprs.alloc(node))
     }
 
     /// Builds the body of every dispatcher a call site reserved.
@@ -417,10 +475,9 @@ impl Analyzer<'_> {
     /// from whichever call site happened to mint the dispatcher first, which is
     /// analysis order rather than a property of the program.
     ///
-    /// A type whose literals are split across both engines would need a
-    /// dispatcher per engine. That program does not exist yet, and it fails
-    /// loudly at the bytecode compiler rather than silently, so this stays the
-    /// simple rule until one does.
+    /// A function type's literals must share an execution engine: a split would
+    /// require one dispatcher per engine, while this representation carries one
+    /// execution choice for the whole type.
     fn dispatcher_execution(&self, impls: &[ClosureImpl]) -> kira_semantics_model::Execution {
         for entry in impls {
             let index = (entry.function.0 - self.synth_base) as usize;

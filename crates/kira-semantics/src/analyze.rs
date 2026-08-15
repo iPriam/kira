@@ -257,8 +257,8 @@ pub(crate) struct Analyzer<'a> {
     /// Which declared struct ids came from a `@FFI.*` type annotation, and
     /// which form. Only `@FFI.Struct`/`Array`/`Callback` mint a struct id;
     /// `@FFI.Alias`/`Pointer` become aliases and never appear here. This is
-    /// where a C-layout struct's zero-fill construction and an array's or
-    /// callback's typed "not yet executable" refusals read their answer.
+    /// where C-layout zero-fill construction and foreign type validation read
+    /// their answers.
     pub(crate) ffi_structs: HashMap<StructId, crate::ffi_types::FfiStructKind>,
     /// The file each declared struct was written in.
     ///
@@ -540,7 +540,15 @@ impl<'a> Analyzer<'a> {
                 break;
             }
         }
+        // Every enum exists now, including the ones a body minted by writing a
+        // generic instantiation, and the desugar below is the first pass to ask
+        // for a value of a type nobody wrote.
+        self.check_enum_terminates();
         self.finalize_closures();
+        // After lifting, not before: a closure's representation struct is only
+        // final once every literal of its type has been found, and a callback
+        // state's identity is a fingerprint of the shape it boxes.
+        self.finalize_native_state_type_ids();
         Analysis {
             program: self.program,
             diagnostics: self.diagnostics,

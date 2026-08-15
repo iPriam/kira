@@ -205,6 +205,19 @@ pub fn managed_binary_dir(
 /// editor finds the selected toolchain's server on PATH, never a stale copy.
 pub const LANGUAGE_SERVER_BINARY: &str = "kira-language-server";
 
+/// The stack a Windows executable reserves for its main thread, in bytes.
+///
+/// A PE reserves 1 MiB unless it is told otherwise, which is an eighth of what
+/// every other platform gives a main thread. Two things overflow it: a Kira
+/// program with a deep, wide call graph, and the compiler's own frontend
+/// recursing over a large package's syntax, types, and IR.
+///
+/// So both get this reserve — the executables the LLVM backend links, through
+/// its link line, and the toolchain's own binaries, through the workspace's
+/// `.cargo/config.toml`. Cargo cannot read a constant, so that file carries
+/// this number as a literal and names this constant beside it.
+pub const WINDOWS_STACK_RESERVE: u64 = 32 * 1024 * 1024;
+
 /// The desktop runner client a toolchain ships beside its primary.
 ///
 /// `kira live` starts this next to itself, so it has to be installed with the
@@ -281,6 +294,21 @@ pub fn static_archive_name(base: &str) -> String {
         format!("{base}.lib")
     } else {
         format!("lib{base}.a")
+    }
+}
+
+/// The file name of the libffi binary Kira ships and loads at run time.
+///
+/// Named here rather than in the crate that loads it because it is a file a
+/// toolchain *ships*: an install has to place it, and an install has no reason
+/// to depend on the FFI engine to learn what it is called.
+pub fn bundled_libffi_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "libffi-8.dll"
+    } else if cfg!(target_os = "macos") {
+        "libffi.8.dylib"
+    } else {
+        "libffi.so.8"
     }
 }
 
@@ -362,5 +390,26 @@ mod tests {
             .iter()
             .collect();
         assert!(libffi_home.ends_with(&expected));
+    }
+
+    /// The workspace's cargo configuration cannot read a constant, so this is
+    /// what keeps the number it passes to the linker equal to the one the
+    /// backend reserves for the programs Kira produces.
+    #[test]
+    fn the_workspace_reserves_the_same_windows_stack_for_its_own_binaries() {
+        let config = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(".cargo")
+            .join("config.toml");
+        let Ok(text) = std::fs::read_to_string(&config) else {
+            return; // built from a package rather than from the workspace
+        };
+        let expected = format!("/STACK:{WINDOWS_STACK_RESERVE}");
+        assert!(
+            text.contains(&expected),
+            "{} does not reserve {expected}",
+            config.display()
+        );
     }
 }

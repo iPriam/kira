@@ -26,8 +26,8 @@ impl Codegen<'_> {
     ///
     /// The one place a box is made, whether the tag names a variant or an erased
     /// type: a scalar payload's bits go in directly, a `String` or nested handle
-    /// goes in owned, and a struct goes through the runtime's erased aggregate
-    /// box. Ownership of `value` passes to the box, which is what makes the
+    /// goes in owned, and a struct or array goes through the runtime's erased
+    /// aggregate box. Ownership of `value` passes to the box, which is what makes the
     /// box's clone/free reclaim it.
     pub(in crate::codegen) fn box_new(
         &mut self,
@@ -72,12 +72,12 @@ impl Codegen<'_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         let tag = self.const_int(
             ErasedTypeId::of(from)
-                .ok_or(LlvmError::Unsupported("an erasure of a type with no value"))?
+                .ok_or(LlvmError::internal("an erasure of a type with no value"))?
                 .as_i64(),
         );
         // A struct is wider than one word, and an array's clone and free are
         // type-specific, so both take the runtime's erased aggregate payload —
-        // the same one a struct enum payload already uses. Everything else fits
+        // the same one an aggregate enum payload already uses. Everything else fits
         // the word directly.
         self.box_new(tag, from, value, c"any")
     }
@@ -168,9 +168,9 @@ impl Codegen<'_> {
                 // dereferences or frees. It reaches here only through an `Any`
                 // — no enum variant declares a `RawPtr` payload — and it needs
                 // no conversion when it does.
-                // A task handle is a word naming a row in the running program.s own
-                // task table, so it is already the box.s word too.
-                Type::RawPtr | Type::Task(_) => value,
+                // A task handle is a word naming a row in the running
+                // program's task table, so it is already the box's word too.
+                Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => value,
                 // A nested enum is a handle exactly as a `String` is, so it
                 // encodes the same way; only the kind the box records differs,
                 // which is what makes its clone/free recurse.
@@ -180,7 +180,7 @@ impl Codegen<'_> {
                     LLVMBuildPtrToInt(builder, value, types.i64, c"enum.handle.bits".as_ptr())
                 }
                 _ => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "an enum payload of an unsupported type",
                     ));
                 }
@@ -206,7 +206,7 @@ impl Codegen<'_> {
         // there by `encode_box_payload`, and the builder is on a live block.
         unsafe {
             Ok(match ty {
-                Type::Int(_) | Type::RawPtr | Type::Task(_) => word,
+                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => word,
                 Type::Float(_) => {
                     LLVMBuildBitCast(builder, word, types.f64, c"enum.payload.float".as_ptr())
                 }
@@ -217,7 +217,7 @@ impl Codegen<'_> {
                     LLVMBuildIntToPtr(builder, word, types.ptr, c"enum.payload.handle".as_ptr())
                 }
                 _ => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "an enum payload of an unsupported type",
                     ));
                 }

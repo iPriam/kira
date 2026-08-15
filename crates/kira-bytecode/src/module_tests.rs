@@ -2,6 +2,7 @@
 //! split out of `module.rs` on the file-size ladder.
 
 use super::*;
+use kira_runtime_abi::{BridgeValueTag, ForeignAbi, ForeignType, ForeignTypeSpec};
 
 #[test]
 fn module_round_trips_through_bytes() {
@@ -83,7 +84,7 @@ fn the_no_entrypoint_sentinel_is_pinned_in_the_bytes() {
     // must fail this test.
     let bytes = library_module().to_bytes();
     assert_eq!(&bytes[0..4], &MAGIC);
-    assert_eq!(&bytes[4..8], &[0xff, 0xff, 0xff, 0xff]);
+    assert_eq!(&bytes[4..12], &[0xff; 8]);
     assert_eq!(NO_ENTRYPOINT, u32::MAX);
 }
 
@@ -100,7 +101,7 @@ fn an_entrypoint_index_is_never_the_sentinel() {
         ..library_module()
     }
     .to_bytes();
-    assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
+    assert_eq!(&bytes[4..12], &[0; 8]);
     assert_eq!(Module::from_bytes(&bytes).unwrap().main, Some(0));
 }
 
@@ -263,15 +264,214 @@ fn bytes_after_the_last_section_are_rejected() {
     let module = exporting_module();
     let mut bytes = module.to_bytes();
     for _ in 0..3 {
-        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes.extend_from_slice(&[0; 8]);
     }
-    bytes.extend_from_slice(&(module.functions.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(module.functions.len() as u64).to_le_bytes());
     for _ in 0..module.functions.len() {
-        bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+        bytes.extend_from_slice(&[0xff; 8]);
     }
     bytes.extend_from_slice(&[0, 0, 0]);
     assert_eq!(
         Module::from_bytes(&bytes).unwrap_err(),
         ModuleDecodeError::TrailingBytes(3)
+    );
+}
+
+fn legacy_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn legacy_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn legacy_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
+    legacy_u32(bytes, value.len() as u32);
+    bytes.extend_from_slice(value);
+}
+
+/// A KBC1 fixture with every appended section and every section's legacy
+/// width. It is deliberately hand-written: KBC2 is the only format this crate
+/// emits, so compatibility coverage must prove that the reader still accepts
+/// bytes produced by the old writer rather than round-tripping through a new
+/// encoder.
+fn legacy_module_with_all_sections() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&LEGACY_MAGIC);
+    legacy_u32(&mut bytes, 0);
+    legacy_u32(&mut bytes, 1);
+    legacy_bytes(&mut bytes, b"s");
+    legacy_u32(&mut bytes, 1);
+    legacy_bytes(&mut bytes, b"main");
+    legacy_u16(&mut bytes, 0);
+    legacy_u16(&mut bytes, 2);
+    bytes.push(Execution::Runtime.as_byte());
+    let code = [
+        0x04, 0, 0, 0, 0, // ConstStr(0)
+        0x07, 1, 0, // StoreLocal(1)
+        0x06, 1, 0,    // LoadLocal(1)
+        0x2a, // Return
+    ];
+    legacy_u32(&mut bytes, code.len() as u32);
+    bytes.extend_from_slice(&code);
+
+    // Exports: one class and one zero-argument handle-returning function.
+    legacy_u32(&mut bytes, 1);
+    legacy_bytes(&mut bytes, b"Button");
+    legacy_u32(&mut bytes, 1);
+    legacy_bytes(&mut bytes, b"make_button");
+    legacy_bytes(&mut bytes, b"makeButton");
+    legacy_u32(&mut bytes, 0);
+    legacy_u32(&mut bytes, 0);
+    bytes.push(BridgeValueTag::HANDLE.0);
+    legacy_u32(&mut bytes, 0);
+
+    // Foreign imports: one aggregate parameter and an I32 result.
+    legacy_u32(&mut bytes, 1);
+    legacy_bytes(&mut bytes, b"lib");
+    legacy_bytes(&mut bytes, b"sym");
+    bytes.push(ForeignAbi::C.tag());
+    legacy_u32(&mut bytes, 1);
+    bytes.push(ForeignTypeSpec::AGGREGATE_TAG);
+    legacy_u32(&mut bytes, 0);
+    bytes.push(ForeignType::I32.tag());
+
+    // One aggregate row containing one scalar member.
+    legacy_u32(&mut bytes, 1);
+    legacy_u32(&mut bytes, 1);
+    bytes.push(ForeignType::I32.tag());
+
+    // One callback row, with one I32 parameter and a void result.
+    legacy_u32(&mut bytes, 1);
+    legacy_u32(&mut bytes, 0);
+    legacy_u32(&mut bytes, 1);
+    bytes.push(ForeignType::I32.tag());
+    bytes.push(ForeignType::Void.tag());
+
+    // One planned release slot. KBC1 plans use a u16 slot width.
+    legacy_u32(&mut bytes, 1);
+    legacy_u32(&mut bytes, 1);
+    legacy_u16(&mut bytes, 1);
+    bytes
+}
+
+#[test]
+fn a_kbc1_module_remains_readable() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&LEGACY_MAGIC);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(b"main");
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.push(Execution::Runtime.as_byte());
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(&[0x06, 0, 0, 0x2a]);
+
+    let decoded = Module::from_bytes(&bytes).expect("KBC1 remains readable");
+    assert_eq!(decoded.main, Some(0));
+    assert_eq!(decoded.functions[0].param_count, 0);
+    assert_eq!(decoded.functions[0].local_count, 1);
+    assert_eq!(
+        decoded.functions[0].code,
+        vec![Instruction::LoadLocal(0), Instruction::Return]
+    );
+}
+
+#[test]
+fn kbc1_all_sections_decode_and_upgrade_to_a_kbc2_round_trip() {
+    let legacy = legacy_module_with_all_sections();
+    let decoded = Module::from_bytes(&legacy).expect("all KBC1 sections decode");
+    assert_eq!(decoded.strings, ["s"]);
+    assert_eq!(decoded.exports.classes, ["Button"]);
+    assert_eq!(decoded.foreign_imports.len(), 1);
+    assert_eq!(decoded.foreign_aggregates.len(), 1);
+    assert_eq!(decoded.foreign_callbacks.len(), 1);
+    assert_eq!(
+        decoded.functions[0].releases,
+        FrameRelease::Planned(vec![1])
+    );
+    decoded
+        .validate()
+        .expect("legacy fixture is structurally valid");
+
+    let current = decoded.to_bytes();
+    assert_eq!(&current[..4], &MAGIC);
+    assert_eq!(
+        Module::from_bytes(&current).expect("KBC2 round trip"),
+        decoded
+    );
+}
+
+#[test]
+fn kbc2_round_trips_wide_function_and_release_operands_with_all_sections() {
+    let mut module =
+        Module::from_bytes(&legacy_module_with_all_sections()).expect("legacy fixture decodes");
+    let above_u16 = u64::from(u16::MAX) + 1;
+    module.functions[0].local_count = above_u16 + 1;
+    module.functions[0].releases = FrameRelease::Planned(vec![above_u16]);
+    let bytes = module.to_bytes();
+    assert_eq!(&bytes[..4], &MAGIC);
+    assert_eq!(
+        Module::from_bytes(&bytes).expect("wide module decodes"),
+        module
+    );
+}
+
+#[test]
+fn kbc2_rejects_an_entrypoint_beyond_the_u32_function_id_seam() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&MAGIC);
+    bytes.extend_from_slice(&(u64::from(u32::MAX) + 1).to_le_bytes());
+    assert_eq!(
+        Module::from_bytes(&bytes).unwrap_err(),
+        ModuleDecodeError::EntrypointTooLarge {
+            index: u64::from(u32::MAX) + 1,
+        }
+    );
+}
+
+#[test]
+fn kbc2_rejects_an_indexed_section_count_beyond_its_u32_seam() {
+    let bytes = u64::MAX.to_le_bytes();
+    let mut reader = Reader {
+        bytes: &bytes,
+        offset: 0,
+    };
+    assert_eq!(
+        reader.read_index_count(Format::Wide, "foreign callback"),
+        Err(ModuleDecodeError::IndexTableTooLarge {
+            table: "foreign callback",
+            count: u64::MAX,
+        })
+    );
+}
+
+#[test]
+fn kbc2_rejects_a_function_count_without_function_bytes() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&MAGIC);
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        Module::from_bytes(&bytes).unwrap_err(),
+        ModuleDecodeError::Truncated
+    );
+}
+
+#[test]
+fn kbc2_rejects_an_impossible_length_without_allocating_it() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&MAGIC);
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+    bytes.extend_from_slice(&1u64.to_le_bytes());
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+
+    assert_eq!(
+        Module::from_bytes(&bytes).unwrap_err(),
+        ModuleDecodeError::Truncated
     );
 }

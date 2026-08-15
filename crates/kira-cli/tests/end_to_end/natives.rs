@@ -1,15 +1,8 @@
-//! `@Native` in a library, on the VM engine.
+//! `@Native` in a library remains valid on the VM engine.
 //!
-//! Not refused, and these pin that it stays that way. The export design proposed
-//! refusing it — see `kira-build/src/library.rs`'s header for why the code says
-//! otherwise — and the property that would break is checked here rather than
-//! left to be rediscovered: `--backend vm` compiles every function to bytecode
-//! whatever it was annotated with, so nothing native executes on a pure VM and
-//! there is nothing for a refusal to prevent.
-//!
-//! Refusing would also open a parity hole: the same package builds on the native
-//! and hybrid engines, and one API over three engines is the claim this whole
-//! feature is measured on.
+//! The VM compiles every function to bytecode, so the annotation does not
+//! request native execution in this backend. These tests cover library build
+//! and application execution.
 
 use crate::{LIBRARY_SOURCE, kira, run_source, write_package};
 
@@ -56,8 +49,7 @@ fn a_native_function_in_an_application_is_compiled_to_bytecode() {
 
 #[test]
 fn a_library_that_exports_nothing_still_builds() {
-    // The refusal is scoped to a declared export, not to libraries: step 0's
-    // artifact must keep working.
+    // Library validity is independent of whether it declares an export.
     let path = write_package(".Library", LIBRARY_SOURCE);
     let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));

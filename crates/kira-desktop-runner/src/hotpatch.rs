@@ -1,12 +1,12 @@
-//! The shared VM hot-patch control used by the protocol and app threads.
+//! The VM hot-patch control owned by the app thread.
 //!
 //! A desktop app spends its lifetime inside the native window loop, so the app
-//! thread cannot answer a protocol-thread `swap` request. The VM backend has a
-//! safe boundary anyway: native callback thunks enter the VM one callback at a
-//! time. This control lets the protocol thread stage the new bytecode and swap
-//! the VM program while the existing native window remains alive.
+//! thread cannot answer a protocol-thread `swap` request. Its runtime session
+//! is not thread-safe, so the protocol thread receives only an atomic status
+//! and sends swap work back to this controller's owner.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,11 +16,32 @@ use kira_live::{Bundle, PayloadKind};
 
 use crate::host::DesktopRunnerError;
 
-/// A reload controller shared by the runner's protocol and app threads.
+/// Thread-safe status for the VM hot-patch controller.
+#[derive(Clone, Debug)]
+pub struct VmHotPatchStatus {
+    active: Arc<AtomicBool>,
+}
+
+impl VmHotPatchStatus {
+    /// Creates status for a controller with no active VM session.
+    pub(crate) fn inactive() -> VmHotPatchStatus {
+        VmHotPatchStatus {
+            active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Whether the app thread owns an active VM-only session.
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::SeqCst)
+    }
+}
+
+/// A reload controller owned by the app thread.
 #[derive(Clone)]
 pub struct VmHotPatch {
     cache: PathBuf,
     active: Arc<Mutex<Option<Arc<Session>>>>,
+    status: VmHotPatchStatus,
 }
 
 impl std::fmt::Debug for VmHotPatch {
@@ -39,19 +60,28 @@ impl VmHotPatch {
         VmHotPatch {
             cache,
             active: Arc::new(Mutex::new(None)),
+            status: VmHotPatchStatus::inactive(),
         }
     }
 
     /// Publishes the VM-only session currently owning the native window.
     pub fn activate(&self, session: Arc<Session>) {
         let mut active = self.active.lock().unwrap_or_else(|held| held.into_inner());
-        *active = session.is_vm_only().then_some(session);
+        let is_vm = session.is_vm_only();
+        *active = is_vm.then_some(session);
+        self.status.active.store(is_vm, Ordering::SeqCst);
     }
 
     /// Clears the active session.
     pub fn clear(&self) {
         let mut active = self.active.lock().unwrap_or_else(|held| held.into_inner());
         *active = None;
+        self.status.active.store(false, Ordering::SeqCst);
+    }
+
+    /// Returns the thread-safe status view for a protocol relay.
+    pub fn status(&self) -> VmHotPatchStatus {
+        self.status.clone()
     }
 
     /// Whether a VM-only session can accept a bytecode swap in place.

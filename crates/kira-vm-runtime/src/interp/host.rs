@@ -58,14 +58,16 @@ impl Vm<'_> {
         frames: &mut [Frame],
         scratch: &mut NativeCallScratch,
     ) -> Result<(), VmError> {
+        let active_vm = self as *mut _;
         let arguments = &mut scratch.arguments;
         let trees = &mut scratch.trees;
         let native_views = &mut scratch.native_views;
         let proto = module
             .functions
-            .get(id as usize)
-            .ok_or(VmError::UnknownFunction(id))?;
-        let count = proto.param_count as usize;
+            .get(usize::try_from(id).map_err(|_| VmError::UnknownFunction(u64::from(id)))?)
+            .ok_or(VmError::UnknownFunction(u64::from(id)))?;
+        let count = usize::try_from(proto.param_count)
+            .map_err(|_| VmError::LocalSlotOutOfRange(proto.param_count))?;
         let first = self
             .stack
             .len()
@@ -103,6 +105,11 @@ impl Vm<'_> {
                     self.heap
                         .seam_tree(*value)
                         .ok_or(VmError::EnumAtSeam { function: id })?,
+                ),
+                Value::Erased(_) => Some(
+                    self.heap
+                        .seam_tree(*value)
+                        .ok_or(VmError::HandleAtSeam { function: id })?,
                 ),
                 // A recovered view is a borrow into host-owned callback state,
                 // not a VM heap handle. Snapshot it into the same backend-
@@ -148,35 +155,32 @@ impl Vm<'_> {
                     },
                 },
                 Value::RawPtr(value) => NativeArg::RawPtr(value),
-                // A cell is refused with the handles, and for the strongest
-                // reason among them: it is shared mutable storage this heap
-                // counts holds on, and the other side of the seam has no way to
-                // release one. The compiler never routes one here — a cell is
-                // not surface and cannot appear in a signature — so this is a
-                // guard on the desugar, not a message a reader can provoke.
-                // An erased value is refused with them. `Any` is not a foreign
-                // signature type — nothing in a C signature spells the top
-                // type — so, like a cell, this guards the desugar rather than
-                // reporting something a reader can provoke.
+                // A cell is refused with the handles: it is shared mutable
+                // storage this heap counts holds on, and no ordinary seam
+                // signature names one. An erased value has an explicit state
+                // tree form, so it is handled by the aggregate arm below.
                 // A deferred read is refused with them, and is unreachable:
                 // `own_arguments` above rebuilt every one on this stack, so a
                 // state read arrives as the struct, array or enum it holds.
-                Value::NativeState(_)
-                | Value::NativeSnapshot(_)
-                | Value::Cell(_)
-                | Value::Erased(_) => {
+                Value::NativeState(_) | Value::NativeSnapshot(_) | Value::Cell(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }
+                Value::Erased(_) => match &trees[index] {
+                    Some(tree) => NativeArg::Aggregate(tree),
+                    None => return Err(VmError::HandleAtSeam { function: id }),
+                },
                 Value::NativeView { .. } => match &trees[index] {
                     Some(tree) => NativeArg::Aggregate(tree),
                     None => return Err(VmError::HandleAtSeam { function: id }),
                 },
             });
         }
-        let returned = self
-            .host
-            .call_native(id, &lowered)
-            .map_err(VmError::NativeCall);
+        let returned = {
+            let _active = super::ActiveVmGuard::install(active_vm, module);
+            self.host
+                .call_native(id, &lowered)
+                .map_err(VmError::NativeCall)
+        };
 
         for value in self.stack.split_off(first) {
             self.heap.drop_value(value);
@@ -191,7 +195,7 @@ impl Vm<'_> {
             let value = returned
                 .writebacks
                 .iter()
-                .find(|(param, _)| *param == u32::from(writeback.param))
+                .find(|(param, _)| u64::from(*param) == writeback.param)
                 .map(|(_, value)| value.clone())
                 .ok_or(VmError::MissingSeamWriteback {
                     function: id,
@@ -203,7 +207,10 @@ impl Vm<'_> {
             // into the object it names. A non-empty path remains a normal VM
             // writeback; the place machinery already writes through a view.
             if let Some(source) = native_views
-                .get(writeback.param as usize)
+                .get(
+                    usize::try_from(writeback.param)
+                        .map_err(|_| VmError::LocalSlotOutOfRange(writeback.param))?,
+                )
                 .and_then(|source| *source)
                 && writeback.steps.is_empty()
             {
@@ -249,6 +256,7 @@ impl Vm<'_> {
     }
 
     pub(super) fn call_foreign(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
+        let active_vm = self as *mut _;
         let import = module
             .foreign_imports
             .get(id as usize)
@@ -324,10 +332,12 @@ impl Vm<'_> {
                 foreign: id,
                 expected,
             }),
-            (None, None) => self
-                .host
-                .call_foreign(id, &lowered)
-                .map_err(VmError::ForeignCall),
+            (None, None) => {
+                let _active = super::ActiveVmGuard::install(active_vm, module);
+                self.host
+                    .call_foreign(id, &lowered)
+                    .map_err(VmError::ForeignCall)
+            }
         };
         drop(lowered);
         for value in self.stack.split_off(first) {

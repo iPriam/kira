@@ -289,8 +289,9 @@ struct Diagnostics { static function error(message: String, at: Syntax) }
 ```
 
 An enum's variants surface through `target.fields`: `field.name` is the variant
-name and `field.type` its payload type, or empty. One derive macro walks a
-struct and an enum with the same loop.
+name and `field.type` its payload type, or empty. Both payload forms read the
+same way — `Rank(Int)` and `Rank: Int = 0` each give one field named `Rank` with
+type `Int`. One derive macro walks a struct and an enum with the same loop.
 
 `dropField`, `rewriteProperty`, and `replaceIdentifier` are span edits over the
 declaration's original source, so untouched source survives byte-for-byte,
@@ -460,12 +461,31 @@ let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x=1;y=-2}"
 let back = deserialize_Point(wire)                  // Point { x: 1, y: -2 }
 ```
 
+An **enum** derives too, and writes the variant it holds by name, with a payload
+in parentheses after it:
+
+```kira
+@Derive(Equatable, Serializable, Deserializable)
+enum Note { Blank Rank(Int) Tag(String) }
+
+serialize_Note(Note.Rank(42))                       // "Note.Rank(42)"
+serialize_Note(Note.Blank)                          // "Note.Blank"
+deserialize_Note("Note.Tag(\"edge\")")              // Note.Tag("edge")
+```
+
+The variant is **named, never numbered**: an ordinal would tie the format to
+declaration order, so inserting a variant would re-read every value ever written
+as its neighbour. An enum used as a struct field is that same text in the field's
+value slot — `slot=Slot{tool=Tool.Move;…}` — which the brace-aware scanner
+already consumes whole, and an unknown variant name traps like any other
+structural violation.
+
 Two limits are worth stating. A `String` value is **not escaped**: a `String`
-field whose text contains `"`, `;`, or `}` is out of contract, and no error is
-raised, but the wire string is then ambiguous and will not round-trip.
-`Deserializable` **refuses a `Float` field** — there is no lossless `Float`
-parsing primitive, so refusing beats shipping a parser that silently loses the
-low bits. Both derives are `appliesTo { struct }` only.
+field or payload whose text contains `"`, `;`, or `}` is out of contract, and no
+error is raised, but the wire string is then ambiguous and will not round-trip.
+`Deserializable` **refuses a `Float`** field or payload — there is no lossless
+`Float` parsing primitive, so refusing beats shipping a parser that silently
+loses the low bits.
 
 ## `@Derive(Copy)` — the builtin copyability assertion
 

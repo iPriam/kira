@@ -1,10 +1,10 @@
 // Foundation's lint runner: the `collector` macro that reads a package's
 // `Lint` entries and checks the package against them.
 //
-// The same shape `TestRunner` has, for the same reason. Every other macro form
-// is attached to the declaration or call it rewrites, so none of them can ask
-// what a program *contains*. A `collector` runs once for the whole program and
-// is handed every declaration in it, which is both halves of a lint run at
+// A collector runs once for the whole program. Every other macro form is
+// attached to the declaration or call it rewrites, so none of them can ask
+// what a program *contains*. It is handed every declaration in the program,
+// which is both halves of a lint run at
 // once: the `Lint` entries a `linter.kira` wrote, and the code they judge.
 //
 // Nothing here is privileged. The selection is `d.family == "Lint"` — a string

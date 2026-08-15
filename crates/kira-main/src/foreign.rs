@@ -1,88 +1,195 @@
-//! A native-capable host that answers `call_foreign` through a generated sidecar.
+//! A native-capable host that answers `call_foreign` through libffi.
 //!
 //! The VM is a portable core: it marshals a foreign call to borrowed
 //! [`ForeignArg`]s and asks its host, never loading or linking anything itself.
 //! This is the host that says yes. It wraps another [`HostCapabilities`] for
-//! `write_line` and adds a foreign half backed by one
-//! [`ForeignAdapterLibrary`] — the adapter sidecar the CLI build produced for
-//! this exact program.
+//! `write_line` and adds a foreign half backed by the [`ForeignLibrary`]
+//! handles opened from the package's resolved native libraries.
 //!
-//! Native-only by construction: it `dlopen`s the sidecar, so it is compiled out
-//! for `wasm32` targets. That is the same division of labour the seam is built
-//! around — the VM stays portable precisely because the host is not.
+//! Native-only by construction: it `dlopen`s the declared libraries, so it is
+//! compiled out for `wasm32` targets. That is the same division of labour the
+//! seam is built around — the VM stays portable precisely because the host is
+//! not.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary};
+use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
     HostCapabilities, NativeArg, NativeCallError, NativeReturn, NativeStateError, NativeStateToken,
     NativeStateTypeId, NativeStateValue,
 };
 
-/// One foreign import's binding: the adapter symbol to call and the exact-width
-/// signature to marshal against.
+/// The native target of one direct foreign import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignBindingTarget {
+    /// No native library was selected for this target.
+    Unavailable,
+    /// A symbol supplied by the host process image.
+    Process { symbol: String },
+    /// A symbol supplied by a separately loaded native library.
+    Library { path: PathBuf, symbol: String },
+}
+
+/// One foreign import's binding and the exact-width signature to marshal
+/// against.
 ///
 /// The CLI builds one of these per import, in import-id order, from the
-/// program's foreign table and `kira_llvm_backend::adapter_name`. The VM's
+/// program's foreign table and the resolved native libraries. The VM's
 /// `CallForeign(id)` indexes this list.
 #[derive(Debug, Clone)]
 pub struct ForeignBinding {
-    /// The exported adapter symbol in the sidecar (`kira_foreign_adapter_<id>`).
-    pub adapter_symbol: String,
+    /// Where the direct call resolves.
+    pub target: ForeignBindingTarget,
     /// The import's exact-width parameter and result types.
     pub signature: ForeignSignature,
 }
 
 impl ForeignBinding {
-    /// Pairs an adapter symbol with the signature it was generated for.
-    pub fn new(adapter_symbol: impl Into<String>, signature: ForeignSignature) -> ForeignBinding {
+    /// Creates a binding to a real native library symbol.
+    pub fn dynamic(
+        library_path: impl Into<PathBuf>,
+        symbol: impl Into<String>,
+        signature: ForeignSignature,
+    ) -> ForeignBinding {
         ForeignBinding {
-            adapter_symbol: adapter_symbol.into(),
+            target: ForeignBindingTarget::Library {
+                path: library_path.into(),
+                symbol: symbol.into(),
+            },
             signature,
+        }
+    }
+
+    /// Creates a binding to a symbol exported by the host process image.
+    pub fn process(symbol: impl Into<String>, signature: ForeignSignature) -> ForeignBinding {
+        ForeignBinding {
+            target: ForeignBindingTarget::Process {
+                symbol: symbol.into(),
+            },
+            signature,
+        }
+    }
+
+    /// Creates a binding for a library excluded on this target.
+    pub fn unavailable(signature: ForeignSignature) -> ForeignBinding {
+        ForeignBinding {
+            target: ForeignBindingTarget::Unavailable,
+            signature,
+        }
+    }
+
+    /// Returns the path of a separately loaded library target.
+    pub fn library_path(&self) -> Option<&Path> {
+        match &self.target {
+            ForeignBindingTarget::Library { path, .. } => Some(path),
+            ForeignBindingTarget::Unavailable | ForeignBindingTarget::Process { .. } => None,
+        }
+    }
+
+    /// Returns the real symbol of a direct process or library target.
+    pub fn direct_symbol(&self) -> Option<&str> {
+        match &self.target {
+            ForeignBindingTarget::Process { symbol }
+            | ForeignBindingTarget::Library { symbol, .. } => Some(symbol),
+            ForeignBindingTarget::Unavailable => None,
         }
     }
 }
 
 /// A host that forwards `write_line` to an inner host and answers `call_foreign`
-/// through a loaded adapter sidecar.
+/// through the native libraries its bindings name.
 ///
 /// Generic over the inner host so an embedder that captures output — or streams
 /// it to stdout with [`StdoutHost`](crate::StdoutHost) — keeps its own behaviour
 /// and gains a foreign half.
 pub struct ForeignHost<H: HostCapabilities> {
     inner: H,
-    library: ForeignAdapterLibrary,
+    libraries: Vec<ForeignLibrary>,
     imports: Vec<ForeignBinding>,
     detail: Option<String>,
 }
 
 impl<H: HostCapabilities> ForeignHost<H> {
-    /// Loads the adapter sidecar at `sidecar` and binds it to `imports`.
-    ///
-    /// The load verifies the sidecar's foreign-adapter ABI marker and resolves
-    /// its string helpers; a stale or incompatible sidecar is rejected here by
-    /// name rather than at the first foreign call.
+    /// Opens every real native library named by `imports` and routes calls
+    /// through Kira's bundled libffi engine.
     ///
     /// `aggregates` is the program's C-layout aggregate table, which the
     /// bindings' signatures index; it sizes the buffer an aggregate result is
     /// written into.
-    pub fn load(
-        sidecar: &Path,
+    pub fn load_dynamic(
         imports: Vec<ForeignBinding>,
         aggregates: ForeignAggregates,
         inner: H,
-    ) -> Result<ForeignHost<H>, ForeignAdapterError> {
-        let library = ForeignAdapterLibrary::load(sidecar, aggregates)?;
+    ) -> Result<ForeignHost<H>, ForeignLibraryError> {
+        Self::load_dynamic_inner(imports, aggregates, inner, None)
+    }
+
+    /// Opens direct foreign bindings with libffi staged beside a live bundle.
+    pub fn load_dynamic_with_runtime_path(
+        imports: Vec<ForeignBinding>,
+        aggregates: ForeignAggregates,
+        runtime_path: impl AsRef<Path>,
+        inner: H,
+    ) -> Result<ForeignHost<H>, ForeignLibraryError> {
+        Self::load_dynamic_inner(
+            imports,
+            aggregates,
+            inner,
+            Some(runtime_path.as_ref().to_path_buf()),
+        )
+    }
+
+    fn load_dynamic_inner(
+        imports: Vec<ForeignBinding>,
+        aggregates: ForeignAggregates,
+        inner: H,
+        runtime_path: Option<PathBuf>,
+    ) -> Result<ForeignHost<H>, ForeignLibraryError> {
+        let mut libraries = Vec::new();
+        for binding in &imports {
+            match &binding.target {
+                ForeignBindingTarget::Library { path, .. } => {
+                    if libraries.iter().any(|library: &ForeignLibrary| {
+                        !library.is_process() && library.path() == path
+                    }) {
+                        continue;
+                    }
+                    let library = match runtime_path.as_deref() {
+                        Some(runtime_path) => ForeignLibrary::load_with_runtime_path(
+                            path,
+                            aggregates.clone(),
+                            runtime_path,
+                        ),
+                        None => ForeignLibrary::load(path, aggregates.clone()),
+                    }?;
+                    libraries.push(library);
+                }
+                ForeignBindingTarget::Process { .. } => {
+                    if libraries.iter().any(ForeignLibrary::is_process) {
+                        continue;
+                    }
+                    let library = match runtime_path.as_deref() {
+                        Some(runtime_path) => ForeignLibrary::load_process_with_runtime_path(
+                            aggregates.clone(),
+                            runtime_path,
+                        ),
+                        None => ForeignLibrary::load_process(aggregates.clone()),
+                    }?;
+                    libraries.push(library);
+                }
+                ForeignBindingTarget::Unavailable => {}
+            }
+        }
         Ok(ForeignHost {
             inner,
-            library,
+            libraries,
             imports,
             detail: None,
         })
     }
 
-    /// Hands the inner host back, dropping the loaded sidecar.
+    /// Hands the inner host back, dropping the loaded libraries.
     pub fn into_inner(self) -> H {
         self.inner
     }
@@ -92,11 +199,11 @@ impl<H: HostCapabilities> ForeignHost<H> {
         &self.inner
     }
 
-    /// Takes the detail of the last adapter-load-consistency failure, if any.
+    /// Takes the detail of the last binding-consistency failure, if any.
     ///
-    /// A missing or malformed adapter symbol surfaces to the VM as a typed
-    /// foreign-call error, but its full explanation cannot ride that enum; the
-    /// CLI reads it here to name the sidecar problem precisely.
+    /// A missing library or symbol surfaces to the VM as a typed foreign-call
+    /// error, but its full explanation cannot ride that enum; the CLI reads it
+    /// here to name the binding problem precisely.
     pub fn take_detail(&mut self) -> Option<String> {
         self.detail.take()
     }
@@ -154,23 +261,58 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
             // The VM validated the id against the module's import table already,
             // so this is a build inconsistency, not a program fault.
             self.detail = Some(format!(
-                "no adapter binding for foreign import {foreign_id} (the sidecar and the \
+                "no foreign binding for import {foreign_id} (the native library table and the \
                  program disagree)"
             ));
             return Err(ForeignCallError::NoForeignHost);
         };
-        match self
-            .library
-            .call(&binding.adapter_symbol, &binding.signature, args)
-        {
+        let result = match &binding.target {
+            ForeignBindingTarget::Library { path, symbol } => {
+                let Some(library) = self
+                    .libraries
+                    .iter()
+                    .find(|library| !library.is_process() && library.path() == path)
+                else {
+                    self.detail = Some(format!(
+                        "native library `{}` was not loaded",
+                        path.display()
+                    ));
+                    return Err(ForeignCallError::NoForeignHost);
+                };
+                // SAFETY: the binding came from the exact foreign declaration
+                // and the library owns the exported function address.
+                unsafe { library.call(symbol, &binding.signature, args) }.map_err(|error| {
+                    match error {
+                        ForeignLibraryError::Call(call) => call,
+                        _other => ForeignCallError::NoForeignHost,
+                    }
+                })
+            }
+            ForeignBindingTarget::Process { symbol } => {
+                let Some(library) = self.libraries.iter().find(|library| library.is_process())
+                else {
+                    self.detail = Some("the host process image was not opened".to_owned());
+                    return Err(ForeignCallError::NoForeignHost);
+                };
+                // SAFETY: the process binding came from the exact foreign
+                // declaration and uses its declared LibFFI signature.
+                unsafe { library.call(symbol, &binding.signature, args) }.map_err(|error| {
+                    match error {
+                        ForeignLibraryError::Call(call) => call,
+                        _other => ForeignCallError::NoForeignHost,
+                    }
+                })
+            }
+            ForeignBindingTarget::Unavailable => {
+                self.detail = Some("the foreign binding is unavailable on this target".to_owned());
+                return Err(ForeignCallError::NoForeignHost);
+            }
+        };
+        match result {
             Ok(result) => Ok(result),
-            // A contract or adapter-status error is the program's to see, typed.
-            Err(ForeignAdapterError::Call(error)) => Err(error),
-            // A missing/malformed adapter symbol is a stale-sidecar fault: record
-            // the detail and surface a typed refusal rather than panicking.
-            Err(other) => {
-                self.detail = Some(other.to_string());
-                Err(ForeignCallError::NoForeignHost)
+            Err(error) => {
+                self.detail = Some(error.to_string());
+                Err(error)
             }
         }
     }

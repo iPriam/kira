@@ -1,5 +1,4 @@
-//! Building a Kira library for the **hybrid engine**, and the two refusals it
-//! owes.
+//! Building a Kira library for the **hybrid engine**.
 //!
 //! # What `@Runtime` and `@Native` mean for a library
 //!
@@ -33,26 +32,10 @@
 //! one file long, and `kira_hybrid_main::locate` is where being found at load
 //! time is designed.
 //!
-//! # The two refusals, and why they are here rather than in the frontend
-//!
-//! Both are consequences of *this engine*, not of the language, so they belong
-//! beside the engine that has them rather than above the backend split where
-//! they would refuse programs the other two engines build happily.
-//!
-//! - **An `@Export` function may not be `@Native`.** A handle is a root into the
-//!   instance's VM heap; machine code cannot mint one. A `@Native` export
-//!   returning a class would allocate in a second heap and the consumer would
-//!   hold two different things behind one newtype with one destructor. Refused
-//!   for the whole surface rather than only for exports that mention a class,
-//!   because "this export may be `@Native` and that one may not" is a rule
-//!   nobody can hold in their head.
-//! - **A `@Native` function may not call a `@Runtime` one.** A library instance
-//!   owns a heap and is called through `&mut self`; a call back into it from
-//!   inside an exported call would need a second mutable borrow of the same
-//!   instance. An *application's* hybrid session has no such problem because it
-//!   runs on a `Program`, which holds no heap. So this direction of the seam is
-//!   the one thing a hybrid library gives up, and it gives it up by name at
-//!   build time rather than by aborting at run time.
+//! The manifest carries the resolved engine for every function and the exact
+//! native symbol emitted for each native entry. The generated wrapper embeds
+//! that manifest with the bytecode, so exports and cross-engine calls use the
+//! same description at build and run time.
 
 use std::path::{Path, PathBuf};
 
@@ -128,36 +111,6 @@ pub enum HybridLibraryError {
         /// How many the compiled bytecode half carries.
         module: usize,
     },
-    /// An exported function is annotated `@Native`.
-    #[error(
-        "`{function}` is both `@Export` and `@Native`, which the hybrid engine cannot build: \
-         a consumer enters this library through its bytecode half, because a handle it \
-         gets back is a root into that half's heap and machine code has no way to mint \
-         one\n\
-         note: drop `@Native` from `{function}` and put it on the function `{function}` \
-         calls instead — that is the split this engine exists to honor"
-    )]
-    ExportIsNative {
-        /// The function annotated both ways.
-        function: String,
-    },
-    /// A native function calls back into the runtime half.
-    #[error(
-        "`{function}` is `@Native` and calls the `@Runtime` function `{callee}`, which a \
-         hybrid *library* cannot do: a library instance owns a heap and is entered through \
-         a mutable borrow, so a call back into it from inside an exported call would need \
-         a second one\n\
-         note: an application built with `--backend hybrid` may call in both directions; a \
-         library may not, and this is the one thing it gives up\n\
-         note: annotate `{callee}` `@Native` too, or move the call into a `@Runtime` \
-         function that calls `{function}` rather than the other way around"
-    )]
-    NativeCallsRuntime {
-        /// The native function making the call.
-        function: String,
-        /// The runtime function it calls.
-        callee: String,
-    },
     /// A function's signature uses a type the seam cannot describe.
     #[error("function `{function}` has a type the hybrid boundary cannot carry: {ty:?}")]
     UnsupportedType {
@@ -204,42 +157,6 @@ pub fn engines(program: &IrProgram) -> Vec<Execution> {
         .collect()
 }
 
-/// Refuses the two programs the hybrid engine cannot build as a library.
-///
-/// Run before anything is compiled or written, so a refusal names a function
-/// while there is still nothing on disk to be confused by.
-pub fn check_library(program: &IrProgram) -> Result<(), HybridLibraryError> {
-    let engines = engines(program);
-
-    for export in &program.exports {
-        let index = export.function as usize;
-        if engines.get(index).copied() == Some(Execution::Native) {
-            return Err(HybridLibraryError::ExportIsNative {
-                function: export.kira_name.clone(),
-            });
-        }
-    }
-
-    for (index, function) in program.functions.iter().enumerate() {
-        if engines.get(index).copied() != Some(Execution::Native) {
-            continue;
-        }
-        for callee in crate::callgraph::direct_calls(program, &function.body) {
-            if engines.get(callee as usize).copied() == Some(Execution::Runtime) {
-                return Err(HybridLibraryError::NativeCallsRuntime {
-                    function: function.name.clone(),
-                    callee: program
-                        .functions
-                        .get(callee as usize)
-                        .map(|target| target.name.clone())
-                        .unwrap_or_else(|| format!("#{callee}")),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 /// How many functions the compiled bytecode half carries beyond the program's.
 ///
 /// The VM synthesizes widen helpers and appends them, so this is a subtraction
@@ -278,6 +195,27 @@ pub fn manifest(
     native_file: &str,
     exports: &[(u32, String)],
     internal_functions: u32,
+) -> Result<HybridManifest, HybridLibraryError> {
+    manifest_with_foreign_paths(
+        program,
+        module_name,
+        bytecode_file,
+        native_file,
+        exports,
+        internal_functions,
+        &[],
+    )
+}
+
+/// Describes `program` with the resolved libraries the Libffi host opens.
+pub fn manifest_with_foreign_paths(
+    program: &IrProgram,
+    module_name: &str,
+    bytecode_file: &str,
+    native_file: &str,
+    exports: &[(u32, String)],
+    internal_functions: u32,
+    foreign_paths: &[Option<String>],
 ) -> Result<HybridManifest, HybridLibraryError> {
     let functions = program
         .functions
@@ -328,20 +266,26 @@ pub fn manifest(
         entry: program.main,
         functions,
         internal_functions,
-        // One row per `@FFI.Extern` import, paired with the adapter symbol the
-        // LLVM backend emits for that import index — the same symbol the hybrid
-        // session resolves out of the native half. The name comes from
-        // `kira_llvm_backend::adapter_name`, the one place that contract is
-        // spelled, so producer and consumer cannot disagree.
+        // One row per `@FFI.Extern` import, carrying the resolved library path
+        // for the direct Libffi host. An empty path is an excluded optional
+        // library and remains a call-time unavailable binding.
         foreign: program
             .foreign_imports
             .iter()
             .enumerate()
             .map(|(index, import)| {
-                kira_hybrid_definition::HybridForeign::from_import(
-                    &import.import,
-                    kira_llvm_backend::adapter_name(index),
-                )
+                let path = foreign_paths
+                    .get(index)
+                    .and_then(|path| path.as_deref())
+                    .map(Path::new);
+                if foreign_paths.is_empty() {
+                    kira_hybrid_definition::HybridForeign::from_import(
+                        &import.import,
+                        import.import.symbol(),
+                    )
+                } else {
+                    kira_hybrid_definition::HybridForeign::from_import_path(&import.import, path)
+                }
             })
             .collect(),
         foreign_aggregates: program.foreign_aggregates.clone(),
@@ -351,10 +295,9 @@ pub fn manifest(
 /// The bridge tag for an IR type, or why it cannot be described.
 ///
 /// Described, not carried: a manifest has a row for every function in the
-/// program, and most of them never cross. Refusing a struct here would refuse a
-/// `@Runtime` function that merely *mentions* one and is only ever called from
-/// other `@Runtime` code. What a struct cannot do is travel, and that is
-/// enforced where a crossing is emitted.
+/// program, and most of them never cross. A `@Runtime` function may therefore
+/// mention a type that stays within the runtime half; crossing code validates
+/// the types that actually travel.
 fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
     Ok(match ty {
         Type::Int(_) => BridgeValueTag::INT,
@@ -370,9 +313,8 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         Type::RawPtr | Type::ForeignPtr(_) => BridgeValueTag::RAW_PTR,
         // `CString` is seam-only — legal only as a foreign parameter — so it
         // never appears in a manifest row for an ordinary function.
-        // Described like a struct, and travelling no more than one does: a
-        // `@Runtime` function may mention `Any` and never cross, and a crossing
-        // is refused where it is emitted rather than by refusing the row.
+        // `Any` may occur in a `@Runtime` function that never crosses, so its
+        // manifest row still needs a tag; crossing code validates what travels.
         Type::Any => BridgeValueTag::ANY,
         // A task handle names a row in the running program's own task table, so
         // it means nothing to the other engine and never crosses a hybrid seam.
@@ -403,8 +345,6 @@ pub fn build_hybrid_library(
     program: &IrProgram,
     options: &HybridLibraryOptions,
 ) -> Result<HybridLibraryArtifacts, HybridLibraryError> {
-    check_library(program)?;
-
     let lib_directory = options.build_directory.join("lib");
     std::fs::create_dir_all(&lib_directory).map_err(|source| HybridLibraryError::Write {
         path: lib_directory.display().to_string(),

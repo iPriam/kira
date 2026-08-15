@@ -16,6 +16,7 @@
 
 mod codec;
 
+pub(crate) use codec::decode_legacy;
 pub use codec::{DecodeError, decode, encode, encode_one};
 
 use kira_runtime_abi::ForeignType;
@@ -34,13 +35,13 @@ pub enum Instruction {
     /// Push a boolean constant.
     ConstBool(bool),
     /// Push a fresh heap string cloned from the module's string pool.
-    ConstStr(u32),
+    ConstStr(u64),
     /// Push the unit value.
     ConstVoid,
     /// Push a copy of local slot `n` (strings are cloned).
-    LoadLocal(u16),
+    LoadLocal(u64),
     /// Pop the stack top into local slot `n`, dropping the slot's old value.
-    StoreLocal(u16),
+    StoreLocal(u64),
     /// Pop and drop the stack top.
     Pop,
     /// Integer negation.
@@ -153,11 +154,11 @@ pub enum Instruction {
     /// Pop two erased values; push whether they are structurally unequal.
     NeAny,
     /// Unconditional jump to an absolute instruction index.
-    Jump(u32),
+    Jump(u64),
     /// Pop a boolean; jump to an absolute index when it is `false`.
-    JumpIfFalse(u32),
+    JumpIfFalse(u64),
     /// Call the function at the given index; arguments are already on the stack.
-    Call(u32),
+    Call(u64),
     /// Call the *native* function with the given program-wide id; arguments are
     /// already on the stack, and the result is pushed.
     ///
@@ -188,9 +189,9 @@ pub enum Instruction {
     /// path writes the caller's local slot itself — the `g.mutate()` case.
     CallMut {
         /// The function index to call.
-        func: u32,
+        func: u64,
         /// The caller-frame local slot the writeback place is rooted at.
-        slot: u16,
+        slot: u64,
         /// Steps to walk to the writeback location; may be empty.
         path: PlacePath,
     },
@@ -206,7 +207,7 @@ pub enum Instruction {
     /// pushing the call's result.
     CallWriteback {
         /// The function index to call.
-        func: u32,
+        func: u64,
         /// Where each written-through parameter lands, in parameter order.
         targets: Vec<WritebackTarget>,
     },
@@ -254,9 +255,9 @@ pub enum Instruction {
     /// carries its own arity, so the module needs no struct table and field
     /// names never reach the runtime. The compiler resolves names to indices
     /// and fills every field — defaults included — before emitting this.
-    NewStruct(u16),
+    NewStruct(u64),
     /// Pop a struct, push a copy of field `n`, and drop the struct.
-    GetField(u16),
+    GetField(u64),
     /// Pop a pointer word and push the value `offset` bytes into it, read as
     /// `ty`.
     ///
@@ -286,16 +287,14 @@ pub enum Instruction {
     /// instruction and no copy of `b`.
     StoreField {
         /// The local slot the place is rooted at.
-        slot: u16,
+        slot: u64,
         /// Field indices to walk, outermost first; never empty.
         path: FieldPath,
     },
     /// Pop `n` values and push an array holding them, first element deepest.
     ///
-    /// The count is a `u32` rather than the `u16` [`Instruction::NewStruct`]
-    /// uses: a struct's field count is written by hand, but an array literal's
-    /// element count is as long as someone cares to make it.
-    NewArray(u32),
+    /// The element count is a bytecode-owned `u64`.
+    NewArray(u64),
     /// Pop an index, pop an array, push a copy of that element, and drop the
     /// array.
     ///
@@ -334,7 +333,7 @@ pub enum Instruction {
     /// [`Instruction::ArrayGet`], without the copy of the whole array that pair
     /// makes. Reading one element cost the whole array before this, so a loop
     /// over `n` elements cost `O(n²)`.
-    ArrayGetLocal(u16),
+    ArrayGetLocal(u64),
     /// Pop three `Int` operands (last pushed is the third), carry out one task
     /// primitive, and push its `Int` answer.
     ///
@@ -448,7 +447,7 @@ pub enum Instruction {
     /// the indices, which come off innermost-first.
     StorePlace {
         /// The local slot the place is rooted at.
-        slot: u16,
+        slot: u64,
         /// Steps to walk, outermost first; never empty.
         path: PlacePath,
     },
@@ -459,7 +458,7 @@ pub enum Instruction {
     /// `xs.append(v)` compiles to.
     ArrayAppend {
         /// The local slot the place is rooted at.
-        slot: u16,
+        slot: u64,
         /// Steps to walk, outermost first; may be empty.
         path: PlacePath,
     },
@@ -473,7 +472,7 @@ pub enum Instruction {
     /// struct field does.
     NewEnum {
         /// The variant's declaration index — its discriminant.
-        tag: u16,
+        tag: u64,
         /// Whether a payload value sits on top of the stack for this variant.
         has_payload: bool,
     },
@@ -497,14 +496,14 @@ pub enum Instruction {
     /// Rooted at a slot rather than the stack so a read does not have to take —
     /// and then drop — a share of the handle just to look inside it, the same
     /// reason [`Instruction::ArrayGetLocal`] exists.
-    CellGet(u16),
+    CellGet(u64),
     /// Pop a value and store it in the cell a local slot holds, releasing
     /// whatever was there.
     ///
     /// **One instruction, not two.** A separate drop and store would leave a
     /// freed handle in the box for the window between them, and a trap in that
     /// window leaves it there for good.
-    CellSet(u16),
+    CellSet(u64),
     /// Pop an `Int`, push it as a `Float` (signed, round to nearest ties even).
     ///
     /// Emitted for a scalar conversion `Float(intValue)`. The integer-to-integer
@@ -518,13 +517,17 @@ pub enum Instruction {
     /// Emitted for a scalar conversion `Int(floatValue)`. Never traps — the
     /// conversion is total over every float input.
     ConvertFloatToInt,
+    /// Pop an `Int`, push the same 64-bit word as a `RawPtr`.
+    ConvertIntToRawPtr,
+    /// Pop a `RawPtr`, push the same 64-bit word as an `Int`.
+    ConvertRawPtrToInt,
 }
 
 /// One step of a [`PlacePath`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathStep {
     /// Walk into the field at this index.
-    Field(u16),
+    Field(u64),
     /// Walk into an array element, whose index is on the operand stack.
     Index,
 }
@@ -539,21 +542,16 @@ mod step_tag {
 /// [`Instruction::ArrayAppend`].
 ///
 /// The generalization of [`FieldPath`]: a step is a constant field index or a
-/// stack-supplied array index. As with `FieldPath`, the length is a `u16` on
-/// the wire and the cap lives in the one constructor, so an unencodable path
-/// cannot be built and [`encode_one`] never has to truncate one or fail.
+/// stack-supplied array index.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlacePath {
     steps: Vec<PathStep>,
 }
 
 impl PlacePath {
-    /// Builds a path, or fails when it is too deep to encode.
-    pub fn new(steps: Vec<PathStep>) -> Result<Self, FieldPathTooDeep> {
-        if u16::try_from(steps.len()).is_err() {
-            return Err(FieldPathTooDeep { count: steps.len() });
-        }
-        Ok(Self { steps })
+    /// Builds a path.
+    pub fn new(steps: Vec<PathStep>) -> Self {
+        Self { steps }
     }
 
     /// The steps to walk, outermost first.
@@ -561,10 +559,9 @@ impl PlacePath {
         &self.steps
     }
 
-    /// How many steps the path walks. Always fits in a `u16`.
-    pub fn len(&self) -> u16 {
-        // Guaranteed by the only constructor.
-        self.steps.len() as u16
+    /// How many steps the path walks.
+    pub fn len(&self) -> u64 {
+        self.steps.len() as u64
     }
 
     /// Whether the path walks no steps.
@@ -589,50 +586,33 @@ impl PlacePath {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritebackTarget {
     /// The callee's local slot — its parameter — whose final value is moved out.
-    pub param: u16,
+    pub param: u64,
     /// The caller-frame local slot the place is rooted at.
-    pub slot: u16,
+    pub slot: u64,
     /// Steps to walk to the writeback location; may be empty.
     pub path: PlacePath,
 }
 
-/// A field path inside a [`Instruction::StoreField`], short enough to encode.
-///
-/// The length is a `u16` on the wire, so a path is capped at `u16::MAX` steps.
-/// The cap lives in the one constructor and the steps are private, which is
-/// what makes [`encode_one`] total: an unencodable path cannot be built, so
-/// encoding never has to truncate one and never has to fail.
+/// A field path inside a [`Instruction::StoreField`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FieldPath {
-    steps: Vec<u16>,
-}
-
-/// A field path with more steps than the bytecode format can encode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("a field path of {count} steps exceeds the bytecode format's 65535")]
-pub struct FieldPathTooDeep {
-    /// How many steps were requested.
-    pub count: usize,
+    steps: Vec<u64>,
 }
 
 impl FieldPath {
-    /// Builds a path, or fails when it is too deep to encode.
-    pub fn new(steps: Vec<u16>) -> Result<Self, FieldPathTooDeep> {
-        if u16::try_from(steps.len()).is_err() {
-            return Err(FieldPathTooDeep { count: steps.len() });
-        }
-        Ok(Self { steps })
+    /// Builds a field path.
+    pub fn new(steps: Vec<u64>) -> Self {
+        Self { steps }
     }
 
     /// The steps to walk, outermost first.
-    pub fn steps(&self) -> &[u16] {
+    pub fn steps(&self) -> &[u64] {
         &self.steps
     }
 
-    /// How many steps the path walks. Always fits in a `u16`.
-    pub fn len(&self) -> u16 {
-        // Guaranteed by the only constructor.
-        self.steps.len() as u16
+    /// How many steps the path walks.
+    pub fn len(&self) -> u64 {
+        self.steps.len() as u64
     }
 
     /// Whether the path walks no steps.
@@ -749,7 +729,7 @@ mod opcode {
 
     // The mutating-method call. Appended after `CONVERT_FLOAT_TO_INT`, which was
     // the last opcode before it; adding an opcode is not an ABI change. It
-    // carries a `u32` function index plus a place operand (slot and path), so it
+    // carries a wide function index plus a place operand (slot and path), so it
     // is decoded in `Cursor::next_instruction` rather than as a nullary opcode.
     pub const CALL_MUT: u8 = 0x48;
 
@@ -802,7 +782,7 @@ mod opcode {
     // `STRING_OF`; adding an opcode is not an ABI change.
     pub const CONVERT_BITS32_TO_FLOAT: u8 = 0x5a;
     // Reading one element of an array a local holds, without copying the
-    // array. Appended after `CONVERT_BITS32_TO_FLOAT`; carries the `u32` slot.
+    // array. Appended after `CONVERT_BITS32_TO_FLOAT`; carries a wide slot.
     pub const ARRAY_GET_LOCAL: u8 = 0x5b;
     // A `Float` narrowed to its 32-bit pattern — the other direction of
     // `CONVERT_BITS32_TO_FLOAT`. Appended after `ARRAY_GET_LOCAL`; adding an
@@ -818,8 +798,7 @@ mod opcode {
     pub const TASK_OP: u8 = 0x5d;
     // The three capture-cell primitives. Appended after `REM_FLOAT`, which was
     // the last opcode before them; adding an opcode is not an ABI change.
-    // `NEW_CELL` is nullary, while the get and set forms carry the `u16` slot
-    // the cell lives in.
+    // `NEW_CELL` is nullary; the get and set forms carry a wide slot.
     pub const NEW_CELL: u8 = 0x5f;
     pub const CELL_GET: u8 = 0x60;
     pub const CELL_SET: u8 = 0x61;
@@ -862,8 +841,16 @@ mod opcode {
     pub const FOREIGN_OFFSET: u8 = 0x6a;
     /// See [`super::Instruction::ForeignIndex`].
     pub const FOREIGN_INDEX: u8 = 0x6b;
+    // The explicit integer and opaque pointer-word conversions. Appended after
+    // `FOREIGN_INDEX`; both are nullary and only retag one 64-bit VM value.
+    pub const CONVERT_INT_TO_RAW_PTR: u8 = 0x6f;
+    pub const CONVERT_RAW_PTR_TO_INT: u8 = 0x70;
 }
 
 #[cfg(test)]
 #[path = "op_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "op_legacy_tests.rs"]
+mod legacy_tests;

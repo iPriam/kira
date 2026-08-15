@@ -26,8 +26,7 @@ struct KslArtifact {
     //
     // There is no per-stage MSL beside it, because Metal has none to give: one
     // library holds every stage, and a pipeline picks between them by entry
-    // name. Fields for it used to be declared here and nothing could ever fill
-    // them — a renderer reading `vertexMsl` got an empty string and no reason.
+    // name. Metal stores all stages in this one source field.
     var combinedMsl: String = ""
     // Per-stage sources. A compute kernel is a stage like any other here: every
     // target that splits stages emits one, and a backend that dispatches

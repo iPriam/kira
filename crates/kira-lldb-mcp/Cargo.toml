@@ -1,0 +1,22 @@
+[package]
+name = "kira-lldb-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The debugger model, the DAP session, and the prepared-target contract this
+# server builds through. Nothing here re-implements a debugger: the engine is
+# the same one `kira debug` drives.
+kira-debug.workspace = true
+kira-mcp-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "kira-lldb-mcp"
+path = "src/main.rs"

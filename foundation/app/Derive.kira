@@ -29,10 +29,10 @@
 //     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
 //   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
 //     parsing primitive, so refusing beats shipping a lossy parser.
-//   * `Serializable` and `Deserializable` are `appliesTo { struct }` only.
-//     `Equatable` and `Clone` also take an enum, because a struct holding an
-//     enum field recurses through that enum's own `eq_` / `clone_` and those
-//     have to exist — which is what `@Derive(Equatable) enum Blend { … }` gives.
+//   * All four take a struct or an enum. A struct holding an enum field recurses
+//     through that enum's own `eq_` / `clone_` / `serialize_` / `deserialize_`
+//     and those have to exist — which is what `@Derive(Equatable) enum Blend
+//     { … }` gives.
 
 comptime macro Equatable {
     kind { derive }

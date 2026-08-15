@@ -53,6 +53,12 @@ pub enum HybridError {
         #[source]
         source: libloading::Error,
     },
+    /// A declared foreign library or bundled Libffi runtime could not be loaded.
+    #[error(transparent)]
+    Foreign(#[from] kira_dynamic_ffi::ForeignLibraryError),
+    /// A bundled Libffi closure could not be prepared.
+    #[error(transparent)]
+    Libffi(#[from] kira_libffi::LibffiError),
     /// A symbol the host must resolve is absent from the loaded library.
     ///
     /// A linker pulls only *referenced* members out of an archive, so a library

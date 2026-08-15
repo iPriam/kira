@@ -1,0 +1,19 @@
+[package]
+name = "kira-profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-bytecode.workspace = true
+kira-core.workspace = true
+kira-debug.workspace = true
+kira-vm-runtime.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

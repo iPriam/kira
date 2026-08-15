@@ -204,6 +204,7 @@ pub fn expand_with(
         expanded.iter().flat_map(|file| file.declarations.iter()),
         shaders,
         platform,
+        false,
         // `expand_with` is the id-and-text entry point: no verb asked, so no
         // lint runs under it.
         false,
@@ -234,6 +235,7 @@ pub fn collect_program(
     texts: &[(SourceId, &str, &str)],
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
+    testing: bool,
     lint: bool,
 ) -> (String, Vec<Diagnostic>) {
     let files: Vec<FileDeclarations> = texts
@@ -245,6 +247,7 @@ pub fn collect_program(
         files.iter().flat_map(|file| file.declarations.iter()),
         shaders,
         platform,
+        testing,
         lint,
     );
     (appended.join("\n"), diagnostics)

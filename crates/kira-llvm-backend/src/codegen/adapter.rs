@@ -293,7 +293,7 @@ impl Codegen<'_> {
                         .iter()
                         .find(|(param, _)| *param == i)
                         .copied()
-                        .ok_or(LlvmError::Unsupported(
+                        .ok_or(LlvmError::internal(
                             "a CString slot the adapter never allocated",
                         ))?;
                     LLVMBuildStore(builder, c_ptr, cstr_slot);

@@ -50,8 +50,8 @@ pub use autobind::{NativeDeclarationError, declaring_packages};
 pub use frontend::{Compiled, FrontendError, FrontendSession, compile, compile_as, compile_for};
 pub use hybrid::{
     HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions, build_hybrid_library,
-    check_library as check_hybrid_library,
     internal_function_count as hybrid_internal_function_count, manifest as hybrid_manifest,
+    manifest_with_foreign_paths as hybrid_manifest_with_foreign_paths,
 };
 // Re-exported rather than restated: a consumer's `build.rs` that reaches the
 // generated wrapper without running the generated `build.rs` still has to name

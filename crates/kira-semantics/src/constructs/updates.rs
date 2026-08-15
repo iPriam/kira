@@ -11,6 +11,7 @@ use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
 
+use super::slots::ChildFills;
 use crate::analyze::{Analyzer, FnCtx};
 
 #[derive(Clone)]
@@ -79,8 +80,22 @@ impl Analyzer<'_> {
             ty: base_ty,
         });
 
+        let slots = self.child_slots(id);
+        let mut named_fills: Vec<(usize, CallArg)> = Vec::new();
         let mut overrides = Vec::new();
         for arg in args {
+            // A label naming a child slot restates that slot's content, so it
+            // goes through the same filling an ordinary construction uses —
+            // which is what lets an update write `detail: { … }` at all, since a
+            // content block is not a value an override could carry.
+            if let Some(label) = arg.label
+                && let Some(slot) = slots
+                    .iter()
+                    .position(|slot| slot.name == self.interner.resolve(label))
+            {
+                named_fills.push((slot, arg.clone()));
+                continue;
+            }
             let Some(label) = arg.label else {
                 self.analyze_expr(ctx, arg.value);
                 self.emit(
@@ -133,10 +148,13 @@ impl Analyzer<'_> {
         }
 
         let mut fields = self.construct_field_reads(id, base);
-        self.fill_content_slots(
+        self.fill_child_slots(
             ctx,
-            id,
-            children,
+            ChildFills {
+                slots: &slots,
+                children,
+                named: &named_fills,
+            },
             &self.program.types.type_name(base_ty),
             &mut fields,
             span,

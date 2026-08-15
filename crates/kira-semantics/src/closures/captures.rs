@@ -228,6 +228,12 @@ impl Scan<'_> {
                     self.expr(item);
                 }
             }
+            Expr::Content { children, .. } => {
+                let children = children.clone();
+                for &child in &children {
+                    self.expr(child);
+                }
+            }
             Expr::ContentIf {
                 cond,
                 then_body,

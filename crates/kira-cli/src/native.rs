@@ -4,13 +4,14 @@
 //! [`Artifacts`] is where every backend's output paths are decided, Web
 //! included — one program has one build directory, whatever it was built for.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use kira_debug::DebugInfo;
 use kira_ir::IrProgram;
-use kira_llvm_backend::{
-    AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions, NativeLinkInputs,
-};
+use kira_llvm_backend::{LlvmError, NativeArtifacts, NativeBuildOptions, NativeLinkInputs};
+use kira_main::ForeignBindingTarget;
 
 /// Where a program's build artifacts live: its package's `.kira-build/`
 /// ([`kira_project::build_directory`]).
@@ -86,6 +87,11 @@ impl Artifacts {
         &self.stem
     }
 
+    /// The directory holding this source's finished artifacts.
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
     /// The hybrid manifest path: the artifact a hybrid run loads first.
     pub fn manifest(&self) -> PathBuf {
         self.directory.join(format!("{}.khm", self.stem))
@@ -104,23 +110,26 @@ impl Artifacts {
         self.directory.join(shared_library_name(&self.stem))
     }
 
+    /// The whole-program native library path used by an LLVM live session.
+    pub fn live_library(&self) -> PathBuf {
+        self.directory
+            .join(shared_library_name(&format!("{}_live", self.stem)))
+    }
+
     /// The cache marker for a VM live session's reusable native adapter surface.
     pub fn native_surface_key(&self) -> PathBuf {
         self.directory.join(format!("{}.native-surface", self.stem))
     }
 
-    /// The object file for the VM's foreign-adapter sidecar.
-    fn foreign_object(&self) -> PathBuf {
-        self.directory.join(format!("{}_ffi.o", self.stem))
+    /// The shared carrier for static foreign archives.
+    pub fn ffi_carrier(&self) -> PathBuf {
+        self.directory
+            .join(shared_library_name(&format!("{}_ffi_carrier", self.stem)))
     }
 
-    /// The VM's foreign-adapter sidecar shared library.
-    ///
-    /// A separate name from the hybrid dylib so a VM build and a hybrid build of
-    /// the same program never write to one path.
-    pub fn foreign_sidecar(&self) -> PathBuf {
-        self.directory
-            .join(shared_library_name(&format!("{}_ffi", self.stem)))
+    /// The import-ordered direct Libffi binding manifest used by a live VM.
+    pub fn foreign_bindings(&self) -> PathBuf {
+        self.directory.join(format!("{}.ffi-bindings", self.stem))
     }
 }
 
@@ -172,6 +181,33 @@ pub fn build(
     Ok(kira_llvm_backend::build_native(program, &options)?)
 }
 
+/// Builds the whole native program library an LLVM live runner loads in
+/// process, linking `foreign_link` and the Kira runtime into it.
+pub fn build_live(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+    optimize: bool,
+    foreign_link: &NativeLinkInputs,
+) -> Result<NativeArtifacts, NativeError> {
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
+    let options = NativeBuildOptions {
+        module_name: format!("{}_live", artifacts.stem),
+        object_path: artifacts.object(),
+        executable_path: None,
+        shared_library_path: Some(artifacts.live_library()),
+        archive_path: None,
+        exports: kira_llvm_backend::NativeExportSurface::default(),
+        ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
+        runtime_archive: runtime_archive(program)?,
+        optimize,
+        unavailable_imports: foreign_link.unavailable_imports().to_vec(),
+        foreign_link: foreign_link.clone(),
+    };
+    Ok(kira_llvm_backend::build_native_live(program, &options)?)
+}
+
 /// Builds a native executable with debug metadata for a debugger session.
 pub fn build_debug(
     program: &IrProgram,
@@ -201,28 +237,344 @@ pub fn build_debug(
     )?)
 }
 
-/// Builds the VM's foreign-adapter sidecar for `program`, returning its path.
-///
-/// The VM never links or `dlopen`s anything itself; this is what a VM build
-/// produces so a native-capable host can answer `call_foreign`. The sidecar
-/// carries one exported adapter per foreign import, the foreign-adapter marker,
-/// the string helpers, and the selected C archives — one self-contained file.
-pub fn build_adapter_sidecar(
+/// Builds the shared carrier, when needed, and creates one direct Libffi
+/// binding per foreign import.
+pub fn direct_foreign_bindings(
     program: &IrProgram,
     source: &Path,
     foreign_link: &NativeLinkInputs,
-) -> Result<PathBuf, NativeError> {
+) -> Result<Vec<kira_main::ForeignBinding>, NativeError> {
+    let static_names: HashSet<&str> = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let carrier = if program.foreign_imports.is_empty() || static_names.is_empty() {
+        None
+    } else {
+        build_ffi_carrier_for_imports(program, source, foreign_link)?
+    };
+    Ok(program
+        .foreign_imports
+        .iter()
+        .map(|entry| {
+            let signature = entry.import.signature().clone();
+            let path = foreign_link
+                .library_paths()
+                .iter()
+                .find(|(name, _)| name == entry.import.library())
+                .map(|(_, path)| loadable_foreign_library_path(path, foreign_link));
+            if entry.import.library() == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
+                kira_main::ForeignBinding::process(entry.import.symbol(), signature)
+            } else if static_names.contains(&entry.import.library()) {
+                match carrier.as_ref() {
+                    Some(carrier) if carrier.symbols.contains(entry.import.symbol()) => {
+                        kira_main::ForeignBinding::dynamic(
+                            &carrier.path,
+                            entry.import.symbol(),
+                            signature,
+                        )
+                    }
+                    // A static-library row may also declare symbols supplied by
+                    // the host executable, such as live-session telemetry. It
+                    // must not become a carrier export merely because the row
+                    // contains an archive.
+                    _ => kira_main::ForeignBinding::process(entry.import.symbol(), signature),
+                }
+            } else if let Some(path) = path {
+                kira_main::ForeignBinding::dynamic(path, entry.import.symbol(), signature)
+            } else {
+                kira_main::ForeignBinding::unavailable(signature)
+            }
+        })
+        .collect())
+}
+
+/// Creates hybrid bindings, using its native half as the static-library carrier.
+pub fn hybrid_foreign_bindings(
+    program: &IrProgram,
+    native_half: &Path,
+    foreign_link: &NativeLinkInputs,
+) -> Vec<kira_main::ForeignBinding> {
+    let static_names: HashSet<&str> = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    program
+        .foreign_imports
+        .iter()
+        .map(|entry| {
+            let signature = entry.import.signature().clone();
+            let library = entry.import.library();
+            if library == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
+                return kira_main::ForeignBinding::process(entry.import.symbol(), signature);
+            }
+            if static_names.contains(library) {
+                return kira_main::ForeignBinding::dynamic(
+                    native_half,
+                    entry.import.symbol(),
+                    signature,
+                );
+            }
+            foreign_link
+                .library_paths()
+                .iter()
+                .find(|(name, _)| name == library)
+                .map(|(_, path)| {
+                    kira_main::ForeignBinding::dynamic(
+                        loadable_foreign_library_path(path, foreign_link),
+                        entry.import.symbol(),
+                        signature.clone(),
+                    )
+                })
+                .unwrap_or_else(|| kira_main::ForeignBinding::unavailable(signature))
+        })
+        .collect()
+}
+
+/// Returns explicit foreign library files that a native live bundle must carry.
+///
+/// Static archives are linked into the native image and do not need to survive
+/// as load-time files. A shared library remains an input to the direct Libffi
+/// call path, so it has to be staged beside the live image.
+pub(crate) fn dynamic_foreign_library_paths(foreign_link: &NativeLinkInputs) -> Vec<PathBuf> {
+    let static_names: HashSet<&str> = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    foreign_link
+        .library_paths()
+        .iter()
+        .filter(|(name, path)| !static_names.contains(name.as_str()) && path.is_file())
+        .map(|(_, path)| loadable_foreign_library_path(path, foreign_link))
+        .collect()
+}
+
+/// Selects the file a direct loader can open for a resolved dynamic row.
+///
+/// MSVC native targets commonly record an import `.lib` for the link step and
+/// a sibling `runtimeFiles` directory for the actual `.dll`. LibFFI opens the
+/// latter; handing the import library to `LoadLibraryExW` is a link/load
+/// category error that only appears once a VM live bundle starts.
+fn loadable_foreign_library_path(path: &Path, foreign_link: &NativeLinkInputs) -> PathBuf {
+    if !cfg!(target_env = "msvc") || path.extension().and_then(|ext| ext.to_str()) != Some("lib") {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem();
+    let direct = path.with_extension("dll");
+    if direct.is_file() {
+        return direct;
+    }
+    for declared in foreign_link.runtime_files() {
+        if declared.is_file()
+            && declared
+                .file_stem()
+                .zip(stem)
+                .is_some_and(|(candidate, expected)| candidate == expected)
+            && declared.extension().and_then(|ext| ext.to_str()) == Some("dll")
+        {
+            return declared.clone();
+        }
+        if declared.is_dir() {
+            let Ok(entries) = std::fs::read_dir(declared) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let candidate = entry.path();
+                if candidate.extension().and_then(|ext| ext.to_str()) == Some("dll")
+                    && candidate
+                        .file_stem()
+                        .zip(stem)
+                        .is_some_and(|(candidate, expected)| candidate == expected)
+                {
+                    return candidate;
+                }
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Writes the resolved library path for each import in import order.
+pub fn write_foreign_binding_paths(
+    path: &Path,
+    bindings: &[kira_main::ForeignBinding],
+) -> Result<(), NativeError> {
+    write_binding_manifest(path, bindings, false)
+}
+
+/// Writes import-ordered binding file names for a relocatable live bundle.
+pub fn write_foreign_binding_names(
+    path: &Path,
+    bindings: &[kira_main::ForeignBinding],
+) -> Result<(), NativeError> {
+    write_binding_manifest(path, bindings, true)
+}
+
+fn write_binding_manifest(
+    path: &Path,
+    bindings: &[kira_main::ForeignBinding],
+    names_only: bool,
+) -> Result<(), NativeError> {
+    let mut text = String::new();
+    for binding in bindings {
+        match &binding.target {
+            ForeignBindingTarget::Library {
+                path: library_path, ..
+            } => {
+                let rendered_path = if names_only {
+                    library_path
+                        .file_name()
+                        .ok_or_else(|| NativeError::BindingManifest {
+                            path: library_path.to_path_buf(),
+                            message: "a foreign library path has no file name".to_owned(),
+                        })?
+                } else {
+                    library_path.as_os_str()
+                };
+                let rendered = rendered_path.to_string_lossy();
+                if rendered.contains(['\r', '\n']) {
+                    return Err(NativeError::BindingManifest {
+                        path: library_path.to_path_buf(),
+                        message: "a foreign library path contains a line break".to_owned(),
+                    });
+                }
+                text.push_str(&rendered);
+            }
+            ForeignBindingTarget::Process { .. } => {
+                text.push_str(kira_dynamic_ffi::PROCESS_BINDING_MARKER);
+            }
+            ForeignBindingTarget::Unavailable => {}
+        }
+        text.push('\n');
+    }
+    std::fs::write(path, text).map_err(|source| NativeError::BindingManifest {
+        path: path.to_path_buf(),
+        message: source.to_string(),
+    })
+}
+
+/// Reads the import-ordered library paths written for a prebuilt VM test.
+pub fn read_foreign_binding_paths(path: &Path) -> Result<Vec<Option<PathBuf>>, NativeError> {
+    let text = std::fs::read_to_string(path).map_err(|source| NativeError::BindingManifest {
+        path: path.to_path_buf(),
+        message: source.to_string(),
+    })?;
+    Ok(text
+        .lines()
+        .map(|line| (!line.is_empty()).then(|| PathBuf::from(line)))
+        .collect())
+}
+
+/// Recognizes the reserved direct-binding token written for the host process.
+pub(crate) fn is_process_binding_path(path: &Path) -> bool {
+    path == Path::new(kira_dynamic_ffi::PROCESS_BINDING_MARKER)
+}
+
+/// Copies file-backed direct bindings beside a hybrid or live artifact and
+/// rewrites their paths so the bundle remains relocatable.
+pub fn stage_direct_foreign_bindings(
+    destination_directory: &Path,
+    bindings: &[kira_main::ForeignBinding],
+) -> Result<Vec<kira_main::ForeignBinding>, NativeError> {
+    std::fs::create_dir_all(destination_directory).map_err(|source| {
+        NativeError::BindingManifest {
+            path: destination_directory.to_path_buf(),
+            message: format!("cannot prepare the staging directory: {source}"),
+        }
+    })?;
+    let mut staged = Vec::with_capacity(bindings.len());
+    let mut destinations = HashMap::new();
+    for binding in bindings {
+        let mut binding = binding.clone();
+        let Some(path) = binding.library_path().map(Path::to_path_buf) else {
+            staged.push(binding);
+            continue;
+        };
+        if !path.is_file() {
+            staged.push(binding);
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            return Err(NativeError::BindingManifest {
+                path: path.clone(),
+                message: "a foreign library path has no file name".to_owned(),
+            });
+        };
+        let destination = destination_directory.join(name);
+        if let Some(previous) = destinations.insert(destination.clone(), path.clone())
+            && previous != path
+        {
+            return Err(NativeError::BindingManifest {
+                path: destination,
+                message: format!(
+                    "foreign libraries `{}` and `{}` have the same file name",
+                    previous.display(),
+                    path.display()
+                ),
+            });
+        }
+        if path != destination {
+            std::fs::copy(&path, &destination).map_err(|source| NativeError::BindingManifest {
+                path: path.clone(),
+                message: format!("cannot stage beside the artifact: {source}"),
+            })?;
+        }
+        let ForeignBindingTarget::Library { symbol, .. } = binding.target else {
+            staged.push(binding);
+            continue;
+        };
+        binding.target = ForeignBindingTarget::Library {
+            path: destination,
+            symbol,
+        };
+        staged.push(binding);
+    }
+    Ok(staged)
+}
+
+/// The carrier path and the archive-owned symbols it actually exports.
+struct BuiltFfiCarrier {
+    path: PathBuf,
+    symbols: HashSet<String>,
+}
+
+/// Builds a carrier only when at least one requested symbol is defined by a
+/// selected static archive.
+fn build_ffi_carrier_for_imports(
+    program: &IrProgram,
+    source: &Path,
+    foreign_link: &NativeLinkInputs,
+) -> Result<Option<BuiltFfiCarrier>, NativeError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
-    let options = AdapterSidecarOptions {
-        module_name: format!("{}_ffi", artifacts.stem),
-        object_path: artifacts.foreign_object(),
-        library_path: artifacts.foreign_sidecar(),
-        runtime_archive: runtime_archive(program)?,
-        unavailable_imports: foreign_link.unavailable_imports().to_vec(),
-        foreign_link: foreign_link.clone(),
-    };
-    Ok(kira_llvm_backend::build_adapter_sidecar(program, &options)?)
+    let static_names: HashSet<&str> = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let symbols: Vec<String> = program
+        .foreign_imports
+        .iter()
+        .filter(|entry| static_names.contains(entry.import.library()))
+        .map(|entry| entry.import.symbol().to_owned())
+        .collect();
+    if symbols.is_empty() {
+        return Ok(None);
+    }
+    let llvm = kira_toolchain::discover(None).map_err(LlvmError::from)?;
+    let path = artifacts.ffi_carrier();
+    let retained = kira_llvm_backend::link_ffi_carrier(&llvm, foreign_link, &symbols, &path)
+        .map_err(LlvmError::from)?;
+    if retained.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(BuiltFfiCarrier {
+        path,
+        symbols: retained.into_iter().collect(),
+    }))
 }
 
 /// Runs a built native executable with the program arguments, returning its
@@ -230,14 +582,56 @@ pub fn build_adapter_sidecar(
 ///
 /// The child inherits this process's streams, so a native run's output is
 /// indistinguishable from a VM run's.
-pub fn execute(executable: &Path, arguments: &[String]) -> Result<i32, NativeError> {
-    let status = std::process::Command::new(executable)
+///
+/// `quit_after` ends the child at a deadline. It is enforced here rather than
+/// by the caller because the program is a *child* on this backend: a caller
+/// that ended itself would leave the program running with nothing waiting on
+/// it, which is the window nobody can close.
+pub fn execute(
+    executable: &Path,
+    arguments: &[String],
+    quit_after: Option<Duration>,
+) -> Result<i32, NativeError> {
+    let mut child = std::process::Command::new(executable)
         .args(arguments)
-        .status()
+        .spawn()
         .map_err(|source| NativeError::Spawn {
             executable: executable.to_path_buf(),
             source,
         })?;
+    let mut ended_at_deadline = false;
+    let status = match quit_after {
+        None => child.wait(),
+        Some(bound) => {
+            /// How often to re-check whether the program has exited.
+            const POLL: Duration = Duration::from_millis(5);
+
+            let deadline = std::time::Instant::now() + bound;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Err(error) => break Err(error),
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        crate::progress::out!("kira run: --quit-after reached");
+                        ended_at_deadline = true;
+                        let _ = child.kill();
+                        break child.wait();
+                    }
+                    Ok(None) => std::thread::sleep(POLL),
+                }
+            }
+        }
+    }
+    .map_err(|source| NativeError::Spawn {
+        executable: executable.to_path_buf(),
+        source,
+    })?;
+    if ended_at_deadline {
+        // The status is the kill's, not the program's: every host reports one
+        // (Windows an exit code, unix a signal) and neither says anything about
+        // the run, which did exactly what it was asked.
+        return Ok(crate::pipeline::EXIT_OK);
+    }
     // A signal-killed child reports no code; surface it as a failure rather
     // than as success.
     Ok(status.code().unwrap_or(1))
@@ -258,6 +652,18 @@ pub fn execute(executable: &Path, arguments: &[String]) -> Result<i32, NativeErr
 /// Accept both layouts so `cargo build -p kira-cli` and a workspace build have
 /// the same runtime behavior.
 pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
+    runtime_archive_for(program.uses_compiler())
+}
+
+/// Locates the runtime archive needed by an application hybrid half.
+///
+/// Only compiler expressions in reachable native bodies require the compiler
+/// bridge; runtime-owned compiler calls stay in the VM half.
+pub fn hybrid_runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
+    runtime_archive_for(kira_llvm_backend::hybrid_uses_compiler_runtime(program))
+}
+
+fn runtime_archive_for(uses_compiler: bool) -> Result<PathBuf, NativeError> {
     let executable =
         std::env::current_exe().map_err(|source| NativeError::RuntimeArchive { source })?;
     let directory = executable
@@ -265,7 +671,7 @@ pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
         .ok_or_else(|| NativeError::RuntimeArchive {
             source: std::io::Error::other("this executable has no parent directory"),
         })?;
-    let name = archive_file_name(program.uses_compiler());
+    let name = archive_file_name(uses_compiler);
     Ok(find_runtime_archive(directory, name).unwrap_or_else(|| directory.join(name)))
 }
 
@@ -346,6 +752,14 @@ pub enum NativeError {
     /// The backend failed.
     #[error(transparent)]
     Backend(#[from] LlvmError),
+    /// A prebuilt VM binding manifest could not be written or read.
+    #[error("cannot use foreign binding manifest `{path}`: {message}")]
+    BindingManifest {
+        /// The binding manifest path.
+        path: PathBuf,
+        /// Why the manifest was rejected.
+        message: String,
+    },
     /// The built executable could not be started.
     #[error("cannot run `{executable}`: {source}")]
     Spawn {

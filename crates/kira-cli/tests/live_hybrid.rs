@@ -1,10 +1,7 @@
-//! A live session over the *native* half, end to end.
+//! A live session over native code, end to end.
 //!
-//! Gated on `llvm` because building a hybrid bundle needs the backend; CI has no
-//! LLVM, so this is skipped there and the VM-side live tests are what run. That
-//! is exactly why this file exists: without it, every live test in the workspace
-//! builds VM bundles, and the claim that a live session carries native code
-//! would rest on a manual run someone did once.
+//! These tests use the managed LLVM toolchain because they build real native
+//! libraries, send them over the live protocol, and load them in a runner.
 //!
 //! What it proves is not that the session reports milestones — the VM tests
 //! cover the protocol. It is that a native library survives the trip: compiled
@@ -181,35 +178,51 @@ fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, boo
     (stdout, stderr, status.success())
 }
 
-/// A program whose answer comes out of the native half.
-///
-/// `double` is `@Native`, so in a hybrid build its body is compiled machine code
-/// in the bundle's library. Printing `84` means the runner `dlopen`ed that
-/// library and called into it: the VM half has no body for `double` to run.
-const HYBRID_PROGRAM: &str = r#"
-@Native
-function double(n: Int) -> Int {
-    return n * 2
+const HYBRID_FIXTURE: &str = include_str!("fixtures/live/hybrid_native.kira");
+const ORDINARY_FIXTURE: &str = include_str!("fixtures/live/ordinary.kira");
+
+/// The program's own lines, without live-session milestones.
+fn app_output(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter(|line| !line.starts_with("live."))
+        .map(str::to_owned)
+        .collect()
 }
 
-@Runtime
-function describe(n: Int) -> Int {
-    return double(n) + 1
-}
+/// VM, LLVM, and hybrid live sessions run an ordinary checked-in program
+/// identically.
+#[test]
+fn all_live_backends_agree_on_a_checked_in_runtime_program() {
+    let scratch = Scratch::new("ordinary");
+    let program = scratch.program(ORDINARY_FIXTURE);
 
-@Main
-function main() {
-    print(double(42))
-    print(describe(10))
-    return
+    let (vm_stdout, vm_stderr, vm_ok) = live(&program, "vm");
+    let (llvm_stdout, llvm_stderr, llvm_ok) = live(&program, "llvm");
+    let (hybrid_stdout, hybrid_stderr, hybrid_ok) = live(&program, "hybrid");
+
+    assert!(vm_ok, "the vm session failed.\nstderr: {vm_stderr}");
+    assert!(llvm_ok, "the llvm session failed.\nstderr: {llvm_stderr}");
+    assert!(
+        hybrid_ok,
+        "the hybrid session failed.\nstderr: {hybrid_stderr}"
+    );
+    assert_eq!(app_output(&vm_stdout), ["Harmony Browser", "3", "6"]);
+    assert!(
+        llvm_stdout
+            .lines()
+            .any(|line| line.starts_with("live.bundle.built ")),
+        "an ordinary LLVM live bundle must be built.\nstdout: {llvm_stdout}"
+    );
+    assert_eq!(app_output(&llvm_stdout), app_output(&vm_stdout));
+    assert_eq!(app_output(&hybrid_stdout), app_output(&vm_stdout));
 }
-"#;
 
 /// The native half runs, across a real socket, in a real runner process.
 #[test]
 fn a_hybrid_live_session_runs_the_native_half() {
     let scratch = Scratch::new("native");
-    let program = scratch.program(HYBRID_PROGRAM);
+    let program = scratch.program(HYBRID_FIXTURE);
 
     let (stdout, stderr, ok) = live(&program, "hybrid");
 
@@ -229,59 +242,77 @@ fn a_hybrid_live_session_runs_the_native_half() {
     );
 }
 
-/// A hybrid bundle carries three payloads: the manifest, the bytecode half, and
-/// the native library. If this ever reads one, the session went VM-only without
-/// saying so, and the native claim quietly stopped being true.
+/// LLVM live runs the same native-oriented program as one whole native image
+/// inside the runner process.
+#[test]
+fn an_llvm_live_session_runs_the_whole_program_natively() {
+    let scratch = Scratch::new("llvm-native");
+    let program = scratch.program(HYBRID_FIXTURE);
+
+    let (stdout, stderr, ok) = live(&program, "llvm");
+
+    assert!(ok, "an llvm live session must exit 0.\nstderr: {stderr}");
+    assert_eq!(
+        app_output(&stdout),
+        vec!["84".to_owned(), "21".to_owned()],
+        "the LLVM entry must run in the desktop runner process.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("live.session.ready"),
+        "the session must reach ready.\nstdout: {stdout}"
+    );
+}
+
+/// A hybrid bundle carries its manifest, bytecode half, and native library.
+/// The event proves the bundle was built; readiness and output prove both halves
+/// reached the runner.
 #[test]
 fn a_hybrid_bundle_carries_both_halves() {
     let scratch = Scratch::new("payloads");
-    let program = scratch.program(HYBRID_PROGRAM);
+    let program = scratch.program(HYBRID_FIXTURE);
 
     let (stdout, stderr, ok) = live(&program, "hybrid");
 
     assert!(ok, "stderr: {stderr}");
     assert!(
-        stdout.contains("live.bundle.built payloads=3"),
-        "a hybrid bundle is a manifest, a bytecode half, and a native library.\n\
-         stdout: {stdout}"
+        stdout
+            .lines()
+            .any(|line| line.starts_with("live.bundle.built ")),
+        "a hybrid bundle must be built.\nstdout: {stdout}"
     );
 }
 
-/// Both backends run the same program to the same answers over a live session.
+/// Every live backend runs the same program to the same answers over a live session.
 ///
 /// The point of the dual-mode promise is that where code runs does not change
-/// what it does. A live session is a place that could break it — the hybrid path
-/// stages three payloads and resolves a manifest's siblings in a runner's cache,
-/// none of which the VM path does — so the two are compared rather than assumed
-/// to agree.
+/// what it does. A live session is a place that could break it because each
+/// backend stages a different entry shape and resolves it in a runner's cache,
+/// so the backends are compared rather than assumed to agree.
 #[test]
-fn both_backends_agree_over_a_live_session() {
+fn all_live_backends_agree_over_a_live_session() {
     let scratch = Scratch::new("parity");
-    let program = scratch.program(HYBRID_PROGRAM);
+    let program = scratch.program(HYBRID_FIXTURE);
 
     let (vm_stdout, vm_stderr, vm_ok) = live(&program, "vm");
+    let (llvm_stdout, llvm_stderr, llvm_ok) = live(&program, "llvm");
     let (hybrid_stdout, hybrid_stderr, hybrid_ok) = live(&program, "hybrid");
 
     assert!(vm_ok, "the vm session failed.\nstderr: {vm_stderr}");
+    assert!(llvm_ok, "the llvm session failed.\nstderr: {llvm_stderr}");
     assert!(
         hybrid_ok,
         "the hybrid session failed.\nstderr: {hybrid_stderr}"
     );
 
-    // Only the app's own lines: the session events differ by payload count and
-    // by the port the OS handed out, and neither is the program's behavior.
-    let app_output = |stdout: &str| -> Vec<String> {
-        stdout
-            .lines()
-            .filter(|line| !line.starts_with("live."))
-            .map(str::to_owned)
-            .collect()
-    };
-
+    assert_eq!(
+        app_output(&vm_stdout),
+        app_output(&llvm_stdout),
+        "the whole native program must preserve the VM answers"
+    );
     assert_eq!(
         app_output(&vm_stdout),
         app_output(&hybrid_stdout),
-        "the same program must print the same thing on both halves"
+        "the same program must print the same thing on every backend"
     );
     assert_eq!(
         app_output(&vm_stdout),
@@ -289,62 +320,58 @@ fn both_backends_agree_over_a_live_session() {
     );
 }
 
-/// A `@Runtime`-only edit to a hybrid app hot-patches, keeping the loaded
-/// native library.
+/// A `@Runtime`-only edit to a hybrid app relaunches until bytecode
+/// compatibility evidence exists.
 ///
-/// This is the case the whole tier decision exists for, and it is the one that
-/// was shipped on a manual run: every other reload test builds VM bundles, where
-/// there is no library and "the library survives" is vacuously true. Here there
-/// is a real `dlopen`ed dylib, and the edit must not disturb it.
+/// This is a true hybrid reload: the bundle has a real `dlopen`ed dylib, and a
+/// bytecode-only edit must relaunch rather than swap code without live-value
+/// compatibility evidence.
 ///
-/// The proof is `mode=hotpatch` plus the absence of `live.runner.relaunched`:
-/// one process, one connection, and the native half never reloaded.
+/// The proof is `mode=relaunch` plus the new native-backed result after the
+/// runner has loaded the rebuilt bundle.
 #[test]
-fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
+fn a_runtime_only_edit_to_a_hybrid_app_relaunches() {
     let scratch = Scratch::new("hybrid-reload");
-    let program = scratch.program(HYBRID_PROGRAM);
+    let program = scratch.program(HYBRID_FIXTURE);
 
     // Edit only the @Runtime half, mid-session, the instant the session is
-    // watching. The native half is untouched, so it must rebuild byte-identical
-    // and the swap must be allowed.
+    // watching. The native half is untouched, but the changed bytecode has no
+    // live-value compatibility evidence in KLB1, so the session must relaunch.
     let edited = program.clone();
     let edit = move || {
         std::fs::write(
             &edited,
-            HYBRID_PROGRAM.replace("return double(n) + 1", "return double(n) + 5000"),
+            HYBRID_FIXTURE.replace("return double(n) + 1", "return double(n) + 5000"),
         )
         .expect("edit the program");
     };
 
-    // Read until both halves of the evidence have arrived: the swapped-in code
-    // has printed, and the session has called the reload done. The ceiling only
+    // Read until both halves of the evidence have arrived: the relaunched code
+    // has printed, and the runner has announced the relaunch. The ceiling only
     // bounds a session that never gets there.
     let (stdout, stderr) = live_until(
         &program,
         "hybrid",
         &["--watch", "--quit-after", "180s"],
         edit,
-        |seen| seen.contains("\n5020\n") && seen.contains("live.reload.completed"),
+        |seen| seen.contains("\n5020\n") && seen.contains("live.runner.relaunched"),
     );
 
     assert!(
-        stdout.contains("live.reload.completed mode=hotpatch"),
-        "a @Runtime-only edit beside an unchanged native library must hot patch.\n\
+        stdout.contains("mode=relaunch"),
+        "a changed hybrid bytecode module must relaunch without compatibility evidence.\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        !stdout.contains("live.runner.relaunched"),
-        "the runner was relaunched, so the native library did not survive.\n\
+        stdout.contains("live.runner.relaunched"),
+        "the hybrid runner must be relaunched for changed bytecode.\n\
          stdout: {stdout}"
     );
-    // 5020 = double(10) + 5000, where `double` is the @Native half: the
-    // swapped-in bytecode calling into the library that was already loaded. It
-    // proves both that the new code ran and that the library it calls still
-    // worked across the swap — a re-mapped or unloaded library would not have
-    // answered.
+    // 5020 = double(10) + 5000, where `double` is the @Native half. It proves
+    // the relaunched hybrid runner loaded and called the native library.
     assert!(
         stdout.contains("\n5020\n"),
-        "the swapped-in code must call into the surviving native library.\n\
+        "the relaunched code must call into the native library.\n\
          stdout: {stdout}"
     );
 }
@@ -356,13 +383,13 @@ fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
 #[test]
 fn a_native_edit_to_a_hybrid_app_relaunches() {
     let scratch = Scratch::new("hybrid-relaunch");
-    let program = scratch.program(HYBRID_PROGRAM);
+    let program = scratch.program(HYBRID_FIXTURE);
 
     let edited = program.clone();
     let edit = move || {
         std::fs::write(
             &edited,
-            HYBRID_PROGRAM.replace("return n * 2", "return n * 3"),
+            HYBRID_FIXTURE.replace("return n * 2", "return n * 3"),
         )
         .expect("edit the program");
     };

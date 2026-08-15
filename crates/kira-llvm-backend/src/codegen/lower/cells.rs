@@ -180,6 +180,6 @@ impl FunctionLowering<'_, '_> {
             .program
             .types
             .cell_inner(ty)
-            .ok_or(LlvmError::Unsupported("a capture cell of no type"))
+            .ok_or(LlvmError::internal("a capture cell of no type"))
     }
 }

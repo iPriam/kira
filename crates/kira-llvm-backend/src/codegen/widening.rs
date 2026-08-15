@@ -97,13 +97,11 @@ impl Codegen<'_> {
     /// Off }` instantiated twice. Such a value needs no rebuild at all.
     fn changed_variants(&self, from: Type, to: Type) -> Result<Vec<ChangedVariant>, LlvmError> {
         let (Type::Enum(from_id), Type::Enum(to_id)) = (from, to) else {
-            return Err(LlvmError::Unsupported(
-                "a widening of something not an enum",
-            ));
+            return Err(LlvmError::internal("a widening of something not an enum"));
         };
         let (from_def, to_def) = (self.enum_def(from_id)?, self.enum_def(to_id)?);
         if from_def.variants.len() != to_def.variants.len() {
-            return Err(LlvmError::Unsupported(
+            return Err(LlvmError::internal(
                 "a widening between rows with different variants",
             ));
         }
@@ -124,7 +122,7 @@ impl Codegen<'_> {
                 }
                 (None, None) | (Some(_), Some(_)) => {}
                 _ => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a widening between rows whose variants disagree about a payload",
                     ));
                 }
@@ -228,7 +226,7 @@ impl Codegen<'_> {
             return self.erase_value(value, from);
         }
         if !matches!((from, to), (Type::Enum(_), Type::Enum(_))) {
-            return Err(LlvmError::Unsupported(
+            return Err(LlvmError::internal(
                 "a widening of a payload the type rule refuses",
             ));
         }
@@ -244,6 +242,6 @@ impl Codegen<'_> {
             .types
             .enums()
             .get(id)
-            .ok_or(LlvmError::Unsupported("an enum the program never declared"))
+            .ok_or(LlvmError::internal("an enum the program never declared"))
     }
 }

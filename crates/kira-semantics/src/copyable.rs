@@ -173,12 +173,20 @@ impl Analyzer<'_> {
 
 /// Whether `ty` is copyable without looking inside anything.
 ///
-/// The scalars, and nothing else. `NativeState` is deliberately **not** here:
+/// The scalar and pointer-word values, and the internal capture-cell handle.
+/// `NativeState` is deliberately **not** here:
 /// it is an opaque handle to storage a copy could not duplicate, so a type
 /// holding one moves however scalar-shaped the handle is.
 fn is_leaf_copyable(ty: Type) -> bool {
     matches!(
         ty,
-        Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::RawPtr | Type::CString
+        Type::Int(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Void
+            | Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::Cell(_)
+            | Type::CString
     )
 }

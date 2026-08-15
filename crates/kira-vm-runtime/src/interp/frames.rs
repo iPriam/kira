@@ -24,7 +24,7 @@ use super::{Vm, VmScratch};
 
 /// One call frame: its function, program counter, and local slots.
 pub(super) struct Frame {
-    pub(super) func: u32,
+    pub(super) func: u64,
     pub(super) pc: usize,
     pub(super) locals: Vec<Value>,
     /// Which of this frame's final parameter slots are written back on return.
@@ -43,30 +43,32 @@ pub(super) struct Frame {
     /// function that takes a `borrow mut`. There is no caller frame to write
     /// into: the caller is the other engine, so the values are moved out here
     /// and handed to whoever started the call.
-    pub(super) capture: Vec<u16>,
+    pub(super) capture: Vec<u32>,
 }
 
 /// A resolved writeback target on a callee frame.
 pub(super) struct Writeback {
     /// The callee-frame local slot — a parameter — whose value is moved out.
-    pub(super) param: u16,
+    pub(super) param: u64,
     /// The caller-frame local slot the place is rooted at.
-    pub(super) slot: u16,
+    pub(super) slot: u64,
     /// The steps to walk into the caller's storage, indices already resolved;
     /// empty writes the caller's local slot itself.
     pub(super) steps: Vec<ResolvedStep>,
 }
 
 /// A fresh frame for `index`, with every local slot at `Void`.
-fn fresh_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
+fn fresh_frame(module: &Module, index: u64) -> Result<Frame, VmError> {
     let function = module
         .functions
-        .get(index as usize)
+        .get(usize::try_from(index).map_err(|_| VmError::UnknownFunction(index))?)
         .ok_or(VmError::UnknownFunction(index))?;
+    let local_count = usize::try_from(function.local_count)
+        .map_err(|_| VmError::LocalSlotOutOfRange(function.local_count))?;
     Ok(Frame {
         func: index,
         pc: 0,
-        locals: vec![Value::Void; function.local_count as usize],
+        locals: vec![Value::Void; local_count],
         writebacks: Vec::new(),
         capture: Vec::new(),
     })
@@ -102,6 +104,7 @@ impl<'h> Vm<'h> {
             frame_cache: scratch.frame_cache,
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,
+            trap_probe: None,
         }
     }
 
@@ -111,10 +114,10 @@ impl<'h> Vm<'h> {
     /// The cache contains only frames whose heap-bearing locals have already
     /// been released. Clearing the vector therefore drops no runtime object;
     /// it only resets the copied scalar state before the frame is retargeted.
-    pub(super) fn take_frame(&mut self, module: &Module, index: u32) -> Result<Frame, VmError> {
+    pub(super) fn take_frame(&mut self, module: &Module, index: u64) -> Result<Frame, VmError> {
         let function = module
             .functions
-            .get(index as usize)
+            .get(usize::try_from(index).map_err(|_| VmError::UnknownFunction(index))?)
             .ok_or(VmError::UnknownFunction(index))?;
         let mut frame = match self.frame_cache.pop() {
             Some(frame) => frame,
@@ -122,7 +125,8 @@ impl<'h> Vm<'h> {
         };
         frame.func = index;
         frame.pc = 0;
-        let local_count = function.local_count as usize;
+        let local_count = usize::try_from(function.local_count)
+            .map_err(|_| VmError::LocalSlotOutOfRange(function.local_count))?;
         if frame.locals.len() != local_count {
             // Cached frames contain only released heap values. Clearing before
             // resizing is therefore just a scalar reset, not an ownership
@@ -183,7 +187,7 @@ impl<'h> Vm<'h> {
         module: &Module,
         function_id: u32,
         args: &[NativeArg<'_>],
-        capture: &[u16],
+        capture: &[u32],
     ) -> Result<(Value, Vec<(u32, Value)>), VmError> {
         self.pending_capture = capture.to_vec();
         let result = self.enter(module, function_id, args);
@@ -231,7 +235,7 @@ impl<'h> Vm<'h> {
         function_id: u32,
         args: Vec<Value>,
     ) -> Result<Value, VmError> {
-        let mut frame = match self.take_frame(module, function_id) {
+        let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
                 self.discard(args);
@@ -248,8 +252,10 @@ impl<'h> Vm<'h> {
             self.discard(args);
             self.discard(frame.locals);
             return Err(VmError::ArityMismatch {
-                function: function_id,
-                expected: module.functions[function_id as usize].param_count,
+                function: u64::from(function_id),
+                expected: module.functions[usize::try_from(function_id)
+                    .map_err(|_| VmError::UnknownFunction(u64::from(function_id)))?]
+                .param_count,
                 got,
             });
         }
@@ -271,7 +277,7 @@ impl<'h> Vm<'h> {
         args: Vec<Value>,
         observer: &mut dyn VmDebugObserver,
     ) -> Result<Value, VmError> {
-        let mut frame = match self.take_frame(module, function_id) {
+        let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
                 self.discard(args);
@@ -283,8 +289,10 @@ impl<'h> Vm<'h> {
             self.discard(args);
             self.discard(frame.locals);
             return Err(VmError::ArityMismatch {
-                function: function_id,
-                expected: module.functions[function_id as usize].param_count,
+                function: u64::from(function_id),
+                expected: module.functions[usize::try_from(function_id)
+                    .map_err(|_| VmError::UnknownFunction(u64::from(function_id)))?]
+                .param_count,
                 got,
             });
         }
@@ -313,10 +321,17 @@ impl<'h> Vm<'h> {
     pub(super) fn fill_params(
         &mut self,
         module: &Module,
-        index: u32,
+        index: u64,
         frame: &mut Frame,
     ) -> Result<(), VmError> {
-        let param_count = module.functions[index as usize].param_count as usize;
+        let param_count = usize::try_from(
+            module
+                .functions
+                .get(usize::try_from(index).map_err(|_| VmError::UnknownFunction(index))?)
+                .ok_or(VmError::UnknownFunction(index))?
+                .param_count,
+        )
+        .map_err(|_| VmError::LocalSlotOutOfRange(index))?;
         if param_count == 0 {
             return Ok(());
         }
@@ -355,6 +370,14 @@ impl<'h> Vm<'h> {
         let Some(mut finished) = frames.pop() else {
             return Err(VmError::FrameUnderflow);
         };
+        let Some(function) = usize::try_from(finished.func)
+            .ok()
+            .and_then(|index| module.functions.get(index))
+        else {
+            self.discard(finished.locals);
+            self.heap.drop_value(result);
+            return Err(VmError::UnknownFunction(finished.func));
+        };
         // Most generated functions use the conservative `EveryLocal` release
         // plan and have no written-through parameters. Their return has no
         // writeback or capture work to do, so keep this branch ahead of the
@@ -362,10 +385,7 @@ impl<'h> Vm<'h> {
         // and matching the release-plan variants on every ordinary call.
         if finished.writebacks.is_empty()
             && finished.capture.is_empty()
-            && matches!(
-                &module.functions[finished.func as usize].releases,
-                FrameRelease::EveryLocal
-            )
+            && matches!(&function.releases, FrameRelease::EveryLocal)
         {
             for held in &mut finished.locals {
                 let value = std::mem::replace(held, Value::Void);
@@ -399,7 +419,10 @@ impl<'h> Vm<'h> {
             for writeback in &mut writebacks {
                 let Some(value) = finished
                     .locals
-                    .get_mut(writeback.param as usize)
+                    .get_mut(match usize::try_from(writeback.param) {
+                        Ok(index) => index,
+                        Err(_) => continue,
+                    })
                     .map(|slot| std::mem::replace(slot, Value::Void))
                 else {
                     continue;
@@ -422,14 +445,17 @@ impl<'h> Vm<'h> {
         for slot in capture {
             let Some(value) = finished
                 .locals
-                .get_mut(slot as usize)
+                .get_mut(match usize::try_from(slot) {
+                    Ok(index) => index,
+                    Err(_) => continue,
+                })
                 .map(|held| std::mem::replace(held, Value::Void))
             else {
                 continue;
             };
-            self.captured.push((u32::from(slot), value));
+            self.captured.push((slot, value));
         }
-        let (cacheable, reset_locals) = match &module.functions[finished.func as usize].releases {
+        let (cacheable, reset_locals) = match &function.releases {
             FrameRelease::EveryLocal => {
                 for held in &mut finished.locals {
                     let value = std::mem::replace(held, Value::Void);
@@ -448,7 +474,10 @@ impl<'h> Vm<'h> {
                     // unreachable case a leak rather than a panic.
                     let Some(held) = finished
                         .locals
-                        .get_mut(slot as usize)
+                        .get_mut(match usize::try_from(slot) {
+                            Ok(index) => index,
+                            Err(_) => continue,
+                        })
                         .map(|slot| std::mem::replace(slot, Value::Void))
                     else {
                         continue;
@@ -514,7 +543,18 @@ impl<'h> Vm<'h> {
             return Err(VmError::FrameUnderflow);
         };
         if writeback.steps.is_empty() {
-            let previous = std::mem::replace(&mut caller.locals[writeback.slot as usize], value);
+            let Ok(slot) = usize::try_from(writeback.slot) else {
+                self.heap.drop_value(value);
+                return Err(VmError::LocalSlotOutOfRange(writeback.slot));
+            };
+            let Some(previous) = caller
+                .locals
+                .get_mut(slot)
+                .map(|local| std::mem::replace(local, value))
+            else {
+                self.heap.drop_value(value);
+                return Err(VmError::LocalSlotOutOfRange(writeback.slot));
+            };
             self.heap.drop_value(previous);
             return Ok(());
         }

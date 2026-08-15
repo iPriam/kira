@@ -19,7 +19,6 @@
 //! is one `unsafe` fence: [`Module`] owns its context and disposes of it on
 //! drop, and no LLVM reference escapes that lifetime.
 
-mod adapter;
 mod boxing;
 mod bridge;
 mod callback;
@@ -31,6 +30,7 @@ mod foreign_scalar;
 mod glue;
 mod library;
 mod lower;
+mod native_ffi;
 mod native_state;
 mod native_state_enums;
 mod native_state_values;
@@ -65,7 +65,7 @@ use self::types::{Runtime, Types, declare_runtime};
 use crate::LlvmError;
 use crate::exports::NativeExportSurface;
 
-use self::plan::{ModuleKind, Plan};
+use self::plan::{CodegenTarget, ModuleKind, Plan};
 
 pub(crate) use self::plan::CodegenUnit;
 pub(crate) use self::symbols::trampoline_name;
@@ -122,6 +122,73 @@ impl Module {
         unavailable: &[usize],
         unit: CodegenUnit,
     ) -> Result<Self, LlvmError> {
+        Self::build_executable_for_target(
+            program,
+            module_name,
+            pointer_width,
+            unavailable,
+            unit,
+            CodegenTarget::Host,
+        )
+    }
+
+    /// Lowers a whole program into the shared library used by an LLVM live
+    /// session.
+    ///
+    /// This has the same all-native function plan as [`Module::build`], but its
+    /// entry is a fixed C symbol the desktop runner can load and call after the
+    /// bundle crosses the process boundary.
+    pub(crate) fn build_native_live(
+        program: &IrProgram,
+        module_name: &str,
+        unavailable: &[usize],
+        unit: CodegenUnit,
+    ) -> Result<Self, LlvmError> {
+        Self::lower(
+            program,
+            module_name,
+            Plan {
+                kind: ModuleKind::NativeLiveLibrary,
+                engines: vec![Execution::Native; program.functions.len()],
+                reachable: crate::reachability::native_functions(program),
+                exports: &NativeExportSurface::default(),
+                pointer_width: ForeignPointerWidth::HOST,
+                target: CodegenTarget::Host,
+                unavailable,
+                unit,
+            },
+            None,
+        )
+    }
+
+    /// Lowers a whole program with the Web target's data layout.
+    pub(crate) fn build_wasm(
+        program: &IrProgram,
+        module_name: &str,
+        pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
+        unit: CodegenUnit,
+        device: kira_backend_api::WasmDevice,
+    ) -> Result<Self, LlvmError> {
+        Self::build_executable_for_target(
+            program,
+            module_name,
+            pointer_width,
+            unavailable,
+            unit,
+            CodegenTarget::Wasm(device),
+        )
+    }
+
+    /// Lowers an executable for one target machine.
+    fn build_executable_for_target(
+        program: &IrProgram,
+        module_name: &str,
+        pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
+        unit: CodegenUnit,
+        target: CodegenTarget,
+    ) -> Result<Self, LlvmError> {
         Self::lower(
             program,
             module_name,
@@ -131,6 +198,7 @@ impl Module {
                 reachable: crate::reachability::native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width,
+                target,
                 unavailable,
                 unit,
             },
@@ -157,6 +225,7 @@ impl Module {
                 reachable: crate::reachability::native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width,
+                target: CodegenTarget::Host,
                 unavailable,
                 unit,
             },
@@ -174,6 +243,43 @@ impl Module {
         module_name: &str,
         exports: &NativeExportSurface,
     ) -> Result<Self, LlvmError> {
+        Self::build_library_for_target(
+            program,
+            module_name,
+            exports,
+            ForeignPointerWidth::HOST,
+            CodegenTarget::Host,
+        )
+    }
+
+    /// Lowers a whole Kira library with the Web target's data layout.
+    pub(crate) fn build_wasm_library(
+        program: &IrProgram,
+        module_name: &str,
+        exports: &NativeExportSurface,
+        device: kira_backend_api::WasmDevice,
+    ) -> Result<Self, LlvmError> {
+        let pointer_width = match device {
+            kira_backend_api::WasmDevice::Wasm32 => ForeignPointerWidth::Bits32,
+            kira_backend_api::WasmDevice::Wasm64 => ForeignPointerWidth::Bits64,
+        };
+        Self::build_library_for_target(
+            program,
+            module_name,
+            exports,
+            pointer_width,
+            CodegenTarget::Wasm(device),
+        )
+    }
+
+    /// Lowers a library for one target machine.
+    fn build_library_for_target(
+        program: &IrProgram,
+        module_name: &str,
+        exports: &NativeExportSurface,
+        pointer_width: ForeignPointerWidth,
+        target: CodegenTarget,
+    ) -> Result<Self, LlvmError> {
         Self::lower(
             program,
             module_name,
@@ -182,35 +288,9 @@ impl Module {
                 engines: vec![Execution::Native; program.functions.len()],
                 reachable: vec![true; program.functions.len()],
                 exports,
-                pointer_width: ForeignPointerWidth::HOST,
+                pointer_width,
+                target,
                 unavailable: &[],
-                unit: CodegenUnit::WHOLE,
-            },
-            None,
-        )
-    }
-
-    /// Lowers only the program's foreign adapters into a module for the VM's
-    /// adapter sidecar.
-    ///
-    /// Every function is marked as running on the VM, so no Kira body is emitted
-    /// here; what the module carries is one exported adapter per foreign import,
-    /// which a native host loads and calls on the VM's behalf.
-    pub(crate) fn build_adapter_sidecar(
-        program: &IrProgram,
-        module_name: &str,
-        unavailable: &[usize],
-    ) -> Result<Self, LlvmError> {
-        Self::lower(
-            program,
-            module_name,
-            Plan {
-                kind: ModuleKind::AdapterSidecar,
-                engines: vec![Execution::Runtime; program.functions.len()],
-                reachable: vec![false; program.functions.len()],
-                exports: &NativeExportSurface::default(),
-                pointer_width: ForeignPointerWidth::HOST,
-                unavailable,
                 unit: CodegenUnit::WHOLE,
             },
             None,
@@ -233,9 +313,10 @@ impl Module {
                     .iter()
                     .map(|function| function.execution.resolve(Execution::Runtime))
                     .collect(),
-                reachable: vec![true; program.functions.len()],
+                reachable: crate::reachability::hybrid_native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
+                target: CodegenTarget::Host,
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
@@ -260,9 +341,10 @@ impl Module {
                     .iter()
                     .map(|function| function.execution.resolve(Execution::Runtime))
                     .collect(),
-                reachable: vec![true; program.functions.len()],
+                reachable: crate::reachability::hybrid_native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
+                target: CodegenTarget::Host,
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
@@ -319,6 +401,9 @@ impl Module {
         }
         // SAFETY: on failure the verifier allocated a NUL-terminated message.
         let detail = unsafe { take_message(message) };
+        if let Ok(path) = std::env::var("KIRA_DUMP_INVALID_LLVM_IR") {
+            let _ = self.write_ir(Path::new(&path));
+        }
         Err(LlvmError::InvalidModule(detail))
     }
 
@@ -397,6 +482,13 @@ pub(crate) struct Codegen<'a> {
     /// has to be the *target*'s width, not this machine's: a wasm32 module
     /// built on a 64-bit host lays a pointer member out in four bytes.
     pointer_width: ForeignPointerWidth,
+    /// What this module is emitted for.
+    ///
+    /// A foreign call reaches its C differently on each: a host build calls
+    /// through the bundled libffi graph, and a wasm module calls the symbol
+    /// directly, because its C is linked into the module and there is no
+    /// loader, no second image, and no libffi to reach.
+    target: CodegenTarget,
     context: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
@@ -420,10 +512,10 @@ pub(crate) struct Codegen<'a> {
     /// Only functions this module defines have a real entry; a function that
     /// lives in the other half is reached through the bridge instead.
     functions: Vec<Option<Callable>>,
-    /// One generated adapter per foreign import, in
-    /// [`IrProgram::foreign_imports`] order. A foreign call site references the
-    /// adapter at its import's index; a sidecar exports every one.
-    foreign_adapters: Vec<Callable>,
+    /// One compact shared-graph descriptor per foreign import.
+    foreign_ffi_descriptors: Vec<LLVMValueRef>,
+    /// One compact shared-graph descriptor per foreign callback.
+    callback_ffi_descriptors: Vec<LLVMValueRef>,
     /// The LLVM type of each declared struct, indexed by `StructId`.
     ///
     /// A struct lowers to a real LLVM struct with real field layout, not to a
@@ -475,22 +567,27 @@ impl<'a> Codegen<'a> {
             reachable,
             exports,
             pointer_width,
+            target,
             unavailable,
             unit,
         } = plan;
         let types = Types::new(owned.context, pointer_width);
         let runtime = declare_runtime(owned.module, &types);
 
-        // The module needs the host's data layout in place before any element
-        // is sized, and object emission sets the same layout again (harmlessly)
-        // when it runs. `target_data` borrows it from the module.
-        TargetMachine::host(false, false)?.set_module_layout(owned.module);
+        // The module needs its target layout in place before any element is
+        // sized, and object emission sets the same layout again harmlessly.
+        let target_machine = match target {
+            CodegenTarget::Host => TargetMachine::host(false, false)?,
+            CodegenTarget::Wasm(device) => TargetMachine::wasm(device)?,
+        };
+        target_machine.set_module_layout(owned.module);
         // SAFETY: the layout was just set, so the module has one; the returned
         // handle borrows it and lives as long as the module does.
         let target_data = unsafe { LLVMGetModuleDataLayout(owned.module) };
 
         let mut codegen = Codegen {
             program,
+            target,
             unavailable: unavailable.to_vec(),
             context: owned.context,
             module: owned.module,
@@ -503,7 +600,8 @@ impl<'a> Codegen<'a> {
             exports: exports.clone(),
             engines,
             functions: Vec::with_capacity(program.functions.len()),
-            foreign_adapters: Vec::with_capacity(program.foreign_imports.len()),
+            foreign_ffi_descriptors: Vec::with_capacity(program.foreign_imports.len()),
+            callback_ffi_descriptors: Vec::with_capacity(program.foreign_callbacks.len()),
             struct_types: Vec::with_capacity(program.types.structs().len()),
             string_counter: 0,
             target_data,
@@ -520,6 +618,7 @@ impl<'a> Codegen<'a> {
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
         codegen.declare_structs()?;
+        codegen.declare_foreign_ffi_descriptors()?;
         for (index, function) in program.functions.iter().enumerate() {
             // A function that runs on the other engine has no body here; its
             // callers reach it through the bridge, so there is nothing to
@@ -533,9 +632,6 @@ impl<'a> Codegen<'a> {
             };
             codegen.functions.push(declared);
         }
-        // Adapters are declared for every kind: an executable and a hybrid half
-        // reference them at call sites, and a sidecar exports them.
-        codegen.declare_foreign_adapters()?;
         Ok(codegen)
     }
 
@@ -594,9 +690,9 @@ impl<'a> Codegen<'a> {
     ) -> Result<Callable, LlvmError> {
         let mut params = Vec::with_capacity(function.param_count as usize);
         for slot in 0..function.param_count {
-            let ty = function.param_type(slot).ok_or(LlvmError::Unsupported(
-                "a function with a missing parameter",
-            ))?;
+            let ty = function
+                .param_type(slot)
+                .ok_or(LlvmError::internal("a function with a missing parameter"))?;
             // A written-through parameter — a mutating method's receiver, or one
             // declared `borrow mut` — is a pointer to the caller's storage, so a
             // write to it lands there and is observable after the call.
@@ -643,17 +739,10 @@ impl<'a> Codegen<'a> {
             }
             self.lower_function(index, function)?;
         }
-        // Every module that declares adapters also defines them: an executable
-        // and a hybrid half so their call sites resolve, a sidecar so a host can
-        // load them. A program has one set of them however many units it is
-        // emitted in, so a later unit keeps the declarations and defines
-        // nothing — the same arrangement its call into another unit's Kira
-        // function relies on.
+        // One module owns the callback thunks. A later codegen unit keeps only
+        // declarations, so callback addresses remain unique in a split build.
         if self.unit.is_first() {
             self.clear_debug_location();
-            self.emit_foreign_adapters()?;
-            // And one entry thunk per callback, for the same reason: whatever
-            // holds the adapters is what a C library reaches Kira through.
             self.emit_foreign_callbacks()?;
         }
         if !self.unit.is_first() {
@@ -662,19 +751,22 @@ impl<'a> Codegen<'a> {
         let result = match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
+            // A whole native live program is entered through the runner's
+            // fixed shared-library symbol.
+            ModuleKind::NativeLiveLibrary => self.lower_native_live_entry_point(),
             // A library is entered by its consumer, so nothing starts it here.
             // Emitting a C `main` would make the artifact an executable that
             // happens to be a library, which is exactly the confusion the two
             // kinds exist to prevent. What a consumer reaches it through is the
             // export surface.
             ModuleKind::Library => self.lower_export_surface(),
-            // A sidecar carries only its adapters, already emitted above; there
-            // is nothing to enter.
-            ModuleKind::AdapterSidecar => Ok(()),
             // A hybrid library is entered by its host, one call at a time.
             ModuleKind::HybridLibrary => {
                 for (index, function) in program.functions.iter().enumerate() {
-                    if self.engine_of(index) == Execution::Native {
+                    if self.engine_of(index) == Execution::Native
+                        && self.reachable.get(index).copied().unwrap_or(false)
+                        && self.unit.owns(index)
+                    {
                         self.lower_trampoline(index, function)?;
                     }
                 }
@@ -719,7 +811,9 @@ impl<'a> Codegen<'a> {
     fn lending(&self) -> kira_ir::mid::Lending {
         kira_ir::mid::Lending {
             read_only: match self.kind {
-                ModuleKind::Executable => kira_ir::mid::BorrowLending::ByPointer,
+                ModuleKind::Executable | ModuleKind::NativeLiveLibrary => {
+                    kira_ir::mid::BorrowLending::ByPointer
+                }
                 _ => kira_ir::mid::BorrowLending::ByValue,
             },
             write_through: kira_ir::mid::BorrowLending::ByPointer,
@@ -736,7 +830,10 @@ impl<'a> Codegen<'a> {
     /// decided to use, so those keep passing by value.
     fn param_is_pointer(&self, function: &IrFunction, slot: u32) -> bool {
         function.param_by_reference(slot)
-            || (matches!(self.kind, ModuleKind::Executable) && function.param_by_pointer(slot))
+            || (matches!(
+                self.kind,
+                ModuleKind::Executable | ModuleKind::NativeLiveLibrary
+            ) && function.param_by_pointer(slot))
     }
 
     fn llvm_type(&self, ty: Type) -> Result<LLVMTypeRef, LlvmError> {
@@ -777,13 +874,11 @@ impl<'a> Codegen<'a> {
             Type::Struct(id) => *self
                 .struct_types
                 .get(id.index() as usize)
-                .ok_or(LlvmError::Unsupported("a struct the module never declared"))?,
+                .ok_or(LlvmError::internal("a struct the module never declared"))?,
             // Lowering only ever runs on a program that type-checked, so an
             // error type here means a broken frontend contract, not user input.
             Type::Error => {
-                return Err(LlvmError::Unsupported(
-                    "a program that failed to type-check",
-                ));
+                return Err(LlvmError::internal("a program that failed to type-check"));
             }
         })
     }

@@ -307,6 +307,7 @@ impl Evaluator<'_> {
             shaders: self.shaders,
             platform: &self.platform.clone(),
             enums: &self.enums.clone(),
+            testing: self.testing,
         };
         let (value, reported) = super::run_value(&compiled, Vec::new(), comptime, self.lint)?;
         self.reported.extend(reported);
@@ -385,6 +386,7 @@ impl Evaluator<'_> {
             // Whether `kira lint` asked for this run. False under every other
             // verb, which is what keeps a lint from running during `check`.
             ("Build", "linting", []) => Ok(Value::Bool(self.lint)),
+            ("Build", "testing", []) => Ok(Value::Bool(self.testing)),
             _ => Err(EvalError::unsupported(format!(
                 "`{namespace}.{method}` with {} argument(s)",
                 values.len()

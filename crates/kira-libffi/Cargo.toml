@@ -1,0 +1,21 @@
+[package]
+name = "kira-libffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+kira-runtime-abi.workspace = true
+# The bundled libffi binary is a file the toolchain ships; its name lives with
+# the rest of the shipped layout.
+kira-toolchain.workspace = true
+libloading.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

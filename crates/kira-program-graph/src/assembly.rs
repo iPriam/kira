@@ -144,11 +144,8 @@ pub fn load_program_with(
     let mut modules = walk.modules_for(entry_path, entry_text);
 
     // Every `.kira` file under a package's source root is a member of that
-    // package — app or library. What a package *produces* does not decide which
-    // of its own files belong to it, and an app used to compile its entry file
-    // plus that file's imports and nothing else: a program split across
-    // `app/main.kira` and `app/area/Thing.kira` reported every function in the
-    // sibling as undefined, while the identical library layout compiled.
+    // package, whether it is an app or library. Imports remain file-scoped, so
+    // aggregating package files does not add a sibling's imports here.
     //
     // Aggregating adds files to the package, not to each other's scope: imports
     // stay file-scoped, so a sibling's `import Foundation` still does not put

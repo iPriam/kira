@@ -5,8 +5,8 @@
 //! what each foreign import's library puts on the link line for it. This module
 //! produces both from the package's declarations — inline `nativeLibraries` in
 //! `package.kira` *and* any `NativeLibs/*.toml` it ships — plus the program's
-//! foreign table, so the LLVM link, the hybrid dylib, the VM sidecar, and the
-//! wasm `emcc` link all select one way.
+//! foreign table, so the LLVM link, the hybrid dylib, the VM direct-binding
+//! payload, and the wasm `emcc` link all select one way.
 //!
 //! An archive is not the whole answer: a selected row may also carry Apple
 //! frameworks, system libraries, and linker flags, and may carry those and no
@@ -143,7 +143,26 @@ pub fn resolve(
         // contributes nothing to the link line — but only the second means the
         // symbol is missing, so only the second makes its adapter trap.
         match row {
-            Some(row) => inputs.push_row(row),
+            Some(row) => {
+                let path = catalog
+                    .foreign_library_path(symbol, &target)
+                    .map_err(|error| match error {
+                        ImportResolveError::UndeclaredLibrary { library } => {
+                            ForeignResolveError::UndeclaredLibrary {
+                                library,
+                                target: target.clone(),
+                            }
+                        }
+                        ImportResolveError::NoArtifactForTarget { library, target } => {
+                            ForeignResolveError::NoArtifactForTarget { library, target }
+                        }
+                    })?
+                    .ok_or_else(|| ForeignResolveError::NoArtifactForTarget {
+                        library: library.to_owned(),
+                        target: target.clone(),
+                    })?;
+                inputs.push_library(library, path, row);
+            }
             None if catalog.is_excluded(symbol, &target) => inputs.mark_unavailable(index),
             // An *optional* library whose row names no artifact is a driver the
             // runtime opens, and its symbols stay undefined in whatever links
@@ -161,7 +180,25 @@ pub fn resolve(
             None if !target.resolves_symbols_at_load() && catalog.is_optional(symbol) => {
                 inputs.mark_unavailable(index)
             }
-            None => {}
+            None => {
+                if let Some(path) =
+                    catalog
+                        .foreign_library_path(symbol, &target)
+                        .map_err(|error| match error {
+                            ImportResolveError::UndeclaredLibrary { library } => {
+                                ForeignResolveError::UndeclaredLibrary {
+                                    library,
+                                    target: target.clone(),
+                                }
+                            }
+                            ImportResolveError::NoArtifactForTarget { library, target } => {
+                                ForeignResolveError::NoArtifactForTarget { library, target }
+                            }
+                        })?
+                {
+                    inputs.push_library_path(library, path);
+                }
+            }
         }
     }
 

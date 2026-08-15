@@ -140,6 +140,21 @@ fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
     run_on_with_args(source_path, backend, &[])
 }
 
+/// Runs one native-capable backend with the native heap report enabled.
+fn run_on_with_heap_report(source_path: &std::path::Path, backend: &str) -> Output {
+    kira()
+        .env(kira_native_bridge::accounting::HEAP_REPORT_VAR, "1")
+        .args([
+            "run",
+            "--backend",
+            backend,
+            source_path.to_str().unwrap(),
+            "--",
+        ])
+        .output()
+        .expect("run kira")
+}
+
 /// Runs one backend with arguments after the program separator.
 fn run_on_with_args(source_path: &std::path::Path, backend: &str, arguments: &[&str]) -> Output {
     let mut command = kira();
@@ -263,11 +278,98 @@ fn assert_parity(source: &str) -> String {
         .iter()
         .map(|backend| (*backend, run_on(&path, backend)))
         .collect();
+    let expected = assert_parity_results(source, &runs);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    expected
+}
 
-    let (_, reference) = &runs[0];
+/// Asserts parity and native heap balance for one source program.
+///
+/// Each native-capable backend runs in its own process or loaded native half,
+/// so the report is scoped to this program rather than accumulated across the
+/// test binary. The VM remains the output and exit-status reference.
+fn assert_parity_with_heap_balance(source: &str) -> String {
+    let path = write_source(source);
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| {
+            let run = match *backend {
+                "vm" => run_on(&path, backend),
+                "llvm" | "hybrid" => run_on_with_heap_report(&path, backend),
+                _ => unreachable!("backend list contains only known backends"),
+            };
+            (*backend, run)
+        })
+        .collect();
+
+    for (backend, run) in &runs[1..] {
+        let report = assert_native_heap_balanced(backend, run);
+        if *backend == "llvm" {
+            assert!(
+                report.allocated > 0,
+                "the LLVM backend made no measured native allocations for an Any case:\n{}",
+                String::from_utf8_lossy(&run.stderr),
+            );
+        }
+    }
+    let expected = assert_parity_results(source, &runs);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    expected
+}
+
+/// The native runtime's counters at the end of one program.
+#[derive(Debug, PartialEq, Eq)]
+struct NativeHeapReport {
+    allocated: u64,
+    freed: u64,
+    live: u64,
+}
+
+/// Parses and validates one native runtime heap report.
+fn assert_native_heap_balanced(backend: &str, run: &Output) -> NativeHeapReport {
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !stderr.contains("heap accounting is not compiled into this build"),
+        "the {backend} backend did not compile native heap accounting:\n{stderr}"
+    );
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("kira: heap allocated="))
+        .unwrap_or_else(|| panic!("the {backend} backend emitted no heap report:\n{stderr}"));
+    let report = NativeHeapReport {
+        allocated: heap_report_field(line, "allocated", backend),
+        freed: heap_report_field(line, "freed", backend),
+        live: heap_report_field(line, "live", backend),
+    };
+    assert_eq!(
+        report.allocated, report.freed,
+        "the {backend} backend allocated and freed different numbers of objects:\n{stderr}"
+    );
+    assert_eq!(
+        report.live, 0,
+        "the {backend} backend left native objects live:\n{stderr}"
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the {backend} backend failed while reporting its native heap:\n{stderr}"
+    );
+    report
+}
+
+/// Reads one `name=value` field from a runtime report line.
+fn heap_report_field(line: &str, name: &str, backend: &str) -> u64 {
+    let prefix = format!("{name}=");
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix(&prefix))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("the {backend} heap report has no `{name}` field: {line}"))
+}
+
+/// Compares the stdout and exit status produced by all parity runs.
+fn assert_parity_results(source: &str, runs: &[(&str, Output)]) -> String {
+    let (_, reference) = runs.first().expect("at least one parity backend");
     let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
-
     for (backend, run) in &runs[1..] {
         let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
         assert_eq!(

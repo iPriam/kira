@@ -48,7 +48,7 @@ impl<'a> Codegen<'a> {
         function: &'a IrFunction,
     ) -> Result<(), LlvmError> {
         let value = self.functions[index]
-            .ok_or(LlvmError::Unsupported(
+            .ok_or(LlvmError::internal(
                 "a body for a function on the other engine",
             ))?
             .value;
@@ -241,7 +241,7 @@ impl<'a> Codegen<'a> {
                 }
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a CString local (it is a foreign-parameter-only type)",
                     ));
                 }
@@ -251,7 +251,7 @@ impl<'a> Codegen<'a> {
                 // first-store special case.
                 Type::Struct(_) => LLVMConstNull(llvm_type),
                 Type::Void | Type::Error => {
-                    return Err(LlvmError::Unsupported("a local with no runtime value"));
+                    return Err(LlvmError::internal("a local with no runtime value"));
                 }
             }
         })
@@ -395,7 +395,7 @@ impl FunctionLowering<'_, '_> {
             .locals
             .get(slot as usize)
             .copied()
-            .ok_or(LlvmError::Unsupported("a read of an unknown local"))
+            .ok_or(LlvmError::internal("a read of an unknown local"))
     }
 
     /// The `alloca` backing a local slot.
@@ -403,7 +403,7 @@ impl FunctionLowering<'_, '_> {
         self.locals
             .get(slot as usize)
             .copied()
-            .ok_or(LlvmError::Unsupported("a read of an unknown local"))
+            .ok_or(LlvmError::internal("a read of an unknown local"))
     }
 
     /// The function currently being built.

@@ -23,6 +23,8 @@
 //! design serving both engines rather than two.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use kira_runtime_abi::{NativeStateToken, NativeStateTypeId, NativeStateValue};
 
@@ -166,13 +168,17 @@ pub enum Value {
 enum Object {
     /// A string's bytes.
     Str(String),
-    /// A struct's fields, in declaration order.
-    Struct(Vec<Value>),
-    /// An array's elements, in order, shared until one holder writes.
+    /// A struct's fields, in declaration order, shared until one holder writes.
     ///
-    /// The one shared object on this heap. Every other kind is exclusively
-    /// owned, which is what lets a place walk move handles; an array earns the
-    /// exception by being the expensive one to copy and the common one to read.
+    /// Shared for the reason an array's elements are, and it is the same
+    /// bargain: reading a struct copied every field, and every string, array,
+    /// enum and struct inside every field, and then dropped them all again. A
+    /// widget tree is structs of structs, so a frame that walks one paid for the
+    /// whole tree at every level. `Heap::copy_value` was 10% of an editor frame
+    /// and `Heap::free_struct` another 6.6%, measured; a copy is a count now and
+    /// [`Heap::make_struct_unique`] buys fields of its own for the first writer.
+    Struct(Rc<Vec<Value>>),
+    /// An array's elements, in order, shared until one holder writes.
     Array(Rc<Vec<Value>>),
     /// An enum value: a discriminant tag and its optional single payload,
     /// shared by every value that copied it.
@@ -183,7 +189,7 @@ enum Object {
     /// of its own and there is nothing to make unique.
     Enum {
         /// The variant's declaration index.
-        tag: u32,
+        tag: u64,
         /// The payload value, absent for a payload-less variant.
         payload: Option<Value>,
         /// How many values hold this object; the payload goes with the last.
@@ -262,6 +268,25 @@ pub struct Heap {
     free_list: Vec<u32>,
     allocated: u64,
     freed: u64,
+    released_cells: Arc<ReleasedCells>,
+}
+
+/// Cells a callback-state tree gave up its last share of.
+///
+/// A tree node is dropped by code that has no heap to release against —
+/// `Arc::make_mut` unsharing a level, a store entry going away, a snapshot being
+/// freed — so the release is *recorded* here and performed by
+/// [`Heap::drain_released_cells`]. Late, never early: the share is still held
+/// until the drain runs, so nothing can read a cell the tree let go of and find
+/// it freed.
+///
+/// `pending` is what makes draining once per instruction affordable: the empty
+/// case is one relaxed load, and the lock is taken only when there is something
+/// under it.
+#[derive(Debug, Default)]
+struct ReleasedCells {
+    pending: AtomicUsize,
+    handles: Mutex<Vec<u32>>,
 }
 
 impl Heap {
@@ -281,7 +306,7 @@ impl Heap {
     /// stack) hands over ownership, exactly as a `Str` handle is handed over.
     pub fn alloc_struct(&mut self, fields: Vec<Value>) -> StructId {
         let fields = self.own_all(fields);
-        StructId(self.alloc_object(Object::Struct(fields)))
+        StructId(self.alloc_object(Object::Struct(Rc::new(fields))))
     }
 
     /// Allocates an array of `elements` on the heap, returning its handle.
@@ -523,7 +548,7 @@ impl Heap {
     /// The payload, when present, is taken rather than copied: whatever
     /// produced it (the operand stack) hands over ownership, exactly as a
     /// struct's fields are handed over.
-    pub fn alloc_enum(&mut self, tag: u32, payload: Option<Value>) -> EnumId {
+    pub fn alloc_enum(&mut self, tag: u64, payload: Option<Value>) -> EnumId {
         let payload = payload.map(|payload| self.own(payload));
         EnumId(self.alloc_object(Object::Enum {
             tag,
@@ -534,7 +559,7 @@ impl Heap {
 
     /// The discriminant tag of the enum behind a handle, or `None` when the
     /// handle does not name one.
-    pub fn enum_tag(&self, id: EnumId) -> Option<u32> {
+    pub fn enum_tag(&self, id: EnumId) -> Option<u64> {
         match self.slots.get(id.0 as usize) {
             Some(Some(Object::Enum { tag, .. })) => Some(*tag),
             _ => None,
@@ -690,6 +715,54 @@ impl Heap {
         true
     }
 
+    /// Hands one hold on a capture cell to a callback-state tree.
+    ///
+    /// The hold is the caller's, transferred rather than duplicated: everything
+    /// that goes into a state tree is *moved* there, and a cell moves the same
+    /// way. What the tree gets is the handle plus the release that puts the hold
+    /// back, which it runs when the last clone of the node goes.
+    pub fn cell_into_native_state(&mut self, id: CellId) -> kira_runtime_abi::NativeCell {
+        let released = Arc::clone(&self.released_cells);
+        kira_runtime_abi::NativeCell::from_vm(u64::from(id.0), move |handle| {
+            let mut handles = match released.handles.lock() {
+                Ok(handles) => handles,
+                // A panic while the list was held leaves the list itself intact:
+                // it is a `Vec<u32>` and every write to it is one push. Dropping
+                // this release instead would leak the cell.
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            handles.push(handle as u32);
+            // Raised while the lock is held, so a drain that sees a count sees
+            // the handle it counts.
+            released.pending.fetch_add(1, Ordering::Release);
+        })
+    }
+
+    /// Releases every cell a callback-state tree has finished with.
+    ///
+    /// Runs once per instruction, so a release is never more than one
+    /// instruction late. The idle cost is the relaxed load that finds nothing.
+    pub fn drain_released_cells(&mut self) {
+        while self.released_cells.pending.load(Ordering::Acquire) > 0 {
+            let batch = {
+                let mut handles = match self.released_cells.handles.lock() {
+                    Ok(handles) => handles,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                self.released_cells
+                    .pending
+                    .fetch_sub(handles.len(), Ordering::Release);
+                std::mem::take(&mut *handles)
+            };
+            // Freeing one of these can free a snapshot holding a tree node,
+            // which records more releases, so this drains until nothing is left
+            // rather than once.
+            for handle in batch {
+                self.free_cell(CellId(handle));
+            }
+        }
+    }
+
     /// Releases one hold on a capture cell, dropping its payload with the last.
     ///
     /// Bounded by the program's nesting depth for every value a cell can hold
@@ -755,8 +828,11 @@ impl Heap {
 
     /// The value of field `index` of a struct, or `None` when the handle does
     /// not name a struct with that many fields.
-    pub fn field(&self, id: StructId, index: u16) -> Option<Value> {
-        self.fields(id).get(index as usize).copied()
+    pub fn field(&self, id: StructId, index: u64) -> Option<Value> {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.fields(id).get(index))
+            .copied()
     }
 
     /// Replaces field `index` of a struct, dropping what was there, and
@@ -764,21 +840,56 @@ impl Heap {
     ///
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name a struct with that field.
-    pub fn set_field(&mut self, id: StructId, index: u16, value: Value) -> bool {
+    pub fn set_field(&mut self, id: StructId, index: u64, value: Value) -> bool {
         let value = self.own(value);
+        if self.field(id, index).is_none() {
+            return false;
+        }
+        // Fields of this struct's own before anything lands in them: a write
+        // through one handle must not be visible through another that copied it.
+        self.make_struct_unique(id);
+        // Read *after* unsharing. The handle in the shared block belongs to
+        // every holder of it; dropping that one would free the storage the other
+        // holders are still reading.
         let Some(previous) = self.field(id, index) else {
             return false;
         };
         self.drop_value(previous);
         match self.slots.get_mut(id.0 as usize) {
-            Some(Some(Object::Struct(fields))) => match fields.get_mut(index as usize) {
-                Some(slot) => {
-                    *slot = value;
-                    true
-                }
+            Some(Some(Object::Struct(fields))) => match Rc::get_mut(fields) {
+                // Unique by the call above, so this is the writer's own block.
+                Some(fields) => match usize::try_from(index)
+                    .ok()
+                    .and_then(|index| fields.get_mut(index))
+                {
+                    Some(slot) => {
+                        *slot = value;
+                        true
+                    }
+                    None => false,
+                },
                 None => false,
             },
             _ => false,
+        }
+    }
+
+    /// Gives a struct fields of its own, if it is sharing them.
+    ///
+    /// The counterpart of [`Heap::make_array_unique`], and the same shape: the
+    /// block moves, the handle does not, so every other holder of this id keeps
+    /// reading the block it already had and no holder has to be found.
+    pub fn make_struct_unique(&mut self, id: StructId) {
+        let shared = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Struct(fields))) if Rc::strong_count(fields) > 1 => Rc::clone(fields),
+            _ => return,
+        };
+        let mut copies = Vec::with_capacity(shared.len());
+        for field in shared.iter() {
+            copies.push(self.copy_value(*field));
+        }
+        if let Some(Some(Object::Struct(fields))) = self.slots.get_mut(id.0 as usize) {
+            *fields = Rc::new(copies);
         }
     }
 
@@ -808,6 +919,11 @@ impl Heap {
         };
         self.freed += 1;
         self.free_list.push(id.0);
+        // Only the last holder of the block owns what is in it. Another handle
+        // still reading these fields would find them freed underneath it.
+        let Ok(fields) = Rc::try_unwrap(fields) else {
+            return;
+        };
         for field in fields {
             self.drop_value(field);
         }
@@ -858,13 +974,16 @@ impl Heap {
                 let cloned = self.get(id).to_owned();
                 Value::Str(self.alloc(cloned))
             }
+            // The fields are shared rather than copied, on the array's terms
+            // below: a fresh handle onto the same block, and the first writer
+            // through either handle buys fields of its own
+            // (`make_struct_unique`).
             Value::Struct(id) => {
-                let fields = self.fields(id).to_vec();
-                let copies = fields
-                    .into_iter()
-                    .map(|field| self.copy_value(field))
-                    .collect();
-                Value::Struct(self.alloc_struct(copies))
+                let shared = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Struct(fields))) => Rc::clone(fields),
+                    _ => Rc::new(Vec::new()),
+                };
+                Value::Struct(StructId(self.alloc_object(Object::Struct(shared))))
             }
             // The elements are shared rather than copied: a fresh handle onto
             // the same ones, and whichever array is written first copies them

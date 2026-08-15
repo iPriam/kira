@@ -22,9 +22,8 @@ fn harness() -> PathBuf {
 
 /// Runs the shipped binary against the harness with this checkout's Foundation.
 ///
-/// Pinned rather than discovered: the harness exercises the runner Foundation
-/// generates, and an installed toolchain's copy is whatever was last installed
-/// rather than what this tree says.
+/// Pinned rather than discovered: the harness exercises its own test runner,
+/// and an installed toolchain's Foundation is not the test package's source.
 fn kira(args: &[&str]) -> std::process::Output {
     let foundation = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../foundation")
@@ -35,6 +34,44 @@ fn kira(args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("run kira")
+}
+
+/// The FFI harness package, relative to this crate.
+///
+/// A second suite beside the first, and hybrid-only for a reason: every case in
+/// it mixes `@Native` and `@Runtime`, which pure vm and pure llvm refuse. What
+/// it exercises is the seam itself — a struct returned by value from native
+/// code, an enum crossing into a VM closure, an array written through a
+/// `borrow mut` parameter and read back on the other side — which no
+/// single-engine suite reaches, because on one engine there is no crossing.
+fn ffi_harness() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/ffi-harness")
+}
+
+/// Every case in the FFI harness passes on the hybrid engine.
+///
+/// The tally is asserted whole, as the suite above does, so a file that stops
+/// being compiled fails this rather than quietly shrinking the run.
+#[test]
+fn the_ffi_harness_passes_on_the_hybrid_engine() {
+    let path = ffi_harness();
+    let path = path.to_str().expect("a utf-8 path");
+    let output = kira(&["test", "--backend", "hybrid", path]);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "the ffi harness did not run: {}\n{stdout}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tally = stdout.lines().last().unwrap_or_default().to_owned();
+    assert!(
+        tally.contains("0 failed"),
+        "the ffi harness reported failures: {tally}"
+    );
+    assert_eq!(
+        tally, "267 passed, 0 failed, 0 skipped, 267 total",
+        "the ffi harness tally changed"
+    );
 }
 
 /// The last line of a run, which is the suite's tally.
@@ -61,20 +98,8 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert!(
-        vm.contains("0 failed"),
-        "the harness reported failures on the vm: {vm}"
-    );
+    assert_eq!(vm, "1210 passed, 0 failed, 0 skipped, 1210 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
-    // A guard on the port itself: the areas ported so far carry over a thousand
-    // cases, so a tally an order of magnitude smaller means files stopped being
-    // compiled rather than that the suite got faster.
-    let passed: usize = vm
-        .split_whitespace()
-        .next()
-        .and_then(|count| count.parse().ok())
-        .unwrap_or_default();
-    assert!(passed > 1000, "only {passed} cases ran: {vm}");
 }
 
 /// The checksum run prints the same bytes on both engines.

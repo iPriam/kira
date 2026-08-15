@@ -6,10 +6,11 @@
 //! developer's real home is never read or written.
 //!
 //! What "on PATH" means splits by host, so the tests do too: the startup-file
-//! tests are unix's, and the user-environment test is Windows'. The Windows one
-//! is the only test here that touches state outside its temp trees — the user's
-//! own `Path`, which is where that host keeps this — so it restores what it
-//! found, on a failing assert as well as a passing one.
+//! tests are unix's, and the user-environment test is Windows'. On Windows the
+//! one thing a test here touches outside its temp trees is the user's own
+//! `Path`, which is where that host keeps this, so every test that installs
+//! takes [`UserPathGuard`] and restores what it found — on a failing assert as
+//! well as a passing one.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,6 +45,73 @@ impl Drop for TempTree {
     }
 }
 
+/// The user `Path` the guard's holder found, put back when it ends — on a
+/// failing assert too, because `Drop` runs while the panic unwinds. One test at
+/// a time may touch the user `Path`.
+///
+/// It is one registry value shared by the whole machine, so two tests editing it
+/// concurrently interleave: the second reads a `Path` the first has already
+/// replaced, and both restore whichever value they happened to read first.
+/// Holding this for the guard's life makes them run in turn.
+///
+/// Every test that installs holds it, not only the one that asserts about the
+/// `Path`: on this host `sinstall` configures the user environment whatever the
+/// test went on to check, so an unguarded install is an unrestored one.
+#[cfg(windows)]
+struct UserPathGuard {
+    original: Option<String>,
+    /// Held for the guard's life; released when the `Path` is restored.
+    ///
+    /// Poison is ignored: a test that panicked mid-edit leaves the value its own
+    /// guard restores, and refusing the lock afterwards would turn one failure
+    /// into every later one.
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(windows)]
+impl UserPathGuard {
+    fn take() -> Self {
+        static USER_PATH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = USER_PATH
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Self {
+            original: read_user_path(),
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for UserPathGuard {
+    fn drop(&mut self) {
+        let value = self.original.clone().unwrap_or_default();
+        let _ = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(
+                "[Environment]::SetEnvironmentVariable('Path', \
+                 $env:KIRA_RESTORED_USER_PATH, 'User')",
+            )
+            .env("KIRA_RESTORED_USER_PATH", value)
+            .output();
+    }
+}
+
+/// The user's persistent `Path`, unexpanded, as knvm reads it.
+#[cfg(windows)]
+fn read_user_path() -> Option<String> {
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg("[Environment]::GetEnvironmentVariable('Path', 'User')")
+        .output()
+        .expect("run powershell");
+    assert!(output.status.success(), "read the user Path");
+    let value = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 /// The repository root, two levels above this crate.
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,6 +124,10 @@ fn repository_root() -> PathBuf {
 /// The three tools land under the names this host runs them by, and run.
 #[test]
 fn sinstall_lands_both_tools_and_configures_the_path() {
+    // This installs for real, so on Windows it edits the user `Path` exactly as
+    // the test that asserts about it does.
+    #[cfg(windows)]
+    let _guard = UserPathGuard::take();
     let kira_home = TempTree::create("home");
     let shell_home = TempTree::create("shell");
 
@@ -258,66 +330,6 @@ mod startup_file {
 #[cfg(windows)]
 mod user_environment {
     use super::*;
-
-    /// The user `Path` this test found, put back when the test ends — on a
-    /// failing assert too, because `Drop` runs while the panic unwinds.
-    /// One test at a time may touch the user `Path`.
-    ///
-    /// It is one registry value shared by the whole machine, so two tests
-    /// editing it concurrently interleave: the second reads a `Path` the first
-    /// has already replaced, and both restore whichever value they happened to
-    /// read first. Holding this for the guard's life makes them run in turn.
-    static USER_PATH: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct UserPathGuard {
-        original: Option<String>,
-        /// Held for the guard's life; released when the `Path` is restored.
-        ///
-        /// Poison is ignored: a test that panicked mid-edit leaves the value
-        /// its own guard restores, and refusing the lock afterwards would turn
-        /// one failure into every later one.
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl UserPathGuard {
-        fn take() -> Self {
-            let lock = USER_PATH
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            Self {
-                original: read_user_path(),
-                _lock: lock,
-            }
-        }
-    }
-
-    impl Drop for UserPathGuard {
-        fn drop(&mut self) {
-            let value = self.original.clone().unwrap_or_default();
-            let _ = Command::new("powershell.exe")
-                .args(["-NoProfile", "-NonInteractive", "-Command"])
-                .arg(
-                    "[Environment]::SetEnvironmentVariable('Path', \
-                     $env:KIRA_RESTORED_USER_PATH, 'User')",
-                )
-                .env("KIRA_RESTORED_USER_PATH", value)
-                .output();
-        }
-    }
-
-    /// The user's persistent `Path`, unexpanded, as knvm reads it.
-    fn read_user_path() -> Option<String> {
-        let output = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command"])
-            .arg("[Environment]::GetEnvironmentVariable('Path', 'User')")
-            .output()
-            .expect("run powershell");
-        assert!(output.status.success(), "read the user Path");
-        let value = String::from_utf8_lossy(&output.stdout)
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
-        (!value.is_empty()).then_some(value)
-    }
 
     /// The bin directory lands on the user's `Path` and a second run leaves it
     /// alone — the entry the user would otherwise accumulate one copy of per

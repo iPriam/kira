@@ -9,10 +9,20 @@
 //! sourced `env` script on unix, and by the user's own `Path` in the registry
 //! on Windows. `path_setup` owns that half.
 //!
-//! Everything here is idempotent. The binaries are replaced atomically (staged
-//! beside the destination, then renamed over it, so replacing the very `knvm`
-//! that is running works on unix), and the PATH entry is added only where it is
+//! Everything here is idempotent. The binaries are replaced by staging beside
+//! the destination and renaming, and the PATH entry is added only where it is
 //! not already present.
+//!
+//! # Replacing the running `knvm`
+//!
+//! This command's whole job is to replace the executable that is running it.
+//! Unix lets a rename land on a busy binary; Windows refuses to open the file
+//! that backs a running image for delete, so a rename *onto* it fails with
+//! access denied — which is `sinstall` failing at exactly the step it exists
+//! for. Windows does allow the running image to be renamed *away*, so that is
+//! what happens: the old tool is moved aside, the new one takes its name, and
+//! the displaced file is deleted now if it can be and on the next run if it
+//! cannot.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -90,6 +100,8 @@ pub fn sinstall(
     std::fs::create_dir_all(&bin_dir)
         .map_err(|error| InstallError::io("create", &bin_dir, error))?;
 
+    sweep_displaced(&bin_dir);
+
     let debug_dir = target_dir(&checkout).join("debug");
     for (tool, installed) in TOOLS {
         let name = kira_toolchain::executable_name(installed);
@@ -99,13 +111,11 @@ pub fn sinstall(
                 expected: built_binary,
             });
         }
-        // Stage beside the destination, then rename over it: replacing the
-        // running `knvm` in place this way is safe on unix, where a plain copy
-        // onto a busy binary is not.
-        let staged = bin_dir.join(format!(".incoming-{name}"));
+        let staged = bin_dir.join(format!("{DISPLACED_PREFIX}incoming-{name}"));
         std::fs::copy(&built_binary, &staged)
             .map_err(|error| InstallError::io("copy the tool to", &staged, error))?;
         let destination = bin_dir.join(&name);
+        displace(&destination)?;
         std::fs::rename(&staged, &destination)
             .map_err(|error| InstallError::io("move the tool into", &destination, error))?;
     }
@@ -113,4 +123,64 @@ pub fn sinstall(
     let path = path_setup::configure(kira_home, &bin_dir, shell_home, shell)?;
 
     Ok(SelfInstalled { bin_dir, path })
+}
+
+/// The prefix every staged and displaced file carries, so a sweep can tell
+/// this command's leavings from an installed tool by name alone.
+const DISPLACED_PREFIX: &str = ".knvm-";
+
+/// Moves an installed tool out of the way of its replacement.
+///
+/// A tool that is not installed yet needs no room made. One that is running —
+/// the `knvm` performing this install, every time — is renamed rather than
+/// deleted, because the running image holds the file open under its old name
+/// and the new name is what the next run will resolve.
+fn displace(destination: &Path) -> Result<(), BinstallError> {
+    if !destination.exists() {
+        return Ok(());
+    }
+    let Some(name) = destination.file_name().and_then(|name| name.to_str()) else {
+        return Err(InstallError::io(
+            "read the name of",
+            destination,
+            std::io::Error::from(std::io::ErrorKind::InvalidInput),
+        )
+        .into());
+    };
+    let Some(parent) = destination.parent() else {
+        return Err(InstallError::io(
+            "read the directory of",
+            destination,
+            std::io::Error::from(std::io::ErrorKind::InvalidInput),
+        )
+        .into());
+    };
+    let displaced = parent.join(format!(
+        "{DISPLACED_PREFIX}old-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&displaced);
+    std::fs::rename(destination, &displaced).map_err(|error| {
+        InstallError::io("move the installed tool aside from", destination, error)
+    })?;
+    // The running image cannot be deleted until it exits, and it is this
+    // process: the next run's sweep is what clears it.
+    let _ = std::fs::remove_file(&displaced);
+    Ok(())
+}
+
+/// Deletes what earlier installs left behind, as far as the host allows.
+fn sweep_displaced(bin_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(bin_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(DISPLACED_PREFIX) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }

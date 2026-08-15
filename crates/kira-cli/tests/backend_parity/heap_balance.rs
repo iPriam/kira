@@ -1,34 +1,17 @@
 //! The native heap balances, the way the VM's always has.
 //!
-//! The VM proves this on its own: its heap counts allocations and frees, and
-//! `current == 0` at exit says every object it made came back. Native code had
-//! no equivalent, and a struct case in `structs.rs` used to say so outright —
-//! *"the VM proves its heap balances; the native backend has no such proof, so
-//! this is what stands in for one"*. A native leak was invisible until
-//! something ran out of memory.
-//!
-//! `KIRA_HEAP_REPORT` asks a native run for that proof: the runtime counts real
-//! allocations and real frees — never a share bump, never an inline enum handle
-//! that was never allocated — and the emitted `main` reports the balance just
-//! before it returns. A hybrid program's native half is a shared library with
-//! no `main`, so the host asks on its behalf when the run ends.
+//! The VM proves this with its heap counters. `KIRA_HEAP_REPORT` asks a native
+//! run for the same proof: the runtime counts real allocations and real frees —
+//! never a share bump, never an inline enum handle that was never allocated —
+//! and the emitted `main` reports the balance just before it returns. A hybrid
+//! program's native half is a shared library with no `main`, so the host asks
+//! on its behalf when the run ends.
 //!
 //! These cases exist to be run *before* changing who emits a free. That is
 //! their whole point: a rewrite of the drop logic either keeps them at zero or
 //! is caught here rather than in production.
 
-use std::process::Output;
-
-use crate::{kira, write_source};
-
-/// Runs `source` on `backend` with the heap report switched on.
-fn run_with_report(source_path: &std::path::Path, backend: &str) -> Output {
-    kira()
-        .env("KIRA_HEAP_REPORT", "1")
-        .args(["run", "--backend", backend, source_path.to_str().unwrap()])
-        .output()
-        .expect("run kira")
-}
+use crate::{assert_native_heap_balanced, run_on_with_heap_report, write_source};
 
 /// Asserts `source` allocates and frees the same number of objects.
 ///
@@ -37,21 +20,8 @@ fn run_with_report(source_path: &std::path::Path, backend: &str) -> Output {
 fn assert_balances(source: &str) {
     let path = write_source(source);
     for backend in ["llvm", "hybrid"] {
-        let run = run_with_report(&path, backend);
-        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
-        assert!(
-            stderr.contains("live=0"),
-            "the {backend} backend did not balance its heap:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("leaked"),
-            "the {backend} backend leaked:\n{stderr}"
-        );
-        assert_eq!(
-            run.status.code(),
-            Some(0),
-            "an unbalanced run exits non-zero; {backend} stderr:\n{stderr}"
-        );
+        let run = run_on_with_heap_report(&path, backend);
+        assert_native_heap_balanced(backend, &run);
     }
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 }
@@ -73,23 +43,15 @@ function main() {
 }
 "#,
     );
-    let run = run_with_report(&path, "llvm");
-    let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+    let run = run_on_with_heap_report(&path, "llvm");
+    let report = assert_native_heap_balanced("llvm", &run);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 
-    assert!(
-        stderr.contains("heap allocated="),
-        "the report must be emitted when asked for:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("not compiled into this build"),
-        "a test build must be counting, or every balance assertion is vacuous:\n{stderr}"
-    );
     // One string, allocated and released — a run that counted nothing would
     // report zero allocations and still say `live=0`.
-    assert!(
-        stderr.contains("allocated=1"),
-        "the one string this program makes must be counted:\n{stderr}"
+    assert_eq!(
+        report.allocated, 1,
+        "the one string this program makes must be counted"
     );
 }
 
@@ -136,6 +98,37 @@ function main() {
         i = i + 1
     }
     print(acc.name)
+    return
+}
+"#,
+    );
+}
+
+/// Aggregate values erased into `Any` keep their nested clone and free leaves
+/// when the containing struct is copied repeatedly.
+#[test]
+fn aggregate_any_copies_balance() {
+    assert_balances(
+        r#"
+struct Pair {
+    let count: Int
+    let label: String
+}
+
+struct Slot {
+    let payload: Any
+}
+
+@Main
+function main() {
+    var i = 0
+    while i < 8 {
+        let pair = Slot(payload: Pair(count: i, label: "pair"))
+        let pairCopy = pair
+        let rows = Slot(payload: [[i, i + 1], [i + 2]])
+        let rowsCopy = rows
+        i = i + 1
+    }
     return
 }
 "#,

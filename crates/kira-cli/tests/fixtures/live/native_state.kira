@@ -1,0 +1,18 @@
+struct BrowserState {
+    var title: String
+    var clicks: Int
+}
+
+@Main
+function main() {
+    let boxed = nativeState(BrowserState { title: "Harmony Browser" clicks: 1 })
+    let handle = nativeUserData(boxed)
+    var state = nativeRecover<BrowserState>(handle)
+    print(state.title)
+    print(state.clicks)
+    state.clicks = state.clicks + 2
+    var after = nativeRecover<BrowserState>(handle)
+    print(after.clicks)
+    nativeStateFree(boxed)
+    return
+}
