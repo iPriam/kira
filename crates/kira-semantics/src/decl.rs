@@ -218,8 +218,7 @@ impl<'a> Analyzer<'a> {
                 .methods
                 .iter()
                 .map(|method| OwnMethod {
-                    name: self.interner.resolve(method.name).to_owned(),
-                    arity: method.params.len(),
+                    key: self.member_key(self.interner.resolve(method.name), &method.params),
                 })
                 .collect();
             resolved.push(ResolvedStruct {

@@ -11,11 +11,25 @@
 
 use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{Callee, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId};
+use kira_semantics_model::hir::{
+    Callee, FuncId, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId,
+};
 use kira_syntax_model::ast::{CallArg, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
+use crate::typeck::overloads::OverloadFailure;
+
+/// What a written call name resolved to.
+enum CallTarget {
+    /// The declaration the call means, and the parameter types its arguments
+    /// are checked against.
+    Chosen(FuncId, Vec<Type>),
+    /// Several declarations fit the call equally well.
+    Ambiguous(Vec<FuncId>),
+    /// Nothing answers to the name here.
+    Unknown,
+}
 
 impl Analyzer<'_> {
     /// Records a receiver-writeback place on a just-built call whose callee
@@ -477,17 +491,51 @@ impl Analyzer<'_> {
         args: &[CallArg],
         span: kira_source::Span,
     ) -> HirExprId {
-        let sig = self
-            .lookup_function(name)
-            .map(|(id, params, _)| (id, params.to_vec()));
-        let Some((id, params)) = sig else {
+        self.analyze_user_call_from_syntax_with(ctx, name, leading, args, &[], span)
+    }
+
+    /// [`Analyzer::analyze_user_call_from_syntax`], plus arguments that occupy
+    /// the *last* parameter slots and are already analyzed.
+    ///
+    /// A construction's trailing children are the case: they fill an `init`'s
+    /// content parameter, and no written expression stands for them, so they
+    /// arrive as a value rather than as syntax to check an ownership mode
+    /// against.
+    pub(crate) fn analyze_user_call_from_syntax_with(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        leading: &[HirExprId],
+        args: &[CallArg],
+        trailing: &[HirExprId],
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let (id, params) = match self.resolve_call_target(ctx, name, leading, args, trailing) {
+            CallTarget::Chosen(id, params) => (id, params),
+            // Nothing decides which declaration this call means, so it has no
+            // meaning. The arguments are still analyzed so their own mistakes
+            // are reported beside the one about the call.
+            CallTarget::Ambiguous(winners) => {
+                let list = self.overload_list(&winners);
+                self.emit(
+                    span,
+                    "KSEM275",
+                    format!("this call of `{name}` fits {list} equally well"),
+                );
+                for arg in args {
+                    self.analyze_expr(ctx, arg.value);
+                }
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
             // No signature to check against: still analyze every argument so
             // the mistakes inside them are reported alongside the bad call. A
             // label cannot bind to a callee that does not exist, so it is
             // dropped here and `analyze_user_call` reports the missing function.
-            let mut all = leading.to_vec();
-            all.extend(args.iter().map(|arg| self.analyze_expr(ctx, arg.value)));
-            return self.analyze_user_call(name, &all, span);
+            CallTarget::Unknown => {
+                let mut all = leading.to_vec();
+                all.extend(args.iter().map(|arg| self.analyze_expr(ctx, arg.value)));
+                return self.analyze_user_call(name, &all, span);
+            }
         };
         // Arguments bind by position; a label on one is decorative. See
         // `super::labels` for the measurement behind that.
@@ -534,6 +582,9 @@ impl Analyzer<'_> {
                 _ => all.push(self.analyze_expr(ctx, arg)),
             }
         }
+        // Arguments the caller already analyzed take the slots after the written
+        // ones, before any default is reached for.
+        all.extend_from_slice(trailing);
         // A positional call that omitted trailing arguments fills them from
         // their defaults, left to right, stopping at the first parameter that
         // declares none — a genuine shortfall the arity check then reports.
@@ -550,11 +601,56 @@ impl Analyzer<'_> {
                 None => break,
             }
         }
-        let call = self.analyze_user_call(name, &all, span);
+        // The declaration was already chosen, from the argument types as
+        // written. Re-choosing here would see them *after* each was coerced
+        // into the parameter it was checked against, which is a rubber stamp
+        // rather than a second opinion.
+        let call = self.analyze_user_call_hinted(name, &all, span, Some(id));
         for writeback in writebacks {
             self.add_writeback(call, writeback);
         }
         call
+    }
+
+    /// The declaration a call names, and the parameter types its arguments are
+    /// analyzed against.
+    ///
+    /// A name declared once answers immediately. An overloaded one is resolved
+    /// from the types its arguments have on their own, because the parameter a
+    /// given argument is checked against is exactly what is being decided —
+    /// see [`Analyzer::try_argument_types`].
+    fn resolve_call_target(
+        &mut self,
+        ctx: &FnCtx,
+        name: &str,
+        leading: &[HirExprId],
+        args: &[CallArg],
+        trailing: &[HirExprId],
+    ) -> CallTarget {
+        let candidates = self.visible_overloads(name);
+        let id = match candidates.as_slice() {
+            [] => return CallTarget::Unknown,
+            [only] => *only,
+            _ => {
+                let mut actual = self.try_argument_types(ctx, leading, args);
+                actual.extend(
+                    trailing
+                        .iter()
+                        .map(|&value| self.program.expr(value).type_of()),
+                );
+                match self.resolve_overload(&candidates, &actual) {
+                    Ok(id) => id,
+                    Err(OverloadFailure::Ambiguous(winners)) => {
+                        return CallTarget::Ambiguous(winners);
+                    }
+                    // A call that fits nothing still needs a signature to be
+                    // checked against, so the first declaration speaks and
+                    // reports the mismatch against what it expected.
+                    Err(OverloadFailure::None) => candidates[0],
+                }
+            }
+        };
+        CallTarget::Chosen(id, self.param_types(id))
     }
 
     /// Resolves the caller storage a `borrow mut` argument names, recording
@@ -642,14 +738,30 @@ impl Analyzer<'_> {
         args: &[HirExprId],
         span: kira_source::Span,
     ) -> HirExprId {
+        self.analyze_user_call_hinted(name, args, span, None)
+    }
+
+    /// Type-checks a call whose arguments are analyzed.
+    ///
+    /// `chosen` is the declaration an earlier pass already resolved this call
+    /// to. It is honored unless class specialization renamed the callee, in
+    /// which case the specialized copy is a different function and is looked up
+    /// as one.
+    fn analyze_user_call_hinted(
+        &mut self,
+        name: &str,
+        args: &[HirExprId],
+        span: kira_source::Span,
+        chosen: Option<FuncId>,
+    ) -> HirExprId {
         // A program may still declare a function called `sqrt`; a *call* of one
         // reaches the primitive only when nothing else answers to the name, so
         // the check runs after the user table below has been consulted.
-        let name = &self.specialized_name(name, args);
-        let Some((id, params, ret)) = self
-            .lookup_function(name)
-            .map(|(id, params, ret)| (id, params.to_vec(), ret))
-        else {
+        let specialized = self.specialized_name(name, args);
+        let chosen = chosen.filter(|_| specialized == name);
+        let name = &specialized;
+        let candidates = self.visible_overloads(name);
+        if candidates.is_empty() {
             if let Some(op) = kira_runtime_abi::MathOp::from_name(name) {
                 return self.analyze_math_call(op, args, span);
             }
@@ -662,6 +774,37 @@ impl Analyzer<'_> {
                 format!("call to undefined function `{name}`"),
             );
             return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // The arguments are already analyzed here, so choosing among the
+        // declarations of an overloaded name is a comparison rather than a
+        // guess. A name declared once returns its one candidate untouched and
+        // reports its own arity and type mistakes below, as it always did.
+        let actual: Vec<Type> = args
+            .iter()
+            .map(|&arg| self.program.expr(arg).type_of())
+            .collect();
+        let id = match chosen
+            .map(Ok)
+            .unwrap_or_else(|| self.resolve_overload(&candidates, &actual))
+        {
+            Ok(id) => id,
+            Err(OverloadFailure::Ambiguous(winners)) => {
+                let list = self.overload_list(&winners);
+                self.emit(
+                    span,
+                    "KSEM275",
+                    format!("this call of `{name}` fits {list} equally well"),
+                );
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
+            // Nothing fits. The first candidate carries the diagnostic, so an
+            // overloaded name still says what it expected rather than only that
+            // nothing matched.
+            Err(OverloadFailure::None) => candidates[0],
+        };
+        let (params, ret) = {
+            let (params, ret) = self.signature_of(id);
+            (params.to_vec(), ret)
         };
         self.link_function(id, span);
         let mut args = args.to_vec();

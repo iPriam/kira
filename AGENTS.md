@@ -16,6 +16,8 @@ All the work that you do, the commits, prs... will be public and seen therefore 
 
 Every issue that was pre existing is yours to fix, do not try to avoid it because it is pre existing or to separate new issues from pre exising ones.
 
+Every kira syntax/behavior MUST always be in `tests-kik` harness(es), if you find pre existing syntax or behavior that isn't in there, you MUST add it immediatly and not deffer it as we have not assured completeness of the harness.
+
 ## Git
 
 Before running or suggesting any Git command except `git diff` or `git status`, read `working-with-git`.

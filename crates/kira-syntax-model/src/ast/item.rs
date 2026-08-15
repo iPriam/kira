@@ -95,6 +95,16 @@ pub struct ConstructDecl {
     /// The behaviour members: computed block-bodied bridges (`let node: Any { … }`,
     /// each a zero-argument method read as a property) and `function` members.
     pub methods: Vec<ConstructMethod>,
+    /// The secondary initializers: `init(…) { … }` members, in written order.
+    ///
+    /// The parenthesized header is the declaration's **primary** way to be
+    /// constructed — the one that fills its stored members directly. Each `init`
+    /// is another way, told apart from the primary and from each other by what
+    /// it takes, and its body ends in a construction of this same declaration.
+    ///
+    /// They are functions returning the declaration, so they carry no receiver:
+    /// an initializer runs to produce a value rather than on one.
+    pub inits: Vec<Function>,
     /// The families this one extends, in written order.
     ///
     /// A family that extends another adds its parent's requirements and members

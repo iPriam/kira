@@ -20,6 +20,14 @@ use crate::ownership::LocalOwnership;
 
 /// Per-function analysis state: the growing local table and the lexical scope
 /// stack mapping names to slots.
+///
+/// Cloneable so a frame can be **tried**: overload resolution needs the types
+/// of a call's arguments before it knows which declaration is being called, and
+/// analyzing them moves locals and declares temporaries. The trial runs on a
+/// copy, which is then dropped — see [`Analyzer::try_argument_types`].
+///
+/// [`Analyzer::try_argument_types`]: crate::analyze::Analyzer
+#[derive(Clone)]
 pub(crate) struct FnCtx {
     pub(crate) locals: Vec<HirLocal>,
     /// Ownership state per local, positionally aligned with `locals`.

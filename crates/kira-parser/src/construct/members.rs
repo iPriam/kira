@@ -127,6 +127,43 @@ impl Parser<'_> {
         body.deferred.push(DeferredConstruct { label, span });
     }
 
+    /// Parses `init(params) { body }`, with `init` at the cursor.
+    ///
+    /// An initializer is a function returning the declaration it is written in,
+    /// so it writes no result type: there is only one thing it can produce, and
+    /// restating it would be the declaration's name twice on one line. The
+    /// result is filled in by analysis, which holds the declaration's id.
+    pub(super) fn parse_construct_init(&mut self, body: &mut ConstructBody) {
+        let start = self.current().span;
+        let name_span = start;
+        let name = self.intern_span(name_span);
+        self.bump(); // `init`
+        let params = self.parse_params();
+        if self.at(TokenKind::Arrow) || self.at(TokenKind::Colon) {
+            self.error(
+                self.current().span,
+                "KPAR067",
+                "an `init` writes no result type: it produces the declaration it is written in",
+            );
+            self.parse_return_type();
+        }
+        let block = self.parse_block();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        body.inits.push(Function {
+            name,
+            name_span,
+            is_main: false,
+            is_async: false,
+            export: None,
+            foreign: None,
+            execution: Execution::Inherited,
+            params,
+            return_type: None,
+            body: block,
+            span,
+        });
+    }
+
     /// Parses a `requires { … }` section, with `requires` at the cursor.
     ///
     /// Every entry is a bodyless `function` signature, and each becomes exactly

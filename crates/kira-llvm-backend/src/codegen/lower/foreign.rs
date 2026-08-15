@@ -28,8 +28,12 @@ impl FunctionLowering<'_, '_> {
         let result_spec = signature.result();
 
         if self.codegen.unavailable.contains(&idx) {
-            let library = self.codegen.string_constant(import.library());
-            let symbol = self.codegen.string_constant(import.symbol());
+            // The trap helper reads these as C strings, so they are terminated
+            // here. A length-carrying Kira constant has no terminator, and the
+            // message then printed the library glued to whatever constant the
+            // module laid down after it.
+            let library = self.codegen.c_string_constant(import.library());
+            let symbol = self.codegen.c_string_constant(import.symbol());
             self.call(
                 self.codegen.runtime.trap_foreign_unavailable,
                 &mut [library, symbol],

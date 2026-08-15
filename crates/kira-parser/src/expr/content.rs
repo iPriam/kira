@@ -11,9 +11,17 @@
 use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{CallArg, Expr, ExprId};
+use kira_syntax_model::ast::{CallArg, Expr, ExprId, TrailingClosure};
 
 use crate::Parser;
+
+/// A `{ … }` with no `in`, in both the readings it may turn out to be.
+pub(crate) struct DeferredBrace {
+    /// The brace read as a construction's content items.
+    pub(crate) children: Vec<ExprId>,
+    /// The brace read as a zero-parameter closure, when it reads that way.
+    pub(crate) closure: Option<TrailingClosure>,
+}
 
 impl Parser<'_> {
     /// Whether the cursor sits on a `{` that opens a **content block** — a
@@ -109,6 +117,67 @@ impl Parser<'_> {
         self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()
     }
 
+    /// Parses the `{ … }` at the cursor both ways — as a construction's content
+    /// and as a zero-parameter closure body — and keeps the readings that hold.
+    ///
+    /// A `{` with no `in` means one of two things, and which one depends on the
+    /// callee: `HStack { Text("a") }` passes children, `doThing { print("a") }`
+    /// passes a closure. The parser does not know the callee, so it stops
+    /// guessing and carries both; analysis, which holds the signature, takes
+    /// the one the parameter asks for.
+    ///
+    /// A reading that does not parse is dropped, and its diagnostics with it.
+    /// Only when *neither* reads cleanly do the content reading's diagnostics
+    /// stand, because content is what a brace after a name means when nothing
+    /// else fits.
+    pub(crate) fn parse_deferred_brace(&mut self, args: &mut Vec<CallArg>) -> DeferredBrace {
+        let start = self.pos;
+        let mark = self.diagnostics.len();
+        let brace = self.current().span;
+
+        let block = self.parse_block();
+        let block_reads = self.diagnostics.len() == mark;
+        self.diagnostics.truncate(mark);
+        let after_block = self.pos;
+
+        self.pos = start;
+        let mut content_args = Vec::new();
+        let children = self.parse_trailing_block(&mut content_args);
+        let content_reads = self.diagnostics.len() == mark;
+        let after_content = self.pos;
+
+        let closure = block_reads.then(|| {
+            let span = Span::from_bounds(brace.start, self.previous_end());
+            TrailingClosure {
+                closure: self.tree.add_expr(Expr::Closure {
+                    params: Vec::new(),
+                    body: block,
+                    span,
+                }),
+                // The brace sits after every parenthesized argument and before
+                // any named fill written after it, which is exactly here.
+                slot: args.len() as u32,
+                content_args: content_args.len() as u32,
+            }
+        });
+        // Only the closure reads: the content reading was never what this is,
+        // so neither its nodes nor its diagnostics belong to the program.
+        if block_reads && !content_reads {
+            self.diagnostics.truncate(mark);
+            self.pos = after_block;
+            return DeferredBrace {
+                children: Vec::new(),
+                closure: closure.map(|mut trailing| {
+                    trailing.content_args = 0;
+                    trailing
+                }),
+            };
+        }
+        self.pos = after_content;
+        args.extend(content_args);
+        DeferredBrace { children, closure }
+    }
+
     /// Parses the braced block that closes a construction, returning its
     /// children and appending its `let field = value` overrides to `args`.
     ///
@@ -179,6 +248,7 @@ impl Parser<'_> {
                 type_args,
                 args,
                 children,
+                trailing_closure,
                 span: base_span,
             } = self.tree.expr(base).clone()
             else {
@@ -194,6 +264,7 @@ impl Parser<'_> {
                 type_args,
                 args,
                 children,
+                trailing_closure,
                 span,
             });
         }
@@ -224,9 +295,17 @@ impl Parser<'_> {
     fn parse_fill_value(&mut self) -> ExprId {
         if self.at(TokenKind::LBrace) && !self.at_closure_start() {
             let start = self.current().span;
-            let children = self.with_struct_literals(|parser| parser.parse_content_block());
+            let mut discard = Vec::new();
+            let brace =
+                self.with_struct_literals(|parser| parser.parse_deferred_brace(&mut discard));
             let span = Span::from_bounds(start.start, self.previous_end());
-            return self.tree.add_expr(Expr::Content { children, span });
+            return self.tree.add_expr(Expr::Content {
+                children: brace.children,
+                // A named fill *is* the argument, so where it sits among the
+                // others is already decided; only the reading is open.
+                closure: brace.closure.map(|trailing| trailing.closure),
+                span,
+            });
         }
         self.without_named_fills(|parser| parser.parse_expr())
     }
@@ -378,6 +457,7 @@ impl Parser<'_> {
             type_args,
             args,
             children: existing,
+            trailing_closure: existing_closure,
             span: base_span,
         } = self.tree.expr(base).clone()
         else {
@@ -385,11 +465,11 @@ impl Parser<'_> {
         };
         // A second content block on one construction is malformed; the first
         // already holds its children, so leave the base as it stands.
-        if !existing.is_empty() {
+        if !existing.is_empty() || existing_closure.is_some() {
             return None;
         }
         let mut args = args;
-        let children = self.parse_trailing_block(&mut args);
+        let brace = self.parse_deferred_brace(&mut args);
         let span = Span::from_bounds(base_span.start, self.previous_end());
         Some(self.tree.add_expr(Expr::Call {
             callee,
@@ -397,7 +477,8 @@ impl Parser<'_> {
             braced,
             type_args,
             args,
-            children,
+            children: brace.children,
+            trailing_closure: brace.closure,
             span,
         }))
     }

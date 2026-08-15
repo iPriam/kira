@@ -14,7 +14,14 @@ use super::{Analyzer, Callable, FieldDefault};
 /// The signature of a user function, resolved before bodies are checked so
 /// calls can be type-checked regardless of declaration order.
 pub(crate) struct FuncSig {
+    /// The name a call site writes, which several declarations may share.
     pub(crate) name: String,
+    /// The name this declaration alone answers to in the compiled program.
+    ///
+    /// Equal to [`name`](Self::name) for a name declared once. An overloaded
+    /// name gives every one of its declarations a mangled symbol, because a
+    /// backend has one symbol per function and two overloads are two functions.
+    pub(crate) symbol: String,
     pub(crate) params: Vec<Type>,
     /// How each parameter takes its argument, positionally aligned with
     /// `params`.
@@ -81,22 +88,35 @@ impl<'a> Analyzer<'a> {
                     .default
                     .map(|syntax| FieldDefault::new(syntax, callable.source))
             }));
-            let return_type = match &function.return_type {
-                Some(type_ref) => self.resolve_type_ref(*type_ref),
-                None => Type::Void,
+            // An `init(…)` writes no result type because it has only one: the
+            // declaration it initializes. Filling it here is what makes its
+            // body's `return Name(…)` an ordinary checked return.
+            let return_type = match (callable.initializes, &function.return_type) {
+                (Some(id), _) => Type::Struct(id),
+                (None, Some(type_ref)) => self.resolve_type_ref(*type_ref),
+                (None, None) => Type::Void,
             };
             let id = FuncId(self.sigs.len() as u32);
-            if self.sig_index.contains_key(&name) {
+            // Sharing a name is overloading; sharing a name *and* what it takes
+            // is redeclaring. Only the second is an error, because only the
+            // second leaves a call with no way to say which one it meant.
+            let twin = self.sig_index.get(&name).and_then(|ids| {
+                ids.iter()
+                    .find(|&&other| self.sigs[other.0 as usize].params == params)
+            });
+            if twin.is_some() {
                 self.emit(
                     function.name_span,
                     "KSEM003",
                     match callable.receiver {
-                        Some(_) => format!("`{name}` is already defined"),
-                        None => format!("function `{name}` is already defined"),
+                        Some(_) => format!("`{name}` is already defined with these parameters"),
+                        None => {
+                            format!("function `{name}` is already defined with these parameters")
+                        }
                     },
                 );
             } else {
-                self.sig_index.insert(name.clone(), id);
+                self.sig_index.entry(name.clone()).or_default().push(id);
             }
             let is_main = function.is_main;
             if is_main && main_seen {
@@ -108,6 +128,10 @@ impl<'a> Analyzer<'a> {
             }
             main_seen = main_seen || is_main;
             self.sigs.push(FuncSig {
+                // Filled by `name_overloads` once every declaration is in, so a
+                // symbol depends on the overload set rather than on which
+                // declaration happened to be read first.
+                symbol: name.clone(),
                 name,
                 params,
                 param_ownership,
@@ -121,6 +145,63 @@ impl<'a> Analyzer<'a> {
             // default lookup returns `None` for it — never a panic.
             self.param_defaults.push(param_defaults);
         }
+        self.name_overloads();
+    }
+
+    /// Gives every declaration of an overloaded name a symbol of its own.
+    ///
+    /// A backend has one symbol per function, so two declarations that share a
+    /// written name need two. The mangling names the parameter types rather
+    /// than a counter so the symbol is the same however the files were ordered,
+    /// and so a backtrace still says which overload it is standing in.
+    ///
+    /// A name declared once keeps its plain symbol. That is what leaves every
+    /// program that overloads nothing byte-identical to what it compiled to
+    /// before overloading existed.
+    fn name_overloads(&mut self) {
+        let overloaded: Vec<FuncId> = self
+            .sig_index
+            .values()
+            .filter(|ids| ids.len() > 1)
+            .flatten()
+            .copied()
+            .collect();
+        for id in overloaded {
+            let params = self.sigs[id.0 as usize].params.clone();
+            let mut symbol = self.sigs[id.0 as usize].name.clone();
+            for param in params {
+                symbol.push('$');
+                symbol.push_str(&self.program.types.type_name(param).replace(' ', "_"));
+            }
+            self.sigs[id.0 as usize].symbol = symbol;
+        }
+    }
+
+    /// Every declaration answering to `name` that this file may see.
+    ///
+    /// The visibility rule is [`Self::lookup_function`]'s, applied per
+    /// candidate: a bare name reaches only the packages this file imports, and
+    /// a qualified `Owner.method` is reached through a value whose type was
+    /// already gated.
+    pub(crate) fn visible_overloads(&self, name: &str) -> Vec<FuncId> {
+        let Some(ids) = self.sig_index.get(name) else {
+            return Vec::new();
+        };
+        if name.contains('.') {
+            return ids.clone();
+        }
+        ids.iter()
+            .copied()
+            .filter(|id| {
+                self.imports
+                    .sees(self.source, self.sigs[id.0 as usize].source)
+            })
+            .collect()
+    }
+
+    /// The symbol one declaration answers to in the compiled program.
+    pub(crate) fn function_symbol(&self, id: FuncId) -> String {
+        self.sigs[id.0 as usize].symbol.clone()
     }
 
     /// The mode a parameter declares.
@@ -150,13 +231,26 @@ impl<'a> Analyzer<'a> {
     /// would break the compiler's own walks over a family's implementations —
     /// which resolve a method while standing in the *family's* file, not the
     /// caller's.
+    /// An overloaded name has no single answer here, so this reports its
+    /// **first** declaration. Every caller either only asks whether the name
+    /// exists, or resolves the overload itself first and looks the chosen
+    /// [`FuncId`] up directly.
     pub(crate) fn lookup_function(&self, name: &str) -> Option<(FuncId, &[Type], Type)> {
-        let id = *self.sig_index.get(name)?;
+        let ids = self.sig_index.get(name)?;
+        let id = *ids.iter().find(|id| {
+            name.contains('.')
+                || self
+                    .imports
+                    .sees(self.source, self.sigs[id.0 as usize].source)
+        })?;
         let sig = &self.sigs[id.0 as usize];
-        if !name.contains('.') && !self.imports.sees(self.source, sig.source) {
-            return None;
-        }
         Some((id, &sig.params, sig.return_type))
+    }
+
+    /// The shape of one declaration, by id.
+    pub(crate) fn signature_of(&self, id: FuncId) -> (&[Type], Type) {
+        let sig = &self.sigs[id.0 as usize];
+        (&sig.params, sig.return_type)
     }
 
     /// Links a call site to the declaration of the function it resolved to.

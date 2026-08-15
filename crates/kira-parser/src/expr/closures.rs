@@ -135,6 +135,7 @@ impl Parser<'_> {
                 type_args,
                 mut args,
                 children,
+                trailing_closure,
                 ..
             } => {
                 args.push(self.positional_arg(closure));
@@ -145,6 +146,7 @@ impl Parser<'_> {
                     type_args,
                     args,
                     children,
+                    trailing_closure,
                     span,
                 })
             }
@@ -171,6 +173,7 @@ impl Parser<'_> {
                 type_args: Vec::new(),
                 args: vec![self.positional_arg(closure)],
                 children: Vec::new(),
+                trailing_closure: None,
                 span,
             }),
             Expr::Field {
