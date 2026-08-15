@@ -29,6 +29,7 @@ mod dispatch;
 mod extend;
 mod inferred;
 mod inherit;
+mod inits;
 mod slots;
 mod updates;
 mod value_members;

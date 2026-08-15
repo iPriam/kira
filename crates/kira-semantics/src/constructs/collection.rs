@@ -108,11 +108,18 @@ impl<'a> Analyzer<'a> {
             let mut methods = std::collections::BTreeMap::new();
             for method in &declaration.methods {
                 let method_name = self.interner.resolve(method.function.name).to_owned();
+                // A family declares a *contract*, and a contract member is one
+                // obligation per name: every backed declaration implements it,
+                // and a family value dispatches to whichever implemented it.
+                // Backed declarations may still overload their own members.
                 if methods.contains_key(&method_name) {
                     self.emit(
                         method.function.name_span,
                         "KSEM202",
-                        format!("construct member `{method_name}` is declared more than once"),
+                        format!(
+                            "construct family `{name}` already declares a member `{method_name}`: \
+                             a family member is one obligation per name, so it is not overloadable"
+                        ),
                     );
                     continue;
                 }
@@ -405,6 +412,19 @@ impl<'a> Analyzer<'a> {
         if !self.constructs.contains_key(&id) {
             return;
         }
+        // Each `init(…)` is a free function producing the declaration. They all
+        // share one name — see `Analyzer::initializer_name` — so the overload
+        // set under it is exactly this declaration's secondary initializers.
+        for init in &declaration.inits {
+            callables.push(Callable {
+                receiver: None,
+                origin: None,
+                specialize: Vec::new(),
+                initializes: Some(id),
+                function: init,
+                source,
+            });
+        }
         let mut own = HashSet::new();
         for method in &declaration.methods {
             // Refused in `define_construct`, and bodyless: registering it would
@@ -417,6 +437,7 @@ impl<'a> Analyzer<'a> {
                 receiver: Some(id),
                 origin: None,
                 specialize: Vec::new(),
+                initializes: None,
                 function: &method.function,
                 source,
             });
@@ -439,6 +460,7 @@ impl<'a> Analyzer<'a> {
                     receiver: Some(id),
                     origin: None,
                     specialize: Vec::new(),
+                    initializes: None,
                     function: method.function,
                     source: method.source,
                 });

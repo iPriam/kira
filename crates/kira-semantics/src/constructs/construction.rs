@@ -25,13 +25,13 @@ use crate::analyze::{Analyzer, FnCtx};
 /// values as its fields. A child slot (`some X` / `[some X]`) is the one field
 /// kind that is *not* here: a slot is filled by content — the trailing block's
 /// children or a fill naming it — and never positionally.
-struct ConstructInput {
+pub(crate) struct ConstructInput {
     /// The input's index among the struct's fields.
-    field_index: u32,
+    pub(crate) field_index: u32,
     /// The field's name, which is also the argument label that fills it.
-    name: String,
+    pub(crate) name: String,
     /// The type the supplied value must satisfy.
-    ty: Type,
+    pub(crate) ty: Type,
 }
 
 impl Analyzer<'_> {
@@ -42,7 +42,7 @@ impl Analyzer<'_> {
     /// rather than filtered afterwards, which is what keeps a slot from ever
     /// being reachable positionally — a slot's field index still exists, so the
     /// index carried here is the field's, not this vector's.
-    fn construct_input_slots(&self, id: StructId) -> Vec<ConstructInput> {
+    pub(crate) fn construct_input_slots(&self, id: StructId) -> Vec<ConstructInput> {
         let slots: Vec<u32> = self
             .constructs
             .get(&id)

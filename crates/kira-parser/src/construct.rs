@@ -22,7 +22,7 @@ use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
     ConstructDecl, ConstructField, ConstructKind, ConstructMethod, ConstructParent,
-    DeferredConstruct, ExtendDecl, TypeRef,
+    DeferredConstruct, ExtendDecl, Function, TypeRef,
 };
 
 use crate::Parser;
@@ -35,6 +35,7 @@ mod members;
 struct ConstructBody {
     fields: Vec<ConstructField>,
     methods: Vec<ConstructMethod>,
+    inits: Vec<Function>,
     deferred: Vec<DeferredConstruct>,
 }
 
@@ -183,6 +184,7 @@ impl Parser<'_> {
             name_span,
             fields: body.fields,
             methods: body.methods,
+            inits: body.inits,
             extends,
             deferred: body.deferred,
             span,
@@ -217,6 +219,7 @@ impl Parser<'_> {
             name_span,
             fields: body.fields,
             methods: body.methods,
+            inits: body.inits,
             extends: Vec::new(),
             deferred: body.deferred,
             span,
@@ -335,6 +338,15 @@ impl Parser<'_> {
                         function,
                     });
                 }
+            }
+            // `init(…) { … }` — another way to construct this declaration. A
+            // contextual keyword, like `requires` and `lifecycle`: recognized
+            // only here and only before `(`, so `init` stays an ordinary name
+            // everywhere else.
+            TokenKind::Identifier
+                if self.at_word("init") && self.peek(1).kind == TokenKind::LParen =>
+            {
+                self.parse_construct_init(body);
             }
             // `requires { function f(…) -> T … }` — the *section* spelling of
             // `@Required function`. One block instead of one annotation per

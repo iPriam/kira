@@ -287,6 +287,36 @@ impl<'a> Codegen<'a> {
             global
         }
     }
+
+    /// The same, NUL-terminated, for a runtime helper that reads a C string.
+    ///
+    /// [`Codegen::string_constant`] deliberately writes no terminator — a Kira
+    /// string carries its length — so handing one to a helper that calls
+    /// `CStr::from_ptr` reads past its end into whatever constant the linker
+    /// laid down next. That is not hypothetical: the missing-library trap
+    /// printed `kira_metal` glued to the mesh name that happened to follow it.
+    fn c_string_constant(&mut self, text: &str) -> LLVMValueRef {
+        let bytes = text.as_bytes();
+        // SAFETY: every type and value below is from this live module; `bytes`
+        // outlives the constant-array copy LLVM makes.
+        unsafe {
+            let name = c_string(&format!("kira.cstr.{}", self.string_counter));
+            self.string_counter += 1;
+            let initializer = LLVMConstStringInContext2(
+                self.context,
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                0, // NUL-terminated: a C string is read to its terminator.
+            );
+            let array = LLVMArrayType2(self.types.i8, bytes.len() as u64 + 1);
+            let global = LLVMAddGlobal(self.module, array, name.as_ptr());
+            LLVMSetInitializer(global, initializer);
+            LLVMSetGlobalConstant(global, 1);
+            LLVMSetLinkage(global, LLVMLinkage::LLVMPrivateLinkage);
+            LLVMSetUnnamedAddress(global, LLVMUnnamedAddr::LLVMGlobalUnnamedAddr);
+            global
+        }
+    }
 }
 
 /// Lowering state for one function body.

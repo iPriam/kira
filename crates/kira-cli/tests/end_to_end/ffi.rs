@@ -194,3 +194,73 @@ fn the_seam_accepts_a_cstring_result_and_still_refuses_a_string() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The missing-library trap names the symbol and the library, and NOTHING else.
+///
+/// The two names reach the runtime helper as C strings. They used to be emitted
+/// as length-carrying Kira constants, which have no terminator, so the message
+/// printed each name run together with whatever constant the module happened to
+/// lay down next — a real run reported `kira_metal` as
+/// `kira_metaldragon.kmesh`. The program below puts a string literal right
+/// beside the call so a regression has something to bleed into.
+#[test]
+fn a_call_into_an_absent_library_names_it_without_trailing_garbage() {
+    let dir = scratch("unavailable-trap");
+    // An OPTIONAL library with rows for another platform only: the build is
+    // allowed to proceed without it, and the call traps at run time. This is
+    // exactly how `kira_metal` is declared, which is the case that surfaced the
+    // bug on a machine with no Metal.
+    std::fs::write(
+        dir.join("package.kira"),
+        "Package FfiAbsent {\n\
+         \x20   let version = \"0.1.0\"\n\
+         \x20   let kira = \"0.1.0\"\n\
+         \x20   let kind = PackageKind.App\n\
+         \x20   let allowThinFfiShim = true\n\
+         \x20   let nativeLibraries = [\n\
+         \x20       NativeLibrary {\n\
+         \x20           name: \"absentlib\",\n\
+         \x20           linkMode: LinkMode.Dynamic,\n\
+         \x20           availability: Availability.Optional,\n\
+         \x20           nativeTargets: [\n\
+         \x20               NativeTarget { triple: \"aarch64-macos-none\", frameworks: [\"Foundation\"] }\n\
+         \x20           ],\n\
+         \x20       }\n\
+         \x20   ]\n\
+         }\n",
+    )
+    .expect("package manifest");
+    std::fs::create_dir_all(dir.join("app")).expect("app directory");
+    let entry = dir.join("app/main.kira");
+    std::fs::write(
+        &entry,
+        "@FFI.Extern { library: absentlib; symbol: absent_answer; abi: c; }\n\
+         function absentAnswer() -> Int;\n\
+         @Main\n\
+         function main() {\n\
+         print(\"dragon.kmesh\")\n\
+         print(absentAnswer())\n\
+         return\n\
+         }\n",
+    )
+    .expect("program");
+
+    let _ = &entry;
+    let output = run(&["run", "--backend", "llvm", dir.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.contains("was called, but that library is not") {
+        // The platform refused the program before it ran (no managed linker, a
+        // resolver diagnostic): there is no trap message to check.
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        stderr.contains("`absent_answer` from native library `absentlib` was called"),
+        "the trap must name the symbol and library exactly: {stderr}",
+    );
+    assert!(
+        !stderr.contains("absentlibdragon") && !stderr.contains("absent_answerdragon"),
+        "a name ran into the constant beside it: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -18,7 +18,7 @@ mod item;
 mod stmt;
 mod tree;
 
-pub use expr::{BinaryOp, CallArg, ClosureParam, Expr, FieldInit, UnaryOp};
+pub use expr::{BinaryOp, CallArg, ClosureParam, Expr, FieldInit, TrailingClosure, UnaryOp};
 pub use item::{
     ClassDecl, ClassMethod, ConstructDecl, ConstructField, ConstructKind, ConstructMethod,
     ConstructParent, DeferredConstruct, EnumDecl, ExportMark, ExtendDecl, FfiTypeKind, FfiTypeMark,

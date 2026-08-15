@@ -63,14 +63,18 @@ pub(crate) enum Qualifier {
     NotAType,
 }
 
-/// One method a type declares itself.
+/// One method a type declares itself, by the key it is known under.
+///
+/// The key is the name together with what it takes — see
+/// [`Analyzer::member_key`] — rather than the name alone, because a name may be
+/// **overloaded**: `bump()` and `bump(step: Int)` are two methods, and a
+/// subclass overriding one leaves the other alone.
+///
+/// [`Analyzer::member_key`]: crate::analyze::Analyzer
 #[derive(Debug, Clone)]
 pub(crate) struct OwnMethod {
-    /// The method name as written.
-    pub(crate) name: String,
-    /// How many parameters it declares, receiver excluded. Compared when an
-    /// `override` claims to match it.
-    pub(crate) arity: usize,
+    /// The member key.
+    pub(crate) key: String,
 }
 
 /// Everything analysis knows about one class beyond its struct shape.
@@ -87,9 +91,15 @@ pub(crate) struct ClassInfo {
     pub(crate) bare_fields: HashMap<String, Member<u32>>,
     /// `(owner, field name)` to its slot, for parent-qualified reads.
     pub(crate) qualified_fields: HashMap<(StructId, String), u32>,
-    /// Bare method name to the ancestor whose body it names.
+    /// Member key to the ancestor whose body it names.
+    ///
+    /// Keyed by [`Analyzer::member_key`] rather than by name, so two overloads
+    /// of one name are two entries and a subclass overriding one of them does
+    /// not shadow the other.
+    ///
+    /// [`Analyzer::member_key`]: crate::analyze::Analyzer
     pub(crate) bare_methods: HashMap<String, Member<StructId>>,
-    /// Every `(owner, method name)` pair this class can name.
+    /// Every `(owner, member key)` pair this class can name.
     pub(crate) qualified_methods: BTreeSet<(StructId, String)>,
     /// Slots the constructor fills positionally: the fields with no default, in
     /// flattened order.
@@ -334,8 +344,10 @@ impl Analyzer<'_> {
             .methods
             .iter()
             .map(|method| OwnMethod {
-                name: self.interner.resolve(method.function.name).to_owned(),
-                arity: method.function.params.len(),
+                key: self.member_key(
+                    self.interner.resolve(method.function.name),
+                    &method.function.params,
+                ),
             })
             .collect();
         own.extend(self.extended_methods(&name, &own));
@@ -378,22 +390,27 @@ impl Analyzer<'_> {
             self.source = source;
             for method in &block.methods {
                 let name = self.interner.resolve(method.name).to_owned();
+                let key = self.member_key(&name, &method.params);
+                // An `extend` block may *overload* a method the class already
+                // has — a different parameter list is a different method — but
+                // it may not restate one, which would be two bodies for one
+                // call with no rule saying which runs.
                 if already
                     .iter()
                     .chain(added.iter())
-                    .any(|seen| seen.name == name)
+                    .any(|seen| seen.key == key)
                 {
                     self.emit(
                         method.name_span,
                         "KSEM257",
-                        format!("`{class_name}` already declares a method named `{name}`"),
+                        format!(
+                            "`{class_name}` already declares a method `{name}` taking these \
+                             parameters"
+                        ),
                     );
                     continue;
                 }
-                added.push(OwnMethod {
-                    name,
-                    arity: method.params.len(),
-                });
+                added.push(OwnMethod { key });
             }
         }
         added
@@ -448,7 +465,7 @@ impl Analyzer<'_> {
             }
         }
         for method in self.own_methods.get(&own).into_iter().flatten() {
-            info.qualified_methods.insert((own, method.name.clone()));
+            info.qualified_methods.insert((own, method.key.clone()));
         }
         // A bare name resolves to the definition no other definition is more
         // derived than. Two unrelated parents both defining it leaves two, and
@@ -504,7 +521,7 @@ impl Analyzer<'_> {
                 .get(&id)
                 .into_iter()
                 .flatten()
-                .map(|method| (id, method.name.clone()))
+                .map(|method| (id, method.key.clone()))
                 .collect(),
         }
     }
@@ -520,33 +537,44 @@ impl Analyzer<'_> {
                 continue;
             }
             let name = self.interner.resolve(method.function.name).to_owned();
+            let key = self.member_key(&name, &method.function.params);
+            // An override replaces the inherited method it *matches*, which is
+            // the one taking the same parameters. A name the ancestors overload
+            // therefore keeps every overload the subclass did not restate.
             let base = info
                 .qualified_methods
                 .iter()
-                .find(|(owner, method_name)| *owner != own && *method_name == name)
+                .find(|(owner, member)| *owner != own && *member == key)
                 .map(|(owner, _)| *owner);
-            let Some(base) = base else {
-                self.emit(
+            if base.is_some() {
+                continue;
+            }
+            // Overriding a name the base declares under a different parameter
+            // list is the likelier mistake, and saying so beats "overrides
+            // nothing" when the name plainly exists.
+            let mismatched = info
+                .qualified_methods
+                .iter()
+                .filter(|(owner, _)| *owner != own)
+                .find_map(|(owner, member)| {
+                    member.starts_with(&format!("{name}(")).then_some(*owner)
+                });
+            match mismatched {
+                Some(base) => {
+                    let base_name = self.program.types.type_name(Type::Struct(base));
+                    self.emit(
+                        method.function.name_span,
+                        "KSEM066",
+                        format!(
+                            "`{name}` must match the signature it overrides from `{base_name}`"
+                        ),
+                    );
+                }
+                None => self.emit(
                     method.function.name_span,
                     "KSEM073",
                     format!("`{name}` overrides no inherited method"),
-                );
-                continue;
-            };
-            let overridden = self
-                .own_methods
-                .get(&base)
-                .into_iter()
-                .flatten()
-                .find(|candidate| candidate.name == name)
-                .map(|candidate| candidate.arity);
-            if overridden.is_some_and(|arity| arity != method.function.params.len()) {
-                let base_name = self.program.types.type_name(Type::Struct(base));
-                self.emit(
-                    method.function.name_span,
-                    "KSEM066",
-                    format!("`{name}` must match the signature it overrides from `{base_name}`"),
-                );
+                ),
             }
         }
     }
@@ -587,6 +615,7 @@ impl<'a> Analyzer<'a> {
                 receiver: Some(id),
                 origin: Some(*owner),
                 specialize: Vec::new(),
+                initializes: None,
                 function,
                 // Spans are offsets in the file containing the method body.
                 source: origin_source,
@@ -594,37 +623,41 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// The declaration of `owner`'s method `name`, and the file it is written
-    /// in.
+    /// The declaration of `owner`'s method with member key `key`, and the file
+    /// it is written in.
     ///
     /// A method's body resolves qualified names against the imports of the file
     /// it was *written* in, not the file the inheriting class was written in —
     /// so the origin's source travels with the body.
+    ///
+    /// Matched on the key rather than the name, because a name may be
+    /// overloaded and the two declarations are two different bodies.
     fn method_ast(
         &self,
         owner: StructId,
-        name: &str,
+        key: &str,
     ) -> Option<(&'a kira_syntax_model::ast::Function, SourceId)> {
         let owner_name = self.program.types.type_name(Type::Struct(owner));
         self.tree.items_with_source().find_map(|(source, item)| {
+            let matches = |function: &&'a kira_syntax_model::ast::Function| {
+                self.member_key(self.interner.resolve(function.name), &function.params) == key
+            };
             let candidate = match item {
-                Item::Struct(def) if self.interner.resolve(def.name) == owner_name => def
-                    .methods
-                    .iter()
-                    .find(|method| self.interner.resolve(method.name) == name),
+                Item::Struct(def) if self.interner.resolve(def.name) == owner_name => {
+                    def.methods.iter().find(matches)
+                }
                 Item::Class(def) if self.interner.resolve(def.name) == owner_name => def
                     .methods
                     .iter()
                     .map(|method| &method.function)
-                    .find(|method| self.interner.resolve(method.name) == name),
+                    .find(matches),
                 // A method an `extend <Class>` block added, which is how a class
                 // is written across more than one file. Found here rather than
                 // registered separately so it is the same lookup: everything
                 // downstream asks this one question to reach a method's body.
-                Item::Extend(def) if self.interner.resolve(def.name) == owner_name => def
-                    .methods
-                    .iter()
-                    .find(|method| self.interner.resolve(method.name) == name),
+                Item::Extend(def) if self.interner.resolve(def.name) == owner_name => {
+                    def.methods.iter().find(matches)
+                }
                 _ => None,
             }?;
             Some((candidate, source))

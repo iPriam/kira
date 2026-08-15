@@ -30,6 +30,7 @@ mod memberwise;
 mod mutation;
 mod native_state;
 mod operators;
+mod overloads;
 mod reuse;
 mod strings;
 mod tasks;
