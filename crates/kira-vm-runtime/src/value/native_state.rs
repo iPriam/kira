@@ -21,14 +21,18 @@ impl Heap {
                 _ => return Err("a string whose storage was already taken"),
             },
             Value::Struct(id) => {
+                // Moving the fields out is a write like any other: a struct
+                // sharing them would be left reading values this took over.
+                self.make_struct_unique(id);
                 let fields = match self.take_object(id.0) {
                     Some(Object::Struct(fields)) => fields,
                     _ => return Err("a struct whose fields were already taken"),
                 };
-                let mut values = Vec::with_capacity(fields.len());
-                for field in fields {
-                    values.push(self.into_native_state(field)?);
-                }
+                // Sole owner by now, and the slot just gave up its hold.
+                let Ok(fields) = std::rc::Rc::try_unwrap(fields) else {
+                    return Err("a struct still shared with another value");
+                };
+                let values = self.native_state_children(fields)?;
                 NativeStateValue::struct_of(values)
             }
             Value::Array(id) => {
@@ -43,10 +47,7 @@ impl Heap {
                 let Ok(elements) = std::rc::Rc::try_unwrap(elements) else {
                     return Err("an array still shared with another value");
                 };
-                let mut values = Vec::with_capacity(elements.len());
-                for element in elements {
-                    values.push(self.into_native_state(element)?);
-                }
+                let values = self.native_state_children(elements)?;
                 NativeStateValue::array_of(values)
             }
             // Moving the payload out is the one thing an enum is never asked to
@@ -70,12 +71,34 @@ impl Heap {
                     }
                 };
                 NativeStateValue::enum_of(
-                    tag,
+                    u32::try_from(tag).map_err(|_| "an enum tag too large for callback state")?,
                     match payload {
                         Some(value) => Some(self.into_native_state(value)?),
                         None => None,
                     },
                 )
+            }
+            Value::Erased(id) => {
+                let (type_id, payload, shares) = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Erased {
+                        type_id,
+                        payload,
+                        shares,
+                    })) => (*type_id, *payload, *shares),
+                    _ => return Err("an erased value whose payload was already taken"),
+                };
+                let payload = if shares == 1 {
+                    match self.take_object(id.0) {
+                        Some(Object::Erased { payload, .. }) => payload,
+                        _ => return Err("an erased value whose payload was already taken"),
+                    }
+                } else {
+                    let payload = self.copy_value(payload);
+                    self.free_erased(id);
+                    payload
+                };
+                let payload = self.into_native_state(payload)?;
+                NativeStateValue::any_of(type_id, payload)
             }
             // A read of callback state going back into callback state: the node
             // it holds is already in the stored form, so this is where the
@@ -88,9 +111,13 @@ impl Heap {
                 self.free_snapshot(id);
                 node
             }
+            // The one value that goes in *shared* rather than copied. A closure
+            // inside the state and the frame that declared the `var` are two
+            // holders of one box, and boxing a copy of what it holds would give
+            // them a box each. So the tree takes over this value's hold and
+            // gives it back when its last node goes.
+            Value::Cell(id) => NativeStateValue::Cell(self.cell_into_native_state(id)),
             Value::Void => return Err("a void value"),
-            Value::Erased(_) => return Err("an `Any` inside callback state"),
-            Value::Cell(_) => return Err("a captured `var` inside callback state"),
             Value::NativeState(_) => return Err("callback state inside callback state"),
             Value::NativeView { .. } => {
                 return Err("a recovered callback-state view inside callback state");
@@ -130,9 +157,43 @@ impl Heap {
                 let payload = payload
                     .as_deref()
                     .map(|value| self.from_native_state(value));
-                Value::Enum(self.alloc_enum(*tag, payload))
+                Value::Enum(self.alloc_enum(u64::from(*tag), payload))
+            }
+            NativeStateValue::Any { type_id, payload } => {
+                let payload = self.from_native_state(payload);
+                Value::Erased(self.alloc_erased(*type_id, payload))
+            }
+            // Reading a cell out of state gives back the *same* box, not a copy
+            // of one: that is what makes a write through the recovered value and
+            // a write through the frame's own binding land in one place. The
+            // tree keeps its own hold, so this is a fresh one.
+            NativeStateValue::Cell(cell) if cell.handle() == 0 && !cell.is_vm_owned() => {
+                Value::RawPtr(0)
+            }
+            NativeStateValue::Cell(cell) => {
+                self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
             }
         }
+    }
+
+    fn native_state_children(
+        &mut self,
+        children: Vec<Value>,
+    ) -> Result<Vec<NativeStateValue>, &'static str> {
+        let mut remaining = children.into_iter();
+        let mut converted = Vec::with_capacity(remaining.len());
+        while let Some(child) = remaining.next() {
+            match self.into_native_state(child) {
+                Ok(value) => converted.push(value),
+                Err(error) => {
+                    for child in remaining {
+                        self.drop_value(child);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(converted)
     }
 
     fn take_object(&mut self, index: u32) -> Option<Object> {
@@ -140,5 +201,26 @@ impl Heap {
         self.freed += 1;
         self.free_list.push(index);
         Some(object)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_child_releases_the_rest_of_a_recursive_state_value() {
+        let mut heap = Heap::new();
+        let nested_text = heap.alloc("nested".to_owned());
+        let trailing_text = heap.alloc("trailing".to_owned());
+        let nested = heap.alloc_struct(vec![Value::Str(nested_text), Value::Void]);
+        let root = heap.alloc_struct(vec![Value::Struct(nested), Value::Str(trailing_text)]);
+
+        let error = heap
+            .into_native_state(Value::Struct(root))
+            .expect_err("void is refused inside callback state");
+
+        assert_eq!(error, "a void value");
+        assert_eq!(heap.stats().current, 0);
     }
 }

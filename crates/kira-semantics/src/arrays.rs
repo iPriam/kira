@@ -21,10 +21,15 @@
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_source::Span;
-use kira_syntax_model::ast::ExprId;
+use kira_syntax_model::ast::{CallArg, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
+
+/// The member a type declares to be indexable. Reserved by spelling rather than
+/// by a keyword: a subscript IS a method, it is only reached through different
+/// syntax, and a grammar rule for it would buy nothing a name does not.
+const SUBSCRIPT_MEMBER: &str = "subscript";
 
 impl Analyzer<'_> {
     /// Type-checks an array literal (`[1, 2, 3]`, `[]`).
@@ -130,6 +135,15 @@ impl Analyzer<'_> {
         index: ExprId,
         span: Span,
     ) -> HirExprId {
+        // A type that declares `subscript` is indexed through it. This is
+        // resolved BEFORE the index is analyzed as an integer, because a
+        // subscript's parameter is whatever it declares: `dimensions[.leading]`
+        // reads an enum, and a leading-dot member only resolves once the
+        // expected type is known.
+        if let Some(call) = self.analyze_subscript_call(ctx, base, index, span) {
+            return call;
+        }
+
         let base_hir = self.analyze_expr(ctx, base);
         let base_ty = self.program.expr(base_hir).type_of();
         let index_hir = self.analyze_index_expr(ctx, index);
@@ -181,6 +195,66 @@ impl Analyzer<'_> {
             index: index_hir,
             ty: element,
         })
+    }
+
+    /// Type-checks `base[index]` as a call to the base type's `subscript`
+    /// member, or answers `None` when the base declares none.
+    ///
+    /// Indexing is not an array-only operation. A value that is *addressed by
+    /// something* — a set of layout guides read by anchor, a palette read by
+    /// role, a matrix read by position — reads at a call site exactly the way an
+    /// array does, and a language that reserves `[]` for one built-in container
+    /// pushes every one of them into a differently-named method that the reader
+    /// then has to learn.
+    ///
+    /// So a type opts in by declaring one member:
+    ///
+    /// ```kira
+    /// struct ViewDimensions {
+    ///     function subscript(anchor: AlignmentAnchor) -> Float { … }
+    /// }
+    /// ```
+    ///
+    /// and `dimensions[.leading]` becomes `dimensions.subscript(.leading)`
+    /// here, before any backend sees it. Nothing downstream of analysis learns
+    /// that subscripts exist, which is the same treatment methods get.
+    ///
+    /// The parameter is the declaration's own, so the index is checked against
+    /// it rather than against `Int`. That is what makes the leading-dot spelling
+    /// work: `.leading` has no meaning until something states which type it is a
+    /// member of.
+    fn analyze_subscript_call(
+        &mut self,
+        ctx: &mut FnCtx,
+        base: ExprId,
+        index: ExprId,
+        span: Span,
+    ) -> Option<HirExprId> {
+        // The receiver is analyzed to learn its type, then rolled back: an array
+        // base must reach the array path below with no diagnostics and no
+        // ownership effects left behind by this probe.
+        let mark = self.diagnostics.len();
+        let ownership = ctx.ownership_snapshot();
+        let base_hir = self.analyze_expr(ctx, base);
+        let base_ty = self.program.expr(base_hir).type_of();
+        let Type::Struct(_) = base_ty else {
+            self.diagnostics.truncate(mark);
+            ctx.restore_ownership(ownership);
+            return None;
+        };
+        let qualified = format!("{}.{SUBSCRIPT_MEMBER}", self.type_name(base_ty));
+        if self.lookup_function(&qualified).is_none() {
+            self.diagnostics.truncate(mark);
+            ctx.restore_ownership(ownership);
+            return None;
+        }
+        let arg = CallArg {
+            label: None,
+            label_span: None,
+            value: index,
+            span: self.tree.expr(index).span(),
+        };
+        Some(self.analyze_user_call_from_syntax(ctx, &qualified, &[base_hir], &[arg], span))
     }
 
     /// Analyzes an index expression, requiring an integer.

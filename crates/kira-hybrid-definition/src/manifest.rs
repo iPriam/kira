@@ -22,6 +22,8 @@
 //! reorder a field, or insert one mid-record. A manifest is a deserializable
 //! public artifact, so decoding validates rather than trusts.
 
+use std::path::Path;
+
 use kira_runtime_abi::{
     BridgeValueTag, Execution, ForeignAbi, ForeignAggregate, ForeignAggregateError,
     ForeignAggregateId, ForeignAggregates, ForeignArrayElement, ForeignImport, ForeignMember,
@@ -135,7 +137,7 @@ pub struct HybridForeign {
     pub abi: ForeignAbi,
     /// The import's exact-width parameter and result types.
     pub signature: ForeignSignature,
-    /// The exported adapter symbol the session resolves and calls.
+    /// The direct binding locator: a library path, the process marker, or empty.
     pub adapter_symbol: String,
 }
 
@@ -148,6 +150,19 @@ impl HybridForeign {
             abi: import.abi(),
             signature: import.signature().clone(),
             adapter_symbol: adapter_symbol.into(),
+        }
+    }
+
+    /// Describes an import for the direct Libffi host.
+    pub fn from_import_path(import: &ForeignImport, path: Option<&Path>) -> HybridForeign {
+        HybridForeign {
+            library: import.library().to_owned(),
+            symbol: import.symbol().to_owned(),
+            abi: import.abi(),
+            signature: import.signature().clone(),
+            adapter_symbol: path
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         }
     }
 }
@@ -172,9 +187,11 @@ pub struct HybridFunction {
     /// which is a move by definition, so there is no mode to record. Returned
     /// borrows would need lifetime validation the language does not have yet.
     pub returns: BridgeValueTag,
-    /// The symbol to resolve from the shared library, for a native function.
+    /// The symbol to resolve from the shared library, for an emitted native
+    /// function.
     ///
-    /// `None` for a runtime function, which has no native symbol to bind.
+    /// `None` for a runtime function or an application-native function the
+    /// hybrid build proved unreachable.
     pub exported_name: Option<String>,
 }
 
@@ -231,9 +248,6 @@ pub enum ManifestDecodeError {
         /// The unrecognized foreign-type byte.
         tag: u8,
     },
-    /// A foreign import carried no adapter symbol to bind.
-    #[error("foreign import `{0}` in hybrid manifest carries no adapter symbol")]
-    ForeignWithoutAdapter(String),
     /// An aggregate member named a type byte this build does not know.
     #[error("unknown member type `{tag}` in aggregate {index} of hybrid manifest")]
     UnknownForeignAggregateMember {
@@ -383,11 +397,6 @@ impl HybridManifest {
             }
             let returns = BridgeValueTag(reader.byte()?);
             let exported = reader.string()?;
-            // A native function the runtime cannot bind is a broken artifact,
-            // not a runtime surprise: reject it at load.
-            if execution == Execution::Native && exported.is_empty() {
-                return Err(ManifestDecodeError::NativeWithoutSymbol(name));
-            }
             functions.push(HybridFunction {
                 id,
                 name,
@@ -418,6 +427,15 @@ impl HybridManifest {
             }
             index => Some(index),
         };
+        if entry.is_none()
+            && let Some(function) = functions.iter().find(|function| {
+                function.execution == Execution::Native && function.exported_name.is_none()
+            })
+        {
+            return Err(ManifestDecodeError::NativeWithoutSymbol(
+                function.name.clone(),
+            ));
+        }
         Ok(HybridManifest {
             module_name,
             bytecode_path,
@@ -460,9 +478,6 @@ fn read_foreign(reader: &mut Reader<'_>) -> Result<Vec<HybridForeign>, ManifestD
         }
         let result = read_spec(reader, &symbol)?;
         let adapter_symbol = reader.string()?;
-        if adapter_symbol.is_empty() {
-            return Err(ManifestDecodeError::ForeignWithoutAdapter(symbol));
-        }
         foreign.push(HybridForeign {
             library,
             symbol,

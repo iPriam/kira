@@ -1,157 +1,156 @@
-//! `kira test`, driven through the real binary.
-//!
-//! What these prove is that the whole chain holds through the *shipped*
-//! compiler and the *shipped* Foundation: a `Test` declaration is found by a
-//! collector macro written in Kira, the runner it generates is compiled like
-//! any other function, and `kira test` enters it instead of `@Main`. Nothing
-//! in the compiler names `Test`, so if the chain broke anywhere the verb would
-//! report a program with no tests rather than quietly passing.
+//! Direct coverage for Foundation isolation and harness-owned KIK tests.
 
-use crate::write_source;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Runs `kira test` against the Foundation **in this checkout**.
-///
-/// The other end-to-end modules deliberately exercise the *installed*
-/// Foundation, which is the right target for a discovery contract. These cases
-/// are about the runner Foundation ships, so they pin the source tree's copy:
-/// otherwise they would test whichever toolchain was last installed and fail
-/// or pass for a reason that has nothing to do with this checkout.
-fn kira_test(path: &std::path::Path) -> std::process::Output {
-    let foundation = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+const TEST_VOCABULARY: &str = include_str!("../../../../tests-kik/harness/app/Test.kira");
+const TEST_RUNNER: &str = include_str!("../../../../tests-kik/harness/app/TestRunner.kira");
+
+fn package(source: &str, with_test_support: bool) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let directory =
+        std::env::temp_dir().join(format!("kira_test_verb_{}_{}", std::process::id(), unique));
+    let app = directory.join("app");
+    std::fs::create_dir_all(&app).expect("test package directory");
+    std::fs::write(
+        directory.join("package.kira"),
+        "Package KikTestRegression {\n    let version = \"0.1.0\"\n    let kind = .App\n    let moduleRoot = \"KikTestRegression\"\n}\n",
+    )
+    .expect("test package manifest");
+    std::fs::write(app.join("main.kira"), source).expect("test package source");
+    if with_test_support {
+        std::fs::write(app.join("Test.kira"), TEST_VOCABULARY).expect("test vocabulary");
+        std::fs::write(app.join("TestRunner.kira"), TEST_RUNNER).expect("test runner");
+    }
+    directory
+}
+
+fn kira(args: &[&str]) -> std::process::Output {
+    let foundation = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../foundation")
         .canonicalize()
-        .expect("the checkout's foundation");
+        .expect("the checkout's Foundation");
     std::process::Command::new(env!("CARGO_BIN_EXE_kira"))
         .env("KIRA_FOUNDATION_HOME", foundation)
-        .args(["test", path.to_str().expect("a utf-8 path")])
+        .args(args)
         .output()
         .expect("run kira")
 }
 
-/// A suite with no `@Main` at all, which is the case the verb exists for.
-///
-/// `kira run` would refuse this program — an application needs an entrypoint —
-/// so a suite compiling and running here is the whole feature.
+fn remove_package(path: &Path) {
+    let _ = std::fs::remove_dir_all(path);
+}
+
 #[test]
-fn runs_a_suite_that_has_no_main() {
-    let path = write_source(
+fn a_normal_foundation_app_checks_and_runs_without_test_runner_expansion() {
+    let path = package(
+        "import Foundation\n@Main function main() { printLine(\"ordinary\") return }\n",
+        false,
+    );
+    let path_text = path.to_str().expect("a utf-8 package path");
+
+    let checked = kira(&["check", path_text]);
+    assert!(
+        checked.status.success(),
+        "ordinary app did not check: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let run = kira(&["run", "--backend", "vm", path_text]);
+    assert!(
+        run.status.success(),
+        "ordinary app did not run: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "ordinary\n");
+
+    let tested = kira(&["test", path_text]);
+    assert!(!tested.status.success());
+    assert!(
+        String::from_utf8_lossy(&tested.stderr).contains("no tests to run"),
+        "Foundation supplied a test entrypoint: {}",
+        String::from_utf8_lossy(&tested.stderr)
+    );
+    remove_package(&path);
+}
+
+#[test]
+fn harness_owned_test_declarations_compile_and_run_in_test_mode() {
+    let path = package(
         "import Foundation\n\
          Test SumsToTen {\n\
              test { return 4 + 6 }\n\
              expect { let e: Result<Int, TestFailure> = .Ok(10) return e }\n\
-         }",
-    );
-    let output = kira_test(&path);
-    let _ = std::fs::remove_file(&path);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "ok   SumsToTen\n1 passed, 0 failed, 0 skipped, 1 total\n"
-    );
-}
-
-/// A case whose answer differs from its expectation is reported as a failure
-/// rather than passing quietly, and the run still reaches the ones after it.
-#[test]
-fn reports_a_case_that_does_not_hold() {
-    let path = write_source(
-        "import Foundation\n\
-         Test Holds {\n\
-             test { return 1 }\n\
-             expect { let e: Result<Int, TestFailure> = .Ok(1) return e }\n\
          }\n\
          Test DoesNot {\n\
              test { return 1 }\n\
              expect { let e: Result<Int, TestFailure> = .Ok(2) return e }\n\
-         }",
+         }\n",
+        true,
     );
-    let output = kira_test(&path);
-    let _ = std::fs::remove_file(&path);
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "ok   Holds\nFAIL DoesNot\n1 passed, 1 failed, 0 skipped, 2 total\n"
-    );
-}
-
-/// A case may answer with whatever it measures, because a `Test` member returns
-/// `Any` and the comparison behind it is structural.
-///
-/// The `String` case is the one that would pass for the wrong reason if `Any`
-/// equality compared handles rather than contents: the two strings are built
-/// differently and are never one object.
-#[test]
-fn a_case_may_answer_with_any_type_it_measures() {
-    let path = write_source(
-        "import Foundation\n\
-         struct Point { var x: Int = 0\n\
-             var y: Int = 0 }\n\
-         Test Text {\n\
-             test { return \"he\" + \"llo\" }\n\
-             expect { let e: Result<String, TestFailure> = .Ok(\"hello\") return e }\n\
-         }\n\
-         Test Truth {\n\
-             test { return 1 < 2 }\n\
-             expect { let e: Result<Bool, TestFailure> = .Ok(true) return e }\n\
-         }\n\
-         Test Shape {\n\
-             test { return Point(x: 1, y: 2) }\n\
-             expect { let e: Result<Point, TestFailure> = .Ok(Point(x: 1, y: 2)) return e }\n\
-         }",
-    );
-    let output = kira_test(&path);
-    let _ = std::fs::remove_file(&path);
+    let path_text = path.to_str().expect("a utf-8 package path");
+    let output = kira(&["test", "--backend", "vm", path_text]);
     assert!(
-        output.status.success(),
-        "{}",
+        !output.status.success(),
+        "harness tests did not run: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "ok   Text\nok   Truth\nok   Shape\n3 passed, 0 failed, 0 skipped, 3 total\n"
+        "ok   SumsToTen\nFAIL DoesNot\n1 passed, 1 failed, 0 skipped, 2 total\n"
     );
+    remove_package(&path);
 }
 
-/// A program that imports Foundation but declares no case runs an empty suite.
-///
-/// The collector emits a runner whether or not it found anything, so this
-/// reports an empty run rather than an error: "no tests here" is an answer, and
-/// a suite that has had its last case deleted should say so rather than start
-/// failing the build.
 #[test]
-fn a_suite_with_no_cases_runs_empty() {
-    let path = write_source(
+fn harness_owned_dispatch_selects_one_test_in_test_mode() {
+    let path = package(
         "import Foundation\n\
-         @Main function main() { printLine(\"not a suite\") return }",
+         Test SumsToTen {\n\
+             test { return 4 + 6 }\n\
+             expect { let e: Result<Int, TestFailure> = .Ok(10) return e }\n\
+         }\n",
+        true,
     );
-    let output = kira_test(&path);
-    let _ = std::fs::remove_file(&path);
+    let path_text = path.to_str().expect("a utf-8 package path");
+    let output = kira(&[
+        "test",
+        "--backend",
+        "vm",
+        path_text,
+        "--",
+        "check",
+        "SumsToTen",
+    ]);
     assert!(
         output.status.success(),
-        "{}",
+        "test dispatch did not run: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "__kira_test_result__:0\n"
+    );
+    remove_package(&path);
+}
+
+#[test]
+fn a_harness_with_no_cases_reports_an_empty_run() {
+    let path = package(
+        "import Foundation\n@Main function main() { printLine(\"not a suite\") return }\n",
+        true,
+    );
+    let path_text = path.to_str().expect("a utf-8 package path");
+    let output = kira(&["test", path_text]);
+    assert!(
+        output.status.success(),
+        "empty harness did not run: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "0 passed, 0 failed, 0 skipped, 0 total\n"
     );
-}
-
-/// A program that never imports Foundation has no runner at all, and is told so
-/// by name rather than refused as a library with no entrypoint.
-///
-/// The collector lives in Foundation, so a program that does not import it runs
-/// no collector and generates nothing — which is the honest reason there is
-/// nothing to enter.
-#[test]
-fn a_program_without_foundation_says_it_has_no_tests() {
-    let path = write_source("@Main function main() { print(\"plain\") return }");
-    let output = kira_test(&path);
-    let _ = std::fs::remove_file(&path);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no tests to run"), "{stderr}");
+    remove_package(&path);
 }

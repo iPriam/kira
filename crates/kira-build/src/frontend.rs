@@ -1,11 +1,8 @@
 //! Source on disk to verified IR: the one pipeline everything compiles through.
 //!
-//! This used to live in `kira-cli`, and moving it here is what makes the CLI a
-//! driver rather than the compiler. The reason is a second consumer, not tidiness:
-//! a Rust crate embedding a Kira library builds that library from its own
-//! `build.rs`, and a `build.rs` that reimplemented package resolution, module
-//! loading, source mapping, or build-kind discovery would drift from `kira` in
-//! exactly the ways that make a bug reproduce on one path and not the other.
+//! The CLI and generated Rust crates share this pipeline. Keeping package
+//! resolution, module loading, source mapping, and build-kind discovery here
+//! prevents the embedding path from drifting from `kira`.
 //!
 //! When an entry belongs to a package, this pipeline resolves its transitive path
 //! dependencies from `package.kira` before walking imports. A library package

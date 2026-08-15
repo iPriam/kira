@@ -9,6 +9,18 @@
 
 use crate::{kira, write_program, write_source};
 
+fn kira_with_checkout_foundation(args: &[&str]) -> std::process::Output {
+    let foundation = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../foundation")
+        .canonicalize()
+        .expect("the checkout's foundation");
+    std::process::Command::new(env!("CARGO_BIN_EXE_kira"))
+        .env("KIRA_FOUNDATION_HOME", foundation)
+        .args(args)
+        .output()
+        .expect("run kira")
+}
+
 /// The mechanism, as a user meets it: an import with no path, no dependency
 /// entry, and nothing beside the program on disk.
 #[test]
@@ -74,6 +86,29 @@ fn the_bundled_foundation_ships_the_geometry_vocabulary() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "1121\n");
+}
+
+#[test]
+fn a_foundation_app_checks_and_builds_without_test_dispatch() {
+    let path = crate::write_isolated_source(
+        "import Foundation\n\
+         @Main function main() { printLine(\"ordinary\") return }",
+    );
+    let written = path.to_str().expect("a utf-8 path");
+    let check = kira_with_checkout_foundation(&["check", written]);
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let build = kira_with_checkout_foundation(&["build", "--backend", "vm", written]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("isolated source directory"));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 }
 
 /// Foundation is imported, never implicit. A file that does not import it does

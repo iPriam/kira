@@ -105,6 +105,11 @@ fn write_ffi_package(program: &str) -> PathBuf {
 
     build_fixture_archive(&dir);
     std::fs::write(
+        dir.join("package.kira"),
+        "Package FfiParity {\n    let allowThinFfiShim = true\n}\n",
+    )
+    .expect("package manifest");
+    std::fs::write(
         dir.join("NativeLibs/ffifixture.toml"),
         r#"name = "ffifixture"
 [[target]]
@@ -167,6 +172,7 @@ fn write_inline_ffi_package(program: &str, extra_fields: &str) -> PathBuf {
             "Package FfiInline {{\n\
              \x20   let version = \"0.1.0\"\n\
              \x20   let kind = .App\n\
+             \x20   let allowThinFfiShim = true\n\
              \x20   let nativeLibraries = [\n\
              \x20       NativeLibrary {{\n\
              \x20           name: \"ffifixture\",\n\
@@ -415,8 +421,8 @@ fn every_backend_agrees_on_a_c_function_pointer() {
 /// C calls a **Kira** function through a `@FFI.Callback`, on every backend.
 ///
 /// The direction the seam was missing: the pointer is the address of a generated
-/// entry thunk, and what it enters differs per backend — the VM's thunk reaches
-/// the interpreter through the sidecar's invoker, while a native build's calls
+/// entry thunk, and what it enters differs per backend. The VM's thunk reaches
+/// the interpreter through the direct Libffi host, while a native build calls
 /// the compiled function directly. C cannot tell, which is the point, so all
 /// three must print the same numbers.
 ///
@@ -766,12 +772,6 @@ fn every_backend_agrees_on_an_extension_chained_onto_a_descriptor() {
 }
 
 /// A Kira enum and an array named directly in a foreign signature.
-///
-/// Both were refused before, and both refusals told the author to write
-/// something that threw a name away: an integer for the enum, a `RawPtr` and a
-/// length for the array. A graphics binding paid for that twice — sixteen enums
-/// each with a hand-written `*Code()` mapper, and a six-function shim whose only
-/// job was streaming an array into C.
 ///
 /// The enum crosses as its case's number, which is what a C enum is; the array
 /// crosses as a pointer to elements the seam writes out in C's widths.

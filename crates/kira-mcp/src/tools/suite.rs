@@ -1,10 +1,7 @@
 //! Choosing and running Kira's own tests, with failures as structured results.
 //!
-//! Not a tool of its own. `kira_dev_validate` is the one entry point to the
-//! gate, and the tests are one of the things it runs — so what used to be a
-//! second tool is the part of that one that decides *which* tests and reads
-//! what they printed. Keeping it in its own file keeps the gate's own file
-//! about the gate.
+//! `kira_dev_validate` is the entry point to the gate. This module selects the
+//! test suites it runs and converts their output into structured results.
 
 use std::time::Duration;
 
@@ -32,12 +29,26 @@ pub const SUITES: [&str; 15] = [
     "toolchain",
 ];
 
-/// How each suite selects work: the packages it runs, and the name filter.
+/// How a suite narrows a package's tests once the packages are chosen.
+///
+/// The two are not interchangeable, and reaching for the wrong one is silent:
+/// a test binary's *name* is no part of any test's name, so
+/// `cargo test -- backend_parity` matched nothing and reported success. What
+/// selects a binary is `--test`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Narrow {
+    /// A substring of a test's own name, including its module path.
+    Name(&'static str),
+    /// An integration-test target, one file or directory under `tests/`.
+    Target(&'static str),
+}
+
+/// How each suite selects work: the packages it runs, and how it narrows them.
 ///
 /// A suite is a *question about the toolchain*, not a cargo invocation. The
 /// mapping lives here so an agent asks "does lowering still pass" rather than
 /// remembering which crate holds those tests.
-fn selection(suite: &str) -> (&'static [&'static str], Option<&'static str>) {
+fn selection(suite: &str) -> (&'static [&'static str], Option<Narrow>) {
     match suite {
         "unit" => (&[], None),
         "parser" => (&["kira-parser", "kira-lexer"], None),
@@ -64,9 +75,14 @@ fn selection(suite: &str) -> (&'static [&'static str], Option<&'static str>) {
             None,
         ),
         "diagnostics" => (&["kira-diagnostics", "kira-diagnostic-messages"], None),
-        "hybrid" => (&["kira-hybrid-runtime", "kira-cli"], Some("seam")),
-        "backend_parity" => (&["kira-cli"], Some("backend_parity")),
-        "golden" => (&["kira-cli"], Some("shader_validation")),
+        // The seam tests are a module of `kira-cli`'s parity binary and a
+        // package of their own, so this narrows by name across both.
+        "hybrid" => (
+            &["kira-hybrid-runtime", "kira-cli"],
+            Some(Narrow::Name("seam")),
+        ),
+        "backend_parity" => (&["kira-cli"], Some(Narrow::Target("backend_parity"))),
+        "golden" => (&["kira-cli"], Some(Narrow::Target("shader_validation"))),
         "integration" => (&["kira-cli"], None),
         _ => (&[], None),
     }
@@ -120,8 +136,14 @@ pub struct Outcome {
 }
 
 impl Outcome {
+    /// Whether the run proved anything: cargo agreed, and nothing was read out
+    /// of it that says otherwise.
+    ///
+    /// The exit status alone is not enough. A suite whose selection matched no
+    /// test at all exits zero, and reporting that as a pass is how a broken
+    /// selection survives every gate that runs it.
     pub fn success(&self) -> bool {
-        self.run.success()
+        self.run.success() && self.failures.is_empty()
     }
 }
 
@@ -152,11 +174,83 @@ pub fn run(
     }
     let named = named.or(from_file);
 
+    let args = cargo_arguments(
+        suite,
+        named.as_deref(),
+        profile,
+        filter.as_deref(),
+        fallback,
+    );
+
+    let name = match (suite, &named) {
+        (_, Some(package)) => format!("tests_{package}"),
+        (Some(suite), None) => format!("tests_{suite}"),
+        (None, None) => "tests".to_owned(),
+    };
+    let root = exec::repository_root();
+    let run = match exec::run("cargo", &args, &root, &env, bound) {
+        Ok(run) => run,
+        Err(error) => {
+            let failure = Failure::new(FailureKind::Crash, error.to_string());
+            return Err((
+                json!({ "success": false, "failures": [failure], "stdout": "", "stderr": "" }),
+                true,
+            ));
+        }
+    };
+
+    let tally = parse_tally(&run.stdout);
+    let mut failures = parse_failures(&run);
+    if let Some(suite) = suite
+        && let Some(failure) = ran_nothing(suite, &run, &tally)
+    {
+        failures.push(failure);
+    }
+    let diagnostics = diagnostics_for(&run, run.success(), tally.failed);
+    Ok(Outcome {
+        name,
+        run,
+        tally,
+        failures,
+        diagnostics,
+    })
+}
+
+/// The failure a suite that matched no test at all owes its caller.
+///
+/// A named suite is a claim that a body of tests exists and answers a question.
+/// A run of it that reports no test — passed, failed or ignored — answered
+/// nothing, and its zero exit status says only that cargo had nothing to do.
+fn ran_nothing(suite: &str, run: &Run, tally: &Tally) -> Option<Failure> {
+    if !run.success() || tally.passed + tally.failed + tally.skipped > 0 {
+        return None;
+    }
+    let mut failure = Failure::new(
+        FailureKind::CapabilityMissing,
+        format!("the `{suite}` suite matched no test, so it proved nothing"),
+    );
+    failure.command = Some(run.command.clone());
+    failure.exit_code = run.exit_code;
+    Some(failure)
+}
+
+/// The `cargo test` invocation a selection spells.
+///
+/// Split out so the mapping is checked rather than trusted: the difference
+/// between narrowing by name and narrowing by binary is invisible in a run that
+/// ran nothing and exited zero.
+fn cargo_arguments(
+    suite: Option<&str>,
+    named: Option<&str>,
+    profile: &str,
+    filter: Option<&str>,
+    fallback: Fallback,
+) -> Vec<String> {
     let mut args = vec!["test".to_owned()];
-    match (suite, &named) {
+    match (suite, named) {
         (_, Some(name)) => {
             args.push("-p".to_owned());
-            args.push(name.clone());
+            args.push(name.to_owned());
         }
         (Some("all"), None) => args.push("--workspace".to_owned()),
         (Some("unit"), None) => {
@@ -179,47 +273,32 @@ pub fn run(
             }
         },
     }
+    // A suite's binary is selected only when the suite also chose the packages:
+    // a caller who named a package of their own may well have no such target,
+    // and `--test` against one that does not exist fails the run outright.
+    let narrow = match named {
+        Some(_) => None,
+        None => suite.and_then(|suite| selection(suite).1),
+    };
+    if let Some(Narrow::Target(target)) = narrow {
+        args.push("--test".to_owned());
+        args.push(target.to_owned());
+    }
     if profile == "release" {
         args.push("--release".to_owned());
     }
     // Never let the first failing binary hide the rest: a suite that stopped
     // early reports the binaries it never ran as nothing at all.
     args.push("--no-fail-fast".to_owned());
-    if let Some(filter) = filter
-        .as_deref()
-        .or_else(|| suite.and_then(|s| selection(s).1))
-    {
+    let by_name = filter.or(match narrow {
+        Some(Narrow::Name(name)) => Some(name),
+        _ => None,
+    });
+    if let Some(filter) = by_name {
         args.push("--".to_owned());
         args.push(filter.to_owned());
     }
-
-    let name = match (suite, &named) {
-        (_, Some(package)) => format!("tests_{package}"),
-        (Some(suite), None) => format!("tests_{suite}"),
-        (None, None) => "tests".to_owned(),
-    };
-    let root = exec::repository_root();
-    let run = match exec::run("cargo", &args, &root, &env, bound) {
-        Ok(run) => run,
-        Err(error) => {
-            let failure = Failure::new(FailureKind::Crash, error.to_string());
-            return Err((
-                json!({ "success": false, "failures": [failure], "stdout": "", "stderr": "" }),
-                true,
-            ));
-        }
-    };
-
-    let tally = parse_tally(&run.stdout);
-    let failures = parse_failures(&run);
-    let diagnostics = diagnostics_for(&run, run.success(), tally.failed);
-    Ok(Outcome {
-        name,
-        run,
-        tally,
-        failures,
-        diagnostics,
-    })
+    args
 }
 
 /// The crate a path under `crates/` belongs to.

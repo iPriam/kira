@@ -534,6 +534,9 @@ pub enum ForeignCallError {
         /// The argument position.
         index: usize,
     },
+    /// A C string result was not valid UTF-8.
+    #[error("foreign CString result is not valid UTF-8")]
+    InvalidCStringResult,
     /// A raw pointer word cannot fit the current target's pointer width.
     #[error("raw pointer value {value:#x} does not fit this target's pointer width")]
     RawPointerOutOfRange {

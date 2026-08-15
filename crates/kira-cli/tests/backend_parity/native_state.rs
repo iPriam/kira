@@ -1,4 +1,4 @@
-use super::assert_parity;
+use super::{assert_parity, assert_parity_with_heap_balance};
 
 #[test]
 fn callback_state_mutation_crosses_runtime_and_native_byte_identically() {
@@ -262,4 +262,99 @@ function main() {
 "#,
     );
     assert_eq!(output, "box\n12\n1\n11\nkira\n");
+}
+
+/// Callback state may hold a closure that captured a `var`, and the capture
+/// cell inside it is still the *same* box the declaring frame writes through.
+///
+/// This is the shape an application's runtime state has: a frame handler stored
+/// beside the values it reads. Boxing a copy of the cell's contents instead
+/// would give the frame and the handler a counter each, and each engine would
+/// have to be caught doing it separately — so parity is the check that matters.
+#[test]
+fn callback_state_shares_a_capture_cell_rather_than_copying_it() {
+    let output = assert_parity(
+        r#"
+struct AppState {
+    var label: String
+    var bump: () -> Void
+}
+
+@Main function main() {
+    var total = 0
+    let bump: () -> Void = { in total = total + 1 }
+
+    let boxed = nativeState(AppState { label: "frames", bump: bump })
+    var state = nativeRecover<AppState>(nativeUserData(boxed))
+    state.bump()
+    state.bump()
+    // The frame's own binding sees what the boxed closure wrote.
+    print(total)
+    print(state.label)
+    total = total + 10
+    // …and the boxed closure writes into what the frame reads.
+    state.bump()
+    print(total)
+    nativeStateFree(boxed)
+    print(total)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\nframes\n13\n13\n");
+}
+
+/// A callback-state enum carries an opaque pointer directly and a closure whose
+/// representation owns a capture cell. The native half recovers both values,
+/// calls through the recovered closure, and returns the pointer comparison so
+/// the hybrid tree must preserve both payload shape and cell identity.
+#[test]
+fn callback_state_enum_preserves_raw_pointer_and_capture_cell_payloads() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+enum Payload {
+    Pointer(RawPtr)
+    Handler(() -> Void)
+}
+
+struct State {
+    var payload: Payload
+}
+
+@Native
+function inspect(raw: RawPtr, expected: RawPtr) -> Bool {
+    var state = nativeRecover<State>(raw)
+    match state.payload {
+        Pointer(value) -> {
+            return rawPointerWord(value) == rawPointerWord(expected)
+        }
+        Handler(handler) -> {
+            handler()
+            return true
+        }
+    }
+    return false
+}
+
+@Main
+@Runtime
+function main() {
+    var pointerSource = nativeState(0)
+    let pointer = nativeUserData(pointerSource)
+    var pointerState = nativeState(State { payload: .Pointer(pointer) })
+    print(inspect(nativeUserData(pointerState), pointer))
+    nativeStateFree(pointerState)
+    nativeStateFree(pointerSource)
+
+    var total = 0
+    let bump: () -> Void = { in total = total + 1 }
+    var handlerState = nativeState(State { payload: .Handler(bump) })
+    print(inspect(nativeUserData(handlerState), RawPtr(0)))
+    nativeStateFree(handlerState)
+    print(total)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\n1\n");
 }

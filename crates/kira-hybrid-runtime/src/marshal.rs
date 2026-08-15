@@ -96,7 +96,11 @@ pub fn lower_args(
                     // consumed by the trampoline it is handed to.
                     let node = unsafe { library.encode_state_value(tree) }
                         .map_err(|reason| MarshalError::Aggregate { index, reason })?;
-                    BridgeData::Node(node as u64)
+                    if matches!(tree, NativeStateValue::Any { .. }) {
+                        BridgeData::Any(node as u64)
+                    } else {
+                        BridgeData::Node(node as u64)
+                    }
                 }
             };
             Ok(BridgeValue::encode(data))
@@ -173,6 +177,13 @@ pub unsafe fn lift_result(
         // The tree is the host's now: decoding copies it out and frees every
         // node, which is the one free the transfer owes.
         BridgeData::Node(node) => {
+            // SAFETY: the caller vouches the node came from this library and
+            // has not been freed; decoding consumes it exactly once.
+            let tree = unsafe { library.decode_state_value(node as *mut c_void) }
+                .map_err(|reason| MarshalError::Aggregate { index: 0, reason })?;
+            NativeResult::Aggregate(tree)
+        }
+        BridgeData::Any(node) => {
             // SAFETY: the caller vouches the node came from this library and
             // has not been freed; decoding consumes it exactly once.
             let tree = unsafe { library.decode_state_value(node as *mut c_void) }
@@ -288,6 +299,17 @@ pub unsafe fn take_args(
                     }
                 }
             }
+            BridgeData::Any(node) => {
+                // SAFETY: the caller vouches every node is live and
+                // transferred; decoding consumes it exactly once.
+                match unsafe { library.decode_state_value(node as *mut c_void) } {
+                    Ok(tree) => OwnedArg::Aggregate(tree),
+                    Err(reason) => {
+                        failure.get_or_insert(MarshalError::Aggregate { index, reason });
+                        continue;
+                    }
+                }
+            }
         };
         owned.push(argument);
     }
@@ -316,6 +338,9 @@ pub fn lower_result(library: &NativeLibrary, result: NativeResult) -> BridgeValu
             // SAFETY: the node is allocated by this library and consumed by
             // the native caller that receives the result.
             match unsafe { library.encode_state_value(&tree) } {
+                Ok(node) if matches!(tree, NativeStateValue::Any { .. }) => {
+                    BridgeData::Any(node as u64)
+                }
                 Ok(node) => BridgeData::Node(node as u64),
                 // A tree the native half cannot build is reported as the unit
                 // value: this path has no error channel, and a wrong value

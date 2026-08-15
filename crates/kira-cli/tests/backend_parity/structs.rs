@@ -117,9 +117,7 @@ function main() {
 #[test]
 fn a_string_field_is_copied_not_shared() {
     // The case where a shallow copy is not just wrong but unsound: two structs
-    // sharing one string handle would double-free it at scope exit. The VM
-    // proves its heap balances; the native backend has no such proof, so this
-    // is what stands in for one.
+    // sharing one string handle would double-free it at scope exit.
     let output = assert_parity(
         r#"
 struct Labelled {
@@ -252,11 +250,8 @@ function main() {
 
 /// A struct crossing the `@Native` seam builds and runs, on every backend.
 ///
-/// This case used to assert the opposite — that the build failed with "cannot
-/// cross" — because the seam had no way to carry a struct and refusing beat
-/// marshalling the wrong shape. It carries one now, as a node tree that is
-/// transferred and freed by the reader, so what is pinned here is the value
-/// arriving intact rather than the refusal.
+/// The value travels as a transferred node tree, and the reader frees its
+/// allocations. This pins the value arriving intact across all three engines.
 ///
 /// The deeper coverage lives in `seam.rs`, which exercises the same mechanism
 /// for arrays and payload-carrying enums; this is the struct-shaped entry into

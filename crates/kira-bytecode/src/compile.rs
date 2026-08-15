@@ -5,9 +5,9 @@
 //! `&&`/`||` compile to short-circuiting jumps. String constants are pooled and
 //! deduplicated into the module's string table.
 //!
-//! Compilation is fallible: counts that exceed the bytecode format's operand
-//! widths (u16 local slots, u32 string pool) and internal invariant breaks
-//! surface as a typed [`CompileError`] — never a panic.
+//! Compilation is fallible only for malformed lowered input and internal
+//! invariant breaks. Bytecode-owned indexes and counts use the wide format
+//! representation, so frontend-valid sizes are not rejected at this layer.
 
 use std::collections::HashMap;
 
@@ -72,24 +72,13 @@ pub fn compile_hybrid(program: &IrProgram) -> Result<Module, CompileError> {
 fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, CompileError> {
     let mut strings = StringPool::default();
     let mut functions = Vec::with_capacity(program.functions.len());
-    let function_count =
-        u32::try_from(program.functions.len()).map_err(|_| CompileError::TooManyFunctions {
-            count: program.functions.len(),
-        })?;
+    let function_count = program.functions.len() as u64;
     let mut widens = widen::WidenHelpers::new(function_count);
     let plans = kira_ir::mid::plan(program, VM_LENDING)?;
     for (index, function) in program.functions.iter().enumerate() {
         let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
-        let param_count =
-            u16::try_from(function.param_count).map_err(|_| CompileError::TooManyLocals {
-                function: function.name.clone(),
-                count: function.param_count,
-            })?;
-        let local_count =
-            u16::try_from(function.local_count()).map_err(|_| CompileError::TooManyLocals {
-                function: function.name.clone(),
-                count: function.local_count(),
-            })?;
+        let param_count = u64::from(function.param_count);
+        let local_count = u64::from(function.local_count());
         // A native function's body is not ours to emit; it is compiled into the
         // shared library instead.
         let code = if execution == Execution::Native {
@@ -147,7 +136,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
         });
     }
 
-    Ok(Module {
+    let module = Module {
         functions,
         main: program.main,
         strings: strings.into_vec(),
@@ -159,26 +148,23 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             .collect(),
         foreign_aggregates: program.foreign_aggregates.clone(),
         foreign_callbacks: program.foreign_callbacks.clone(),
-    })
+    };
+    // The compiler checks its own output against the rules every loader checks
+    // it against. Without this the rules guard the VM's front door and nothing
+    // else: a malformed function is written to a `.kbc`, described in a hybrid
+    // manifest, and reported — if at all — by whichever engine loads it first,
+    // in that engine's vocabulary. `validate` names the function and the rule.
+    module.validate()?;
+    Ok(module)
 }
 
-/// Narrows a mid-stage plan to the slot width the bytecode format addresses.
-///
-/// A slot beyond `u16` cannot be encoded, and a function with that many locals
-/// is refused earlier for the same reason; this reports it in the same
-/// vocabulary rather than truncating a plan into one that silently leaks.
 fn frame_release(
     plan: &kira_ir::mid::ReleasePlan,
-    function: &str,
+    _function: &str,
 ) -> Result<FrameRelease, CompileError> {
     let mut slots = Vec::with_capacity(plan.len());
     for &slot in plan.slots() {
-        slots.push(
-            u16::try_from(slot).map_err(|_| CompileError::LocalSlotOutOfRange {
-                function: function.to_owned(),
-                slot,
-            })?,
-        );
+        slots.push(u64::from(slot));
     }
     Ok(FrameRelease::Planned(slots))
 }
@@ -186,19 +172,19 @@ fn frame_release(
 /// Deduplicating string constant pool.
 #[derive(Default)]
 struct StringPool {
-    index: HashMap<String, u32>,
+    index: HashMap<String, u64>,
     strings: Vec<String>,
 }
 
 impl StringPool {
-    fn intern(&mut self, value: &str) -> Result<u32, CompileError> {
+    fn intern(&mut self, value: &str) -> u64 {
         if let Some(&id) = self.index.get(value) {
-            return Ok(id);
+            return id;
         }
-        let id = u32::try_from(self.strings.len()).map_err(|_| CompileError::TooManyStrings)?;
+        let id = self.strings.len() as u64;
         self.strings.push(value.to_owned());
         self.index.insert(value.to_owned(), id);
-        Ok(id)
+        id
     }
 
     fn into_vec(self) -> Vec<String> {
@@ -233,7 +219,7 @@ struct LoopFrame {
     /// The address of the loop's condition test — a `continue` jumps here.
     ///
     /// Known when the frame is pushed, so a `continue` needs no patching.
-    continue_target: u32,
+    continue_target: u64,
     /// Placeholder `Jump`s emitted by `break`, patched to the loop's exit once
     /// the body is compiled and that address is known.
     break_jumps: Vec<usize>,

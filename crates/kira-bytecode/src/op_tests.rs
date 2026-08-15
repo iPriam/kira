@@ -141,9 +141,18 @@ fn round_trips_the_scalar_conversion_opcodes() {
     let code = vec![
         Instruction::ConvertIntToFloat,
         Instruction::ConvertFloatToInt,
+        Instruction::ConvertIntToRawPtr,
+        Instruction::ConvertRawPtrToInt,
     ];
     let bytes = encode(&code);
     assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn the_pointer_word_conversion_opcodes_are_appended() {
+    assert_eq!(opcode::CONVERT_FLOAT_TO_BITS32, 0x5c);
+    assert_eq!(opcode::CONVERT_INT_TO_RAW_PTR, 0x6f);
+    assert_eq!(opcode::CONVERT_RAW_PTR_TO_INT, 0x70);
 }
 
 #[test]
@@ -176,13 +185,12 @@ fn round_trips_a_mutating_call() {
         Instruction::CallMut {
             func: 0,
             slot: 0,
-            path: PlacePath::new(vec![]).expect("an empty path"),
+            path: PlacePath::new(vec![]),
         },
         Instruction::CallMut {
             func: 4_294_967_295,
             slot: 7,
-            path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index])
-                .expect("a two-step path"),
+            path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index]),
         },
         Instruction::ReturnVoid,
     ];
@@ -202,9 +210,9 @@ fn a_mutating_call_with_a_truncated_place_is_reported() {
     // A full function index but a step count that promises a step whose bytes
     // never arrive.
     let mut bytes = vec![opcode::CALL_MUT];
-    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
-    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step promised
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // func
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // one step promised
     // ...but no step tag follows.
     let err = decode(&bytes).unwrap_err();
     assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
@@ -235,7 +243,7 @@ fn round_trips_a_writeback_call() {
             targets: vec![WritebackTarget {
                 param: 3,
                 slot: 9,
-                path: PlacePath::new(vec![]).expect("an empty path"),
+                path: PlacePath::new(vec![]),
             }],
         },
         Instruction::CallWriteback {
@@ -244,13 +252,12 @@ fn round_trips_a_writeback_call() {
                 WritebackTarget {
                     param: 0,
                     slot: 1,
-                    path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index])
-                        .expect("a two-step path"),
+                    path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index]),
                 },
                 WritebackTarget {
                     param: 2,
                     slot: 5,
-                    path: PlacePath::new(vec![PathStep::Index]).expect("a one-step path"),
+                    path: PlacePath::new(vec![PathStep::Index]),
                 },
             ],
         },
@@ -264,9 +271,9 @@ fn round_trips_a_writeback_call() {
 fn a_truncated_writeback_call_target_is_reported() {
     // A full function index and a promised target whose bytes never arrive.
     let mut bytes = vec![opcode::CALL_WRITEBACK];
-    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // one target promised
-    bytes.extend_from_slice(&0u16.to_le_bytes()); // param
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // func
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // one target promised
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // param
     // ...but no place follows.
     let err = decode(&bytes).unwrap_err();
     assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
@@ -275,11 +282,11 @@ fn a_truncated_writeback_call_target_is_reported() {
 #[test]
 fn a_writeback_call_with_an_unknown_place_step_is_reported() {
     let mut bytes = vec![opcode::CALL_WRITEBACK];
-    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // one target
-    bytes.extend_from_slice(&0u16.to_le_bytes()); // param
-    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // func
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // one target
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // param
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // one step
     bytes.push(0xff); // an unknown step tag
     let err = decode(&bytes).unwrap_err();
     assert!(matches!(
@@ -291,9 +298,9 @@ fn a_writeback_call_with_an_unknown_place_step_is_reported() {
 #[test]
 fn a_mutating_call_with_an_unknown_place_step_is_reported() {
     let mut bytes = vec![opcode::CALL_MUT];
-    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
-    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // func
+    bytes.extend_from_slice(&0u64.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u64.to_le_bytes()); // one step
     bytes.push(0xff); // an unknown step tag
     let err = decode(&bytes).unwrap_err();
     assert!(matches!(
@@ -432,8 +439,8 @@ fn round_trips_the_capture_cell_opcodes() {
         Instruction::NewCell,
         Instruction::CellGet(0),
         Instruction::CellSet(0),
-        Instruction::CellGet(u16::MAX),
-        Instruction::CellSet(u16::MAX),
+        Instruction::CellGet(u64::MAX),
+        Instruction::CellSet(u64::MAX),
     ];
     let bytes = encode(&code);
     assert_eq!(decode(&bytes).unwrap(), code);
@@ -447,5 +454,189 @@ fn a_truncated_cell_slot_is_reported() {
             matches!(err, DecodeError::UnexpectedEnd { .. }),
             "a half-written slot must be a typed error, not a guess"
         );
+    }
+}
+
+#[test]
+fn bytecode_owned_operands_cross_the_legacy_boundaries() {
+    let above_u16 = u64::from(u16::MAX) + 1;
+    let above_u32 = u64::from(u32::MAX) + 1;
+    let deep_place = PlacePath::new((0..=u16::MAX).map(|_| PathStep::Field(above_u16)).collect());
+    let deep_fields = FieldPath::new((0..=u16::MAX).map(|_| above_u16).collect());
+    let code = vec![
+        Instruction::ConstStr(above_u32),
+        Instruction::LoadLocal(above_u16),
+        Instruction::StoreLocal(above_u16),
+        Instruction::Jump(above_u32),
+        Instruction::Call(above_u32),
+        Instruction::CallMut {
+            func: above_u32,
+            slot: above_u16,
+            path: deep_place.clone(),
+        },
+        Instruction::CallWriteback {
+            func: above_u32,
+            targets: vec![WritebackTarget {
+                param: above_u16,
+                slot: above_u16,
+                path: PlacePath::new(Vec::new()),
+            }],
+        },
+        Instruction::NewStruct(above_u16),
+        Instruction::GetField(above_u16),
+        Instruction::StoreField {
+            slot: above_u16,
+            path: deep_fields,
+        },
+        Instruction::NewArray(above_u16),
+        Instruction::ArrayGetLocal(above_u16),
+        Instruction::NewEnum {
+            tag: above_u16,
+            has_payload: false,
+        },
+        Instruction::CellGet(above_u16),
+        Instruction::CellSet(above_u16),
+        Instruction::ReturnVoid,
+    ];
+    assert_eq!(decode(&encode(&code)).unwrap(), code);
+}
+
+#[test]
+fn legacy_codec_decodes_old_widths_and_round_trips_in_the_current_format() {
+    let mut bytes = Vec::new();
+    let push_u16 = |bytes: &mut Vec<u8>, value: u16| {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    };
+    let push_u32 = |bytes: &mut Vec<u8>, value: u32| {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    };
+    let push_legacy_place = |bytes: &mut Vec<u8>, slot: u16, steps: &[(u8, u16)]| {
+        push_u16(bytes, slot);
+        push_u16(bytes, steps.len() as u16);
+        for &(tag, index) in steps {
+            bytes.push(tag);
+            if tag == 0 {
+                push_u16(bytes, index);
+            }
+        }
+    };
+
+    bytes.push(opcode::CONST_STR);
+    push_u32(&mut bytes, 0x0102_0304);
+    bytes.push(opcode::LOAD_LOCAL);
+    push_u16(&mut bytes, 0x1234);
+    bytes.push(opcode::STORE_LOCAL);
+    push_u16(&mut bytes, 0x2345);
+    bytes.push(opcode::JUMP);
+    push_u32(&mut bytes, 0x3456_789a);
+    bytes.push(opcode::JUMP_IF_FALSE);
+    push_u32(&mut bytes, 0x4567_89ab);
+    bytes.push(opcode::CALL);
+    push_u32(&mut bytes, 0x5678_9abc);
+    bytes.push(opcode::CALL_MUT);
+    push_u32(&mut bytes, 0x6789_abcd);
+    push_legacy_place(&mut bytes, 0x3456, &[(0, 0x4567), (1, 0)]);
+    bytes.push(opcode::CALL_WRITEBACK);
+    push_u32(&mut bytes, 0x789a_bcde);
+    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 0x2345);
+    push_legacy_place(&mut bytes, 0x3456, &[(0, 0x4567)]);
+    bytes.push(opcode::CALL_NATIVE_WRITEBACK);
+    push_u32(&mut bytes, 0x89ab_cdef);
+    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 0x1234);
+    push_legacy_place(&mut bytes, 0x2345, &[]);
+    bytes.push(opcode::NEW_STRUCT);
+    push_u16(&mut bytes, 0x3456);
+    bytes.push(opcode::GET_FIELD);
+    push_u16(&mut bytes, 0x4567);
+    bytes.push(opcode::STORE_FIELD);
+    push_u16(&mut bytes, 0x5678);
+    push_u16(&mut bytes, 2);
+    push_u16(&mut bytes, 0x6789);
+    push_u16(&mut bytes, 0x789a);
+    bytes.push(opcode::NEW_ARRAY);
+    push_u32(&mut bytes, 0x89ab_cdef);
+    bytes.push(opcode::ARRAY_GET_LOCAL);
+    push_u16(&mut bytes, 0x1234);
+    bytes.push(opcode::NEW_ENUM);
+    push_u16(&mut bytes, 0x2345);
+    bytes.push(1);
+    bytes.push(opcode::CELL_GET);
+    push_u16(&mut bytes, 0x3456);
+    bytes.push(opcode::CELL_SET);
+    push_u16(&mut bytes, 0x4567);
+    bytes.push(opcode::RETURN_VOID);
+
+    let decoded = decode_legacy(&bytes).expect("the KBC1 operand widths decode");
+    assert_eq!(
+        decoded,
+        vec![
+            Instruction::ConstStr(0x0102_0304),
+            Instruction::LoadLocal(0x1234),
+            Instruction::StoreLocal(0x2345),
+            Instruction::Jump(0x3456_789a),
+            Instruction::JumpIfFalse(0x4567_89ab),
+            Instruction::Call(0x5678_9abc),
+            Instruction::CallMut {
+                func: 0x6789_abcd,
+                slot: 0x3456,
+                path: PlacePath::new(vec![PathStep::Field(0x4567), PathStep::Index]),
+            },
+            Instruction::CallWriteback {
+                func: 0x789a_bcde,
+                targets: vec![WritebackTarget {
+                    param: 0x2345,
+                    slot: 0x3456,
+                    path: PlacePath::new(vec![PathStep::Field(0x4567)]),
+                }],
+            },
+            Instruction::CallNativeWriteback {
+                func: 0x89ab_cdef,
+                targets: vec![WritebackTarget {
+                    param: 0x1234,
+                    slot: 0x2345,
+                    path: PlacePath::new(Vec::new()),
+                }],
+            },
+            Instruction::NewStruct(0x3456),
+            Instruction::GetField(0x4567),
+            Instruction::StoreField {
+                slot: 0x5678,
+                path: FieldPath::new(vec![0x6789, 0x789a]),
+            },
+            Instruction::NewArray(0x89ab_cdef),
+            Instruction::ArrayGetLocal(0x1234),
+            Instruction::NewEnum {
+                tag: 0x2345,
+                has_payload: true,
+            },
+            Instruction::CellGet(0x3456),
+            Instruction::CellSet(0x4567),
+            Instruction::ReturnVoid,
+        ]
+    );
+    assert_eq!(decode(&encode(&decoded)).unwrap(), decoded);
+}
+
+#[test]
+fn a_wide_path_count_is_rejected_when_its_steps_are_missing() {
+    let mut bytes = vec![opcode::STORE_FIELD];
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+    let error = decode(&bytes).unwrap_err();
+    assert!(matches!(error, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
+fn noncanonical_boolean_operands_are_rejected() {
+    for bytes in [
+        vec![opcode::CONST_BOOL, 2],
+        vec![opcode::NEW_ENUM, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+    ] {
+        assert!(matches!(
+            decode(&bytes),
+            Err(DecodeError::InvalidBoolean { value: 2, .. })
+        ));
     }
 }

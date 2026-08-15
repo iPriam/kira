@@ -44,7 +44,7 @@ impl FunctionLowering<'_, '_> {
             .program
             .foreign_aggregates
             .layout_of(id, self.codegen.pointer_width)
-            .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?;
+            .map_err(|_| LlvmError::internal("an aggregate with no computable C layout"))?;
         let types = self.codegen.types;
         let builder = self.codegen.builder;
         // SAFETY: `buffer` is a live alloca of exactly `layout.size` bytes on
@@ -76,7 +76,7 @@ impl FunctionLowering<'_, '_> {
             .program
             .foreign_aggregates
             .get(id)
-            .ok_or(LlvmError::Unsupported("an aggregate not in the table"))?
+            .ok_or(LlvmError::internal("an aggregate not in the table"))?
             .members()
             .to_vec();
         let field_types = self.struct_field_types(ty, members.len())?;
@@ -89,7 +89,7 @@ impl FunctionLowering<'_, '_> {
                     offset = round_up(offset, layout.align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let slot = self.byte_offset_ptr(buffer, at)?;
                     let converted = self.codegen.kira_value_to_c(field, *ty)?;
                     // SAFETY: `slot` addresses `layout.size` bytes inside the
@@ -100,7 +100,7 @@ impl FunctionLowering<'_, '_> {
                     }
                     offset = offset
                         .checked_add(layout.size)
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                 }
                 ForeignMember::Aggregate(nested) => {
                     let layout = self
@@ -109,23 +109,23 @@ impl FunctionLowering<'_, '_> {
                         .foreign_aggregates
                         .layout_of(*nested, self.codegen.pointer_width)
                         .map_err(|_| {
-                            LlvmError::Unsupported("an aggregate with no computable C layout")
+                            LlvmError::internal("an aggregate with no computable C layout")
                         })?;
                     offset = round_up(offset, layout.align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     self.write_members(*nested, field, field_types[index], buffer, at)?;
                     offset = offset
                         .checked_add(layout.size)
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                 }
                 ForeignMember::Array { element, count } => {
                     let (stride, align) = self.element_layout(*element)?;
                     offset = round_up(offset, align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let slot = self.byte_offset_ptr(buffer, at)?;
                     self.write_array_member(
                         *element,
@@ -139,9 +139,9 @@ impl FunctionLowering<'_, '_> {
                         .checked_add(
                             stride
                                 .checked_mul(*count)
-                                .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?,
+                                .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?,
                         )
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                 }
             }
         }
@@ -171,7 +171,7 @@ impl FunctionLowering<'_, '_> {
             .program
             .foreign_aggregates
             .layout_of(id, self.codegen.pointer_width)
-            .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?;
+            .map_err(|_| LlvmError::internal("an aggregate with no computable C layout"))?;
         // SAFETY: `types.i64` belongs to this module's context.
         let size = unsafe { LLVMConstInt(self.codegen.types.i64, u64::from(layout.size), 0) };
         Ok(self.call(
@@ -204,7 +204,7 @@ impl FunctionLowering<'_, '_> {
             .program
             .foreign_aggregates
             .get(id)
-            .ok_or(LlvmError::Unsupported("an aggregate not in the table"))?
+            .ok_or(LlvmError::internal("an aggregate not in the table"))?
             .members()
             .to_vec();
         let field_types = self.struct_field_types(ty, members.len())?;
@@ -220,7 +220,7 @@ impl FunctionLowering<'_, '_> {
                     offset = round_up(offset, layout.align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let slot = self.byte_offset_ptr(buffer, at)?;
                     let c_type = self.codegen.foreign_c_type(*scalar);
                     // SAFETY: `slot` addresses this scalar's bytes inside the
@@ -233,7 +233,7 @@ impl FunctionLowering<'_, '_> {
                     };
                     offset = offset
                         .checked_add(layout.size)
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                     self.codegen.c_value_to_kira(loaded, *scalar)?
                 }
                 ForeignMember::Aggregate(nested) => {
@@ -243,16 +243,16 @@ impl FunctionLowering<'_, '_> {
                         .foreign_aggregates
                         .layout_of(*nested, self.codegen.pointer_width)
                         .map_err(|_| {
-                            LlvmError::Unsupported("an aggregate with no computable C layout")
+                            LlvmError::internal("an aggregate with no computable C layout")
                         })?;
                     offset = round_up(offset, layout.align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let inner = self.read_members(*nested, buffer, at, field_types[index])?;
                     offset = offset
                         .checked_add(layout.size)
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                     inner
                 }
                 ForeignMember::Array { element, count } => {
@@ -260,7 +260,7 @@ impl FunctionLowering<'_, '_> {
                     offset = round_up(offset, align)?;
                     let at = base
                         .checked_add(offset)
-                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let slot = self.byte_offset_ptr(buffer, at)?;
                     let array =
                         self.read_array_member(*element, *count, stride, field_types[index], slot)?;
@@ -268,9 +268,9 @@ impl FunctionLowering<'_, '_> {
                         .checked_add(
                             stride
                                 .checked_mul(*count)
-                                .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?,
+                                .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?,
                         )
-                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
                     array
                 }
             };
@@ -283,7 +283,7 @@ impl FunctionLowering<'_, '_> {
     /// the aggregate table holds for it.
     fn struct_field_types(&self, ty: Type, members: usize) -> Result<Vec<Type>, LlvmError> {
         let Type::Struct(struct_id) = ty else {
-            return Err(LlvmError::Unsupported(
+            return Err(LlvmError::internal(
                 "an aggregate whose Kira type is not a struct",
             ));
         };
@@ -293,13 +293,13 @@ impl FunctionLowering<'_, '_> {
             .types
             .structs()
             .get(struct_id)
-            .ok_or(LlvmError::Unsupported("an aggregate naming no struct"))?
+            .ok_or(LlvmError::internal("an aggregate naming no struct"))?
             .fields
             .iter()
             .map(|field| field.ty)
             .collect();
         if field_types.len() != members {
-            return Err(LlvmError::Unsupported(
+            return Err(LlvmError::internal(
                 "an aggregate whose member count does not match its Kira struct",
             ));
         }
@@ -315,7 +315,7 @@ impl FunctionLowering<'_, '_> {
                 .program
                 .foreign_aggregates
                 .layout_of(id, self.codegen.pointer_width)
-                .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?,
+                .map_err(|_| LlvmError::internal("an aggregate with no computable C layout"))?,
         };
         Ok((layout.size, layout.align))
     }
@@ -598,5 +598,5 @@ fn round_up(value: u32, align: u32) -> Result<u32, LlvmError> {
     value
         .checked_add(align - 1)
         .map(|raised| raised - (raised % align))
-        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))
+        .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))
 }

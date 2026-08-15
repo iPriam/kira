@@ -173,10 +173,7 @@ impl FnCompiler<'_> {
                 }
             }
         }
-        FieldPath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
-            function: self.function_name.to_owned(),
-            count: error.count,
-        })
+        Ok(FieldPath::new(steps))
     }
 
     /// Emits a place's index expressions, outermost first, and returns the
@@ -198,30 +195,21 @@ impl FnCompiler<'_> {
                 }
             }
         }
-        PlacePath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
-            function: self.function_name.to_owned(),
-            count: error.count,
-        })
+        Ok(PlacePath::new(steps))
     }
 
-    /// Converts an IR local index to a `u16` slot, or fails typed.
-    pub(super) fn local_slot(&self, slot: u32) -> Result<u16, CompileError> {
-        u16::try_from(slot).map_err(|_| CompileError::LocalSlotOutOfRange {
-            function: self.function_name.to_owned(),
-            slot,
-        })
+    /// Converts an IR local index to the wide bytecode slot representation.
+    pub(super) fn local_slot(&self, slot: u32) -> Result<u64, CompileError> {
+        Ok(u64::from(slot))
     }
 
-    /// Converts an IR field index to a `u16` operand, or fails typed.
-    pub(super) fn field_index(&self, index: u32) -> Result<u16, CompileError> {
-        u16::try_from(index).map_err(|_| CompileError::TooManyFields {
-            function: self.function_name.to_owned(),
-            count: index as usize,
-        })
+    /// Converts an IR field index to the wide bytecode operand.
+    pub(super) fn field_index(&self, index: u32) -> Result<u64, CompileError> {
+        Ok(u64::from(index))
     }
 
-    fn here(&self) -> u32 {
-        self.code.len() as u32
+    fn here(&self) -> u64 {
+        self.code.len() as u64
     }
 
     pub(super) fn emit_placeholder_jump(&mut self) -> usize {
@@ -237,7 +225,7 @@ impl FnCompiler<'_> {
     }
 
     pub(super) fn patch_to_here(&mut self, placeholder: usize) -> Result<(), CompileError> {
-        let target = self.code.len() as u32;
+        let target = self.code.len() as u64;
         match self.code.get_mut(placeholder) {
             Some(Instruction::Jump(slot)) | Some(Instruction::JumpIfFalse(slot)) => {
                 *slot = target;

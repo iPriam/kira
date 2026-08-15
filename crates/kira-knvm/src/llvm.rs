@@ -1,28 +1,12 @@
-//! Provisioning the managed LLVM bundle: `knvm install-llvm`.
+//! Provisions the managed LLVM bundle for `knvm install-llvm`.
 //!
-//! The LLVM backend is a hard dependency of every `kira`, and its build script
-//! discovers the bundle at `<toolchains-root>/llvm/<version>/<host-key>`
-//! without being told where it is. Until now the only things that put a bundle
-//! there were a CI step and a developer running `tar` by hand; this is the
-//! supported route, and it lands the tree at exactly the path
-//! `kira_toolchain::discover` looks in.
+//! The bundle is stored at `<toolchains-root>/llvm/<version>/<host-key>`, the
+//! path discovered by the LLVM backend. The compiled `llvm-metadata.toml` pin
+//! supplies the version, release asset, and host-specific filename.
 //!
-//! # What decides the version
-//!
-//! Nothing here. The pin is `llvm-metadata.toml`, compiled into
-//! `kira-toolchain`, which names the LLVM version, the GitHub release tag that
-//! owns the published bundles, and the exact asset filename per host. This
-//! module reads that and downloads what it says. A knvm built from a checkout
-//! whose pin has moved provisions the new bundle by construction — there is no
-//! second place recording which LLVM Kira wants.
-//!
-//! # Why it is not part of a toolchain install
-//!
-//! `llvm/` is a version-independent sibling of the channel directories, shared
-//! by every installed toolchain and keyed by its own version. A toolchain
-//! install writes `<channel>/<version>/` and `current.toml` and nothing else,
-//! and that separation is asserted by its tests. Provisioning LLVM is
-//! therefore its own verb, and it writes only under `llvm/`.
+//! LLVM is a versioned sibling of installed toolchain directories, so this verb
+//! updates only the `llvm/` tree and can serve every installed toolchain that
+//! uses the same LLVM version.
 
 use std::path::{Path, PathBuf};
 

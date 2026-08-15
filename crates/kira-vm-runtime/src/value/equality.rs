@@ -81,12 +81,18 @@ impl Heap {
                         .all(|(&element, node)| self.value_equals_node(element, node))
             }
             (Value::Enum(a), NativeStateValue::Enum { tag, payload }) => {
-                self.enum_tag(a) == Some(*tag)
+                self.enum_tag(a) == Some(u64::from(*tag))
                     && match (self.enum_payload_ref(a), payload.as_deref()) {
                         (Some(one), Some(other)) => self.value_equals_node(one, other),
                         (None, None) => true,
                         _ => false,
                     }
+            }
+            (Value::Erased(a), NativeStateValue::Any { type_id, payload }) => {
+                self.erased_type_id(a) == Some(*type_id)
+                    && self
+                        .erased_payload_ref(a)
+                        .is_some_and(|value| self.value_equals_node(value, payload))
             }
             _ => false,
         }

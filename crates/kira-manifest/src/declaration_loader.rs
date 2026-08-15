@@ -90,6 +90,9 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
             "packages" => manifest.packages = string_array_value(key, value)?,
             "dependencies" => manifest.dependencies = dependencies_value(value)?,
             "nativeLibraries" => manifest.native_libraries = native_libraries_value(value)?,
+            "allowThinFfiShim" => {
+                manifest.allow_thin_ffi_shim = bool_value(key, value)?;
+            }
             "defaults" => {
                 let (execution_mode, build_target) = defaults_value(value)?;
                 if let Some(mode) = execution_mode {
@@ -341,6 +344,15 @@ pub(crate) fn string_value(key: &str, value: &str) -> Result<String, Declaration
         }
     }
     Ok(decoded)
+}
+
+/// Reads a declaration boolean without accepting a truthy spelling.
+fn bool_value(key: &str, value: &str) -> Result<bool, DeclarationError> {
+    match value.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(malformed(key)),
+    }
 }
 
 /// Reads a declaration array whose members are all quoted strings.

@@ -29,7 +29,7 @@ use kira_runtime_abi::NativeStatePathStep;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResolvedStep {
     /// Walk into the field at this index.
-    Field(u16),
+    Field(u64),
     /// Walk into the element at this index, as the program computed it.
     Index(i64),
 }
@@ -53,16 +53,24 @@ pub(super) fn check_index(index: i64, len: Option<usize>) -> Result<usize, VmErr
     }
 }
 
+fn local_index(slot: u64) -> Result<usize, VmError> {
+    usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))
+}
+
+fn native_field(index: u64) -> Result<u32, VmError> {
+    u32::try_from(index).map_err(|_| VmError::NoSuchField { index })
+}
+
 impl Vm<'_> {
     /// Walks `steps` from local `slot`, returning the value the last step lands
     /// *on* — that is, the value the caller is about to write into.
     fn walk_place(
         &mut self,
         frame: &Frame,
-        slot: u16,
+        slot: u64,
         steps: &[ResolvedStep],
     ) -> Result<Value, VmError> {
-        self.walk_value(frame.locals[slot as usize], steps)
+        self.walk_value(frame.locals[local_index(slot)?], steps)
     }
 
     /// Rebuilds a local that holds a deferred state read, so a write can land.
@@ -73,10 +81,13 @@ impl Vm<'_> {
     /// it must reach the copy and not the state. Rebuilding here is that copy,
     /// paid at the first write instead of at every read — and a local that is
     /// only ever read never pays it at all.
-    fn own_local(&mut self, frame: &mut Frame, slot: u16) {
-        let local = frame.locals[slot as usize];
+    fn own_local(&mut self, frame: &mut Frame, slot: u64) {
+        let Ok(slot) = local_index(slot) else {
+            return;
+        };
+        let local = frame.locals[slot];
         if matches!(local, Value::NativeSnapshot(_)) {
-            frame.locals[slot as usize] = self.heap.own(local);
+            frame.locals[slot] = self.heap.own(local);
         }
     }
 
@@ -94,6 +105,11 @@ impl Vm<'_> {
                 let Value::Struct(id) = current else {
                     return Err(VmError::NotAStruct);
                 };
+                // Fields of this struct's own before the handle inside one is
+                // read out, for the reason the index step gives below: the walk
+                // is on its way to a write, and a handle read out of a shared
+                // block is a handle every holder of that block also has.
+                self.heap.make_struct_unique(id);
                 self.heap
                     .field(id, index)
                     .ok_or(VmError::NoSuchField { index })
@@ -120,12 +136,12 @@ impl Vm<'_> {
     pub(super) fn store_place(
         &mut self,
         frame: &mut Frame,
-        slot: u16,
+        slot: u64,
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
         self.own_local(frame, slot);
-        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+        if let Value::NativeView { token, type_id } = frame.locals[local_index(slot)?] {
             if steps.is_empty() {
                 self.heap.drop_value(value);
                 return Err(VmError::EmptyFieldPath);
@@ -140,7 +156,7 @@ impl Vm<'_> {
     }
 
     /// Writes `value` through a field-only place (`StoreField`), walking the
-    /// `&[u16]` field path directly.
+    /// The field path directly.
     ///
     /// This is the shape that predates arrays, and it stays allocation-free: a
     /// field step needs no stack index, so nothing is resolved into a scratch
@@ -148,27 +164,27 @@ impl Vm<'_> {
     pub(super) fn store_field(
         &mut self,
         frame: &mut Frame,
-        slot: u16,
-        path: &[u16],
+        slot: u64,
+        path: &[u64],
         value: Value,
     ) -> Result<(), VmError> {
         self.own_local(frame, slot);
-        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+        if let Value::NativeView { token, type_id } = frame.locals[local_index(slot)?] {
             if path.is_empty() {
                 self.heap.drop_value(value);
                 return Err(VmError::EmptyFieldPath);
             }
             self.native_path.clear();
-            self.native_path.extend(
-                path.iter()
-                    .map(|&index| NativeStatePathStep::Field(index.into())),
-            );
+            for &index in path {
+                self.native_path
+                    .push(NativeStatePathStep::Field(native_field(index)?));
+            }
             return self.write_native_path(token, type_id, value, false);
         }
         let Some((&last, walk)) = path.split_last() else {
             return Err(VmError::EmptyFieldPath);
         };
-        let mut target = frame.locals[slot as usize];
+        let mut target = frame.locals[local_index(slot)?];
         for &index in walk {
             target = self.walk_step(target, ResolvedStep::Field(index))?;
         }
@@ -212,12 +228,12 @@ impl Vm<'_> {
     pub(super) fn append_through(
         &mut self,
         frame: &mut Frame,
-        slot: u16,
+        slot: u64,
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
         self.own_local(frame, slot);
-        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+        if let Value::NativeView { token, type_id } = frame.locals[local_index(slot)?] {
             return self.write_through_view_appending(token, type_id, steps, value);
         }
         let target = self.walk_place(frame, slot, steps)?;
@@ -270,7 +286,7 @@ impl Vm<'_> {
         self.native_path.clear();
         for step in steps {
             self.native_path.push(match *step {
-                ResolvedStep::Field(index) => NativeStatePathStep::Field(index.into()),
+                ResolvedStep::Field(index) => NativeStatePathStep::Field(native_field(index)?),
                 ResolvedStep::Index(index) => NativeStatePathStep::Index(
                     u64::try_from(index).map_err(|_| VmError::NegativeIndex)?,
                 ),

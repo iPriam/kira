@@ -17,7 +17,7 @@ use kira_bytecode::op::{FieldPath, Instruction as I};
 use kira_runtime_abi::Execution;
 
 /// One function, spelled the way every fixture here needs it.
-fn func(name: &str, params: u16, locals: u16, code: Vec<I>) -> FuncProto {
+fn func(name: &str, params: u64, locals: u64, code: Vec<I>) -> FuncProto {
     FuncProto {
         name: name.to_owned(),
         param_count: params,
@@ -90,7 +90,7 @@ pub(crate) fn library() -> Module {
                     I::ConstStr(1),
                     I::StoreField {
                         slot: 0,
-                        path: FieldPath::new(vec![0]).expect("a one-step path"),
+                        path: FieldPath::new(vec![0]),
                     },
                     I::LoadLocal(1),
                     I::ConstInt(0),

@@ -133,6 +133,30 @@ fn an_aggregate_payload_is_admitted_at_the_declaration() {
     );
 }
 
+/// Pointer words do not own storage, so both the opaque spelling and a typed
+/// foreign pointer are valid enum payloads.
+#[test]
+fn pointer_payloads_are_admitted() {
+    assert!(
+        codes(
+            "enum E { Wrap(RawPtr) }\n\
+             @Main function main() { let e: E = .Wrap(RawPtr(0)) return }"
+        )
+        .is_empty()
+    );
+    assert!(
+        codes(
+            "@FFI.Struct { layout: c; }\n\
+             struct Event { let kind: I32 }\n\
+             @FFI.Pointer { target: Event; ownership: borrowed; }\n\
+             struct EventPtr {}\n\
+             enum E { Wrap(EventPtr) }\n\
+             @Main function main() { return }"
+        )
+        .is_empty()
+    );
+}
+
 /// A type with no payload form at all is still refused, and `KSEM118` still
 /// names the set that has one.
 #[test]
@@ -143,6 +167,20 @@ fn a_payload_type_with_no_value_form_is_refused_at_the_declaration() {
              @Main function main() { return }"
         ),
         vec!["KSEM118"]
+    );
+}
+
+/// A borrowed C string is rejected at its seam-only type boundary before enum
+/// payload validation. Pointer words are safe because they are inert; this
+/// borrowed view remains rejected.
+#[test]
+fn a_borrowed_c_string_payload_is_still_refused() {
+    assert_eq!(
+        codes(
+            "enum E { Wrap(CString) }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM176"]
     );
 }
 
@@ -228,6 +266,49 @@ fn a_closure_still_refuses_an_enum_that_owns_storage() {
              let f: () -> Int = { in return pick(e) }\n print(f()) return }"
         ),
         vec!["KSEM117"]
+    );
+}
+
+/// An enum whose every variant leads back into itself has no finite value, so
+/// no program can build one. It is reported at its declaration rather than left
+/// for whichever later pass first tries to build a value of it.
+#[test]
+fn an_enum_with_no_terminating_variant_is_reported() {
+    assert_eq!(
+        codes(
+            "enum Tree { Node(Branch) }\n\
+             struct Branch { let child: Tree }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM272"]
+    );
+}
+
+/// One terminating variant is enough: `Tree` is the shape a real tree has, and
+/// it stays legal wherever the branching variant is written.
+#[test]
+fn an_enum_with_one_terminating_variant_is_accepted() {
+    assert!(
+        codes(
+            "enum Tree { Node(Branch) Leaf }\n\
+             struct Branch { let child: Tree }\n\
+             @Main function main() { let t: Tree = .Leaf return }"
+        )
+        .is_empty()
+    );
+}
+
+/// Two enums that only reach a finite value through each other reach none: the
+/// cycle is reported once, against the declaration that closes it.
+#[test]
+fn a_mutually_recursive_pair_with_no_terminating_variant_is_reported() {
+    assert_eq!(
+        codes(
+            "enum A { X(B) }\n\
+             enum B { Y(A) }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM272"]
     );
 }
 

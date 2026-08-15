@@ -12,6 +12,7 @@ use kira_runtime_abi::{
     HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId, NativeStateValue,
     TaskExecutor,
 };
+use std::sync::OnceLock;
 
 use crate::debug::{VmDebugAction, VmDebugEvent, VmDebugFrame, VmDebugObserver};
 use crate::error::VmError;
@@ -39,6 +40,29 @@ use self::place::ResolvedStep;
 
 /// Guards against unbounded recursion turning into unbounded memory use.
 const MAX_CALL_DEPTH: usize = 1 << 20;
+
+fn debug_function_id(function_id: u64) -> u32 {
+    u32::try_from(function_id).unwrap_or(u32::MAX)
+}
+
+fn debug_word(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn trap_context_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("KIRA_VM_TRAP_CONTEXT").is_some())
+}
+
+struct TrapProbe {
+    function_id: u32,
+    function_name: String,
+    pc: usize,
+    instruction: String,
+    locals: Vec<String>,
+    stack: Vec<String>,
+    backtrace: Vec<String>,
+}
 
 /// The running interpreter: a host, a heap, an operand stack, and scratch.
 pub(crate) struct Vm<'h> {
@@ -74,7 +98,7 @@ pub(crate) struct Vm<'h> {
     ///
     /// Set immediately before entering and taken by the frame that starts, so
     /// it names the outermost frame and no other.
-    pending_capture: Vec<u16>,
+    pending_capture: Vec<u32>,
     /// The final values of the parameters an embedder asked to have back.
     ///
     /// Filled by the outermost frame as it returns, and only when the embedder
@@ -101,6 +125,7 @@ pub(crate) struct Vm<'h> {
     native_writebacks: Vec<Writeback>,
     /// Temporary buffers used to marshal the next native crossing.
     native_scratch: NativeCallScratch,
+    trap_probe: Option<TrapProbe>,
 }
 
 /// Temporary native-call storage detached from [`Vm`] while a host call runs.
@@ -113,6 +138,78 @@ pub(crate) struct NativeCallScratch {
     pub(crate) arguments: Vec<Value>,
     pub(crate) trees: Vec<Option<NativeStateValue>>,
     pub(crate) native_views: Vec<Option<(NativeStateToken, NativeStateTypeId)>>,
+}
+
+struct ActiveVmContext {
+    vm: *mut (),
+    module: *const Module,
+}
+
+thread_local! {
+    static ACTIVE_VM: std::cell::Cell<*mut ActiveVmContext> = const {
+        std::cell::Cell::new(std::ptr::null_mut())
+    };
+}
+
+struct ActiveVmGuard {
+    previous: *mut ActiveVmContext,
+    _context: Box<ActiveVmContext>,
+}
+
+impl ActiveVmGuard {
+    fn install(vm: *mut Vm<'_>, module: &Module) -> Self {
+        let mut context = Box::new(ActiveVmContext {
+            vm: vm.cast(),
+            module: std::ptr::from_ref(module),
+        });
+        let current = std::ptr::from_mut(context.as_mut());
+        let previous = ACTIVE_VM.with(|active| active.replace(current));
+        Self {
+            previous,
+            _context: context,
+        }
+    }
+}
+
+impl Drop for ActiveVmGuard {
+    fn drop(&mut self) {
+        ACTIVE_VM.with(|active| active.set(self.previous));
+    }
+}
+
+/// Calls a runtime function on the VM currently suspended at a native seam.
+///
+/// `None` means the caller is outside a VM call, so it must create the ordinary
+/// standalone callback VM instead.
+pub fn call_active(
+    function_id: u32,
+    args: &[kira_runtime_abi::NativeArg<'_>],
+    capture: &[u32],
+) -> Option<Result<kira_runtime_abi::NativeReturn, VmError>> {
+    ACTIVE_VM.with(|active| {
+        let context = active.get();
+        // SAFETY: a non-null `ACTIVE_VM` is the frame this thread is executing
+        // inside, so the context outlives this reentrant call.
+        (!context.is_null()).then(|| unsafe { call_on_active(context, function_id, args, capture) })
+    })
+}
+
+unsafe fn call_on_active(
+    context: *mut ActiveVmContext,
+    function_id: u32,
+    args: &[kira_runtime_abi::NativeArg<'_>],
+    capture: &[u32],
+) -> Result<kira_runtime_abi::NativeReturn, VmError> {
+    // SAFETY: the context is installed only around a synchronous host call;
+    // both pointers remain live until that call returns.
+    let context = unsafe { &*context };
+    // SAFETY: the active VM is suspended while native code calls back, so its
+    // heap can be lent to a nested interpreter without touching its frames.
+    let vm = unsafe { &mut *context.vm.cast::<Vm<'_>>() };
+    // SAFETY: the module belongs to the suspended VM call and remains live for
+    // the same duration as the context.
+    let module = unsafe { &*context.module };
+    vm.call_capturing_on_shared_heap(module, function_id, args, capture)
 }
 
 impl NativeCallScratch {
@@ -133,7 +230,7 @@ pub(crate) struct VmScratch {
     steps: Vec<ResolvedStep>,
     native_path: Vec<NativeStatePathStep>,
     string_args: Vec<Value>,
-    pending_capture: Vec<u16>,
+    pending_capture: Vec<u32>,
     captured: Vec<(u32, Value)>,
     frame_cache: Vec<Frame>,
     native_writebacks: Vec<Writeback>,
@@ -149,7 +246,7 @@ impl Vm<'_> {
     /// about to be dropped anyway, but an [`crate::Instance`]'s heap outlives
     /// the call, so a trap that left its frames behind would leak into it.
     fn run(&mut self, module: &Module, entry: Frame) -> Result<Value, VmError> {
-        self.run_inner::<false>(module, entry, None)
+        self.run_inner(module, entry, None)
     }
 
     /// Runs with an instruction observer installed.
@@ -159,10 +256,17 @@ impl Vm<'_> {
         entry: Frame,
         observer: &mut dyn VmDebugObserver,
     ) -> Result<Value, VmError> {
-        self.run_inner::<true>(module, entry, Some(observer))
+        self.run_inner(module, entry, Some(observer))
     }
 
-    fn run_inner<const DEBUG: bool>(
+    /// Enters the dispatch loop this run needs, and reclaims a trap's storage.
+    ///
+    /// The loop is selected once, here, rather than tested inside it: observing
+    /// instructions and publishing the call stack for a sampler are both
+    /// whole-run decisions, and a run that does neither is compiled without
+    /// either. Debugging and profiling do not combine — an observer already
+    /// sees every frame change as it happens.
+    fn run_inner(
         &mut self,
         module: &Module,
         entry: Frame,
@@ -170,9 +274,19 @@ impl Vm<'_> {
     ) -> Result<Value, VmError> {
         let mut frames = std::mem::take(&mut self.frames);
         frames.push(entry);
-        let result = match self.dispatch_inner::<DEBUG>(module, &mut frames, observer) {
+        let dispatched = match observer {
+            Some(observer) => {
+                self.dispatch_inner::<true, false>(module, &mut frames, Some(observer))
+            }
+            None if crate::profile::enabled() => {
+                self.dispatch_inner::<false, true>(module, &mut frames, None)
+            }
+            None => self.dispatch_inner::<false, false>(module, &mut frames, None),
+        };
+        let result = match dispatched {
             Ok(value) => Ok(value),
             Err(error) => {
+                self.report_trap_context(&error);
                 self.unwind(&mut frames);
                 Err(error)
             }
@@ -195,7 +309,7 @@ impl Vm<'_> {
         }
     }
 
-    fn dispatch_inner<const DEBUG: bool>(
+    fn dispatch_inner<const DEBUG: bool, const PROFILE: bool>(
         &mut self,
         module: &Module,
         frames: &mut Vec<Frame>,
@@ -211,32 +325,104 @@ impl Vm<'_> {
         } else {
             Vec::new()
         };
+        // The scope this run publishes its frames into, and the depth it last
+        // published, so a call or a return costs one publication and every
+        // other instruction costs one store.
+        let shadow = PROFILE.then(crate::profile::ShadowScope::open);
+        let mut published = u32::MAX;
         loop {
             let depth = frames.len() - 1;
             let function_id = frames[depth].func;
             let pc = frames[depth].pc;
-            let func = &module.functions[function_id as usize];
+            let Some(func) = usize::try_from(function_id)
+                .ok()
+                .and_then(|index| module.functions.get(index))
+            else {
+                return Err(VmError::UnknownFunction(function_id));
+            };
+            if PROFILE && let Some(shadow) = shadow.as_ref() {
+                let index = shadow.base().saturating_add(depth as u32);
+                let debug_function = debug_function_id(function_id);
+                if index != published {
+                    shadow.stack().enter(index, debug_function);
+                    published = index;
+                }
+                shadow.stack().mark(index, debug_function, debug_word(pc));
+            }
             // The bytecode is immutable for the duration of a run. Borrowing
             // the instruction avoids cloning path vectors and writeback target
             // tables on every dispatch iteration; scalar immediates are copied
             // only in the arms that need them.
             let instruction = &func.code[pc];
+            if trap_context_enabled()
+                && matches!(
+                    instruction,
+                    Instruction::ArrayGet
+                        | Instruction::ArrayGetLocal(_)
+                        | Instruction::ArrayElements(_)
+                )
+            {
+                let backtrace = frames
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter_map(|(index, frame)| {
+                        module
+                            .functions
+                            .get(usize::try_from(frame.func).ok()?)
+                            .map(|function| {
+                                format!(
+                                    "{}#{}@{}",
+                                    function.name,
+                                    debug_function_id(frame.func),
+                                    if index == depth {
+                                        pc
+                                    } else {
+                                        frame.pc.saturating_sub(1)
+                                    }
+                                )
+                            })
+                    })
+                    .collect();
+                self.trap_probe = Some(TrapProbe {
+                    function_id: debug_function_id(function_id),
+                    function_name: func.name.clone(),
+                    pc,
+                    instruction: format!("{instruction:?}"),
+                    locals: frames[depth]
+                        .locals
+                        .iter()
+                        .map(|value| format!("{value:?}"))
+                        .collect(),
+                    stack: self
+                        .stack
+                        .iter()
+                        .map(|value| format!("{value:?}"))
+                        .collect(),
+                    backtrace,
+                });
+            }
             if DEBUG && let Some(observer) = observer.as_deref_mut() {
                 debug_backtrace.clear();
-                debug_backtrace.extend(frames.iter().enumerate().rev().map(|(index, frame)| {
-                    let function = &module.functions[frame.func as usize];
-                    VmDebugFrame {
-                        function_id: frame.func,
+                for (index, frame) in frames.iter().enumerate().rev() {
+                    let Some(function) = usize::try_from(frame.func)
+                        .ok()
+                        .and_then(|function| module.functions.get(function))
+                    else {
+                        return Err(VmError::UnknownFunction(frame.func));
+                    };
+                    debug_backtrace.push(VmDebugFrame {
+                        function_id: debug_function_id(frame.func),
                         function_name: &function.name,
                         pc: if index == depth {
                             pc
                         } else {
                             frame.pc.saturating_sub(1)
                         },
-                    }
-                }));
+                    });
+                }
                 let event = VmDebugEvent {
-                    function_id,
+                    function_id: debug_function_id(function_id),
                     function_name: &func.name,
                     pc,
                     instruction,
@@ -287,10 +473,13 @@ impl Vm<'_> {
                     // dispatch turn. Keep the validation guard, but avoid
                     // re-looking it up through `frame.func` on every loop
                     // back-edge.
-                    if (*target as usize) >= func.code.len() {
+                    let Some(target) = usize::try_from(*target)
+                        .ok()
+                        .filter(|target| *target < func.code.len())
+                    else {
                         return Err(VmError::BadJump(*target));
-                    }
-                    frames[depth].pc = *target as usize;
+                    };
+                    frames[depth].pc = target;
                 }
                 // Keep scalar loop shapes in this outer match. Falling
                 // through to `step` would match the same instruction a second
@@ -303,17 +492,20 @@ impl Vm<'_> {
                 Instruction::ConstVoid => self.stack.push(Value::Void),
                 Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
                 Instruction::LoadLocal(slot) => {
-                    self.load_local(&frames[depth], *slot);
+                    self.load_local(&frames[depth], *slot)?;
                 }
                 Instruction::StoreLocal(slot) => {
                     self.store_local(&mut frames[depth], *slot)?;
                 }
                 Instruction::JumpIfFalse(target) => {
                     if !self.pop_bool()? {
-                        if (*target as usize) >= func.code.len() {
+                        let Some(target) = usize::try_from(*target)
+                            .ok()
+                            .filter(|target| *target < func.code.len())
+                        else {
                             return Err(VmError::BadJump(*target));
-                        }
-                        frames[depth].pc = *target as usize;
+                        };
+                        frames[depth].pc = target;
                     }
                 }
                 Instruction::AddInt => self.add_int()?,
@@ -426,15 +618,37 @@ impl Vm<'_> {
         }
     }
 
+    fn report_trap_context(&self, error: &VmError) {
+        if !trap_context_enabled() || !matches!(error, VmError::NotAnArray) {
+            return;
+        }
+        let Some(probe) = &self.trap_probe else {
+            return;
+        };
+        eprintln!(
+            "kira vm trap context: function {} `{}` pc={} instruction={}",
+            probe.function_id, probe.function_name, probe.pc, probe.instruction
+        );
+        eprintln!("  locals: [{}]", probe.locals.join(", "));
+        eprintln!("  stack: [{}]", probe.stack.join(", "));
+        eprintln!("  backtrace: {}", probe.backtrace.join(" <- "));
+    }
+
     #[inline(always)]
-    fn jump(&self, module: &Module, frame: &mut Frame, target: u32) -> Result<(), VmError> {
-        let len = module.functions[frame.func as usize].code.len() as u32;
+    fn jump(&self, module: &Module, frame: &mut Frame, target: u64) -> Result<(), VmError> {
+        let Some(function) = usize::try_from(frame.func)
+            .ok()
+            .and_then(|index| module.functions.get(index))
+        else {
+            return Err(VmError::UnknownFunction(frame.func));
+        };
+        let len = function.code.len() as u64;
         // A target must land on a real instruction; `len` (one past the end)
         // is out of range and would read past the code on the next step.
         if target >= len {
             return Err(VmError::BadJump(target));
         }
-        frame.pc = target as usize;
+        frame.pc = usize::try_from(target).map_err(|_| VmError::BadJump(target))?;
         Ok(())
     }
 

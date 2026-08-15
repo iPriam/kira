@@ -62,9 +62,8 @@ fn missing_main_is_rejected() {
 
 #[test]
 fn a_construct_declaration_compiles_and_runs() {
-    // A `construct` used to be reported as unsupported; it is now ordinary
-    // language surface. A construct-backed declaration is a typed factory:
-    // constructing it and reading its computed bridge member runs the member.
+    // A construct-backed declaration is a typed factory: constructing it and
+    // reading its computed bridge member runs the member.
     let output = run_source(
         "construct Shape { let area: Int { 0 } }\n\
          Shape Square(side: Int) { let area: Int { side * side } }\n\
@@ -105,10 +104,8 @@ fn inferred_construct_members_and_updates_run_through_the_binary() {
 
 #[test]
 fn a_class_declaration_compiles_and_runs() {
-    // The counterpart to the case above: a `class` used to be reported as
-    // unsupported, and is now ordinary language surface. An inherited method
-    // reads a field default the subclass overrode, and a parent-qualified call
-    // runs the parent body against this instance.
+    // An inherited method reads a field default the subclass overrode, and a
+    // parent-qualified call runs the parent body against this instance.
     let output = run_source(
         "class Account { var balance: Int = 100\n let rate: Int = 2\n \
            function gross() -> Int { return self.balance * self.rate } }\n\
@@ -126,9 +123,8 @@ fn a_class_declaration_compiles_and_runs() {
 
 #[test]
 fn an_enum_declaration_compiles_and_runs() {
-    // The counterpart to the case above: an enum used to be reported as
-    // unsupported, and is now ordinary language surface. A leading-dot member
-    // resolves against the expected type, and `==` compares discriminants.
+    // A leading-dot member resolves against the expected type, and `==`
+    // compares discriminants.
     let output = run_source(
         "enum Color { Red Green Blue }\n\
          function rank(c: Color) -> Int { if c == .Green { return 2 } return 1 }\n\
@@ -144,8 +140,6 @@ fn an_enum_declaration_compiles_and_runs() {
 
 #[test]
 fn a_struct_declaration_compiles_and_runs() {
-    // The counterpart to the case above: a struct used to be reported as
-    // unsupported, and is now ordinary language surface.
     let output = run_source(
         "struct Point { var x: Int  var y: Int = 4 }\n\
          @Main function main() { let p = Point { x = 3 } print(p.x + p.y) return }",

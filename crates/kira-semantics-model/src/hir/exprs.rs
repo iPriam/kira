@@ -129,6 +129,11 @@ pub enum HirExpr {
         /// The cell type produced (an interned [`Type::Cell`]).
         ty: Type,
     },
+    /// A null capture-cell slot used by a closure representation's padding.
+    CellNull {
+        /// The cell type represented by the null slot.
+        ty: Type,
+    },
     /// An **owned** read of what a capture cell holds.
     ///
     /// Rooted at a local rather than an expression because every cell the
@@ -598,16 +603,20 @@ pub enum TaskTarget {
 
 /// Which machine operation a scalar [`HirExpr::Convert`] performs.
 ///
-/// The four kinds are the cross product of the two numeric runtime
-/// representations (`Int` is `i64`, `Float` is `f64`). Two are identity copies
-/// — an integer width is a type-level annotation over one representation, and
-/// float width likewise — and two do real work. The kind is fixed at analysis,
-/// so nothing below re-derives it: the VM and every backend read it directly.
+/// The numeric kinds cover the two runtime representations (`Int` is `i64`,
+/// `Float` is `f64`); the pointer-word kinds retag the VM's `Int` and `RawPtr`
+/// values without changing their 64 bits. The kind is fixed at analysis, so
+/// nothing below re-derives it: the VM and every backend read it directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConvertKind {
     /// Integer to integer, any width to any width. An identity copy: widths
     /// share one 64-bit representation, so nothing is truncated or extended.
     IntToInt,
+    /// Integer word to opaque pointer word. The VM changes only the value tag.
+    IntToRawPtr,
+    /// Opaque pointer word to the `U64` integer representation. The VM changes
+    /// only the value tag.
+    RawPtrToInt,
     /// Float to float (`Float`/`F32`). An identity copy: every float is
     /// one 64-bit representation, and float arithmetic runs at that width.
     FloatToFloat,
@@ -677,6 +686,7 @@ impl HirExpr {
             | HirExpr::TaskSpawn { ty, .. }
             | HirExpr::TaskJoin { ty, .. }
             | HirExpr::CellNew { ty, .. }
+            | HirExpr::CellNull { ty }
             | HirExpr::CellGet { ty, .. }
             | HirExpr::StringOperation { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,

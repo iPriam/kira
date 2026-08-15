@@ -12,6 +12,13 @@
 // wrapped in `"`; a nested derived struct is `serialize_<FieldType>(value)`
 // recursed inline, so `from=Point{x=1;y=2}` sits inside its parent's braces.
 //
+// An ENUM is written as `TypeName.Variant`, with a payload in parentheses after
+// it — `Tool.Rotate`, `Note.Rank(42)`, `Slot.At(Point{x=1;y=2})`. The variant is
+// named, never numbered: an ordinal would tie the format to declaration order,
+// so inserting a variant would re-read every value ever written as its
+// neighbour. An enum field inside a struct is just that text in the field's
+// value slot, which the brace-aware scanner already consumes whole.
+//
 // Deserialization is the exact inverse. It validates the leading `TypeName{`,
 // then for each field in declaration order locates `label=`, carves the value
 // with a brace-aware scan (a `;` or `}` at brace depth 0 terminates it, so a
@@ -33,7 +40,8 @@
 //     loses the low bits.
 //   * Array / generic / optional field types are refused by both, exactly as
 //     Equatable / Clone refuse them.
-//   * `appliesTo { struct }` only; enums are a follow-up.
+//   * An enum payload follows the same field rules: a `Float` payload is refused
+//     by `Deserializable`, and a `String` payload is unescaped like any other.
 //
 // The shared helpers below are defined once and carry the reserved
 // `__kira_deser_` prefix, so they can never collide with user code.
@@ -149,8 +157,50 @@ function __kira_deser_unquote(s: borrow String) -> String {
 
 comptime macro Serializable {
     kind { derive }
-    appliesTo { struct }
+    appliesTo { struct enum }
     expand(target: Declaration) -> Syntax {
+        // An enum writes the variant it holds by NAME — `Tool.Rotate` — and a
+        // payload in parentheses after it. The name is the point: an ordinal
+        // would make the wire format depend on declaration ORDER, so inserting a
+        // variant would silently re-read every value ever written.
+        if target.kind == .Enum {
+            var arms: [Syntax] = []
+            for variant in target.fields {
+                var head: String = target.name.asString() + "." + variant.name.asString()
+                if variant.type.asSyntax() == "" {
+                    arms.append(quote { #{variant.name} -> return #{head}; })
+                } else {
+                    var isNumScalar: Bool = false
+                    for sname in ["Int", "Float", "Bool", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "F32", "CBool"] {
+                        if variant.type == sname {
+                            isNumScalar = true
+                        }
+                    }
+                    if isNumScalar {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(" + String(payload) + ")";
+                        })
+                    } else {
+                        if variant.type == "String" {
+                            arms.append(quote {
+                                #{variant.name}(payload) -> return #{head} + "(\"" + payload + "\")";
+                            })
+                        } else {
+                            arms.append(quote {
+                                #{variant.name}(payload) -> return #{head} + "(" + serialize_#{variant.type.asSyntax()}(payload) + ")";
+                            })
+                        }
+                    }
+                }
+            }
+            return quote {
+                function serialize_#{target.name}(v: borrow #{target.name}) -> String {
+                    match v {
+                        #{arms}
+                    }
+                }
+            }
+        }
         var stmts: [Syntax] = []
         stmts.append(quote { var out: String = #{target.name.asString()} })
         stmts.append(quote { out = out + "{" })
@@ -200,8 +250,90 @@ comptime macro Serializable {
 
 comptime macro Deserializable {
     kind { derive }
-    appliesTo { struct }
+    appliesTo { struct enum }
     expand(target: Declaration) -> Syntax {
+        // The inverse of the enum writer: validate `TypeName.`, read the variant
+        // name up to `(` or the end, and rebuild that variant — carving the
+        // payload out of the parentheses when there is one. An unknown name is a
+        // structural violation and traps, exactly as a wrong struct name does.
+        if target.kind == .Enum {
+            var arms: [Syntax] = []
+            var fallback: Syntax = quote { }
+            var seen: Int = 0
+            for variant in target.fields {
+                if seen == 0 {
+                    fallback = quote { return .#{variant.name} }
+                }
+                seen = seen + 1
+                if variant.type.asSyntax() == "" {
+                    arms.append(quote {
+                        if __name == #{variant.name.asString()} {
+                            return .#{variant.name}
+                        }
+                    })
+                } else {
+                    // The conversion is written inline per payload type rather
+                    // than interpolated as a prepared expression: a `#{...}` in
+                    // argument position splices as a statement, which turns
+                    // `.Rank(convert(x))` into a bare `.Rank` and a stray call.
+                    if variant.type == "Int" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(__kira_deser_int(__inner))
+                            }
+                        })
+                    } else {
+                        if variant.type == "Bool" {
+                            arms.append(quote {
+                                if __name == #{variant.name.asString()} {
+                                    return .#{variant.name}(__kira_deser_bool(__inner))
+                                }
+                            })
+                        } else {
+                            if variant.type == "String" {
+                                arms.append(quote {
+                                    if __name == #{variant.name.asString()} {
+                                        return .#{variant.name}(__kira_deser_unquote(__inner))
+                                    }
+                                })
+                            } else {
+                                if variant.type == "Float" {
+                                    Diagnostics.error("Derive(Deserializable): a Float payload is not supported — there is no lossless Float parser, so derive Serializable only, or carry the value as a String or an Int", at: target.syntax)
+                                }
+                                arms.append(quote {
+                                    if __name == #{variant.name.asString()} {
+                                        return .#{variant.name}(deserialize_#{variant.type.asSyntax()}(__inner))
+                                    }
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+            return quote {
+                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                    let __dot: Int = s.indexOf(".")
+                    var __head: String = s.substring(0, __dot)
+                    if __head != #{target.name.asString()} {
+                        __head = __kira_deser_trap_str(s)
+                    }
+                    let __rest: String = s.substring(__dot + 1, s.count)
+                    let __open: Int = __rest.indexOf("(")
+                    var __name: String = __rest
+                    var __inner: String = ""
+                    if __open >= 0 {
+                        __name = __rest.substring(0, __open)
+                        if __rest.charAt(__rest.count - 1) != 41 {
+                            __name = __kira_deser_trap_str(s)
+                        }
+                        __inner = __rest.substring(__open + 1, __rest.count - 1)
+                    }
+                    #{arms}
+                    let __unknown: Int = __kira_deser_trap(s)
+                    #{fallback}
+                }
+            }
+        }
         var total: Int = 0
         for field in target.fields {
             total = total + 1

@@ -1,0 +1,6 @@
+Package KikFfiHarness {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "KikFfiHarness"
+    let defaults = Defaults { executionMode: Backend.Hybrid, buildTarget: BuildTarget.Host }
+}

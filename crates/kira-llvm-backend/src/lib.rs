@@ -54,22 +54,20 @@ mod link;
 mod platform;
 mod reachability;
 pub mod shim;
-mod shim_build;
 #[cfg(test)]
 mod shim_tests;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
-pub use link::LinkError;
+pub use link::{LinkError, link_ffi_carrier};
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
-pub use shim_build::ShimObject;
 
 /// The exported symbol of the generated adapter for foreign import `index`.
 ///
 /// A wire contract shared by every backend and every host: the LLVM backend
 /// defines this symbol, the VM sidecar host resolves it, and the hybrid manifest
-/// records it. Spelled once here so a producer and a consumer cannot disagree.
+/// records it. The spelling lives in the runtime ABI crate.
 pub fn adapter_name(index: usize) -> String {
-    format!("kira_foreign_adapter_{index}")
+    kira_runtime_abi::foreign_adapter_name(index)
 }
 
 /// The exported symbol C holds for callback `index`.
@@ -85,7 +83,7 @@ pub fn adapter_name(index: usize) -> String {
 /// prototype and forwards to [`callback_body_name`]. Either way the address C
 /// holds is this name, which is why no host has to know the difference.
 pub fn callback_name(index: usize) -> String {
-    format!("kira_ffi_callback_{index}")
+    kira_runtime_abi::foreign_callback_name(index)
 }
 
 /// The symbol LLVM's entry thunk for callback `index` is defined under when the
@@ -102,16 +100,19 @@ pub fn callback_body_name(index: usize) -> String {
 /// [`callback_name`] for a signature LLVM can present to C on its own, and
 /// [`callback_body_name`] for one whose by-value struct the shim classifies.
 pub fn callback_thunk_symbol(index: usize, signature: &ForeignSignature) -> String {
-    if shim::callback_needs_entry(signature) {
-        callback_body_name(index)
-    } else {
-        callback_name(index)
-    }
+    let _ = signature;
+    callback_name(index)
 }
 
 /// What went wrong producing native code.
 #[derive(Debug, thiserror::Error)]
 pub enum LlvmError {
+    /// A frontend invariant was violated before LLVM lowering.
+    #[error("{what} reached the LLVM backend (this is a compiler bug)")]
+    Internal {
+        /// What was found, named as the invariant that did not hold.
+        what: String,
+    },
     /// A `break`/`continue` reached codegen with no enclosing loop, which
     /// analysis is supposed to have rejected.
     #[error(
@@ -126,33 +127,21 @@ pub enum LlvmError {
         /// The member index the read asked for.
         member: u32,
     },
+    /// A native library build did not name an archive or shared-library output.
+    #[error("a native library build needs an archive path or a shared-library path")]
+    MissingLibraryOutput,
+    /// A hybrid native half did not name its shared-library output.
+    #[error("a hybrid native build needs a shared-library path")]
+    MissingHybridLibraryPath,
+    /// A whole-program native live build did not name its shared-library output.
+    #[error("a native live build needs a shared-library path")]
+    MissingNativeLiveLibraryPath,
     /// No usable LLVM installation was found.
     #[error(transparent)]
     Discovery(#[from] LlvmDiscoveryError),
-    /// The program uses something the native backend cannot lower yet.
-    #[error("the LLVM backend cannot lower {0} yet")]
-    Unsupported(&'static str),
-    // Struct, array and enum crossings were refused here until the seam grew a
-    // way to carry them. A struct and an array now cross as a node tree, and an
-    // enum crosses either as its bare variant tag (payload-less) or as a tree
-    // (carrying one) — so the three errors that named those refusals are gone
-    // rather than left unreachable. The ownership question they each cited has
-    // one answer now: the tree is transferred, and the reader frees it as it
-    // decodes. See `BridgeValueTag::NODE`.
-    //
-    // The VM keeps its own `StructAtSeam`/`ArrayAtSeam`/`EnumAtSeam`, which are
-    // still reachable: they are the backstop for a *value* with no tree form,
-    // which is a different question from a *type* with no crossing.
-    /// A value of the top type reached the hybrid seam.
-    ///
-    /// Not a size problem — an erased value is one word — but a reading one: the
-    /// seam's tag tells the far side how to read the payload, and `Any` says
-    /// only that some type was erased, which the far side cannot act on.
-    #[error(
-        "`Any` cannot cross the `@Native`/`@Runtime` boundary; an erased value \
-         has no type for the far side to read it back as"
-    )]
-    AnyAtSeam,
+    /// The native FFI runtime could not be bundled into a native artifact.
+    #[error(transparent)]
+    FfiRuntime(#[from] kira_libffi::LibffiError),
     /// This compiler was built against a managed LLVM carrying no WebAssembly
     /// code generator, so it can emit for every device except the Web.
     #[error(
@@ -195,6 +184,14 @@ pub enum LlvmError {
     },
 }
 
+impl LlvmError {
+    /// An invariant the frontend proves, found not to hold.
+    #[must_use]
+    pub fn internal(what: impl Into<String>) -> Self {
+        LlvmError::Internal { what: what.into() }
+    }
+}
+
 /// What a native build should produce, and where.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeBuildOptions {
@@ -204,7 +201,7 @@ pub struct NativeBuildOptions {
     pub object_path: PathBuf,
     /// Where the linked executable is written, when one is requested.
     pub executable_path: Option<PathBuf>,
-    /// Where the shared library is written, for a hybrid build.
+    /// Where the shared library is written, for a hybrid or native live build.
     pub shared_library_path: Option<PathBuf>,
     /// Where the static archive is written, for a library build.
     ///
@@ -256,7 +253,7 @@ pub struct NativeArtifacts {
     /// consumer links one file and needs no arrangement with the Kira
     /// toolchain.
     pub archive: Option<PathBuf>,
-    /// The linked shared library, for a library build.
+    /// The linked shared library, for a library or native live build.
     ///
     /// Exclusive with [`NativeArtifacts::executable`] in practice: a program
     /// produces one and a library the other, which is what makes "this build
@@ -266,39 +263,23 @@ pub struct NativeArtifacts {
     pub ir: Option<PathBuf>,
 }
 
-/// Compiles the C shim `program` needs to carry aggregates across the seam, in
-/// either direction.
-///
-/// `None` for a program that neither passes a struct by value nor hands C a
-/// callback entered with one, which is every program that has always worked —
-/// those never invoke clang for a shim.
-fn build_foreign_shim(
-    program: &IrProgram,
-    unavailable: &[usize],
-    object_path: &Path,
-    llvm: &kira_toolchain::LlvmInstallation,
-) -> Result<Option<ShimObject>, LlvmError> {
-    let imports: Vec<_> = program
-        .foreign_imports
-        .iter()
-        .map(|entry| entry.import.clone())
-        .collect();
-    shim_build::build(
-        &imports,
-        &program.foreign_callbacks,
-        &program.foreign_aggregates,
-        unavailable,
-        object_path,
-        llvm,
-    )
-}
-
 /// The smallest number of functions worth giving a codegen unit of its own.
 ///
 /// Every unit re-declares the program's types and runtime and re-emits the
 /// internal leaves it happens to need, and every unit is one more object on the
 /// link line. Below this the split costs more than the thread saves.
 const FUNCTIONS_PER_UNIT: usize = 96;
+
+/// The stack a codegen worker runs on.
+///
+/// Lowering walks a program's types structurally — a struct's fields, an
+/// array's element, an enum's payload — and a widget tree is as deep as the
+/// application that declares it. The main thread is given a large stack by the
+/// workspace's own build settings; a spawned thread is given the platform
+/// default, which is 2 MiB and is not enough for a real user interface. A
+/// compiler that could analyze a program and then overflow emitting it is one
+/// that fails after saying it succeeded.
+const CODEGEN_STACK: usize = 64 * 1024 * 1024;
 
 /// The most codegen units one program is split into.
 ///
@@ -338,6 +319,65 @@ fn unit_object_path(object_path: &Path, index: usize) -> PathBuf {
     object_path.with_extension(format!("{index}.{extension}"))
 }
 
+#[derive(Clone, Copy)]
+enum NativeModuleKind {
+    Executable,
+    LiveLibrary,
+}
+
+fn build_codegen_module(
+    program: &IrProgram,
+    module_name: &str,
+    unavailable: &[usize],
+    unit: codegen::CodegenUnit,
+    debug: Option<&DebugInfo>,
+    kind: NativeModuleKind,
+) -> Result<codegen::Module, LlvmError> {
+    match kind {
+        NativeModuleKind::Executable => match debug {
+            Some(debug) => codegen::Module::build_debug(
+                program,
+                module_name,
+                kira_runtime_abi::ForeignPointerWidth::HOST,
+                unavailable,
+                unit,
+                debug,
+            ),
+            None => codegen::Module::build(
+                program,
+                module_name,
+                kira_runtime_abi::ForeignPointerWidth::HOST,
+                unavailable,
+                unit,
+            ),
+        },
+        NativeModuleKind::LiveLibrary => {
+            codegen::Module::build_native_live(program, module_name, unavailable, unit)
+        }
+    }
+}
+
+/// Adds the Rust helper archive and bundled DLL used by native libffi calls to
+/// the same link/staging set every native backend consumes.
+fn ffi_link_inputs(
+    program: &IrProgram,
+    foreign_link: &NativeLinkInputs,
+    unavailable: &[usize],
+) -> Result<NativeLinkInputs, LlvmError> {
+    let has_callable_foreign = program
+        .foreign_imports
+        .iter()
+        .enumerate()
+        .any(|(index, _)| !unavailable.contains(&index));
+    if !has_callable_foreign && program.foreign_callbacks.is_empty() {
+        return Ok(foreign_link.clone());
+    }
+    let mut link = foreign_link.clone();
+    link.push_archive(kira_libffi::runtime_archive()?);
+    link.push_runtime_file(kira_libffi::bundled_path()?);
+    Ok(link)
+}
+
 /// Lowers and emits the program's objects, one per codegen unit, in parallel.
 ///
 /// Returns them in unit order, first unit first.
@@ -345,6 +385,7 @@ fn emit_codegen_units(
     program: &IrProgram,
     options: &NativeBuildOptions,
     debug: Option<&DebugInfo>,
+    kind: NativeModuleKind,
 ) -> Result<Vec<PathBuf>, LlvmError> {
     let reachable = reachability::native_functions(program);
     let count = codegen_units(options, &reachable);
@@ -354,23 +395,14 @@ fn emit_codegen_units(
 
     if count == 1 {
         kira_diagnostics::progress!("generating native code for {}", options.module_name);
-        let module = match debug {
-            Some(debug) => codegen::Module::build_debug(
-                program,
-                &options.module_name,
-                kira_runtime_abi::ForeignPointerWidth::HOST,
-                &options.unavailable_imports,
-                codegen::CodegenUnit::WHOLE,
-                debug,
-            )?,
-            None => codegen::Module::build(
-                program,
-                &options.module_name,
-                kira_runtime_abi::ForeignPointerWidth::HOST,
-                &options.unavailable_imports,
-                codegen::CodegenUnit::WHOLE,
-            )?,
-        };
+        let module = build_codegen_module(
+            program,
+            &options.module_name,
+            &options.unavailable_imports,
+            codegen::CodegenUnit::WHOLE,
+            debug,
+            kind,
+        )?;
         if let Some(path) = &options.ir_path {
             module.write_ir(path)?;
         }
@@ -387,28 +419,23 @@ fn emit_codegen_units(
             .iter()
             .enumerate()
             .map(|(index, path)| {
-                scope.spawn(move || {
-                    let module = match debug {
-                        Some(debug) => codegen::Module::build_debug(
-                            program,
-                            &format!("{}.{index}", options.module_name),
-                            kira_runtime_abi::ForeignPointerWidth::HOST,
-                            &options.unavailable_imports,
-                            codegen::CodegenUnit::new(index, count),
-                            debug,
-                        )?,
-                        None => codegen::Module::build(
-                            program,
-                            &format!("{}.{index}", options.module_name),
-                            kira_runtime_abi::ForeignPointerWidth::HOST,
-                            &options.unavailable_imports,
-                            codegen::CodegenUnit::new(index, count),
-                        )?,
-                    };
+                let worker = std::thread::Builder::new()
+                    .name(format!("kira-codegen-{index}"))
+                    .stack_size(CODEGEN_STACK);
+                worker.spawn_scoped(scope, move || {
+                    let module = build_codegen_module(
+                        program,
+                        &format!("{}.{index}", options.module_name),
+                        &options.unavailable_imports,
+                        codegen::CodegenUnit::new(index, count),
+                        debug,
+                        kind,
+                    )?;
                     module.emit_object(path, options.optimize)
                 })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| LlvmError::Emit(format!("cannot start a codegen unit: {source}")))?;
         for worker in workers {
             // A worker that panicked took its LLVM context down with it, and
             // the module it was building is gone; there is nothing to report
@@ -445,26 +472,20 @@ fn build_native_inner(
     options: &NativeBuildOptions,
     debug: Option<&DebugInfo>,
 ) -> Result<NativeArtifacts, LlvmError> {
-    let objects = emit_codegen_units(program, options, debug)?;
+    let objects = emit_codegen_units(program, options, debug, NativeModuleKind::Executable)?;
+    let foreign_link =
+        ffi_link_inputs(program, &options.foreign_link, &options.unavailable_imports)?;
 
     let executable = match &options.executable_path {
         Some(path) => {
             let llvm = kira_toolchain::discover(None)?;
-            kira_diagnostics::progress!("compiling the foreign shim");
-            let shim = build_foreign_shim(
-                program,
-                &options.unavailable_imports,
-                &options.object_path,
-                &llvm,
-            )?;
             kira_diagnostics::progress!("linking {}", path.display());
             match debug {
                 Some(debug) => link::link_executable_debug(
                     &llvm,
                     &objects,
                     &options.runtime_archive,
-                    &options.foreign_link,
-                    shim.as_ref().map(|shim| shim.object.as_path()),
+                    &foreign_link,
                     path,
                     &debug_symbols(program, debug, true),
                 )?,
@@ -472,8 +493,7 @@ fn build_native_inner(
                     &llvm,
                     &objects,
                     &options.runtime_archive,
-                    &options.foreign_link,
-                    shim.as_ref().map(|shim| shim.object.as_path()),
+                    &foreign_link,
                     path,
                 )?,
             }
@@ -494,72 +514,41 @@ fn build_native_inner(
     })
 }
 
-/// What the VM's foreign-adapter sidecar build should produce, and where.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AdapterSidecarOptions {
-    /// The module name recorded in the emitted artifacts.
-    pub module_name: String,
-    /// Where the adapters-only object file is written.
-    pub object_path: PathBuf,
-    /// Where the linked sidecar shared library is written.
-    pub library_path: PathBuf,
-    /// The native runtime archive (`libkira_native_bridge.a`) to link against.
-    pub runtime_archive: PathBuf,
-    /// The resolved C link inputs that satisfy the program's foreign imports:
-    /// archives in link order plus the frameworks, system libraries, and
-    /// linker flags declared beside them.
-    pub foreign_link: NativeLinkInputs,
-    /// Imports whose library this target does not have.
-    ///
-    /// Their adapters answer a status instead of calling a symbol nothing
-    /// defines. Without this the sidecar references every import's C symbol and
-    /// the *link* fails — naming Vulkan and Direct3D entry points on a machine
-    /// that was never going to have them — even though the program's own
-    /// declarations already said those libraries are optional.
-    pub unavailable_imports: Vec<usize>,
-}
-
-/// Compiles the program's foreign adapters into one loadable sidecar library.
+/// Compiles a whole program into the shared library used by an LLVM live
+/// session.
 ///
-/// The VM never links or dlopens anything itself; this is what the CLI build
-/// produces so a native-capable host can answer `call_foreign`. The sidecar
-/// carries one exported adapter per foreign import, the foreign-adapter marker,
-/// the string helpers the loader binds, and the selected C archives — all
-/// self-contained, so the host loads one file. Returns the sidecar path.
-pub fn build_adapter_sidecar(
+/// Unlike a hybrid library, this emits every reachable function as native code
+/// and a single fixed runner entry symbol. Foreign adapters and their C shim are
+/// linked into the same artifact, so the runner does not need a second native
+/// surface for the program to be complete.
+pub fn build_native_live(
     program: &IrProgram,
-    options: &AdapterSidecarOptions,
-) -> Result<PathBuf, LlvmError> {
-    let module = codegen::Module::build_adapter_sidecar(
-        program,
-        &options.module_name,
-        &options.unavailable_imports,
-    )?;
-    module.emit_object(&options.object_path, false)?;
+    options: &NativeBuildOptions,
+) -> Result<NativeArtifacts, LlvmError> {
+    let library = options
+        .shared_library_path
+        .clone()
+        .ok_or(LlvmError::MissingNativeLiveLibraryPath)?;
+    let objects = emit_codegen_units(program, options, None, NativeModuleKind::LiveLibrary)?;
+    let foreign_link =
+        ffi_link_inputs(program, &options.foreign_link, &options.unavailable_imports)?;
     let llvm = kira_toolchain::discover(None)?;
-    // Both the adapters and the callback thunks: a thunk is referenced by
-    // nothing inside the sidecar — C is what calls it — so without forcing it by
-    // name the linker is free to drop the very symbol the host resolves.
-    let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
-        .map(adapter_name)
-        .chain((0..program.foreign_callbacks.len()).map(callback_name))
-        .collect();
-    let shim = build_foreign_shim(
-        program,
-        &options.unavailable_imports,
-        &options.object_path,
+    kira_diagnostics::progress!("linking {}", library.display());
+    link::link_native_live_library(
         &llvm,
-    )?;
-    link::link_adapter_sidecar(
-        &llvm,
-        &options.object_path,
+        &objects,
         &options.runtime_archive,
-        &options.foreign_link,
-        shim.as_ref().map(|shim| shim.object.as_path()),
-        &adapter_symbols,
-        &options.library_path,
+        &foreign_link,
+        &library,
     )?;
-    Ok(options.library_path.clone())
+
+    Ok(NativeArtifacts {
+        object: options.object_path.clone(),
+        executable: None,
+        archive: None,
+        library: Some(library),
+        ir: options.ir_path.clone(),
+    })
 }
 
 /// Compiles `program` to a WebAssembly object for `device`.
@@ -574,19 +563,37 @@ pub fn build_wasm_object(
     object_path: &Path,
     device: kira_backend_api::WasmDevice,
 ) -> Result<(), LlvmError> {
-    // A wasm module lays out a pointer in four bytes whatever host builds it,
-    // and the aggregate offsets are computed during lowering.
+    // A wasm module lays out pointers at the selected device width, and the
+    // aggregate offsets are computed during lowering.
     let width = match device {
         kira_backend_api::WasmDevice::Wasm32 => kira_runtime_abi::ForeignPointerWidth::Bits32,
         kira_backend_api::WasmDevice::Wasm64 => kira_runtime_abi::ForeignPointerWidth::Bits64,
     };
-    let module = codegen::Module::build(
+    let module = codegen::Module::build_wasm(
         program,
         module_name,
         width,
         &[],
         codegen::CodegenUnit::WHOLE,
+        device,
     )?;
+    module.emit_wasm_object(object_path, device)
+}
+
+/// Compiles a Kira library to a WebAssembly object for `device`.
+///
+/// The object has no `main`. Its entry surface is the same uniform
+/// `kira_lib_*` trampoline set used by native library consumers, with the
+/// target's pointer width applied while lowering rather than after the module
+/// has already been laid out.
+pub fn build_wasm_library(
+    program: &IrProgram,
+    module_name: &str,
+    object_path: &Path,
+    device: kira_backend_api::WasmDevice,
+    exports: &NativeExportSurface,
+) -> Result<(), LlvmError> {
+    let module = codegen::Module::build_wasm_library(program, module_name, exports, device)?;
     module.emit_wasm_object(object_path, device)
 }
 
@@ -611,17 +618,15 @@ pub fn build_native_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
+    if options.archive_path.is_none() && options.shared_library_path.is_none() {
+        return Err(LlvmError::MissingLibraryOutput);
+    }
     let module = codegen::Module::build_library(program, &options.module_name, &options.exports)?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
     module.emit_object(&options.object_path, options.optimize)?;
 
-    if options.archive_path.is_none() && options.shared_library_path.is_none() {
-        return Err(LlvmError::Unsupported(
-            "a library build with nowhere to put the library",
-        ));
-    }
     let llvm = kira_toolchain::discover(None)?;
     if let Some(archive) = &options.archive_path {
         link::archive_static_library(
@@ -673,11 +678,44 @@ pub fn build_hybrid_library_debug(
     build_hybrid_library_inner(program, options, Some(debug))
 }
 
+/// Reports whether an application hybrid build has a reachable native body.
+///
+/// A native function that no entrypoint or callback can reach is omitted from
+/// the native half and does not prevent the CLI from reusing that half.
+#[must_use]
+pub fn has_reachable_hybrid_native_functions(program: &IrProgram) -> bool {
+    let reachable = reachability::hybrid_native_functions(program);
+    program
+        .functions
+        .iter()
+        .enumerate()
+        .any(|(index, function)| {
+            function
+                .execution
+                .resolve(kira_runtime_abi::Execution::Runtime)
+                == kira_runtime_abi::Execution::Native
+                && reachable.get(index).copied().unwrap_or(false)
+        })
+}
+
+/// Reports whether a reachable native body uses the compiler runtime.
+///
+/// Compiler expressions in runtime-only bodies stay in the VM and do not
+/// require the larger compiler bridge archive in an application hybrid half.
+#[must_use]
+pub fn hybrid_uses_compiler_runtime(program: &IrProgram) -> bool {
+    reachability::hybrid_uses_compiler(program)
+}
+
 fn build_hybrid_library_inner(
     program: &IrProgram,
     options: &NativeBuildOptions,
     debug: Option<&DebugInfo>,
 ) -> Result<HybridArtifacts, LlvmError> {
+    let library = options
+        .shared_library_path
+        .clone()
+        .ok_or(LlvmError::MissingHybridLibraryPath)?;
     let module = match debug {
         Some(debug) => codegen::Module::build_hybrid_debug(
             program,
@@ -696,37 +734,33 @@ fn build_hybrid_library_inner(
     }
     module.emit_object(&options.object_path, options.optimize)?;
 
-    let library = options
-        .shared_library_path
-        .clone()
-        .ok_or(LlvmError::Unsupported(
-            "a hybrid build with no library path",
-        ))?;
     let llvm = kira_toolchain::discover(None)?;
-    // One adapter per foreign import lives in this same dylib; force each in and
-    // link the C archives that satisfy them, so the hybrid session binds every
-    // foreign call out of the one native half.
-    // Both the adapters and the callback thunks: a thunk is referenced by
-    // nothing inside the sidecar — C is what calls it — so without forcing it by
-    // name the linker is free to drop the very symbol the host resolves.
-    let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
-        .map(adapter_name)
-        .chain((0..program.foreign_callbacks.len()).map(callback_name))
+    let foreign_link =
+        ffi_link_inputs(program, &options.foreign_link, &options.unavailable_imports)?;
+    let static_names: std::collections::HashSet<&str> = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
         .collect();
-    let shim = build_foreign_shim(
-        program,
-        &options.unavailable_imports,
-        &options.object_path,
-        &llvm,
-    )?;
+    let mut retained_symbols: Vec<String> = (0..program.foreign_callbacks.len())
+        .map(callback_name)
+        .collect();
+    retained_symbols.extend(
+        program
+            .foreign_imports
+            .iter()
+            .filter(|entry| static_names.contains(entry.import.library()))
+            .map(|entry| entry.import.symbol().to_owned()),
+    );
+    retained_symbols.sort();
+    retained_symbols.dedup();
     match debug {
         Some(debug) => link::link_hybrid_library_debug(
             &llvm,
             &options.object_path,
             &options.runtime_archive,
-            &options.foreign_link,
-            shim.as_ref().map(|shim| shim.object.as_path()),
-            &adapter_symbols,
+            &foreign_link,
+            &retained_symbols,
             &library,
             &debug_symbols(program, debug, false),
         )?,
@@ -734,9 +768,8 @@ fn build_hybrid_library_inner(
             &llvm,
             &options.object_path,
             &options.runtime_archive,
-            &options.foreign_link,
-            shim.as_ref().map(|shim| shim.object.as_path()),
-            &adapter_symbols,
+            &foreign_link,
+            &retained_symbols,
             &library,
         )?,
     }
@@ -772,15 +805,17 @@ fn debug_symbols(program: &IrProgram, info: &DebugInfo, executable: bool) -> Vec
 
 /// The trampoline symbol exported for each `@Native` function, by function id.
 fn exported_trampolines(program: &IrProgram) -> Vec<(u32, String)> {
+    let reachable = reachability::hybrid_native_functions(program);
     program
         .functions
         .iter()
         .enumerate()
-        .filter(|(_, function)| {
+        .filter(|(index, function)| {
             function
                 .execution
                 .resolve(kira_runtime_abi::Execution::Runtime)
                 == kira_runtime_abi::Execution::Native
+                && reachable.get(*index).copied().unwrap_or(false)
         })
         .map(|(index, _)| (index as u32, codegen::trampoline_name(index)))
         .collect()

@@ -2,6 +2,12 @@ use std::collections::{BTreeSet, VecDeque};
 
 use kira_ir::{IrCallee, IrExpr, IrExprId, IrPlace, IrProgram, IrStmt};
 
+#[derive(Default)]
+struct BodyFacts {
+    calls: BTreeSet<u32>,
+    uses_compiler: bool,
+}
+
 pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
     let mut reachable = vec![false; program.functions.len()];
     let mut pending = VecDeque::new();
@@ -20,86 +26,110 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
         if index >= reachable.len() || std::mem::replace(&mut reachable[index], true) {
             continue;
         }
-        for callee in direct_calls(program, &program.functions[index].body) {
+        for callee in body_facts(program, &program.functions[index].body).calls {
             pending.push_back(callee);
         }
     }
     reachable
 }
 
-fn direct_calls(program: &IrProgram, body: &[IrStmt]) -> BTreeSet<u32> {
-    let mut found = BTreeSet::new();
-    for statement in body {
-        walk_stmt(program, statement, &mut found);
+pub(crate) fn hybrid_native_functions(program: &IrProgram) -> Vec<bool> {
+    if program.main.is_some() {
+        native_functions(program)
+    } else {
+        vec![true; program.functions.len()]
     }
-    found
 }
 
-fn walk_stmt(program: &IrProgram, statement: &IrStmt, found: &mut BTreeSet<u32>) {
+pub(crate) fn hybrid_uses_compiler(program: &IrProgram) -> bool {
+    let reachable = hybrid_native_functions(program);
+    program
+        .functions
+        .iter()
+        .enumerate()
+        .any(|(index, function)| {
+            function
+                .execution
+                .resolve(kira_runtime_abi::Execution::Runtime)
+                == kira_runtime_abi::Execution::Native
+                && reachable.get(index).copied().unwrap_or(false)
+                && body_facts(program, &function.body).uses_compiler
+        })
+}
+
+fn body_facts(program: &IrProgram, body: &[IrStmt]) -> BodyFacts {
+    let mut facts = BodyFacts::default();
+    for statement in body {
+        walk_stmt(program, statement, &mut facts);
+    }
+    facts
+}
+
+fn walk_stmt(program: &IrProgram, statement: &IrStmt, facts: &mut BodyFacts) {
     match statement {
-        IrStmt::Let { init, .. } => walk_expr(program, *init, found),
+        IrStmt::Let { init, .. } => walk_expr(program, *init, facts),
         IrStmt::Assign { place, value } => {
-            walk_place(program, place, found);
-            walk_expr(program, *value, found);
+            walk_place(program, place, facts);
+            walk_expr(program, *value, facts);
         }
         IrStmt::Return { value } => {
             if let Some(value) = value {
-                walk_expr(program, *value, found);
+                walk_expr(program, *value, facts);
             }
         }
-        IrStmt::Eval { expr } => walk_expr(program, *expr, found),
-        IrStmt::CellSet { value, .. } => walk_expr(program, *value, found),
+        IrStmt::Eval { expr } => walk_expr(program, *expr, facts),
+        IrStmt::CellSet { value, .. } => walk_expr(program, *value, facts),
         IrStmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            walk_expr(program, *cond, found);
+            walk_expr(program, *cond, facts);
             for statement in then_body.iter().chain(else_body) {
-                walk_stmt(program, statement, found);
+                walk_stmt(program, statement, facts);
             }
         }
         IrStmt::Attempt { attempt } => {
             for step in &attempt.steps {
-                walk_expr(program, step.error_condition, found);
+                walk_expr(program, step.error_condition, facts);
                 for statement in step.setup.iter().chain(&step.handler).chain(&step.success) {
-                    walk_stmt(program, statement, found);
+                    walk_stmt(program, statement, facts);
                 }
             }
             for statement in &attempt.trailing {
-                walk_stmt(program, statement, found);
+                walk_stmt(program, statement, facts);
             }
         }
         IrStmt::While { cond, body } => {
-            walk_expr(program, *cond, found);
+            walk_expr(program, *cond, facts);
             for statement in body {
-                walk_stmt(program, statement, found);
+                walk_stmt(program, statement, facts);
             }
         }
         IrStmt::Break | IrStmt::Continue => {}
     }
 }
 
-fn walk_place(program: &IrProgram, place: &IrPlace, found: &mut BTreeSet<u32>) {
+fn walk_place(program: &IrProgram, place: &IrPlace, facts: &mut BodyFacts) {
     for index in place.indices() {
-        walk_expr(program, index, found);
+        walk_expr(program, index, facts);
     }
 }
 
-fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
+fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
     match program.expr(id) {
         IrExpr::Call { callee, args, .. } => {
             if let IrCallee::User(index) = callee {
-                found.insert(*index);
+                facts.calls.insert(*index);
             }
             for arg in args {
-                walk_expr(program, *arg, found);
+                walk_expr(program, *arg, facts);
             }
         }
-        IrExpr::Unary { operand, .. } => walk_expr(program, *operand, found),
+        IrExpr::Unary { operand, .. } => walk_expr(program, *operand, facts),
         IrExpr::Binary { lhs, rhs, .. } => {
-            walk_expr(program, *lhs, found);
-            walk_expr(program, *rhs, found);
+            walk_expr(program, *lhs, facts);
+            walk_expr(program, *rhs, facts);
         }
         IrExpr::Select {
             cond,
@@ -107,83 +137,87 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             otherwise,
             ..
         } => {
-            walk_expr(program, *cond, found);
-            walk_expr(program, *then, found);
-            walk_expr(program, *otherwise, found);
+            walk_expr(program, *cond, facts);
+            walk_expr(program, *then, facts);
+            walk_expr(program, *otherwise, facts);
         }
         IrExpr::StructNew { fields, .. } => {
             for field in fields {
-                walk_expr(program, *field, found);
+                walk_expr(program, *field, facts);
             }
         }
         IrExpr::EnumNew { payload, .. } => {
             if let Some(payload) = payload {
-                walk_expr(program, *payload, found);
+                walk_expr(program, *payload, facts);
             }
         }
         IrExpr::EnumTag { value } | IrExpr::EnumPayload { value, .. } => {
-            walk_expr(program, *value, found)
+            walk_expr(program, *value, facts)
         }
         IrExpr::Field { base, .. }
         | IrExpr::ForeignField { base, .. }
-        | IrExpr::ForeignMemberAddress { base, .. } => walk_expr(program, *base, found),
+        | IrExpr::ForeignMemberAddress { base, .. } => walk_expr(program, *base, facts),
         IrExpr::ForeignElement { base, index, .. } => {
-            walk_expr(program, *base, found);
-            walk_expr(program, *index, found);
+            walk_expr(program, *base, facts);
+            walk_expr(program, *index, facts);
         }
         IrExpr::MathOperation { value, .. }
         | IrExpr::ScalarText { value }
         | IrExpr::ArrayElements { value, .. }
         | IrExpr::StringLen { text: value }
         | IrExpr::StringOf { value }
-        | IrExpr::ArrayLen { array: value } => walk_expr(program, *value, found),
+        | IrExpr::ArrayLen { array: value } => walk_expr(program, *value, facts),
         IrExpr::StringCharAt { text, index } => {
-            walk_expr(program, *text, found);
-            walk_expr(program, *index, found);
+            walk_expr(program, *text, facts);
+            walk_expr(program, *index, facts);
         }
         IrExpr::StringIndexOf { text, needle } => {
-            walk_expr(program, *text, found);
-            walk_expr(program, *needle, found);
+            walk_expr(program, *text, facts);
+            walk_expr(program, *needle, facts);
         }
         IrExpr::StringOperation {
             text, arguments, ..
         } => {
-            walk_expr(program, *text, found);
+            walk_expr(program, *text, facts);
             for argument in arguments {
-                walk_expr(program, *argument, found);
+                walk_expr(program, *argument, facts);
             }
         }
         IrExpr::StringSubstring { text, start, end } => {
-            walk_expr(program, *text, found);
-            walk_expr(program, *start, found);
-            walk_expr(program, *end, found);
+            walk_expr(program, *text, facts);
+            walk_expr(program, *start, facts);
+            walk_expr(program, *end, facts);
         }
-        IrExpr::CStringNew { text } => walk_expr(program, *text, found),
-        IrExpr::CLayoutAddress { value, .. } => walk_expr(program, *value, found),
-        IrExpr::FileSystem { args, .. }
-        | IrExpr::Compiler { args, .. }
-        | IrExpr::Env { args, .. } => {
+        IrExpr::CStringNew { text } => walk_expr(program, *text, facts),
+        IrExpr::CLayoutAddress { value, .. } => walk_expr(program, *value, facts),
+        IrExpr::FileSystem { args, .. } | IrExpr::Env { args, .. } => {
             for arg in args {
-                walk_expr(program, *arg, found);
+                walk_expr(program, *arg, facts);
+            }
+        }
+        IrExpr::Compiler { args, .. } => {
+            facts.uses_compiler = true;
+            for arg in args {
+                walk_expr(program, *arg, facts);
             }
         }
         IrExpr::ArrayNew { elements, .. } => {
             for element in elements {
-                walk_expr(program, *element, found);
+                walk_expr(program, *element, facts);
             }
         }
         IrExpr::Index { base, index, .. } => {
-            walk_expr(program, *base, found);
-            walk_expr(program, *index, found);
+            walk_expr(program, *base, facts);
+            walk_expr(program, *index, facts);
         }
         IrExpr::TaskOp { operands, .. } => {
             for operand in operands {
-                walk_expr(program, *operand, found);
+                walk_expr(program, *operand, facts);
             }
         }
         IrExpr::ArrayAppend { place, value } => {
-            walk_place(program, place, found);
-            walk_expr(program, *value, found);
+            walk_place(program, place, facts);
+            walk_expr(program, *value, facts);
         }
         IrExpr::Convert { operand, .. }
         | IrExpr::CellNew { value: operand, .. }
@@ -192,13 +226,14 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }
-        | IrExpr::NativeStateFree { token: operand } => walk_expr(program, *operand, found),
+        | IrExpr::NativeStateFree { token: operand } => walk_expr(program, *operand, facts),
         IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Int(_)
         | IrExpr::Float(_)
         | IrExpr::Bool(_)
         | IrExpr::Str(_)
         | IrExpr::RawPtrNull
+        | IrExpr::CellNull { .. }
         | IrExpr::Local(_)
         | IrExpr::CellGet { .. } => {}
     }

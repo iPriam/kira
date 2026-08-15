@@ -4,7 +4,7 @@
 //!
 //! - `<stem>.kbc` — the bytecode half, every non-`@Native` function,
 //! - `lib<stem>.dylib` (or `.so`) — the native half, one trampoline per
-//!   `@Native` function,
+//!   reachable `@Native` function,
 //! - `<stem>.khm` — the manifest tying them together, which a run loads first.
 //!
 //! # Where the manifest is built, and why not here
@@ -30,7 +30,6 @@ use kira_debug::DebugInfo;
 use kira_hybrid_definition::HybridManifest;
 use kira_ir::IrProgram;
 use kira_llvm_backend::{NativeBuildOptions, NativeLinkInputs};
-use kira_runtime_abi::Execution;
 
 use crate::native::{self, Artifacts, NativeError};
 
@@ -38,6 +37,12 @@ use crate::native::{self, Artifacts, NativeError};
 pub struct HybridBundle {
     /// The manifest a run loads first.
     pub manifest: PathBuf,
+    /// Explicit foreign library files staged beside the hybrid artifacts.
+    ///
+    /// The manifest records these paths for the VM half. A live bundle must
+    /// carry the files as native dependency payloads as well, or the runner
+    /// would receive a manifest that names libraries it never received.
+    pub foreign_dependencies: Vec<PathBuf>,
 }
 
 /// Why a hybrid build or run failed.
@@ -101,22 +106,16 @@ fn build_inner(
     foreign_link: &NativeLinkInputs,
     debug: Option<&DebugInfo>,
 ) -> Result<HybridBundle, HybridError> {
-    let artifacts =
-        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
-
     // The bytecode half: every function that is not `@Native`.
     let module = kira_bytecode::compile_hybrid(program)?;
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
     let bytecode_path = artifacts.bytecode();
     write(&bytecode_path, &module.to_bytes())?;
 
-    // A VM live bundle carries a native library only for foreign adapters and
-    // callbacks. Its Kira function bodies are all in the bytecode half, so a
-    // source edit that leaves this crossing surface unchanged must not invoke
-    // LLVM and the linker again.
-    let reusable_native = program
-        .functions
-        .iter()
-        .all(|function| function.execution.resolve(Execution::Runtime) == Execution::Runtime);
+    // A hybrid bundle with no reachable native body can reuse its native half
+    // when the crossing surface is unchanged.
+    let reusable_native = !kira_llvm_backend::has_reachable_hybrid_native_functions(program);
     let surface_key = native_surface_key(program, foreign_link);
     let cache_path = artifacts.native_surface_key();
     let cache_hit = debug.is_none()
@@ -143,7 +142,7 @@ fn build_inner(
             archive_path: None,
             exports: kira_llvm_backend::NativeExportSurface::default(),
             ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
-            runtime_archive: native::runtime_archive(program)?,
+            runtime_archive: native::hybrid_runtime_archive(program)?,
             optimize: debug.is_some_and(|debug| debug.optimized),
             unavailable_imports: foreign_link.unavailable_imports().to_vec(),
             foreign_link: foreign_link.clone(),
@@ -161,29 +160,52 @@ fn build_inner(
         native.exports
     };
 
+    let direct_bindings =
+        native::hybrid_foreign_bindings(program, &artifacts.shared_library(), foreign_link);
+    let direct_bindings =
+        native::stage_direct_foreign_bindings(artifacts.directory(), &direct_bindings)?;
+    let foreign_dependencies = direct_bindings
+        .iter()
+        .filter_map(|binding| binding.library_path().map(Path::to_path_buf))
+        .filter(|path| path.is_file() && path != &artifacts.shared_library())
+        .collect();
+    let foreign_paths: Vec<Option<String>> = direct_bindings
+        .iter()
+        .map(|binding| match &binding.target {
+            kira_main::ForeignBindingTarget::Library { path, .. } => Some(file_name(path)),
+            kira_main::ForeignBindingTarget::Process { .. } => {
+                Some(kira_dynamic_ffi::PROCESS_BINDING_MARKER.to_owned())
+            }
+            kira_main::ForeignBindingTarget::Unavailable => None,
+        })
+        .collect();
+
     // The manifest, last: it names the two payloads above.
     let manifest = manifest(
         program,
         &artifacts,
         &exports,
         kira_build::hybrid_internal_function_count(program, &module)?,
+        &foreign_paths,
     )?;
     let manifest_path = artifacts.manifest();
     write(&manifest_path, &manifest.to_bytes())?;
 
     Ok(HybridBundle {
         manifest: manifest_path,
+        foreign_dependencies,
     })
 }
 
-/// The exact input that can change a VM live session's native adapter library.
+/// The exact input that can change an all-runtime hybrid session's native library.
 ///
-/// The version makes an old compiler's `.kira-build` output conservative after
-/// a native ABI change. The ordinary Kira function bodies are deliberately not
-/// present: they do not enter the native half of a VM bundle.
+/// The runtime marker makes an old compiler's `.kira-build` output conservative
+/// after a native ABI change. The ordinary Kira function bodies are deliberately
+/// not present: they do not enter the native half of a VM bundle.
 fn native_surface_key(program: &IrProgram, foreign_link: &NativeLinkInputs) -> String {
     format!(
-        "kira-vm-native-surface-v1\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}",
+        "kira-vm-native-surface-v2\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}",
+        kira_runtime_abi::RUNTIME_ABI_MARKER,
         program.foreign_imports,
         program.foreign_aggregates,
         program.foreign_callbacks,
@@ -200,7 +222,12 @@ pub fn run(
     program_arguments: &[String],
 ) -> Result<i32, HybridError> {
     let bundle = build(program, source, emit_llvm_ir, foreign_link)?;
-    let session = kira_hybrid_runtime::Session::load(&bundle.manifest)?;
+    run_bundle(&bundle.manifest, program_arguments)
+}
+
+/// Runs an already-built hybrid bundle in an action child.
+pub fn run_bundle(manifest: &Path, program_arguments: &[String]) -> Result<i32, HybridError> {
+    let session = kira_hybrid_runtime::Session::load(manifest)?;
     // SAFETY: the CLI owns this run boundary and does not access the process
     // environment from another thread while the Hybrid session executes.
     unsafe { kira_runtime_abi::env::with_arguments(program_arguments, || session.run())? };
@@ -217,14 +244,16 @@ fn manifest(
     artifacts: &Artifacts,
     exports: &[(u32, String)],
     internal_functions: u32,
+    foreign_paths: &[Option<String>],
 ) -> Result<HybridManifest, HybridError> {
-    Ok(kira_build::hybrid_manifest(
+    Ok(kira_build::hybrid_manifest_with_foreign_paths(
         program,
         artifacts.stem(),
         &file_name(&artifacts.bytecode()),
         &file_name(&artifacts.shared_library()),
         exports,
         internal_functions,
+        foreign_paths,
     )?)
 }
 

@@ -83,14 +83,16 @@ pub(crate) fn precompile(
             } else {
                 lower(ir.module.clone(), target)
             };
-            entries.push((
-                path.clone(),
-                // Keyed by the case a program writes, not by the versioned
-                // label: a bump from 330 to 430 must not invalidate every
-                // `ksl!` call site.
-                target.case_name().to_lowercase(),
-                emit(&ir, target, &path, source, &mut diagnostics),
-            ));
+            if let Some(compiled) = emit(&ir, target, &path, source, &mut diagnostics) {
+                entries.push((
+                    path.clone(),
+                    // Keyed by the case a program writes, not by the versioned
+                    // label: a bump from 330 to 430 must not invalidate every
+                    // `ksl!` call site.
+                    target.case_name().to_lowercase(),
+                    compiled,
+                ));
+            }
         }
     }
     (PrecompiledShaders::new(entries), diagnostics, sources)
@@ -108,10 +110,8 @@ pub struct ShaderEmission {
 
 /// Compiles each `.ksl` file for every target, for `kira shader`.
 ///
-/// Reports what each target *emitted*, which is the thing a build cannot tell
-/// you: a target that cannot express a shader leaves empty sources and a note
-/// rather than failing, so a shader can build clean and still hand a driver
-/// nothing.
+/// Reports what each target emitted. A requested target that cannot emit the
+/// shader contributes an error diagnostic.
 pub fn compile_files(paths: &[PathBuf]) -> (Vec<ShaderEmission>, Vec<Diagnostic>, ShaderSources) {
     let mut emissions = Vec::new();
     let mut diagnostics = Vec::new();
@@ -134,11 +134,13 @@ pub fn compile_files(paths: &[PathBuf]) -> (Vec<ShaderEmission>, Vec<Diagnostic>
             } else {
                 lower(ir.module.clone(), target)
             };
-            emissions.push(ShaderEmission {
-                path: path.clone(),
-                target: target.label(),
-                compiled: emit(&ir, target, &written, source, &mut diagnostics),
-            });
+            if let Some(compiled) = emit(&ir, target, &written, source, &mut diagnostics) {
+                emissions.push(ShaderEmission {
+                    path: path.clone(),
+                    target: target.label(),
+                    compiled,
+                });
+            }
         }
     }
     (emissions, diagnostics, sources)
@@ -229,20 +231,12 @@ fn unreadable(path: &str, reason: &str) -> Diagnostic {
     diagnostic
 }
 
-/// The note a target that cannot express a shader reports.
-///
-/// A note rather than an error: the shader still compiles for every other
-/// target, so the build succeeds — but it succeeds having produced one fewer
-/// backend than it was asked for, and that has to be said.
-fn unsupported_target(path: &str, source: SourceId, target: &str, reason: &str) -> Diagnostic {
-    let message =
-        format!("`{path}` produced no `{target}` output and the artifact's is empty: {reason}");
+/// Reports that a requested backend could not emit a shader.
+fn backend_failure(path: &str, source: SourceId, target: &str, reason: &str) -> Diagnostic {
+    let message = format!("`{path}` could not emit requested `{target}` output: {reason}");
     let mut diagnostic = Diagnostic::single(
-        Severity::Note,
+        Severity::Error,
         message.clone(),
-        // Against the shader itself: a note about a shader that renders on the
-        // first line of some Kira file sends whoever reads it to the wrong
-        // place entirely.
         Label::primary(FileSpan::new(source, Span::new(0, 0)), message),
     );
     diagnostic.code = Some(Code::known("KSLS016"));
@@ -302,17 +296,14 @@ fn resolve_import(directory: &Path, segments: &[String]) -> Option<PathBuf> {
 
 /// Emits every source and name one target contributes.
 ///
-/// A target that cannot express the shader says so through `diagnostics` rather
-/// than contributing an empty source: an artifact whose GLSL fields are blank
-/// looks exactly like one whose GLSL compiled, and the difference only shows up
-/// as a black window on the platform that uses it.
+/// Returns no artifact when the target refuses the shader.
 fn emit(
     ir: &ShaderIr,
     target: BackendTarget,
     path: &str,
     source: SourceId,
     diagnostics: &mut Vec<Diagnostic>,
-) -> CompiledShader {
+) -> Option<CompiledShader> {
     let entry = |stage: Stage| {
         ir.reflection
             .as_ref()
@@ -349,9 +340,6 @@ fn emit(
             compiled.fragment_source = kira_glsl_backend::emit(ir, Stage::Fragment);
             compiled.compute_source = kira_glsl_backend::emit(ir, Stage::Compute);
         }
-        // HLSL refuses the same way GLSL does and for the same reason: a
-        // shader it cannot express arrives with empty sources and a note,
-        // because the other targets still carry it.
         BackendTarget::Hlsl => {
             for stage in [Stage::Vertex, Stage::Fragment, Stage::Compute] {
                 match kira_hlsl_backend::emit(ir, stage) {
@@ -360,25 +348,19 @@ fn emit(
                         Stage::Fragment => compiled.fragment_source = source,
                         Stage::Compute => compiled.compute_source = source,
                     },
-                    // Reported once, not once per stage: a shader HLSL cannot
-                    // express fails the same way for all of them.
                     Err(refusal) => {
-                        if stage == Stage::Vertex {
-                            diagnostics.push(unsupported_target(
-                                path,
-                                source,
-                                "hlsl",
-                                &refusal.to_string(),
-                            ));
-                        }
+                        diagnostics.push(backend_failure(
+                            path,
+                            source,
+                            "hlsl",
+                            &refusal.to_string(),
+                        ));
+                        return None;
                     }
                 }
             }
         }
-        // SPIR-V is the one target whose output is not text. It travels as
-        // hexadecimal, eight characters per word, because the artifact a macro
-        // splices into generated Kira carries strings — see
-        // `kira_spirv_backend::hex` for what a host does with it.
+        // Shader artifacts carry SPIR-V words as hexadecimal text.
         BackendTarget::Spirv => {
             for stage in [Stage::Vertex, Stage::Fragment, Stage::Compute] {
                 match kira_spirv_backend::emit(ir, stage) {
@@ -391,20 +373,19 @@ fn emit(
                         }
                     }
                     Err(refusal) => {
-                        if stage == Stage::Vertex {
-                            diagnostics.push(unsupported_target(
-                                path,
-                                source,
-                                "spirv",
-                                &refusal.to_string(),
-                            ));
-                        }
+                        diagnostics.push(backend_failure(
+                            path,
+                            source,
+                            "spirv",
+                            &refusal.to_string(),
+                        ));
+                        return None;
                     }
                 }
             }
         }
     }
-    compiled
+    Some(compiled)
 }
 
 #[cfg(test)]
@@ -499,7 +480,7 @@ shader Tri {
         // shader running with its uniforms unbound.
         assert_eq!(
             msl.resource_reflection,
-            "u|camera:0:64:1:1:view_projection@0#64:f;"
+            "u|camera:0:64:1:1:view_projection@0#64:f:0;"
         );
 
         let wgsl = table.compile("Shaders/Tri.ksl", "wgsl").expect("wgsl");
@@ -547,10 +528,6 @@ shader Tri {
     }
 
     /// A compute shader over storage reaches GLSL too.
-    ///
-    /// It did not at 330 — compute and storage arrived in 430 — and what a
-    /// target could not express left empty sources plus a note. Nothing does
-    /// that any more, so the assertion is that every target carries it.
     #[test]
     fn a_compute_shader_over_storage_reaches_every_target() {
         let directory = Scratch::new("compute-target");
@@ -609,6 +586,108 @@ shader Step {
             "{}",
             glsl.compute_source
         );
+    }
+
+    #[test]
+    fn an_hlsl_refusal_fails_the_build() {
+        let directory = Scratch::new("hlsl-refusal");
+        std::fs::write(
+            directory.path().join("Loop.ksl"),
+            r#"
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+shader Loop {
+    group Work {
+        storage read_write counter: [UInt]
+    }
+    compute {
+        input QIn
+        threads(1, 1, 1)
+        function entry(q: QIn) {
+            let i: UInt = 0
+            while i < counter.count {
+                i = i + 1
+            }
+            return
+        }
+    }
+}
+"#,
+        )
+        .expect("the shader");
+        let program = "@Main function main() {\n    let art = ksl!(\"Loop.ksl\")\n    return\n}\n";
+
+        let (table, diagnostics, _) =
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
+        let failure = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.has_code("KSLS016"))
+            .expect("the HLSL emission failure");
+
+        assert_eq!(failure.severity, Severity::Error);
+        assert!(failure.message.contains("requested `hlsl` output"));
+        assert!(failure.message.contains("loop condition"));
+        assert!(kira_diagnostics::has_errors(&diagnostics));
+        use kira_macros::ShaderCompiler;
+        let error = table
+            .compile("Loop.ksl", "hlsl")
+            .expect_err("a refused HLSL artifact must be absent");
+        assert!(error.to_string().contains("no `hlsl` output was compiled"));
+    }
+
+    #[test]
+    fn a_spirv_refusal_fails_the_build() {
+        let directory = Scratch::new("spirv-refusal");
+        std::fs::write(
+            directory.path().join("Output.ksl"),
+            r#"
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+type QOut {
+    let value: Float
+}
+shader Output {
+    compute {
+        input QIn
+        output QOut
+        threads(1, 1, 1)
+        function entry(q: QIn) -> QOut {
+            let result: QOut
+            result.value = 1.0
+            return result
+        }
+    }
+}
+"#,
+        )
+        .expect("the shader");
+        let program =
+            "@Main function main() {\n    let art = ksl!(\"Output.ksl\")\n    return\n}\n";
+
+        let (table, diagnostics, _) =
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
+        let failure = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.has_code("KSLS016"))
+            .expect("the SPIR-V emission failure");
+
+        assert_eq!(failure.severity, Severity::Error);
+        assert!(failure.message.contains("requested `spirv` output"));
+        assert!(
+            failure
+                .message
+                .contains("compute stage declares the output `QOut`")
+        );
+        assert!(kira_diagnostics::has_errors(&diagnostics));
+        use kira_macros::ShaderCompiler;
+        let error = table
+            .compile("Output.ksl", "spirv")
+            .expect_err("a refused SPIR-V artifact must be absent");
+        assert!(error.to_string().contains("no `spirv` output was compiled"));
     }
 
     #[test]

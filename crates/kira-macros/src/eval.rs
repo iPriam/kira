@@ -201,7 +201,7 @@ pub(crate) type ComptimeFunctions = HashMap<String, ComptimeFunction>;
 
 /// What a compile-time body reaches besides its own arguments.
 ///
-/// The three travel together through every layer that can run one — a macro's
+/// The compile-time inputs travel together through every layer that can run one — a macro's
 /// `expand`, a `comptime function`, and each nested call either makes — so they
 /// are carried as one value rather than threaded as three parameters that no
 /// call site ever varies independently.
@@ -216,6 +216,8 @@ pub(crate) struct Comptime<'a> {
     pub(crate) platform: &'a str,
     /// Every enum the program declares, so a body may name one of its cases.
     pub(crate) enums: &'a HashMap<String, Vec<String>>,
+    /// Whether the compiler is generating the `kira test` entrypoint.
+    pub(crate) testing: bool,
 }
 
 /// How deep one comptime call may nest inside another.
@@ -237,6 +239,7 @@ fn run_nested(
         shaders: comptime.shaders,
         platform: comptime.platform.to_owned(),
         enums: comptime.enums.clone(),
+        testing: comptime.testing,
         lint,
     };
     let value = match evaluator.block(&body.block)? {
@@ -290,6 +293,8 @@ struct Evaluator<'a> {
     /// Only a collector is told: it is the one macro form a verb runs *for*,
     /// and the only one that has any business asking which verb that was.
     lint: bool,
+    /// Whether the compiler is generating the `kira test` entrypoint.
+    testing: bool,
 }
 
 impl Evaluator<'_> {
@@ -698,6 +703,7 @@ impl Evaluator<'_> {
             shaders: self.shaders,
             platform: &self.platform.clone(),
             enums: &self.enums.clone(),
+            testing: self.testing,
         };
         match run_nested(&body, bound, comptime, self.lint, self.depth + 1) {
             Ok((value, reported)) => {
@@ -727,6 +733,7 @@ mod tests {
             shaders: None,
             platform: "unknown",
             enums: &enums,
+            testing: false,
         };
         run(&body, arguments, comptime, false)
     }

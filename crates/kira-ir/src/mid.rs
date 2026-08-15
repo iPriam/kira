@@ -1,61 +1,15 @@
-//! The mid-level stage: who releases what, decided once.
+//! The mid-level stage decides release ownership once for every backend.
 //!
-//! # Why this exists
+//! Lowering records one release plan for each owned local. Reading a local
+//! copies its heap value, so one release per slot at return is sufficient.
+//! Borrowed parameters and callback-state locals are excluded because their
+//! storage belongs to the caller or to the state store.
 //!
-//! Every owned local a function holds is released when the function returns.
-//! Both engines already do that, and until now both *decided* it separately:
-//! the LLVM backend walked every slot at each `return`, skipping borrowed
-//! parameters and callback-state locals, and the VM discarded a frame's whole
-//! local array. Two hand-maintained answers to one question, with nothing
-//! checking they agree — which is the shape a leak drifts into. One side gains
-//! a case the other does not, and the program leaks on that backend only, in
-//! programs no test happens to run.
-//!
-//! So the question is answered here, once, and both engines read the answer.
-//! A slot released twice or not at all is then a bug in one computation rather
-//! than a disagreement between two.
-//!
-//! # What is released, and what is not
-//!
-//! Reading a local **copies** it — a share bump on the string, array or enum
-//! behind it — so a slot keeps its own hold no matter how many times it is read
-//! or passed on. That is what makes a single release per slot per return both
-//! sufficient and necessary, and it is why this plan is a set of slots rather
-//! than a per-path liveness analysis: there is no path on which an owned slot
-//! has already given its hold away.
-//!
-//! Three kinds of slot are left alone, each for a different reason:
-//!
-//! - **A slot whose type owns no heap storage.** An `Int` has nothing to
-//!   release, so releasing it would be a call that does nothing.
-//! - **A borrowed parameter the caller lent by pointer.** The storage belongs
-//!   to the caller, which releases it itself; releasing it here would free a
-//!   value the caller still holds.
-//! - **A callback-state local.** The value lives in a store that outlives the
-//!   call, reached through a token; the slot names it and never owns it.
-//!
-//! Whether a borrow arrives as a pointer is a property of the *engine*, not of
-//! the function, so it is an input — see [`Lending`]. The native backend hands
-//! a callee pointers into the caller's frame. The VM cannot: its values are not
-//! addressable that way, so it copies into the callee's slot and moves the copy
-//! back out on return. A borrowed parameter is therefore the caller's storage
-//! on one engine and the callee's own value on the other, and a plan that
-//! assumed either would leak on the engine it guessed wrong about.
-//!
-//! # Where this sits
-//!
-//! Between lowering and the backends: it reads a lowered [`IrFunction`] and
-//! answers for it, so both engines consume a decision neither of them made. It
-//! deliberately does not re-derive what lowering already resolved — the types,
-//! the parameter modes and the state locals are all read from the function
-//! rather than recomputed from the HIR, because a second derivation is a second
-//! thing that can disagree, which is the very problem this stage exists to end.
-//!
-//! The two engines reach the answer by different routes because they run at
-//! different times. The LLVM backend calls this while emitting a `return`. The
-//! VM does not see an [`IrFunction`] at all — it runs a serialized module — so
-//! the bytecode compiler calls this and writes the plan into the module, and
-//! the VM walks what it finds there. Same answer, carried rather than recomputed.
+//! Whether a borrow is represented by a pointer is engine-specific: native code
+//! lends the caller's storage, while the VM copies the value into the callee's
+//! slot and moves it back. The plan therefore receives [`Lending`] from
+//! lowering rather than deriving it in either backend. The bytecode compiler
+//! serializes the same plan that LLVM consumes while emitting a `return`.
 
 use kira_semantics_model::TypeTable;
 

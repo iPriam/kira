@@ -45,3 +45,14 @@ pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
 pub use foreign::{kira_foreign_adapter_abi_version_2, kira_rt_cstring_free, kira_rt_cstring_new};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
 pub use runtime::{KStr, KiraString};
+
+/// Keeps this crate in a host binary's link graph.
+///
+/// A host that exports the `kira_dynamic_*` and `kira_live_*` symbols for a
+/// loaded native half asks its linker for them by name. Rust reaches none of
+/// them, and an extern crate no Rust code names is never handed to the linker,
+/// so the request would go unanswered. Calling this from a binary's entry point
+/// answers it.
+pub fn retain_process_exports() {
+    std::hint::black_box(live::kira_live_take_reload as extern "C" fn() -> bool);
+}

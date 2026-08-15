@@ -1,28 +1,8 @@
-//! The model a generated crate is rendered from, and every refusal that
-//! happens before a character of it is written.
+//! The model for a generated Rust wrapper crate.
 //!
-//! Split from [`super::emit`] at the boundary the two halves already had: this
-//! file decides *what* the crate says — which names are legal Rust, which
-//! collide, which engine is being targeted — and `emit` decides how it reads. A
-//! failure here names the offending Kira declaration; a failure there would be a
-//! generated file that did not compile, which is why all the refusing is on this
-//! side.
-//!
-//! # Why every generated type carries a host parameter
-//!
-//! The VM is a portable core: it formats `print` into finished lines and hands
-//! them to a `HostCapabilities` the embedder supplies. A wrapper that only ever
-//! built a `StdoutHost` would make that choice for the consumer — a Rust program
-//! embedding a UI library could not put the library's output in a log, a test
-//! buffer, or a browser console. So the library type and every handle newtype
-//! are generic over the host, with `StdoutHost` as the default type parameter:
-//! `load()` reads exactly as it did and `load_with(host)` is the door. Generic
-//! rather than boxed, matching `kira-main`, so an embedder reads its own host
-//! back afterwards.
-//!
-//! The parameter is spelled `H`, which is therefore a name no exported class may
-//! take: [`Model::build`] refuses one by name rather than emitting a file whose
-//! `impl<H> Drop for H<H>` does not compile.
+//! This layer validates Rust names, export types, and engine requirements before
+//! [`super::emit`] renders source. Generated types are generic over the supplied
+//! `HostCapabilities` so embedders can choose how the library handles output.
 
 use kira_bytecode::{ExportTable, ExportType};
 
@@ -31,8 +11,8 @@ use crate::wrapper::{WrapperError, WrapperSpec, artifact_file_name};
 
 /// The name the generated code gives its host type parameter.
 ///
-/// Public to this module only: it appears in the rendered signatures and in the
-/// one refusal that keeps a class from claiming it.
+/// Appears in rendered signatures and is reserved for the generated host
+/// parameter.
 pub(crate) const HOST_PARAM: &str = "H";
 
 /// The host parameter as it is applied to a generated type: `Button<H>`.

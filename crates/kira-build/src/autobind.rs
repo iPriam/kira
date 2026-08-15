@@ -173,11 +173,12 @@ fn load_clang() -> Result<kira_clang::Clang, String> {
 pub fn declaring_packages(
     source: &Path,
 ) -> Result<Vec<NativeLibraryPackage>, NativeDeclarationError> {
-    let (root, inline) = package_declarations(source)?;
+    let (root, inline, allow_thin_ffi_shim) = package_declarations(source)?;
     let mut packages = vec![NativeLibraryPackage {
         manifest_paths: native_lib_manifests(&root)?,
         root: root.clone(),
         inline,
+        allow_thin_ffi_shim,
     }];
     // A dependency's declarations are read from its own `package.kira`. A
     // dependency that cannot be resolved is not this function's to report: the
@@ -220,6 +221,7 @@ pub fn declaring_packages(
             manifest_paths: native_lib_manifests(&package_root)?,
             root: package_root,
             inline: declared.manifest.native_libraries,
+            allow_thin_ffi_shim: declared.manifest.allow_thin_ffi_shim,
         });
     }
     Ok(packages)
@@ -241,7 +243,7 @@ fn identity(path: &Path) -> PathBuf {
 /// inline.
 fn package_declarations(
     source: &Path,
-) -> Result<(PathBuf, Vec<NativeLibrarySpec>), NativeDeclarationError> {
+) -> Result<(PathBuf, Vec<NativeLibrarySpec>, bool), NativeDeclarationError> {
     // A manifest that exists but does not read is a real fault worth naming: a
     // build with foreign imports would otherwise fail later as an undeclared
     // library, blaming the import for an unreadable manifest.
@@ -254,13 +256,17 @@ fn package_declarations(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        return Ok((root, Vec::new()));
+        return Ok((root, Vec::new(), false));
     };
     let root = match PathBuf::from(&located.path).parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    Ok((root, located.manifest.native_libraries))
+    Ok((
+        root,
+        located.manifest.native_libraries,
+        located.manifest.allow_thin_ffi_shim,
+    ))
 }
 
 /// Every `NativeLibs/*.toml` the package ships, as package-relative paths.

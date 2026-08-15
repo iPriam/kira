@@ -77,6 +77,10 @@ impl NativeStateValueTag {
     pub const ENUM: Self = Self(7);
     /// Opaque raw-pointer word node.
     pub const RAW_PTR: Self = Self(8);
+    /// Capture-cell share node.
+    pub const CELL: Self = Self(9);
+    /// A dynamically typed `Any` node: its type identity and one payload child.
+    pub const ANY: Self = Self(10);
 }
 
 /// The open C status returned by native callback-state runtime helpers.
@@ -120,6 +124,100 @@ impl From<NativeStateError> for NativeStateStatus {
     }
 }
 
+/// One share of a capture cell, held by a callback-state tree.
+///
+/// # Why a cell is a share rather than a copy
+///
+/// Every other node in a state tree is a *copy* of what the engine held: the
+/// value moved in, and nothing on the engine's side can still see it. A capture
+/// cell is the one Kira value with reference semantics — a closure and the frame
+/// that declared the `var` have to see each other's writes — so copying its
+/// contents into the tree would silently split one binding into two.
+///
+/// So the node holds the engine's own cell, by handle, with a share taken for
+/// it. The share is counted *here*, by the [`Arc`]: a tree node is cloned
+/// whenever [`native_state_walk_mut`] unshares the level above it, and an engine
+/// asked to count those clones would need a hook on every one. Counting them
+/// with an `Arc` makes the arithmetic exact by construction, and the engine
+/// hears exactly once — when the last share in the tree goes — through the
+/// release it supplied.
+#[derive(Debug, Clone)]
+pub struct NativeCell {
+    share: Arc<CellShare>,
+}
+
+/// The share itself, so that dropping the last clone releases it once.
+struct CellShare {
+    handle: u64,
+    vm_owned: bool,
+    release: Box<dyn Fn(u64) + Send + Sync>,
+}
+
+impl std::fmt::Debug for CellShare {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CellShare")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CellShare {
+    fn drop(&mut self) {
+        (self.release)(self.handle);
+    }
+}
+
+impl NativeCell {
+    /// Takes over one already-retained share of the cell `handle` names.
+    ///
+    /// The caller retains; this releases. An engine that handed over a share it
+    /// had not taken would see the count fall below what it lent out.
+    pub fn new(handle: u64, release: impl Fn(u64) + Send + Sync + 'static) -> Self {
+        Self::with_origin(handle, false, release)
+    }
+
+    /// Takes over one VM-owned share of the cell `handle` names.
+    pub fn from_vm(handle: u64, release: impl Fn(u64) + Send + Sync + 'static) -> Self {
+        Self::with_origin(handle, true, release)
+    }
+
+    fn with_origin(
+        handle: u64,
+        vm_owned: bool,
+        release: impl Fn(u64) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            share: Arc::new(CellShare {
+                handle,
+                vm_owned,
+                release: Box::new(release),
+            }),
+        }
+    }
+
+    /// The engine handle this shares.
+    pub fn handle(&self) -> u64 {
+        self.share.handle
+    }
+
+    /// Whether this handle names a VM cell rather than a native cell.
+    pub fn is_vm_owned(&self) -> bool {
+        self.share.vm_owned
+    }
+}
+
+/// Two shares are the same cell when they name the same storage.
+///
+/// Identity, not contents: a cell is a place to write, and two boxes holding
+/// equal values are still two places. The same rule the VM's `Heap` and the
+/// native backend's `icmp eq` apply to a cell.
+impl PartialEq for NativeCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.share.handle == other.share.handle
+    }
+}
+
 /// An owned, backend-neutral copy of a Kira value held as callback state.
 ///
 /// # An aggregate is shared until somebody writes to it
@@ -153,6 +251,16 @@ pub enum NativeStateValue {
     Array(Arc<Vec<NativeStateValue>>),
     /// An opaque raw-pointer word.
     RawPtr(u64),
+    /// A share of a capture cell the engine still owns the storage of.
+    Cell(NativeCell),
+    /// An erased value, retaining the type identity that `Any` carries.
+    Any {
+        /// The [`kira_semantics_model::ErasedTypeId`] word of the value before
+        /// it entered `Any`.
+        type_id: u64,
+        /// The value that was erased, represented recursively as a state node.
+        payload: Arc<NativeStateValue>,
+    },
     /// A Kira enum's tag and optional payload.
     Enum {
         /// The declaration-order variant tag.
@@ -182,6 +290,14 @@ impl NativeStateValue {
         }
     }
 
+    /// An erased value node owning its dynamic payload.
+    pub fn any_of(type_id: u64, payload: NativeStateValue) -> NativeStateValue {
+        NativeStateValue::Any {
+            type_id,
+            payload: Arc::new(payload),
+        }
+    }
+
     /// This aggregate's children as a slice, or `None` for a scalar.
     ///
     /// A struct and an array answer with their fields and elements; an enum
@@ -193,6 +309,7 @@ impl NativeStateValue {
             NativeStateValue::Enum { payload, .. } => {
                 Some(payload.as_deref().map_or(&[], std::slice::from_ref))
             }
+            NativeStateValue::Any { payload, .. } => Some(std::slice::from_ref(payload.as_ref())),
             _ => None,
         }
     }
@@ -212,6 +329,9 @@ impl NativeStateValue {
                 }
                 None => Vec::new(),
             }),
+            NativeStateValue::Any { payload, .. } => Some(vec![
+                Arc::try_unwrap(payload).unwrap_or_else(|arc| (*arc).clone()),
+            ]),
             _ => None,
         }
     }
@@ -627,6 +747,8 @@ mod tests {
         assert_eq!(NativeStateValueTag::ARRAY.0, 6);
         assert_eq!(NativeStateValueTag::ENUM.0, 7);
         assert_eq!(NativeStateValueTag::RAW_PTR.0, 8);
+        assert_eq!(NativeStateValueTag::CELL.0, 9);
+        assert_eq!(NativeStateValueTag::ANY.0, 10);
         assert_eq!(NativeStateStatus::OK.0, 0);
         assert_eq!(NativeStateStatus::NO_HOST.0, 1);
         assert_eq!(NativeStateStatus::NULL_TOKEN.0, 2);
@@ -634,6 +756,70 @@ mod tests {
         assert_eq!(NativeStateStatus::WRONG_TYPE.0, 4);
         assert_eq!(NativeStateStatus::TOKEN_EXHAUSTED.0, 5);
         assert_eq!(NativeStateStatus::MALFORMED_VALUE.0, 6);
+    }
+
+    /// A cell share survives the deep clone a write forces, and is given back
+    /// exactly once when the last node holding it goes.
+    ///
+    /// The write is the case worth pinning: `native_state_walk_mut` unshares
+    /// each level it passes through, which clones every sibling node — so a
+    /// cell node is duplicated by a write that has nothing to do with it. An
+    /// engine asked to count those clones would have to be told about each one;
+    /// counting them here makes the arithmetic exact.
+    #[test]
+    fn a_cell_share_is_returned_once_however_often_its_node_is_cloned() {
+        let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&releases);
+        let root = NativeStateValue::struct_of(vec![
+            NativeStateValue::Int(1),
+            NativeStateValue::Cell(NativeCell::new(7, move |handle| {
+                assert_eq!(handle, 7);
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            })),
+        ]);
+
+        // A reader holds the children, so the write below has to unshare them.
+        let snapshot = root.clone();
+        let mut written = root;
+        let slot = native_state_walk_mut(&mut written, &[NativeStatePathStep::Field(0)])
+            .expect("the first field is a value");
+        *slot = NativeStateValue::Int(2);
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "a duplicated node is another share, not a release"
+        );
+
+        drop(snapshot);
+        assert_eq!(releases.load(std::sync::atomic::Ordering::Relaxed), 0);
+        drop(written);
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the engine hears once, when the last share goes"
+        );
+    }
+
+    /// Two shares of one cell are the same cell; the contents are not the
+    /// question, because a cell is a place to write.
+    #[test]
+    fn cell_nodes_compare_by_the_storage_they_name() {
+        let left = NativeStateValue::Cell(NativeCell::new(3, |_| {}));
+        let same = NativeStateValue::Cell(NativeCell::new(3, |_| {}));
+        let other = NativeStateValue::Cell(NativeCell::new(4, |_| {}));
+        assert_eq!(left, same);
+        assert_ne!(left, other);
+    }
+
+    #[test]
+    fn any_nodes_keep_the_type_id_and_one_recursive_child() {
+        let value = NativeStateValue::any_of(0x0005_0000_0000_0002, NativeStateValue::Int(7));
+        let NativeStateValue::Any { type_id, .. } = &value else {
+            panic!("the constructor must produce an Any node");
+        };
+        assert_eq!(*type_id, 0x0005_0000_0000_0002);
+        assert_eq!(value.children().map(|children| children.len()), Some(1));
+        assert_eq!(value.into_children(), Some(vec![NativeStateValue::Int(7)]));
     }
 
     #[test]
@@ -665,6 +851,34 @@ mod tests {
         assert_eq!(
             store.free(token),
             Err(NativeStateError::UnknownToken(token.as_word()))
+        );
+    }
+
+    #[test]
+    fn callback_state_teardown_releases_a_nested_enum_cell_share() {
+        let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&releases);
+        let value = NativeStateValue::struct_of(vec![NativeStateValue::enum_of(
+            3,
+            Some(NativeStateValue::Cell(NativeCell::new(23, move |handle| {
+                assert_eq!(handle, 23);
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }))),
+        )]);
+        let mut store = NativeStateStore::new();
+        let token = store.create(LEFT, value).expect("callback state allocates");
+        let recovered = store.recover(token, LEFT).expect("callback state recovers");
+        drop(recovered);
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the stored state still owns its cell share"
+        );
+        store.free(token).expect("callback state frees");
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "final state teardown releases the nested enum cell once"
         );
     }
 

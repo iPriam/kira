@@ -1,18 +1,7 @@
 //! Which user functions a function's body calls.
 //!
-//! One walk over a lowered body, collecting [`IrCallee::User`] targets. It
-//! exists for one question the hybrid library build has to answer before it
-//! writes anything — *does this `@Native` function call back into the runtime?*
-//! — and it answers it from the IR rather than from a generated artifact,
-//! because a refusal that names a function is only useful before the build is
-//! over.
-//!
-//! # Why it is exhaustive rather than a shortcut
-//!
-//! Every expression arm is matched by name, with no `_` catch-all. A new
-//! expression kind that can contain a call must then fail to compile here rather
-//! than silently drop out of the walk — which would turn this from a refusal
-//! into a hole, quietly, in whichever change added the arm.
+//! The walk is exhaustive so a new expression kind that can contain a call must
+//! be handled here before it can disappear from call analysis.
 
 use std::collections::BTreeSet;
 
@@ -20,9 +9,7 @@ use kira_ir::{IrCallee, IrExpr, IrExprId, IrPlace, IrProgram, IrStmt};
 
 /// Every user function `body` calls, directly, by index.
 ///
-/// Direct calls only: a `@Native` function that calls another `@Native` function
-/// that calls a `@Runtime` one is caught because *that* function is walked too,
-/// so the whole native half is covered one function at a time.
+/// Direct calls only, returned in stable index order.
 pub fn direct_calls(program: &IrProgram, body: &[IrStmt]) -> BTreeSet<u32> {
     let mut found = BTreeSet::new();
     for statement in body {
@@ -204,6 +191,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         | IrExpr::Bool(_)
         | IrExpr::Str(_)
         | IrExpr::RawPtrNull
+        | IrExpr::CellNull { .. }
         | IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Local(_)
         | IrExpr::CellGet { .. } => {}

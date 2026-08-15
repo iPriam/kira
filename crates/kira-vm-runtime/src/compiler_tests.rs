@@ -37,9 +37,9 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
 fn checking_program(request: &CheckRequest) -> Module {
     let strings = request.encode();
     let mut code: Vec<I> = (0..strings.len())
-        .map(|index| I::ConstStr(index as u32))
+        .map(|index| I::ConstStr(index as u64))
         .collect();
-    code.push(I::NewArray(strings.len() as u32));
+    code.push(I::NewArray(strings.len() as u64));
     code.push(I::Compiler(CompilerOp::CheckPackages));
     code.push(I::ArrayLen);
     code.push(I::Print);

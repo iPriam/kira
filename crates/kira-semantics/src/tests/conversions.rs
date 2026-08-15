@@ -49,8 +49,8 @@ fn a_conversion_result_carries_the_target_width() {
     );
 }
 
-/// A conversion whose operand is not numeric is refused with `KSEM209`, not the
-/// `KSEM061` undefined-function error the call form used to produce.
+/// A conversion whose operand is not numeric is refused with `KSEM209`, not an
+/// undefined-function diagnostic.
 #[test]
 fn a_non_numeric_operand_is_refused() {
     assert_eq!(

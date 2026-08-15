@@ -42,12 +42,8 @@ impl Drop for TempDir {
     }
 }
 
-/// The document being edited is rarely a lone file, and this is the shape that
-/// used to break: an app package whose entry sits in `app/`, with its
-/// `package.kira` a directory above and its libraries reached through that
-/// manifest. The server walked up to nothing, so every dependency import was
-/// reported as an unresolved library while `kira check` on the same tree was
-/// clean.
+/// A document inside an app package resolves libraries through the package
+/// manifest above its `app/` entrypoint.
 #[test]
 fn a_package_document_resolves_the_libraries_its_manifest_declares() {
     let tree = TempDir::new("package-deps");

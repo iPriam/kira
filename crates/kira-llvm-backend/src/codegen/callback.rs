@@ -1,43 +1,19 @@
-//! Generated callback entry thunks: the address C holds for a Kira function.
+//! Callback entries, which C reaches through a libffi closure.
 //!
-//! A `@FFI.Callback` value is a C function pointer, and C calls through it with
-//! no knowledge of Kira at all. So for each callback entry the frontend
-//! recorded, the backend emits one `extern "C"` function with exactly the
-//! declared C signature — `kira_ffi_callback_<i>` — and the value of the
-//! callback is that function's address.
+//! The address C holds for a `@FFI.Callback` is a closure libffi prepared, not a
+//! function this backend gave the declared C signature. Whether a struct passed
+//! by value arrives in registers, in memory, or behind a hidden pointer is the
+//! target ABI's answer, and libffi is where this workspace keeps it: a backend
+//! that spelled the signature itself would be classifying the struct a second
+//! time, with a second chance to disagree.
 //!
-//! # Two bodies, one signature
-//!
-//! What the thunk does inside depends on where the target function's body is in
-//! *this* module:
-//!
-//! * **Native here.** The thunk converts each C argument to its Kira value,
-//!   calls the lowered function directly, and converts the result back. An
-//!   executable's callbacks are all this shape, and so are a hybrid half's
-//!   `@Native` targets: the call costs one conversion per argument and nothing
-//!   else.
-//! * **Not native here.** The body is bytecode the VM runs, which this module
-//!   cannot call. The thunk marshals into `BridgeValue`s and goes through
-//!   `kira_hybrid_call_runtime`, the same door a `@Native` function already uses
-//!   to call a `@Runtime` one — so the adapter sidecar of a VM run and the
-//!   native half of a hybrid program reach the interpreter through one path
-//!   rather than two.
-//!
-//! Both are the same C function to the caller, which is the point: whether the
-//! Kira function behind a callback is interpreted or compiled is not something a
-//! C library can be asked to know.
-//!
-//! # A struct C passes by value
-//!
-//! One kind of parameter this module cannot present to C: a struct passed by
-//! value, whose ABI is the target C compiler's to decide and never this
-//! backend's. For such a callback the address C holds is a generated C entry
-//! (see [`crate::shim`]) which takes the struct by value and calls the thunk
-//! here with its address — so from this file's side the parameter is simply a
-//! pointer, and the Kira function it enters declares an `@FFI.Pointer` to the
-//! struct and reads members through it.
+//! So each callback row emits one entry with libffi's own closure signature —
+//! `(cif, result, arguments, user_data)` — and reads each argument out of the
+//! decoded `arguments` array. An aggregate is already a pointer to its C-layout
+//! bytes there, which is exactly what the Kira function's `@FFI.Pointer`
+//! parameter takes.
 
-use kira_runtime_abi::{Execution, ForeignType, ForeignTypeSpec};
+use kira_runtime_abi::{Execution, ForeignSignature, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -46,60 +22,38 @@ use super::{Callable, Codegen};
 use crate::LlvmError;
 use crate::callback_thunk_symbol;
 
-/// The Kira value type a seam scalar arrives as.
-///
-/// The widths collapse: every integer width is a Kira `Int` once converted, as
-/// it is in the VM, and the seam type is what fixed the C width on the way in.
-fn kira_type_of(ft: ForeignType) -> Result<Type, LlvmError> {
-    Ok(match ft {
-        ForeignType::I8
-        | ForeignType::U8
-        | ForeignType::I16
-        | ForeignType::U16
-        | ForeignType::I32
-        | ForeignType::U32
-        | ForeignType::I64
-        | ForeignType::U64 => Type::INT,
-        ForeignType::F32 | ForeignType::F64 => Type::FLOAT,
-        ForeignType::Bool => Type::Bool,
-        ForeignType::RawPtr => Type::RawPtr,
-        ForeignType::Void => Type::Void,
-        // C hands the thunk a `const char*` it keeps; the thunk copies the
-        // bytes, so what the Kira function receives is an owned `String`.
-        ForeignType::CString => Type::String,
-    })
+fn kira_type_of(spec: ForeignTypeSpec) -> Type {
+    match spec {
+        ForeignTypeSpec::Scalar(ty) => match ty {
+            ForeignType::I8
+            | ForeignType::U8
+            | ForeignType::I16
+            | ForeignType::U16
+            | ForeignType::I32
+            | ForeignType::U32
+            | ForeignType::I64
+            | ForeignType::U64 => Type::INT,
+            ForeignType::F32 | ForeignType::F64 => Type::FLOAT,
+            ForeignType::Bool => Type::Bool,
+            ForeignType::RawPtr => Type::RawPtr,
+            ForeignType::Void => Type::Void,
+            ForeignType::CString => Type::String,
+        },
+        ForeignTypeSpec::Aggregate(_) => Type::RawPtr,
+    }
 }
 
-/// The scalar a callback *result* carries, or a typed refusal.
-///
-/// The frontend admits no aggregate result into a callback signature — there is
-/// nothing on the Kira side to build the C bytes out of — so this cannot fire
-/// for a program that type-checked; it is the backend saying so rather than
-/// assuming it.
 fn result_of(spec: ForeignTypeSpec) -> Result<ForeignType, LlvmError> {
     match spec {
         ForeignTypeSpec::Scalar(ty) => Ok(ty),
-        ForeignTypeSpec::Aggregate(_) => Err(LlvmError::Unsupported(
+        ForeignTypeSpec::Aggregate(_) => Err(LlvmError::internal(
             "an aggregate result in a callback signature",
         )),
     }
 }
 
-/// The type one callback parameter reaches this thunk as.
-///
-/// A scalar is itself. A struct C passes by value reaches here as a pointer to
-/// the entry's own copy: the generated C entry is what C actually calls, and it
-/// is the C compiler there — not this backend — that decides how the struct
-/// arrived.
-fn thunk_param(spec: ForeignTypeSpec) -> ForeignType {
-    match spec {
-        ForeignTypeSpec::Scalar(ty) => ty,
-        ForeignTypeSpec::Aggregate(_) => ForeignType::RawPtr,
-    }
-}
-
 impl Codegen<'_> {
-    /// Emits one entry thunk per callback the program records.
+    /// Emits one closure entry per callback row.
     pub(super) fn emit_foreign_callbacks(&mut self) -> Result<(), LlvmError> {
         for index in 0..self.program.foreign_callbacks.len() {
             self.emit_foreign_callback(index)?;
@@ -107,14 +61,10 @@ impl Codegen<'_> {
         Ok(())
     }
 
-    /// The address C holds for callback `index`, as a `RawPtr` value.
+    /// Returns the address C stores for callback `index`.
     ///
-    /// Declared rather than looked up: for a scalar-only callback the thunk is
-    /// emitted by this same module after the function bodies that name it, and
-    /// LLVM resolves the two by name. For one C enters with a struct by value
-    /// the definition is in the generated shim's object, which the link resolves
-    /// — and its prototype is never spelled here, because spelling it would mean
-    /// classifying the struct.
+    /// The closure is prepared on first use and kept for the process, so this
+    /// yields one address per callback however often the value is materialized.
     pub(super) fn callback_thunk_address(
         &mut self,
         index: usize,
@@ -123,163 +73,196 @@ impl Codegen<'_> {
             .program
             .foreign_callbacks
             .get(index)
-            .ok_or(LlvmError::Unsupported("a callback not in the table"))?
+            .ok_or(LlvmError::internal("a callback not in the table"))?
             .clone();
-        let held = if crate::shim::callback_needs_entry(entry.signature()) {
-            self.declare_shim_callback_entry(index)
-        } else {
-            let params: Vec<ForeignType> = entry
-                .signature()
-                .parameters()
-                .iter()
-                .copied()
-                .map(thunk_param)
-                .collect();
-            let result = result_of(entry.signature().result())?;
-            self.declare_callback_thunk(index, entry.signature(), &params, result)
-                .value
-        };
-        let types = self.types;
-        // SAFETY: `held` is a function in this live module, and a `RawPtr` is an
-        // `i64` here.
-        Ok(unsafe { LLVMBuildPtrToInt(self.builder, held, types.i64, c"cb.addr".as_ptr()) })
+        result_of(entry.signature().result())?;
+        let target = self.declare_callback_entry(index, entry.signature())?;
+        let descriptor = self.callback_ffi_descriptor(index)?;
+        let mut arguments = [descriptor, target.value];
+        // SAFETY: both arguments are values in this live module and the runtime
+        // declaration takes exactly two pointers.
+        Ok(unsafe { self.call_runtime(self.runtime.ffi_closure, &mut arguments, c"cb.closure") })
     }
 
-    /// Declares the shim's C entry for callback `index`, for its address alone.
-    ///
-    /// Typed `void (void)` on purpose: nothing in this module calls it, and its
-    /// real prototype takes a struct by value — which is precisely the shape
-    /// this backend must not commit to. An address does not depend on a
-    /// prototype, so declaring the least is declaring the truth.
-    fn declare_shim_callback_entry(&mut self, index: usize) -> LLVMValueRef {
-        let name = super::ffi::c_string(&crate::callback_name(index));
-        // SAFETY: the type belongs to this module's context, and the name
-        // outlives both calls below.
-        unsafe {
-            let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
-            if !existing.is_null() {
-                return existing;
-            }
-            let ty = LLVMFunctionType(self.types.void, std::ptr::null_mut(), 0, 0);
-            LLVMAddFunction(self.module, name.as_ptr(), ty)
-        }
-    }
-
-    /// Emits the entry thunk for callback `index`.
+    /// Emits callback `index`'s entry after its declaration has been shared
+    /// with the call sites that materialize its address.
     fn emit_foreign_callback(&mut self, index: usize) -> Result<(), LlvmError> {
         let entry = self.program.foreign_callbacks[index].clone();
         let signature = entry.signature();
-        let params: Vec<ForeignType> = signature
-            .parameters()
-            .iter()
-            .copied()
-            .map(thunk_param)
-            .collect();
         let result = result_of(signature.result())?;
-        let function = entry.function();
-
-        let thunk = self.declare_callback_thunk(index, signature, &params, result);
-        let builder = self.builder;
-        // SAFETY: `thunk.value` is a function just declared in this live module,
-        // and the block belongs to its context.
+        let target = self.declare_callback_entry(index, signature)?;
+        // SAFETY: the entry is a function just declared in this module and the
+        // block belongs to its context.
         unsafe {
-            let block = LLVMAppendBasicBlockInContext(self.context, thunk.value, c"entry".as_ptr());
-            LLVMPositionBuilderAtEnd(builder, block);
+            let block =
+                LLVMAppendBasicBlockInContext(self.context, target.value, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, block);
         }
 
-        // SAFETY: the parameters exist — the signature was built with them — and
-        // the builder is positioned on the thunk's only block.
-        let arguments: Vec<LLVMValueRef> = (0..params.len())
-            .map(|slot| unsafe { LLVMGetParam(thunk.value, slot as u32) })
-            .collect();
+        let parameters = signature.parameters().to_vec();
+        // SAFETY: the closure signature's third parameter is the decoded
+        // argument array.
+        let argument_array = unsafe { LLVMGetParam(target.value, 2) };
+        let mut arguments = Vec::with_capacity(parameters.len());
+        for (slot, spec) in parameters.iter().copied().enumerate() {
+            arguments.push(self.read_closure_argument(argument_array, slot, spec)?);
+        }
 
-        // Whether this module holds the function's body decides which door the
-        // thunk takes; both present the same C function to the caller.
+        let function = entry.function();
         let produced = if self.engine_of(function as usize) == Execution::Native {
-            self.enter_kira_function(function, &params, &arguments, result)?
+            self.enter_kira_function(function, &arguments, result)?
         } else {
-            self.enter_through_runtime(function, &params, &arguments, result)?
+            self.enter_through_runtime(function, &parameters, &arguments, result)?
         };
 
-        // SAFETY: the builder is on the thunk's unterminated block, and
-        // `produced` (when present) has this result's C type.
-        unsafe {
-            match produced {
-                None => LLVMBuildRetVoid(builder),
-                Some(value) => LLVMBuildRet(builder, value),
-            };
+        if let Some(value) = produced {
+            // SAFETY: the closure signature's second parameter is the result
+            // storage libffi sized for this signature.
+            let storage = unsafe { LLVMGetParam(target.value, 1) };
+            self.write_closure_result(storage, value, result);
         }
+        // SAFETY: the builder is on the entry's only unterminated block.
+        unsafe { LLVMBuildRetVoid(self.builder) };
         Ok(())
     }
 
-    /// Declares the thunk for callback `index` with the signature it is entered
-    /// with here — every by-value struct already reduced to a pointer.
-    ///
-    /// The name is [`callback_thunk_symbol`]: the address C holds for a
-    /// scalar-only callback, and the body behind the shim's entry otherwise.
-    fn declare_callback_thunk(
+    /// Declares one callback entry with libffi's closure signature.
+    fn declare_callback_entry(
         &mut self,
         index: usize,
-        signature: &kira_runtime_abi::ForeignSignature,
-        params: &[ForeignType],
-        result: ForeignType,
-    ) -> Callable {
+        signature: &ForeignSignature,
+    ) -> Result<Callable, LlvmError> {
         let name = super::ffi::c_string(&callback_thunk_symbol(index, signature));
-        let mut param_types: Vec<LLVMTypeRef> =
-            params.iter().map(|ty| self.foreign_c_type(*ty)).collect();
-        let result_type = self.foreign_c_type(result);
-        // SAFETY: every type belongs to this module's context, and `param_types`
-        // outlives the type call.
-        unsafe {
-            let ty = LLVMFunctionType(
-                result_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
+        let mut parameter_types = [
+            self.types.ptr,
+            self.types.ptr,
+            self.types.ptr,
+            self.types.ptr,
+        ];
+        // SAFETY: every type belongs to this module's context, and the
+        // parameter array outlives the LLVM function-type call.
+        let ty = unsafe {
+            LLVMFunctionType(
+                self.types.void,
+                parameter_types.as_mut_ptr(),
+                parameter_types.len() as u32,
                 0,
-            );
-            // A call site declares the thunk before the emission pass defines
-            // it, so this has to return the *same* function both times: adding
-            // one twice would give the second a suffixed name, and the address a
-            // value carries would not be the address C is handed.
+            )
+        };
+        // SAFETY: the name belongs to this live module and LLVM returns the
+        // existing declaration when one was made by a callback value.
+        let value = unsafe {
             let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
-            let value = if existing.is_null() {
+            if existing.is_null() {
                 LLVMAddFunction(self.module, name.as_ptr(), ty)
             } else {
                 existing
-            };
-            Callable { ty, value }
-        }
+            }
+        };
+        Ok(Callable { ty, value })
     }
 
-    /// Converts one C argument the thunk was entered with into the Kira value
-    /// the function expects.
+    /// Reads one decoded argument out of libffi's argument array.
     ///
-    /// Everything but a `CString` is the shared scalar conversion. A `CString`
-    /// is the one position where the thunk *allocates*: C hands over a pointer
-    /// into storage it keeps, and the Kira function is entered with an owned
-    /// `String` copied from it. That copy has to happen here rather than
-    /// anywhere later, because a callback's argument is only guaranteed valid
-    /// for the length of the call C made.
-    fn callback_argument_to_kira(
-        &self,
-        value: LLVMValueRef,
-        ty: ForeignType,
+    /// Each slot holds the address of that argument's value. An aggregate's
+    /// address is what the Kira parameter takes; a scalar is loaded from it.
+    fn read_closure_argument(
+        &mut self,
+        argument_array: LLVMValueRef,
+        slot: usize,
+        spec: ForeignTypeSpec,
     ) -> Result<LLVMValueRef, LlvmError> {
-        if ty != ForeignType::CString {
-            return self.c_value_to_kira(value, ty);
+        let types = self.types;
+        let builder = self.builder;
+        // SAFETY: libffi supplies one readable storage pointer per declared
+        // parameter, so slot `slot` is in bounds for this signature.
+        let storage = unsafe {
+            let mut offset = [LLVMConstInt(types.i64, slot as u64, 0)];
+            let element = LLVMBuildInBoundsGEP2(
+                builder,
+                types.ptr,
+                argument_array,
+                offset.as_mut_ptr(),
+                1,
+                c"cb.arg.slot".as_ptr(),
+            );
+            LLVMBuildLoad2(builder, types.ptr, element, c"cb.arg.ptr".as_ptr())
+        };
+        match spec {
+            ForeignTypeSpec::Aggregate(_) => {
+                // SAFETY: the storage address is a pointer in this module and a
+                // Kira `RawPtr` is its pointer-sized integer.
+                Ok(unsafe {
+                    LLVMBuildPtrToInt(builder, storage, types.i64, c"cb.aggregate.ptr".as_ptr())
+                })
+            }
+            ForeignTypeSpec::Scalar(ty) => {
+                let c_type = self.foreign_c_type(ty);
+                // SAFETY: libffi wrote this argument's C value into `storage`.
+                let value = unsafe { LLVMBuildLoad2(builder, c_type, storage, c"cb.arg".as_ptr()) };
+                if ty != ForeignType::CString {
+                    return self.c_value_to_kira(value, ty);
+                }
+                // SAFETY: `value` is the `const char*` C passed for this slot.
+                Ok(unsafe {
+                    self.call_runtime(self.runtime.str_from_cstr, &mut [value], c"cb.str")
+                })
+            }
         }
-        // SAFETY: `value` is the thunk's `ptr` parameter on its live entry
-        // block, which is exactly what this helper takes.
-        Ok(unsafe { self.call_runtime(self.runtime.str_from_cstr, &mut [value], c"cb.str") })
     }
 
-    /// Calls the lowered Kira function directly, converting across the C types.
+    /// Writes one callback result into the storage libffi handed the closure.
     ///
-    /// `None` when the callback returns nothing.
+    /// Libffi reads a whole `ffi_arg` word back for a narrow integral result, so
+    /// an integer, `Bool`, or pointer result is stored as that word rather than
+    /// as its own C width.
+    fn write_closure_result(
+        &mut self,
+        storage: LLVMValueRef,
+        value: LLVMValueRef,
+        result: ForeignType,
+    ) {
+        let builder = self.builder;
+        let types = self.types;
+        match result {
+            ForeignType::Void => {}
+            ForeignType::F32 | ForeignType::F64 => {
+                // SAFETY: `value` has this result's floating C type, which is
+                // what libffi reads back for a floating result.
+                unsafe { LLVMBuildStore(builder, value, storage) };
+            }
+            ForeignType::I8 | ForeignType::I16 | ForeignType::I32 | ForeignType::I64 => {
+                // SAFETY: `value` is this result's signed C integer.
+                unsafe {
+                    let word = LLVMBuildSExt(builder, value, types.i64, c"cb.result".as_ptr());
+                    LLVMBuildStore(builder, word, storage);
+                }
+            }
+            ForeignType::Bool
+            | ForeignType::U8
+            | ForeignType::U16
+            | ForeignType::U32
+            | ForeignType::U64 => {
+                // SAFETY: `value` is this result's unsigned C integer or `_Bool`.
+                unsafe {
+                    let word = LLVMBuildZExt(builder, value, types.i64, c"cb.result".as_ptr());
+                    LLVMBuildStore(builder, word, storage);
+                }
+            }
+            ForeignType::RawPtr | ForeignType::CString => {
+                // SAFETY: `value` is this result's pointer.
+                unsafe {
+                    let word = LLVMBuildPtrToInt(builder, value, types.i64, c"cb.result".as_ptr());
+                    LLVMBuildStore(builder, word, storage);
+                }
+            }
+        }
+    }
+
+    /// Calls a native Kira callback body directly.
     fn enter_kira_function(
         &mut self,
         function: u32,
-        params: &[ForeignType],
         arguments: &[LLVMValueRef],
         result: ForeignType,
     ) -> Result<Option<LLVMValueRef>, LlvmError> {
@@ -288,15 +271,12 @@ impl Codegen<'_> {
             .get(function as usize)
             .copied()
             .flatten()
-            .ok_or(LlvmError::Unsupported(
+            .ok_or(LlvmError::internal(
                 "a callback naming a function this module did not lower",
             ))?;
-        let mut values = Vec::with_capacity(arguments.len());
-        for (value, ty) in arguments.iter().zip(params) {
-            values.push(self.callback_argument_to_kira(*value, *ty)?);
-        }
-        // SAFETY: `target` is a lowered Kira function of this module and
-        // `values` matches its parameter list, converted one for one.
+        let mut values = arguments.to_vec();
+        // SAFETY: target is a lowered Kira function and values match its
+        // parameter list after seam conversion.
         let produced = unsafe { self.call_runtime(target, &mut values, c"cb.call") };
         match result {
             ForeignType::Void => Ok(None),
@@ -304,36 +284,25 @@ impl Codegen<'_> {
         }
     }
 
-    /// Calls the function through `kira_hybrid_call_runtime`, which reaches the
-    /// interpreter.
+    /// Calls a runtime-owned Kira callback through the hybrid invoker.
     fn enter_through_runtime(
         &mut self,
         function: u32,
-        params: &[ForeignType],
+        parameters: &[ForeignTypeSpec],
         arguments: &[LLVMValueRef],
         result: ForeignType,
     ) -> Result<Option<LLVMValueRef>, LlvmError> {
         let types = self.types;
         let builder = self.builder;
-        // SAFETY: every type and value belongs to this live module, the builder
-        // is on the thunk's block, and the array is sized to hold exactly the
-        // arguments written into it.
+        // SAFETY: every type and value belongs to this live module, and the
+        // builder is positioned on the entry's active block.
         let out = unsafe {
             let count = LLVMConstInt(types.i64, arguments.len() as u64, 0);
             let argv =
                 LLVMBuildArrayAlloca(builder, types.bridge_value, count, c"cb.args".as_ptr());
-            for (slot, (value, ty)) in arguments.iter().zip(params).enumerate() {
-                let kira = self.callback_argument_to_kira(*value, *ty)?;
-                let mut offset = [LLVMConstInt(types.i32, slot as u64, 0)];
-                let element = LLVMBuildInBoundsGEP2(
-                    builder,
-                    types.bridge_value,
-                    argv,
-                    offset.as_mut_ptr(),
-                    1,
-                    c"cb.arg".as_ptr(),
-                );
-                self.write_bridge_value(element, kira, kira_type_of(*ty)?)?;
+            for (slot, (value, spec)) in arguments.iter().zip(parameters).enumerate() {
+                let element = self.bridge_element_ptr(argv, slot as u64);
+                self.write_bridge_value(element, *value, kira_type_of(*spec))?;
             }
             let out = LLVMBuildAlloca(builder, types.bridge_value, c"cb.out".as_ptr());
             let mut call_args = [
@@ -348,7 +317,7 @@ impl Codegen<'_> {
         if result == ForeignType::Void {
             return Ok(None);
         }
-        let value = self.read_bridge_payload(out, kira_type_of(result)?)?;
+        let value = self.read_bridge_payload(out, kira_type_of(ForeignTypeSpec::Scalar(result)))?;
         Ok(Some(self.kira_value_to_c(value, result)?))
     }
 }

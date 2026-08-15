@@ -64,6 +64,9 @@ pub fn render(manifest: &ProjectManifest) -> Result<String, DeclarationWriteErro
     }
     push_string_array_field(&mut text, 1, "assets", &manifest.assets);
     push_string_array_field(&mut text, 1, "packages", &manifest.packages);
+    if manifest.allow_thin_ffi_shim {
+        push_bool_field(&mut text, 1, "allowThinFfiShim", true);
+    }
     push_dependencies(&mut text, &manifest.dependencies);
     push_native_libraries(&mut text, &manifest.native_libraries);
     push_defaults(&mut text, execution_mode, build_target);
@@ -133,6 +136,15 @@ fn push_case_field(text: &mut String, depth: usize, key: &str, value: &str) {
     text.push_str(key);
     text.push_str(" = .");
     text.push_str(value);
+    text.push('\n');
+}
+
+fn push_bool_field(text: &mut String, depth: usize, key: &str, value: bool) {
+    indent(text, depth);
+    text.push_str("let ");
+    text.push_str(key);
+    text.push_str(" = ");
+    text.push_str(if value { "true" } else { "false" });
     text.push('\n');
 }
 

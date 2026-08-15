@@ -11,7 +11,7 @@ use kira_runtime_abi::{CapturingHost, Execution};
 
 use crate::{Value, execute};
 
-fn function(name: &str, locals: u16, code: Vec<I>, releases: FrameRelease) -> FuncProto {
+fn function(name: &str, locals: u64, code: Vec<I>, releases: FrameRelease) -> FuncProto {
     FuncProto {
         name: name.to_owned(),
         param_count: 0,

@@ -45,10 +45,14 @@ impl Vm<'_> {
     }
 
     /// `CellGet`: push an owned copy of what the cell in `slot` holds.
-    pub(super) fn cell_get(&mut self, frame: &Frame, slot: u16) -> Result<(), VmError> {
+    pub(super) fn cell_get(&mut self, frame: &Frame, slot: u64) -> Result<(), VmError> {
         // Borrowed, not consumed: the slot keeps its hold on the box, so
         // nothing is dropped here.
-        let Some(Value::Cell(id)) = frame.locals.get(slot as usize).copied() else {
+        let Some(Value::Cell(id)) = frame
+            .locals
+            .get(usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?)
+            .copied()
+        else {
             return Err(VmError::NotACell);
         };
         let value = self.heap.cell_get(id).ok_or(VmError::NotACell)?;
@@ -58,9 +62,10 @@ impl Vm<'_> {
 
     /// `CellSet`: pop a value into the cell `slot` holds, releasing what was
     /// there.
-    pub(super) fn cell_set(&mut self, frame: &Frame, slot: u16) -> Result<(), VmError> {
+    pub(super) fn cell_set(&mut self, frame: &Frame, slot: u64) -> Result<(), VmError> {
+        let slot = usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?;
         let value = self.pop()?;
-        let Some(Value::Cell(id)) = frame.locals.get(slot as usize).copied() else {
+        let Some(Value::Cell(id)) = frame.locals.get(slot).copied() else {
             // The popped value is this instruction's now, so a refusal releases
             // it rather than leaking it — the same discipline every other
             // consuming instruction follows on its error paths.

@@ -15,7 +15,7 @@ line is the source of truth. A test-only upward reference belongs in
 | 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (Rust embedding surface: staticlib/cdylib/rlib) |
 | 6 | `kira-program-graph`, `kira-hybrid-main` (hybrid embedding surface: bytecode half plus a loaded native half) |
 | 7 | `kira-build` (frontend driver, library builds, generated Rust wrapper crates) |
-| 8 | `kira-instruments`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
+| 8 | `kira-profile`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
 | 9 | `kira-cli` (binary `kira`) |
 | tests | `kira-export-consumer` (a Rust program consuming a Kira library, end to end, on each of the three engines) |
 | runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
@@ -23,6 +23,13 @@ line is the source of truth. A test-only upward reference belongs in
 
 `kira-lsp` is the language-server surface over the salsa frontend, consuming the
 same frontend the compiler does.
+
+`kira-mcp` and `kira-lldb-mcp` are the two agent-facing servers, sharing their
+JSON-RPC framing through `kira-mcp-protocol`. They are split by lifetime rather
+than by subject: `kira-mcp` answers one compiler question per call, while a
+debug session outlives the call that started it, so `kira-lldb-mcp` holds the
+LLDB processes and the built targets its sessions are debugging. Neither is a
+layer — both sit above `kira-cli`, and `kira-lldb-mcp` builds through it.
 
 ## The rules that decide where code goes
 

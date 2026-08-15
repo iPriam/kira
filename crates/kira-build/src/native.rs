@@ -124,8 +124,7 @@ pub fn export_surface(library: &str, exports: &ExportTable) -> NativeExportSurfa
 /// `cargo:rustc-link-lib=static=<name>` resolves to whatever the host
 /// toolchain's static libraries are called, and that is not one spelling:
 /// MSVC links `<name>.lib`, every other target this builds for links
-/// `lib<name>.a`. This used to claim one name "on every platform this targets",
-/// which was true only while Windows was not one of them.
+/// `lib<name>.a`.
 pub fn archive_file_name(library: &str) -> String {
     match cfg!(target_env = "msvc") {
         true => format!("{library}.lib"),

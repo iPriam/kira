@@ -8,10 +8,9 @@
 //! entrypoint, reporting each milestone back as a [`LiveEvent`].
 //!
 //! A later source change rebuilds the bundle, and [`reload`] decides how it
-//! reaches the app: swapped into the running process when the rebuilt native
-//! library is byte-for-byte the loaded one, and by replacing the runner when it
-//! is not. The decision is never silent — a bundle that cannot be swapped says
-//! why.
+//! reaches the app from manifest evidence. A changed bytecode payload relaunches
+//! because `KLB1` has no live-value compatibility fingerprint. The decision is
+//! never silent: a bundle that cannot be swapped says why.
 //!
 //! The pieces, bottom up:
 //!
@@ -66,4 +65,4 @@ pub use reload::{
 pub use server::{LiveServer, ServerError};
 pub use session::{LiveSession, ReloadOutcome};
 pub use store::{Bundle, BundleError, NamedPayload};
-pub use watch::{Change, ChangeKind, SourceWatcher, WatchSet};
+pub use watch::{Change, ChangeKind, SourceWatcher, WatchError, WatchSet};

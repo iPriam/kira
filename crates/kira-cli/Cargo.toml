@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "kira"
@@ -28,16 +29,18 @@ kira-bytecode.workspace = true
 # The build system: the frontend query and the library/wrapper-crate build both
 # live there, so `kira` drives them rather than owning a second copy.
 kira-build.workspace = true
-kira-instruments.workspace = true
+kira-profile.workspace = true
 kira-linter.workspace = true
 kira-doc.workspace = true
 kira-main.workspace = true
+kira-dynamic-ffi.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
 kira-backend-api.workspace = true
 kira-llvm-backend.workspace = true
 kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
+kira-libffi.workspace = true
 kira-live.workspace = true
 kira-manifest.workspace = true
 kira-package-manager.workspace = true
@@ -65,6 +68,9 @@ kira-compiler-bridge.workspace = true
 # so and names the build that would fix it.
 kira-desktop-runner.workspace = true
 salsa.workspace = true
+# `kira debug --prepare` answers a debugger frontend in JSON, in the same
+# contract `kira-debug` defines and the frontend deserializes.
+serde_json.workspace = true
 thiserror.workspace = true
 
 # The build-directory lock is the operating system's, so that a killed build
@@ -85,4 +91,3 @@ kira-knvm.workspace = true
 # clang and llvm-ar, so the test needs no checked-in binary and no system
 # headers.
 kira-toolchain.workspace = true
-

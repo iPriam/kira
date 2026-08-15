@@ -1,32 +1,15 @@
 //! Deciding how a rebuilt bundle reaches a running app.
 //!
-//! Two tiers. A **hot patch** swaps the bytecode into the process that is
-//! already running: same process, same loaded native library, and — once the
-//! language has state that outlives a call — the same heap. A **relaunch** kills
-//! the runner and starts a new one, which loses everything the process held.
-//!
-//! The tier is chosen by what actually changed, and the rule is byte identity
-//! rather than a source diff: if the rebuilt native library is byte-for-byte the
-//! loaded one, the edit was a bytecode-only edit whatever the source looked
-//! like, and the running process can take it. If it differs by one byte, it
-//! cannot — the process has that library's code and layouts baked into it, and
-//! pointers into it held by native state. This is why bundle payloads are named
-//! by a collision-resistant hash: a hash collision here would hot-patch across
-//! an ABI change and corrupt memory silently.
-//!
-//! Nothing degrades quietly. A bundle that cannot be hot-patched produces a
-//! [`ReloadDecision`] that says so and why, and the reason reaches the user —
-//! rather than a relaunch that looks like a slow hot patch and leaves someone
-//! wondering where their state went.
+//! A hot patch needs payload identity and live-value compatibility evidence.
+//! `KLB1` records payload identity, but no struct/enum layout or closure
+//! signature fingerprint. Changed bytecode therefore relaunches.
 
-use crate::bundle::{BundleManifest, PayloadEntry};
+use crate::bundle::{BundleManifest, PayloadEntry, PayloadKind};
 use crate::event::ReloadMode;
 
 /// The environment variable that turns tier 1 off.
 ///
-/// Set it to `1` and every reload relaunches. It exists so that a session can be
-/// run with the hot-patch path removed rather than merely unused — which is what
-/// makes it possible to tell whether a bug is the hot patch's fault.
+/// Set it to `1` to force relaunches for every changed bundle.
 pub const NO_HOTPATCH_VAR: &str = "KIRA_LIVE_NO_HOTPATCH";
 
 /// Whether the environment asks for relaunch-only reloads.
@@ -48,9 +31,7 @@ pub fn hotpatch_kill_switch_reason() -> String {
 
 /// Why a rebuilt bundle cannot be swapped into the running process.
 ///
-/// Each variant is a fact about the two bundles, not a guess. The message a user
-/// sees comes from here, so "restart required" always arrives with the reason it
-/// was required.
+/// Each variant is a fact about the two bundles or the runner.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RelaunchReason {
     /// The native library changed, so the loaded one is stale.
@@ -71,6 +52,14 @@ pub enum RelaunchReason {
     /// against and cannot be told about.
     #[error("the hybrid manifest `{payload}` changed, so the native boundary moved")]
     HybridManifestChanged {
+        /// Which payload changed.
+        payload: String,
+    },
+    /// Bytecode changed without live-value compatibility evidence.
+    #[error(
+        "the bytecode module `{payload}` changed without compatibility evidence for live layouts and closure signatures"
+    )]
+    BytecodeChanged {
         /// Which payload changed.
         payload: String,
     },
@@ -148,21 +137,8 @@ impl ReloadDecision {
 
 /// Decides how `rebuilt` reaches a process running `loaded`.
 ///
-/// The comparison is between two manifests, because a manifest is a list of
-/// content hashes: deciding from hashes rather than from bytes means the
-/// decision costs nothing and does not depend on still having the old payloads
-/// around.
-///
-/// # What is not checked yet
-///
-/// The specification names two more rejection conditions: a struct or enum whose
-/// layout changed, and a function referenced by a live closure that was removed
-/// or had its signature changed. Neither is checked here, because neither can
-/// happen yet — the language has no structs, no enums, and no closures, so there
-/// are no layouts to change and no live values holding function ids across a
-/// swap. They are not skipped; there is nothing to skip. When those features
-/// land, this is the function that grows the checks, and the hot patch must not
-/// be trusted for them until it does.
+/// The comparison uses complete manifest rows. It does not need the old payload
+/// bytes or a source diff.
 pub fn decide(
     loaded: &BundleManifest,
     rebuilt: &BundleManifest,
@@ -182,7 +158,7 @@ pub fn decide(
     ReloadDecision::HotPatch
 }
 
-/// Whether the two manifests describe byte-for-byte the same bundle.
+/// Whether the manifest evidence is identical.
 fn manifests_match(loaded: &BundleManifest, rebuilt: &BundleManifest) -> bool {
     loaded == rebuilt
 }
@@ -211,38 +187,32 @@ fn swap_blocker(loaded: &BundleManifest, rebuilt: &BundleManifest) -> Option<Rel
         });
     }
 
-    // A manifest whose entry names no payload blocks the swap rather than
-    // waving it through. `?` here would have returned `None` — "no blocker
-    // found" — which on a function that decides whether to swap code into a
-    // live process means approving the swap for exactly the malformed input the
-    // check exists for. A safety boundary fails closed.
+    // Invalid public manifests cannot authorize a swap.
     let Some(entry) = rebuilt.entry_payload() else {
         return Some(RelaunchReason::PayloadSetChanged {
             detail: "the rebuilt bundle's entry names no payload".to_owned(),
         });
     };
-    if !entry.kind.is_hot_swappable() && !entry_is_swappable_hybrid(entry) {
+    if !entry.kind.has_in_process_replacement() && !entry_is_swappable_hybrid(entry) {
         return Some(RelaunchReason::EntryNotSwappable {
             kind: entry.kind.label(),
         });
     }
 
-    // Every payload the running process cannot re-take must be identical. This
-    // is the byte-identity rule, and it is the whole tier decision: the loaded
-    // native library is mapped into the process, so it is either the same
-    // library or the process is stale.
+    // Payload hash and size are KLB1's identity fingerprint. A changed bytecode
+    // row has no live-value compatibility evidence in the current format.
     for (was, now) in loaded.payloads.iter().zip(&rebuilt.payloads) {
-        if was.hash == now.hash {
-            continue;
-        }
-        if now.kind.is_hot_swappable() {
+        if payload_fingerprints_match(was, now) {
             continue;
         }
         return Some(match now.kind {
-            crate::bundle::PayloadKind::NativeLibrary => RelaunchReason::NativeLibraryChanged {
+            PayloadKind::VmBytecode => RelaunchReason::BytecodeChanged {
                 payload: now.name.clone(),
             },
-            crate::bundle::PayloadKind::HybridManifest => RelaunchReason::HybridManifestChanged {
+            PayloadKind::NativeLibrary => RelaunchReason::NativeLibraryChanged {
+                payload: now.name.clone(),
+            },
+            PayloadKind::HybridManifest => RelaunchReason::HybridManifestChanged {
                 payload: now.name.clone(),
             },
             kind => RelaunchReason::PayloadChanged {
@@ -255,15 +225,16 @@ fn swap_blocker(loaded: &BundleManifest, rebuilt: &BundleManifest) -> Option<Rel
     None
 }
 
-/// Whether a hybrid entrypoint can head a hot-patchable bundle.
+/// Whether two same-shaped payloads have identical KLB1 identity evidence.
+fn payload_fingerprints_match(loaded: &PayloadEntry, rebuilt: &PayloadEntry) -> bool {
+    loaded.hash == rebuilt.hash && loaded.size == rebuilt.size
+}
+
+/// Whether a hybrid manifest can be the entry of a swappable bundle.
 ///
-/// A hybrid manifest is not itself swappable — but it is the entry of every
-/// hybrid bundle, and a hybrid bundle whose manifest and library are both
-/// unchanged is exactly the `@Runtime`-only edit that tier 1 exists for. So the
-/// entry being a hybrid manifest does not block a swap; the manifest *changing*
-/// does, and that is checked with the other payloads.
+/// Its change is rejected with the other payload rows.
 fn entry_is_swappable_hybrid(entry: &PayloadEntry) -> bool {
-    entry.kind == crate::bundle::PayloadKind::HybridManifest
+    entry.kind == PayloadKind::HybridManifest
 }
 
 /// How the two payload lists differ, or `None` if they are the same shape.
@@ -331,12 +302,19 @@ mod tests {
         }
     }
 
-    /// The central case: a bytecode-only edit is a hot patch.
+    /// A changed module may reshape a live struct, enum, or closure.
     #[test]
-    fn a_bytecode_only_edit_hot_patches() {
-        let loaded = vm(b"KBC1 before");
-        let rebuilt = vm(b"KBC1 after!");
-        assert_eq!(decide(&loaded, &rebuilt, false), ReloadDecision::HotPatch);
+    fn a_bytecode_edit_relaunches_without_live_value_compatibility_evidence() {
+        let loaded = vm(b"KBC1 struct-layout-before");
+        let rebuilt = vm(b"KBC1 struct-layout-after!");
+        assert_eq!(
+            decide(&loaded, &rebuilt, false),
+            ReloadDecision::Relaunch {
+                reason: RelaunchReason::BytecodeChanged {
+                    payload: "app.kbc".to_owned(),
+                }
+            }
+        );
     }
 
     /// The other central case: the native library moving means the loaded
@@ -355,14 +333,47 @@ mod tests {
         );
     }
 
-    /// The case the whole tier exists for: in a hybrid bundle, the bytecode half
-    /// changed and the native half did not, so the running process keeps its
-    /// loaded library and takes the new code.
+    /// The unchanged native boundary does not prove closure compatibility.
     #[test]
-    fn a_runtime_only_edit_to_a_hybrid_bundle_hot_patches() {
-        let loaded = hybrid(b"KHM1", b"KBC1 before", b"\x7fELF");
-        let rebuilt = hybrid(b"KHM1", b"KBC1 after!", b"\x7fELF");
-        assert_eq!(decide(&loaded, &rebuilt, false), ReloadDecision::HotPatch);
+    fn a_hybrid_bytecode_edit_relaunches_with_an_unchanged_native_boundary() {
+        let loaded = hybrid(b"KHM1", b"KBC1 closure-before", b"\x7fELF");
+        let rebuilt = hybrid(b"KHM1", b"KBC1 closure-after!", b"\x7fELF");
+        assert_eq!(
+            decide(&loaded, &rebuilt, false),
+            ReloadDecision::Relaunch {
+                reason: RelaunchReason::BytecodeChanged {
+                    payload: "app.kbc".to_owned(),
+                }
+            }
+        );
+    }
+
+    /// A size mismatch is a changed manifest row even when its hash is copied.
+    #[test]
+    fn a_bytecode_size_change_with_the_same_hash_relaunches() {
+        let loaded = vm(b"KBC1");
+        let mut rebuilt = loaded.clone();
+        rebuilt.payloads[0].size += 1;
+        assert!(matches!(
+            decide(&loaded, &rebuilt, false),
+            ReloadDecision::Relaunch {
+                reason: RelaunchReason::BytecodeChanged { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn a_bytecode_hash_change_with_the_same_size_relaunches() {
+        let loaded = vm(b"KBC1 enum old");
+        let rebuilt = vm(b"KBC1 enum new");
+        assert_eq!(
+            decide(&loaded, &rebuilt, false),
+            ReloadDecision::Relaunch {
+                reason: RelaunchReason::BytecodeChanged {
+                    payload: "app.kbc".to_owned(),
+                }
+            }
+        );
     }
 
     /// The manifest is where the VM/native boundary is written down, so a change
@@ -432,6 +443,28 @@ mod tests {
                 reason: RelaunchReason::PayloadChanged {
                     payload: "logo.png".to_owned(),
                     kind: "asset",
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn a_native_dependency_change_relaunches() {
+        let mut loaded = vm(b"KBC1");
+        loaded
+            .payloads
+            .push(entry("sibling.dll", PayloadKind::NativeDependency, b"old"));
+        let mut rebuilt = vm(b"KBC1");
+        rebuilt
+            .payloads
+            .push(entry("sibling.dll", PayloadKind::NativeDependency, b"new"));
+
+        assert_eq!(
+            decide(&loaded, &rebuilt, false),
+            ReloadDecision::Relaunch {
+                reason: RelaunchReason::PayloadChanged {
+                    payload: "sibling.dll".to_owned(),
+                    kind: "native-dependency",
                 }
             }
         );
@@ -565,6 +598,9 @@ mod tests {
             },
             RelaunchReason::HybridManifestChanged {
                 payload: "app.khm".to_owned(),
+            },
+            RelaunchReason::BytecodeChanged {
+                payload: "app.kbc".to_owned(),
             },
             RelaunchReason::PayloadChanged {
                 payload: "logo.png".to_owned(),

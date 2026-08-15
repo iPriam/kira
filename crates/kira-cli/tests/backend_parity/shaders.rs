@@ -145,7 +145,7 @@ function main() {{
         "Tri\n\
          vertex_main\n\
          fragment_main\n\
-         u|camera:0:64:1:1:view_projection@0#64:f;\n\
+         u|camera:0:64:1:1:view_projection@0#64:f:0;\n\
          true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n\
          07230203\n",
     );

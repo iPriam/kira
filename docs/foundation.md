@@ -261,12 +261,12 @@ is worth having the mechanism before the content: that file becomes a matter of
 adding a `.kira` file to `foundation/app/`, with no change to how an import
 finds it.
 
-## The test vocabulary
+## Test packages
 
-`Test.kira` ships the `Test` construct family a suite is written in, together
-with `TestResult`, `TestReport`, `TestStatus`, `TestFailure`, and `TestRuntime`.
-A case is a declaration backed by `Test` providing the two members the family
-requires:
+Foundation contains no test declarations or runner. `tests-kik/harness` and
+`tests-kik/ffi-harness` each own their programs' `Test.kira` and
+`TestRunner.kira` modules and result vocabulary. A case is a declaration backed
+by `Test` providing the two members the family requires:
 
 ```kira
 Test SumsToTen {
@@ -276,9 +276,9 @@ Test SumsToTen {
 ```
 
 Nothing in the compiler knows the name `Test`. It is one construct family among
-any others a library could declare, and every rule that shapes a case is a rule
-of the construct surface — which is why `Test.kira` is a `.kira` file and not a
-branch in the frontend.
+any others a package could declare, and every rule that shapes a case is a rule
+of the construct surface. `Test.kira` is a package source, not a frontend
+branch.
 
 Both requirements write a result type — `test() -> Any` and
 `expect() -> Result<Any, TestFailure>` — because `Any`, Kira's top type, names

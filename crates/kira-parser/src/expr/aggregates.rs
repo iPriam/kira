@@ -124,7 +124,10 @@ impl Parser<'_> {
             );
             return None;
         }
-        let value = self.parse_expr();
+        // A literal's fields are separated by nothing, so `secondary:` after a
+        // field's own braced value opens the next field rather than filling
+        // that value's child slot.
+        let value = self.without_named_fills(|parser| parser.parse_expr());
         let span = Span::from_bounds(name_span.start, self.previous_end());
         Some(FieldInit {
             name,

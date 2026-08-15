@@ -10,23 +10,28 @@
 //! compatibility story — a decoder that finds no section reads the frame
 //! discipline the VM has always had.
 
-use crate::module::{FrameRelease, FuncProto, ModuleDecodeError, Reader, write_u32};
+use crate::module::{
+    Format, FrameRelease, FuncProto, ModuleDecodeError, Reader, write_count, write_u64,
+};
 
 /// The slot-count value that means "every local", rather than a list.
 ///
 /// A sentinel in the existing `u32` rather than a discriminant byte, on the
 /// same terms as the module's `NO_ENTRYPOINT`: no real function has 4294967295
-/// slots to release, because a slot index is a `u16`.
-const EVERY_LOCAL: u32 = u32::MAX;
+/// slots to release.
+const EVERY_LOCAL_LEGACY: u32 = u32::MAX;
+const EVERY_LOCAL_WIDE: u64 = u64::MAX;
 
-/// Writes the release section: one entry per function, in function order.
+/// Writes the current release section: one entry per function, in function
+/// order. KBC1 is read-only compatibility; no legacy writer narrows a wide
+/// plan back to `u16`.
 pub(crate) fn write_releases(out: &mut Vec<u8>, functions: &[FuncProto]) {
-    write_u32(out, functions.len() as u32);
+    write_count(out, functions.len());
     for function in functions {
         match &function.releases {
-            FrameRelease::EveryLocal => write_u32(out, EVERY_LOCAL),
+            FrameRelease::EveryLocal => write_u64(out, EVERY_LOCAL_WIDE),
             FrameRelease::Planned(slots) => {
-                write_u32(out, slots.len() as u32);
+                write_count(out, slots.len());
                 for &slot in slots {
                     out.extend_from_slice(&slot.to_le_bytes());
                 }
@@ -46,24 +51,33 @@ pub(crate) fn write_releases(out: &mut Vec<u8>, functions: &[FuncProto]) {
 pub(crate) fn read_releases(
     reader: &mut Reader<'_>,
     functions: &mut [FuncProto],
+    format: Format,
 ) -> Result<(), ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(());
     }
-    let entries = reader.read_u32()?;
-    if entries as usize != functions.len() {
+    let entries = reader.read_count(format)?;
+    if entries != functions.len() as u64 {
         return Err(ModuleDecodeError::ReleaseCountMismatch {
-            functions: functions.len() as u32,
+            functions: functions.len() as u64,
             entries,
         });
     }
     for function in functions.iter_mut() {
-        function.releases = match reader.read_u32()? {
-            EVERY_LOCAL => FrameRelease::EveryLocal,
+        let count = reader.read_count(format)?;
+        let every_local = match format {
+            Format::Legacy => u64::from(EVERY_LOCAL_LEGACY),
+            Format::Wide => EVERY_LOCAL_WIDE,
+        };
+        function.releases = match count {
+            value if value == every_local => FrameRelease::EveryLocal,
             count => {
-                let mut slots = Vec::with_capacity(count as usize);
+                let mut slots = Vec::new();
                 for _ in 0..count {
-                    slots.push(reader.read_u16()?);
+                    slots.push(match format {
+                        Format::Legacy => u64::from(reader.read_u16()?),
+                        Format::Wide => reader.read_u64()?,
+                    });
                 }
                 FrameRelease::Planned(slots)
             }
@@ -149,8 +163,8 @@ mod tests {
             .functions
             .push(func("other", FrameRelease::EveryLocal));
         let bytes = mixed.to_bytes();
-        assert_eq!(&bytes[bytes.len() - 4..], &[0xff, 0xff, 0xff, 0xff]);
-        assert_eq!(EVERY_LOCAL, u32::MAX);
+        assert_eq!(&bytes[bytes.len() - 8..], &[0xff; 8]);
+        assert_eq!(EVERY_LOCAL_WIDE, u64::MAX);
         assert_eq!(Module::from_bytes(&bytes).unwrap(), mixed);
     }
 
@@ -185,8 +199,8 @@ mod tests {
     fn a_section_naming_the_wrong_number_of_functions_is_refused() {
         let mut bytes = module(FrameRelease::Planned(vec![0])).to_bytes();
         // The entry count opens the section; the module has one function.
-        let count = bytes.len() - 4 - 4 - 2;
-        bytes[count] = 2;
+        let count = bytes.len() - 8 - 8 - 8;
+        bytes[count..count + 8].copy_from_slice(&2u64.to_le_bytes());
         assert_eq!(
             Module::from_bytes(&bytes).unwrap_err(),
             ModuleDecodeError::ReleaseCountMismatch {

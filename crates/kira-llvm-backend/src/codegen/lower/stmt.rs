@@ -237,7 +237,7 @@ impl FunctionLowering<'_, '_> {
         match step {
             IrPlaceStep::Field(index) => {
                 let Type::Struct(id) = ty else {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a field of a value that is not a struct",
                     ));
                 };
@@ -262,7 +262,7 @@ impl FunctionLowering<'_, '_> {
                     .get(id)
                     .and_then(|def| def.field(*index))
                     .map(|field| field.ty)
-                    .ok_or(LlvmError::Unsupported("a field the struct never declared"))?;
+                    .ok_or(LlvmError::internal("a field the struct never declared"))?;
                 Ok((field_ptr, field_ty))
             }
             IrPlaceStep::Index(index) => {
@@ -314,18 +314,13 @@ impl FunctionLowering<'_, '_> {
     /// a local read clones, a returned string is never one of the slots being
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
-        // Which slots to release is not decided here. `kira_ir::mid` decides it
-        // once, for both engines, from the same function this backend is
-        // lowering — the skip conditions that used to sit inline (a pointer
-        // parameter is the caller's storage, a callback-state local belongs to
-        // a store outside the call, a scalar owns nothing) live there now, in
-        // one place, rather than being re-derived per backend.
+        // `kira_ir::mid` supplies the shared ownership plan for both engines.
         let plan = kira_ir::mid::plan_function(
             self.function,
             &self.codegen.program.types,
             self.codegen.lending(),
         )
-        .map_err(|error| LlvmError::Unsupported(mid_error_detail(error)))?;
+        .map_err(|error| LlvmError::internal(mid_error_detail(error)))?;
         for &slot in plan.slots() {
             let ty = self.local_type(slot)?;
             let pointer = self.local_pointer(slot)?;
@@ -409,7 +404,7 @@ impl FunctionLowering<'_, '_> {
     }
 }
 
-/// Renders a mid-stage failure as the detail an [`LlvmError::Unsupported`]
+/// Renders a mid-stage failure as the detail an [`LlvmError::internal`]
 /// carries.
 ///
 /// A release plan fails only on a contradiction inside one function — two

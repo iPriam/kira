@@ -22,12 +22,14 @@ use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::SourceId;
 use kira_syntax_model::ast::{ExprId, Function, TypeRefId};
 
+mod backed;
 mod collection;
 mod construction;
 mod dispatch;
 mod extend;
 mod inferred;
 mod inherit;
+mod slots;
 mod updates;
 mod value_members;
 
@@ -61,6 +63,9 @@ pub(crate) struct ContentSlot {
     pub(crate) element_ty: Type,
     /// The slot field's stored type.
     pub(crate) field_ty: Type,
+    /// Whether the slot declared a default, which a construction that fills
+    /// neither the slot nor its position falls back to.
+    pub(crate) has_default: bool,
 }
 
 /// One concrete variant of a construct family.

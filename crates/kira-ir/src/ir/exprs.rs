@@ -137,6 +137,11 @@ pub enum IrExpr {
         /// The cell type produced.
         ty: Type,
     },
+    /// A null capture-cell slot used by closure-representation padding.
+    CellNull {
+        /// The cell type represented by the null slot.
+        ty: Type,
+    },
     /// An **owned** read of what the capture cell in a local slot holds.
     ///
     /// Rooted at a slot rather than an expression: every cell lives in one, and

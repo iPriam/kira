@@ -12,6 +12,9 @@ workspace = true
 # The heap oracle's environment variable is read from the crate that defines it,
 # so the leak check cannot drift from the runtime that answers it.
 kira-native-bridge.workspace = true
+# The stdio JSON-RPC framing, shared with the debug-session server so a client
+# cannot meet two slightly different protocols in one toolchain.
+kira-mcp-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -32,6 +32,7 @@ kira-shader-ir = { path = "crates/kira-shader-ir" }
 kira-hybrid-definition = { path = "crates/kira-hybrid-definition" }
 kira-backend-api = { path = "crates/kira-backend-api" }
 kira-native-lib-definition = { path = "crates/kira-native-lib-definition" }
+kira-libffi = { path = "crates/kira-libffi" }
 kira-dynamic-ffi = { path = "crates/kira-dynamic-ffi" }
 kira-clang = { path = "crates/kira-clang" }
 kira-glsl-backend = { path = "crates/kira-glsl-backend" }
@@ -53,7 +54,7 @@ kira-build-definition = { path = "crates/kira-build-definition" }
 kira-program-graph = { path = "crates/kira-program-graph" }
 kira-check = { path = "crates/kira-check" }
 kira-build = { path = "crates/kira-build" }
-kira-instruments = { path = "crates/kira-instruments" }
+kira-profile = { path = "crates/kira-profile" }
 kira-linter = { path = "crates/kira-linter" }
 kira-doc = { path = "crates/kira-doc" }
 kira-app-generation = { path = "crates/kira-app-generation" }
@@ -66,6 +67,7 @@ kira-launcher = { path = "crates/kira-launcher" }
 kira-knvm = { path = "crates/kira-knvm" }
 kira-devflow = { path = "crates/kira-devflow" }
 kira-lsp = { path = "crates/kira-lsp" }
+kira-mcp-protocol = { path = "crates/kira-mcp-protocol" }
 
 # External dependencies.
 thiserror = "2"
@@ -74,11 +76,19 @@ bumpalo = "3"
 libloading = "0.8"
 libc = "0.2"
 # Win32 declarations for the calls that have no portable name: the exclusive file
-# lock a build directory is held with.
+# lock a build directory is held with, and the suspend/unwind/symbolize calls the
+# profiler's sampler is built from.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
 ] }
 redb = "4.1"
 bytes = "1"
@@ -141,5 +151,4 @@ opt-level = 3
 
 [profile.dev.package.kira-runtime-abi]
 opt-level = 3
-
 

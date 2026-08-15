@@ -171,10 +171,6 @@ Family Thing(value: Int) {
 }
 
 /// A child family's own member wins over the one it inherits.
-///
-/// This used to be `KSEM203`, the refusal that `extends` did not execute. It
-/// executes now; see `constructs::inheritance` for the surface it brings with
-/// it.
 #[test]
 fn an_extends_clause_lets_a_child_override_an_inherited_member() {
     assert!(
@@ -342,7 +338,6 @@ extend Gadget {
 
 /// A modifier's body is synthesized, but it is the body the author wrote, so
 /// `@Native` on it decides which half of a hybrid build the modifier lands in.
-/// It used to be dropped between the source and the split.
 #[test]
 fn an_extend_modifier_keeps_the_engine_it_was_annotated_with() {
     let program = analyze_text(

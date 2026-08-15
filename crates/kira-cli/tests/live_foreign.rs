@@ -1,15 +1,16 @@
-//! Calling C over a live session, on both live backends.
+//! Calling C over a live session, on every live backend.
 //!
 //! A live session used to build no foreign surface at all: the bundle carried
 //! bytecode and nothing else, so the first `@FFI.Extern` call in the runner's
-//! process failed with "this host has no foreign-call adapter loaded" — after a
+//! process failed with "this host has no foreign-call binding loaded" after a
 //! bundle that built, linked, and reported ready. Every app that talks to a
 //! platform library is such a program, which is most of the apps a live session
 //! exists for.
 //!
 //! The evidence here is the program's own output: values only the checked-in C
 //! fixture computes, printed by a program running in the *runner's* process,
-//! reached through adapters the bundle carried over a socket.
+//! reached through direct Libffi bindings and dependencies the bundle carried
+//! over a socket.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,13 +24,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n\
      4\n42\n0\n7\nhello from C\nround trip\n|\nhello from C!\n1\n2\n";
 
+/// Output from the callback-state fixture after C enters Kira twice.
+const STATE_EXPECTED: &str = "307\n2\nkept\n2\n7\n107\n";
+
 /// A program, its C library, and the build tree they produce, removed on drop.
 struct Fixture(PathBuf);
 
 impl Fixture {
     /// Writes the Kira program and builds the C fixture into a static archive
     /// the package declares through `NativeLibs`.
-    fn new(tag: &str) -> Fixture {
+    fn new(tag: &str, program: &str) -> Fixture {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -39,11 +43,12 @@ impl Fixture {
         let _ = std::fs::remove_dir_all(&root);
         let lib = root.join("NativeLibs/lib");
         std::fs::create_dir_all(&lib).expect("native-lib directory");
+        std::fs::write(root.join("main.kira"), program).expect("write program");
         std::fs::write(
-            root.join("main.kira"),
-            include_str!("fixtures/ffi/ffi_program.kira"),
+            root.join("package.kira"),
+            "Package LiveFfi {\n    let allowThinFfiShim = true\n}\n",
         )
-        .expect("write program");
+        .expect("write package manifest");
         std::fs::write(root.join("NativeLibs/ffifixture.toml"), HOST_MANIFEST)
             .expect("write native-library manifest");
         std::fs::write(
@@ -178,8 +183,8 @@ fn live(fixture: &Fixture, backend: &str) -> (String, String, bool) {
 
 /// The app's own lines, with the session's events filtered out.
 ///
-/// The events differ by payload count and by the port the OS handed out, and
-/// neither is the program's behavior.
+/// The events carry backend-specific details and the port the OS handed out,
+/// and neither is the program's behavior.
 fn app_output(stdout: &str) -> Vec<String> {
     stdout
         .lines()
@@ -195,8 +200,8 @@ fn expected_lines() -> Vec<String> {
 
 /// A VM live session reaches C.
 #[test]
-fn a_vm_live_session_calls_c_through_the_bundles_adapters() {
-    let fixture = Fixture::new("vm");
+fn a_vm_live_session_calls_c_through_the_bundles_bindings() {
+    let fixture = Fixture::new("vm", include_str!("fixtures/ffi/ffi_program.kira"));
 
     let (stdout, stderr, ok) = live(&fixture, "vm");
 
@@ -208,44 +213,81 @@ fn a_vm_live_session_calls_c_through_the_bundles_adapters() {
     );
 }
 
-/// The bundle carries the native half the adapters live in.
+/// The VM bundle carries separate foreign binding metadata and dependencies.
 ///
-/// One payload means the session went back to shipping bytecode alone, which is
-/// exactly the state that made a foreign call fail in the runner: the count is
-/// what turns that regression into a failing test rather than a trap at
-/// someone's entrypoint.
+/// The event proves the bundle was built; the program output above proves the
+/// runner loaded the bindings and their declared native dependencies. The exact
+/// payload count is deliberately not part of the live contract.
 #[test]
-fn a_vm_bundle_with_foreign_imports_carries_a_native_half() {
-    let fixture = Fixture::new("payloads");
+fn a_vm_bundle_with_foreign_imports_carries_binding_metadata() {
+    let fixture = Fixture::new("payloads", include_str!("fixtures/ffi/ffi_program.kira"));
 
     let (stdout, stderr, ok) = live(&fixture, "vm");
 
     assert!(ok, "stderr: {stderr}");
     assert!(
-        stdout.contains("live.bundle.built payloads=3"),
-        "a VM bundle that reaches C is a manifest, the bytecode, and the \
-         adapters' library.\nstdout: {stdout}\nstderr: {stderr}"
+        stdout
+            .lines()
+            .any(|line| line.starts_with("live.bundle.built ")),
+        "the VM live bundle must be built before the runner starts.\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
 
-/// Both live backends run the same foreign program to the same answers.
+/// VM, LLVM, and hybrid live sessions run the same foreign program to the same
+/// answers.
 ///
-/// The dual-mode promise is that where code runs does not change what it does,
-/// and the two backends reach C differently: the VM bundle puts every function
-/// on the VM and the native half holds only adapters, while the hybrid bundle
-/// splits the program and calls C from both halves.
+/// The backend-parity promise is that where code runs does not change what it
+/// does. VM reaches C through direct Libffi bindings, LLVM links the whole
+/// native program, and hybrid splits the program and calls C from both halves.
 #[test]
-fn both_live_backends_agree_on_a_foreign_program() {
-    let fixture = Fixture::new("parity");
+fn all_live_backends_agree_on_a_foreign_program() {
+    let fixture = Fixture::new("parity", include_str!("fixtures/ffi/ffi_program.kira"));
 
     let (vm_stdout, vm_stderr, vm_ok) = live(&fixture, "vm");
+    let (llvm_stdout, llvm_stderr, llvm_ok) = live(&fixture, "llvm");
     let (hybrid_stdout, hybrid_stderr, hybrid_ok) = live(&fixture, "hybrid");
 
     assert!(vm_ok, "the vm session failed.\nstderr: {vm_stderr}");
+    assert!(llvm_ok, "the llvm session failed.\nstderr: {llvm_stderr}");
     assert!(
         hybrid_ok,
         "the hybrid session failed.\nstderr: {hybrid_stderr}"
     );
     assert_eq!(app_output(&vm_stdout), expected_lines());
+    assert!(
+        llvm_stdout
+            .lines()
+            .any(|line| line.starts_with("live.bundle.built ")),
+        "the LLVM bundle must be built before the runner starts.\nstdout: {llvm_stdout}"
+    );
+    assert_eq!(app_output(&llvm_stdout), app_output(&vm_stdout));
     assert_eq!(app_output(&hybrid_stdout), app_output(&vm_stdout));
+}
+
+/// Every live backend preserves a user-defined state value across a C callback.
+#[test]
+fn all_live_backends_agree_on_callback_state_lifecycle() {
+    let fixture = Fixture::new(
+        "state-parity",
+        include_str!("fixtures/ffi/ffi_program_state_callback.kira"),
+    );
+
+    let (vm_stdout, vm_stderr, vm_ok) = live(&fixture, "vm");
+    let (llvm_stdout, llvm_stderr, llvm_ok) = live(&fixture, "llvm");
+    let (hybrid_stdout, hybrid_stderr, hybrid_ok) = live(&fixture, "hybrid");
+
+    assert!(vm_ok, "the vm session failed.\nstderr: {vm_stderr}");
+    assert!(llvm_ok, "the llvm session failed.\nstderr: {llvm_stderr}");
+    assert!(
+        hybrid_ok,
+        "the hybrid session failed.\nstderr: {hybrid_stderr}"
+    );
+    assert_eq!(app_output(&vm_stdout), expected_state_lines());
+    assert_eq!(app_output(&llvm_stdout), app_output(&vm_stdout));
+    assert_eq!(app_output(&hybrid_stdout), app_output(&vm_stdout));
+}
+
+/// The callback-state output as the lines a session prints.
+fn expected_state_lines() -> Vec<String> {
+    STATE_EXPECTED.lines().map(str::to_owned).collect()
 }

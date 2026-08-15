@@ -1,6 +1,6 @@
 //! Construction-time analysis of a construct-backed declaration: filling its
 //! stored fields from a construction call's arguments and its child slots from
-//! the trailing content block, and reading its computed bridge member.
+//! its content, and reading its computed bridge member.
 //!
 //! The declaration side — collecting families, declaring each backed
 //! declaration as a struct, and recording its child slots — lives in the parent
@@ -9,14 +9,13 @@
 //! a struct literal produces, so every backend runs a constructed widget — its
 //! children included — unchanged.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId, HirPlace, HirStmt, HirStmtId, LocalId};
+use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{CallArg, Expr, ExprId};
+use kira_syntax_model::ast::{CallArg, ExprId};
 
-use super::ContentSlot;
+use super::slots::ChildFills;
 use crate::analyze::{Analyzer, FnCtx};
-use crate::stmt::fors::ForCursor;
 
 /// One value a construction call may supply, positionally or by name.
 ///
@@ -24,8 +23,8 @@ use crate::stmt::fors::ForCursor;
 /// parenthesized `Name(text: String)` params first, then the declared `let`
 /// members — because Construct 2.0 says a construct expresses caller-provided
 /// values as its fields. A child slot (`some X` / `[some X]`) is the one field
-/// kind that is *not* here: a slot is filled only by bare children in the
-/// trailing block, never by an argument.
+/// kind that is *not* here: a slot is filled by content — the trailing block's
+/// children or a fill naming it — and never positionally.
 struct ConstructInput {
     /// The input's index among the struct's fields.
     field_index: u32,
@@ -90,8 +89,10 @@ impl Analyzer<'_> {
             .unwrap_or_default();
         let inputs = self.construct_input_slots(id);
         let input_count = inputs.len();
+        let slots = self.child_slots(id);
 
         let mut initializers: Vec<Option<HirExprId>> = vec![None; field_count];
+        let mut named_fills: Vec<(usize, CallArg)> = Vec::new();
         let mut next_positional = 0usize;
         for arg in args {
             // Which input this argument fills is decided *before* it is
@@ -103,6 +104,15 @@ impl Analyzer<'_> {
             let input = match arg.label {
                 Some(label) => {
                     let label = self.interner.resolve(label).to_owned();
+                    // A label naming a child slot is a named child fill —
+                    // `detail: { … }` or `detail: DetailView { … }` — not a
+                    // construction input. It is held back and filled with the
+                    // rest of the content, so one place decides what every slot
+                    // holds.
+                    if let Some(slot) = slots.iter().position(|slot| slot.name == label) {
+                        named_fills.push((slot, arg.clone()));
+                        continue;
+                    }
                     match inputs.iter().position(|input| input.name == label) {
                         Some(input) => input,
                         None => {
@@ -163,10 +173,20 @@ impl Analyzer<'_> {
             initializers[index] = Some(self.coerce_into(value, expected));
         }
 
-        // The trailing children fill the declaration's child slots. Done before
-        // the default sweep so a slot field arrives already set rather than
-        // being reported as a missing input.
-        self.fill_content_slots(ctx, id, children, &name, &mut initializers, span);
+        // The trailing children and the named fills fill the declaration's child
+        // slots. Done before the default sweep so a slot field arrives already
+        // set rather than being reported as a missing input.
+        self.fill_child_slots(
+            ctx,
+            ChildFills {
+                slots: &slots,
+                children,
+                named: &named_fills,
+            },
+            &name,
+            &mut initializers,
+            span,
+        );
 
         // Defaults are instance initializers, not declaration-global
         // expressions. An isolated scope prevents them from seeing caller
@@ -263,262 +283,6 @@ impl Analyzer<'_> {
             struct_id: id,
             fields,
         })
-    }
-
-    /// Fills a construction's child slots from the trailing content block's
-    /// children, checking each child against the slot's element type.
-    ///
-    /// A single slot (`some X`) takes exactly one child; a list slot
-    /// (`[some X]`) takes an ordered array of them. Children on a declaration
-    /// with no slot, or a bare block for more than one slot (which would need
-    /// named fills), are refused — the latter is the still-deferred boundary.
-    pub(crate) fn fill_content_slots(
-        &mut self,
-        ctx: &mut FnCtx,
-        id: StructId,
-        children: &[ExprId],
-        name: &str,
-        initializers: &mut [Option<HirExprId>],
-        span: Span,
-    ) {
-        let slots = self
-            .constructs
-            .get(&id)
-            .map(|info| info.slots.clone())
-            .unwrap_or_default();
-        if slots.is_empty() {
-            if !children.is_empty() {
-                for &child in children {
-                    self.analyze_expr(ctx, child);
-                }
-                self.emit(
-                    span,
-                    "KSEM229",
-                    format!(
-                        "`{name}` declares no child slot, so it takes no trailing child content"
-                    ),
-                );
-            }
-            return;
-        }
-        if slots.len() > 1 {
-            for &child in children {
-                self.analyze_expr(ctx, child);
-            }
-            for slot in &slots {
-                initializers[slot.field_index as usize] =
-                    Some(self.program.exprs.alloc(HirExpr::Error));
-            }
-            self.emit(
-                span,
-                "KSEM230",
-                format!(
-                    "`{name}` has more than one child slot; a bare content block is ambiguous — \
-                     named child fills are not executable yet"
-                ),
-            );
-            return;
-        }
-        let slot = slots[0].clone();
-        if slot.list {
-            // A content block with no builder is a fixed array — the children in
-            // order — so it stays a plain `ArrayNew` with nothing to run.
-            if !children.iter().any(|&child| self.is_builder_item(child)) {
-                let mut elements = Vec::with_capacity(children.len());
-                for &child in children {
-                    let value = self.analyze_expr_expecting(ctx, child, Some(slot.element_ty));
-                    self.check_child_type(child, value, &slot, name);
-                    elements.push(value);
-                }
-                let array = self.program.exprs.alloc(HirExpr::ArrayNew {
-                    ty: slot.field_ty,
-                    elements,
-                });
-                initializers[slot.field_index as usize] = Some(array);
-                return;
-            }
-            // A builder builds the array at run time: a fresh mutable local
-            // starts empty, each item appends to it, and the local becomes the
-            // slot's value. The building statements are hoisted ahead of the
-            // statement whose construction they fill, because a construction is
-            // an expression and the HIR has no block-expression.
-            let acc = ctx.declare_hidden(slot.field_ty, true);
-            let empty = self.program.exprs.alloc(HirExpr::ArrayNew {
-                ty: slot.field_ty,
-                elements: Vec::new(),
-            });
-            let mut stmts = vec![self.program.stmts.alloc(HirStmt::Let {
-                local: acc,
-                init: empty,
-            })];
-            self.expand_content_items(ctx, children, acc, &slot, name, &mut stmts);
-            for stmt in stmts {
-                ctx.hoist_stmt(stmt);
-            }
-            let read = self.program.exprs.alloc(HirExpr::Local {
-                local: acc,
-                ty: slot.field_ty,
-            });
-            initializers[slot.field_index as usize] = Some(read);
-            return;
-        }
-        // A single slot takes exactly one child, so a builder — which produces
-        // any number — cannot fill it. Report it against the builder rather than
-        // letting a count check speak vaguely about it.
-        if let Some(&builder) = children.iter().find(|&&child| self.is_builder_item(child)) {
-            self.analyze_expr(ctx, builder);
-            self.emit(
-                self.tree.expr(builder).span(),
-                "KSEM242",
-                format!(
-                    "child slot `{}` of `{name}` holds exactly one child; a `For`/`if` builder \
-                     fills only a list slot (`[some X]`)",
-                    slot.name
-                ),
-            );
-            initializers[slot.field_index as usize] =
-                Some(self.program.exprs.alloc(HirExpr::Error));
-            return;
-        }
-        // A single slot takes exactly one child.
-        if children.len() == 1 {
-            let value = self.analyze_expr_expecting(ctx, children[0], Some(slot.element_ty));
-            self.check_child_type(children[0], value, &slot, name);
-            initializers[slot.field_index as usize] = Some(value);
-            return;
-        }
-        for &child in children {
-            self.analyze_expr(ctx, child);
-        }
-        self.emit(
-            span,
-            "KSEM231",
-            format!(
-                "child slot `{}` of `{name}` holds exactly one child, found {}",
-                slot.name,
-                children.len()
-            ),
-        );
-        initializers[slot.field_index as usize] = Some(self.program.exprs.alloc(HirExpr::Error));
-    }
-
-    /// Reports a child whose type does not satisfy the slot's element type.
-    fn check_child_type(
-        &mut self,
-        child: ExprId,
-        value: HirExprId,
-        slot: &ContentSlot,
-        name: &str,
-    ) {
-        let actual = self.program.expr(value).type_of();
-        if !actual.assignable_to(slot.element_ty) {
-            let child_span = self.tree.expr(child).span();
-            self.emit(
-                child_span,
-                "KSEM232",
-                format!(
-                    "child slot `{}` of `{name}` holds `{}`, but this child is `{}`",
-                    slot.name,
-                    self.type_name(slot.element_ty),
-                    self.type_name(actual)
-                ),
-            );
-        }
-    }
-
-    /// Whether `child` is a `For`/`if` builder item rather than a bare child.
-    fn is_builder_item(&self, child: ExprId) -> bool {
-        matches!(
-            self.tree.expr(child),
-            Expr::ContentFor { .. } | Expr::ContentIf { .. }
-        )
-    }
-
-    /// Lowers a run of content items into statements that append each produced
-    /// child to `acc`, the slot's array local.
-    ///
-    /// A bare child appends its value. A `For` reuses the `for`-each desugar,
-    /// its loop body appending each iteration's children. An `if` becomes an
-    /// [`HirStmt::If`] whose branches append theirs. The recursion is what lets
-    /// a builder nest inside a builder, and every child is still checked against
-    /// the slot's element type where it is written.
-    fn expand_content_items(
-        &mut self,
-        ctx: &mut FnCtx,
-        items: &[ExprId],
-        acc: LocalId,
-        slot: &ContentSlot,
-        name: &str,
-        out: &mut Vec<HirStmtId>,
-    ) {
-        for &item in items {
-            match self.tree.expr(item).clone() {
-                Expr::ContentFor {
-                    binding,
-                    binding_span,
-                    iterable,
-                    body,
-                    span,
-                } => {
-                    let cursor = ForCursor {
-                        name: binding,
-                        span: binding_span,
-                    };
-                    self.analyze_for_each(
-                        ctx,
-                        cursor,
-                        iterable,
-                        span,
-                        out,
-                        |analyzer, ctx, out| {
-                            analyzer.expand_content_items(ctx, &body, acc, slot, name, out);
-                        },
-                    );
-                }
-                Expr::ContentIf {
-                    cond,
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    let cond_expr = self.analyze_condition(ctx, cond);
-                    // The condition's own hoisted statements run before the
-                    // branch, not inside whichever arm drains next.
-                    out.extend(ctx.take_pending_stmts());
-                    ctx.push_scope();
-                    let mut then_out = Vec::new();
-                    self.expand_content_items(ctx, &then_body, acc, slot, name, &mut then_out);
-                    ctx.pop_scope();
-                    ctx.push_scope();
-                    let mut else_out = Vec::new();
-                    self.expand_content_items(ctx, &else_body, acc, slot, name, &mut else_out);
-                    ctx.pop_scope();
-                    out.push(self.program.stmts.alloc(HirStmt::If {
-                        cond: cond_expr,
-                        then_body: then_out,
-                        else_body: else_out,
-                    }));
-                }
-                _ => {
-                    let value = self.analyze_expr_expecting(ctx, item, Some(slot.element_ty));
-                    // A child that is itself a construction with builder content
-                    // hoisted its own building statements; they belong here — in
-                    // this loop or branch, before the append that uses the value
-                    // — not drained at the enclosing statement, which would lift
-                    // them out of the control flow that guards them.
-                    out.extend(ctx.take_pending_stmts());
-                    self.check_child_type(item, value, slot, name);
-                    let append = self.program.exprs.alloc(HirExpr::ArrayAppend {
-                        place: HirPlace {
-                            local: acc,
-                            path: Vec::new(),
-                        },
-                        value,
-                    });
-                    out.push(self.program.stmts.alloc(HirStmt::Expr { expr: append }));
-                }
-            }
-        }
     }
 
     /// Type-checks `value.node`: reading a construct's computed bridge member.

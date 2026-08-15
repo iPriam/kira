@@ -45,6 +45,9 @@ pub struct ProjectManifest {
     /// spellings decode into the same [`NativeLibrarySpec`], and a build reads
     /// both sources.
     pub native_libraries: Vec<NativeLibrarySpec>,
+    /// Allows this package's static native archives to be wrapped in a thin
+    /// symbol-carrier shared library for libffi calls.
+    pub allow_thin_ffi_shim: bool,
     /// Project-root-relative directories (or files) bundled into a
     /// self-contained `wasm32-emscripten` package via emcc `--preload-file`.
     /// Accepted (and validated) on every target; only wasm builds package
@@ -75,6 +78,7 @@ impl ProjectManifest {
             kira_version: "0.1.0".to_string(),
             module_root: None,
             native_libraries: Vec::new(),
+            allow_thin_ffi_shim: false,
             assets: Vec::new(),
             dependencies: Vec::new(),
             packages: Vec::new(),

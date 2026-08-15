@@ -190,6 +190,14 @@ impl Parser<'_> {
                 base = next;
                 continue;
             }
+            // Named child fills close a construction that ended with a block of
+            // its own: `NavigationSplitView { … } detail: { … }`. Each becomes a
+            // labeled argument, so analysis reads a fill the way it reads an
+            // override written inside the block.
+            if self.at_named_fill() && self.at_fillable_construction(base) {
+                base = self.attach_named_fills(base);
+                continue;
+            }
             break;
         }
         base
@@ -417,7 +425,12 @@ impl Parser<'_> {
                 children: Vec::new(),
                 span,
             })
-        } else if self.at_bare_construct_block() {
+        } else if self.at_bare_construct_block() || self.at_content_block() {
+            // `HGroup { child child }` — a construction that passes children
+            // with no argument list — and the empty/`let` forms ambiguous with a
+            // struct literal. One block holds both children and overrides, so
+            // `HGroup { child spacing: 8 }` names the enclosing construction's
+            // input the way a construction with an argument list would.
             let mut args = Vec::new();
             let children = self.parse_trailing_block(&mut args);
             let span = Span::from_bounds(name_span.start, self.previous_end());
@@ -427,23 +440,6 @@ impl Parser<'_> {
                 braced: true,
                 type_args,
                 args,
-                children,
-                span,
-            })
-        } else if self.at_content_block() {
-            // `HGroup { child child }` — a construction that passes children
-            // with no argument list. The braces hold bare child expressions, not
-            // `field: value` initializers, so it is a construct construction
-            // rather than a struct literal; analysis fills the callee's child
-            // slots from these children.
-            let children = self.parse_content_block();
-            let span = Span::from_bounds(name_span.start, self.previous_end());
-            self.tree.add_expr(Expr::Call {
-                callee: symbol,
-                callee_span: name_span,
-                braced: true,
-                type_args,
-                args: Vec::new(),
                 children,
                 span,
             })

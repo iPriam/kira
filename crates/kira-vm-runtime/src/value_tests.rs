@@ -165,12 +165,17 @@ fn copying_a_struct_deep_copies_an_array_field() {
     let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
         panic!("a struct copies to a struct");
     };
+    // A write through the copy gives it fields of its own first, which is what
+    // the interpreter's place walk does at every field step on its way to a
+    // write. Only then is the handle inside one read out — before that it is a
+    // handle both structs hold.
+    heap.make_struct_unique(copy);
     let Some(Value::Array(copied_values)) = heap.field(copy, 0) else {
         panic!("the copy holds an array");
     };
     assert_ne!(
         values, copied_values,
-        "the copy's array is its own object, not a shared handle"
+        "the copy's array is its own object once the copy is written through"
     );
 
     // Mutating the copy's array must leave the original's alone.
@@ -327,6 +332,29 @@ fn a_payload_less_enum_balances_and_carries_its_tag() {
     assert_eq!(heap.lift(value), Some(NativeResult::Enum(1)));
     // It still has no pinned rendering, like a struct.
     assert_eq!(heap.format_and_consume(value), None);
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn an_erased_value_round_trips_through_native_state_and_balances() {
+    let mut heap = Heap::new();
+    let payload = heap.alloc("crossed".to_owned());
+    let erased = heap.alloc_erased(3 << 32, Value::Str(payload));
+    let tree = heap
+        .into_native_state(Value::Erased(erased))
+        .expect("Any has a recursive native-state form");
+    let NativeStateValue::Any { type_id, payload } = &tree else {
+        panic!("an erased value must become an Any state node");
+    };
+    assert_eq!(*type_id, 3 << 32);
+    assert_eq!(
+        payload.as_ref(),
+        &NativeStateValue::String("crossed".to_owned())
+    );
+
+    let rebuilt = heap.from_native_state(&tree);
+    assert!(heap.values_equal(rebuilt, rebuilt));
+    heap.drop_value(rebuilt);
     assert_eq!(heap.stats().current, 0);
 }
 

@@ -1,0 +1,251 @@
+import Foundation
+
+// Deliberately hostile bridge cases. Prefix: fax / Fax.
+//
+// The rest of this harness exercises one seam property per test. These combine
+// them, because the bugs that survive a suite are the ones that need two things
+// wrong at once: a capture cell inside state inside a struct returned by value,
+// an aggregate whose ownership changes hands twice in one crossing, an inline C
+// array written on one side of the seam and read on the other.
+//
+// Every case still reduces to one scalar, so a wrong answer names itself.
+
+// ── Shapes ───────────────────────────────────────────────────────────────────
+
+@FFI.Struct { layout: c; }
+struct FaxSlot { var value: I32 }
+
+@FFI.Array { element: FaxSlot; count: 4; }
+struct FaxSlots {}
+
+@FFI.Struct { layout: c; }
+struct FaxBank { var slots: FaxSlots
+var tag: I32 }
+
+struct FaxCounter {
+    var hits: Int = 0
+    var label: String = ""
+    var marks: [Int] = []
+}
+
+struct FaxNest {
+    var rows: [[Int]] = []
+    var name: String = ""
+}
+
+enum FaxShape { Empty  Boxed(FaxNest)  Tagged(Int) }
+
+// ── An inline C array written natively and read on the runtime side ──────────
+
+// The C storage is four zeroed slots, and writing the third of them has to be
+// visible after the value crosses back. An empty-array zero left no element to
+// write at all; this is that regression, at the seam rather than in one engine.
+@Native
+function faxFillBank(seed: I32) -> FaxBank {
+    var bank = FaxBank {}
+    bank.tag = seed
+    var first = FaxSlot {}
+    first.value = seed
+    var third = FaxSlot {}
+    third.value = seed * 2
+    bank.slots.elements[0] = first
+    bank.slots.elements[2] = third
+    return bank
+}
+
+@Runtime
+function faxReadBank(seed: Int) -> Int {
+    let bank = faxFillBank(I32(seed))
+    var total = Int(bank.tag)
+    total = total + Int(bank.slots.elements[0].value) * 10
+    // The slot nothing wrote is the zero the C declaration promises.
+    total = total + Int(bank.slots.elements[1].value) * 100
+    total = total + Int(bank.slots.elements[2].value) * 1000
+    return total
+}
+
+Test FaxInlineArrayCrossesBackFromNative {
+    // 3 + 30 + 0 + 6000
+    test { return faxReadBank(3) }
+    expect { let e: Result<Int, TestFailure> = .Ok(6033); return e }
+}
+
+// ── Callback state holding a captured `var`, driven from native ──────────────
+
+// A closure that captured a `var` lives in callback state, and the state is
+// recovered inside a native call. The capture cell has to be the *same* box on
+// both sides: the frame that declared the `var` and the stored closure are one
+// binding, and a copy would make the count below stop moving.
+@Runtime
+function faxBumpThrough(state: RawPtr) -> Int {
+    var recovered = nativeRecover<FaxCounter>(state)
+    recovered.hits = recovered.hits + 1
+    recovered.marks.append(recovered.hits)
+    return recovered.hits
+}
+
+@Native
+function faxDriveTwice(state: RawPtr) -> Int {
+    let first = faxBumpThrough(state)
+    let second = faxBumpThrough(state)
+    return first * 10 + second
+}
+
+Test FaxCallbackStateSurvivesNativeReentry {
+    test {
+        var total = 0
+        let boxed = nativeState(FaxCounter { label: "kept" })
+        let handle = nativeUserData(boxed)
+        // 1 * 10 + 2
+        total = total + faxDriveTwice(handle)
+        var after = nativeRecover<FaxCounter>(handle)
+        // Both crossings' writes are here, and the string the outer run boxed
+        // is still the one it boxed.
+        if after.hits == 2 { total = total + 100 }
+        if after.label == "kept" { total = total + 1000 }
+        if after.marks.count == 2 { total = total + 10000 }
+        nativeStateFree(boxed)
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(11112); return e }
+}
+
+// ── A capture cell shared between a closure and the frame, across the seam ───
+
+@Native
+function faxCallEach(f: (Int) -> Int, a: Int, b: Int) -> Int {
+    return f(a) + f(b)
+}
+
+Test FaxCaptureCellIsOneBoxAcrossTheSeam {
+    test {
+        var running = 0
+        // The closure writes the frame's `var`, and native code calls it twice.
+        let bump: (Int) -> Int = { n in
+            running = running + n
+            return running
+        }
+        // 5 then 5+7=12, so 17; and the frame sees 12.
+        let returned = faxCallEach(move bump, 5, 7)
+        return returned * 100 + running
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1712); return e }
+}
+
+// ── An enum whose payload is a struct of arrays of arrays ────────────────────
+
+@Native
+function faxDescribe(shape: FaxShape) -> Int {
+    match shape {
+        Empty -> { return 1 }
+        Boxed(nest) -> {
+            var total = 0
+            for row in nest.rows {
+                for cell in row {
+                    total = total + cell
+                }
+            }
+            return total * 10 + nest.name.count
+        }
+        Tagged(n) -> { return n * 100 }
+    }
+}
+
+Test FaxNestedPayloadCrossesIntoNative {
+    test {
+        var nest = FaxNest {}
+        nest.rows.append([1, 2])
+        nest.rows.append([3, 4, 5])
+        nest.name = "abc"
+        // (1+2+3+4+5) * 10 + 3
+        return faxDescribe(FaxShape.Boxed(move nest))
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(153); return e }
+}
+
+// ── The same aggregate crossing out and back in one expression ──────────────
+
+@Native
+function faxRoundTrip(nest: FaxNest) -> FaxNest {
+    var out = nest
+    out.rows.append([9])
+    out.name = out.name + "!"
+    return move out
+}
+
+Test FaxAggregateSurvivesTwoCrossingsInOneExpression {
+    test {
+        var seed = FaxNest {}
+        seed.rows.append([1])
+        seed.name = "a"
+        let once = faxRoundTrip(move seed)
+        let twice = faxRoundTrip(move once)
+        var cells = 0
+        for row in twice.rows {
+            for cell in row {
+                cells = cells + cell
+            }
+        }
+        // 1 + 9 + 9 = 19 cells, name "a!!" is 3
+        return cells * 10 + twice.name.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(193); return e }
+}
+
+// ── A borrow mut array written natively, read back, written again ────────────
+
+@Native
+function faxScaleRow(row: borrow mut [Int], by: Int) {
+    var index = 0
+    while index < row.count {
+        row[index] = row[index] * by
+        index = index + 1
+    }
+    return
+}
+
+Test FaxBorrowMutArraySurvivesRepeatedCrossings {
+    test {
+        var row = [1, 2, 3]
+        faxScaleRow(row, 2)
+        faxScaleRow(row, 3)
+        var total = 0
+        for cell in row {
+            total = total + cell
+        }
+        // (1+2+3) * 6
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+// ── Native → runtime → native, with state written at every level ────────────
+
+@Runtime
+function faxMiddle(state: RawPtr, depth: Int) -> Int {
+    var held = nativeRecover<FaxCounter>(state)
+    held.hits = held.hits + depth
+    if depth > 1 {
+        return faxInner(state, depth - 1)
+    }
+    return held.hits
+}
+
+@Native
+function faxInner(state: RawPtr, depth: Int) -> Int {
+    return faxMiddle(state, depth)
+}
+
+Test FaxStateWrittenAtEveryLevelOfASandwich {
+    test {
+        let boxed = nativeState(FaxCounter { label: "deep" })
+        let handle = nativeUserData(boxed)
+        // depth 3 then 2 then 1: 3 + 2 + 1 = 6
+        let deepest = faxInner(handle, 3)
+        var after = nativeRecover<FaxCounter>(handle)
+        let seen = after.hits
+        nativeStateFree(boxed)
+        return deepest * 100 + seen
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(606); return e }
+}

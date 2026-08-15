@@ -377,12 +377,7 @@ Test CfxSFloatModNegTruncates {
 }
 
 // ---------------------------------------------------------------------------
-// VM recursion-depth guard (S6)
-//
-// The bytecode interpreter recurses on the native stack once per Kira call.
-// Recursing past the guard now raises a clean runtime failure instead of
-// overflowing the native stack (previously SIGABRT with no diagnostic).
-// Shallow recursion is unaffected.
+// Deep recursion
 // ---------------------------------------------------------------------------
 
 function cfxsDeepRec(d: Int) -> Int {
@@ -397,10 +392,7 @@ Test CfxSShallowRecursionOk {
     expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
 }
 
-Test CfxSDeepRecursionTrapsCleanly {
-    test {
-        // 1000 nested calls exceeds the 256-frame VM guard -> clean RuntimeFailure.
-        return cfxsDeepRec(1000)
-    }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("recursion")); return e }
+Test CfxSDeepRecursionCompletes {
+    test { return cfxsDeepRec(1000) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
 }

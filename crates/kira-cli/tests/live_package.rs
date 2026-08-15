@@ -215,8 +215,10 @@ fn a_bare_live_session_takes_flags() {
 
     assert!(ok, "stderr: {stderr}");
     assert!(
-        stdout.contains("live.bundle.built payloads=1"),
-        "a vm bundle is one payload.\nstdout: {stdout}\nstderr: {stderr}"
+        stdout
+            .lines()
+            .any(|line| line.starts_with("live.bundle.built ")),
+        "the VM live bundle must be built.\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
 

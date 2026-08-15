@@ -1,9 +1,7 @@
 //! The entrypoint rule, which is the one thing [`BuildKind`] decides.
 //!
-//! An application must declare a `@Main`; a library must not. Both halves are
-//! checked here rather than in a backend, because the refusal that used to
-//! block libraries entirely (`KSEM011`) is emitted during analysis, above the
-//! backend split.
+//! An application must declare a `@Main`; a library must not. Both cases are
+//! checked during analysis, above the backend split.
 
 use super::*;
 use crate::host_platform;

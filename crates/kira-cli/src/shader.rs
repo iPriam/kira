@@ -115,12 +115,8 @@ fn write_all(emissions: &[ShaderEmission]) -> Result<usize, String> {
                 .map_err(|error| format!("`{}` could not be written: {error}", file.display()))?;
             written += 1;
         }
-        // The resource digest beside the sources, once per shader rather than
-        // once per target: a host loading a stage from disk has to know what it
-        // binds, and the alternative is guessing from the source text — which is
-        // what the graphics runtime used to do, against names it no longer emits.
-        // Every target reflects the same resources, so the first one to reach a
-        // shader writes it and the rest agree.
+        // Write one resource digest per shader rather than one per target. Every
+        // target reflects the same resources, so the first emission is enough.
         if !compiled.resource_reflection.is_empty() {
             let file = directory.join(format!("{asset}.resources"));
             std::fs::write(&file, &compiled.resource_reflection)

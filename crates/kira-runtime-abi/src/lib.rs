@@ -53,11 +53,28 @@ pub use foreign::{
     ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignCallback,
     ForeignImport, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
+
+/// Returns the exported symbol for foreign import `index`.
+///
+/// The adapter sidecar producer and every native-capable host use this same
+/// name, so an import id cannot bind a different adapter after a bundle crosses
+/// the process boundary.
+pub fn foreign_adapter_name(index: usize) -> String {
+    format!("kira_foreign_adapter_{index}")
+}
+
+/// Returns the exported callback entry symbol for callback `index`.
+///
+/// The adapter sidecar producer and the VM host use this same name when C
+/// calls back into a VM function.
+pub fn foreign_callback_name(index: usize) -> String {
+    format!("kira_ffi_callback_{index}")
+}
 pub use math_op::MathOp;
 pub use native_state::{
-    NativeStateError, NativeStateHost, NativeStatePathStep, NativeStateStatus, NativeStateStore,
-    NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag, native_state_walk,
-    native_state_walk_mut,
+    NativeCell, NativeStateError, NativeStateHost, NativeStatePathStep, NativeStateStatus,
+    NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+    native_state_walk, native_state_walk_mut,
 };
 pub use ownership::Ownership;
 pub use string_op::StringOp;
@@ -79,7 +96,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 7;
+pub const RUNTIME_ABI_VERSION: u32 = 9;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -111,7 +128,13 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_7";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_9";
+
+/// The fixed C symbol exported by a whole-program native live library.
+///
+/// Its signature is `unsafe extern "C" fn() -> i32`: the runner loads this
+/// symbol after staging the library and invokes it in the runner process.
+pub const NATIVE_LIVE_ENTRY_SYMBOL: &str = "kira_live_entry";
 
 /// The symbols a hybrid host resolves out of a loaded native half by name.
 ///
@@ -141,6 +164,13 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_live_take_reload",
     "kira_rt_heap_report",
     "kira_rt_native_value_int",
+    "kira_rt_native_value_any",
+    "kira_rt_native_value_read_any_type",
+    "kira_rt_native_value_cell",
+    "kira_rt_native_value_read_cell",
+    "kira_rt_cell_free",
+    "kira_rt_cell_vm_proxy_new",
+    "kira_rt_cell_vm_proxy_handle",
     "kira_rt_native_value_raw_ptr",
     "kira_rt_native_value_float",
     "kira_rt_native_value_bool",
@@ -188,7 +218,8 @@ pub enum NativeArg<'a> {
     /// Each side keeps its enums in its own representation; only the tag
     /// crosses. See [`BridgeValueTag::ENUM`].
     Enum(i64),
-    /// A struct, an array, or an enum carrying a payload, as a value tree.
+    /// A struct, an array, an enum carrying a payload, or an `Any` value, as a
+    /// value tree.
     ///
     /// Borrowed for the call, exactly as a string is: the tree is copied into
     /// the other side's own representation before the callee runs, and this
@@ -234,7 +265,8 @@ pub enum NativeResult {
     /// Unlike [`NativeResult::Str`] this moves no storage: there is none to
     /// move. The receiver builds its own value from the number.
     Enum(i64),
-    /// A struct, an array, or an enum carrying a payload, as a value tree.
+    /// A struct, an array, an enum carrying a payload, or an `Any` value, as a
+    /// value tree.
     ///
     /// Owned, like [`NativeResult::Str`]: the tree was decoded out of what the
     /// other side handed over, and that copy is now this side's.

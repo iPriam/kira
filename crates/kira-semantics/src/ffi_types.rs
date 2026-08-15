@@ -1,26 +1,21 @@
-//! The struct-attached `@FFI.*` type family: how each of the five forms is
-//! realized, and the executable slice among them.
+//! The struct-attached `@FFI.*` type family and its C representations.
 //!
 //! Two of the forms become **type aliases** and never mint a struct id —
 //! `@FFI.Alias` to its written `target`, `@FFI.Pointer` to [`Type::RawPtr`] —
 //! and are registered in [`crate::aliases`] alongside `type Name = Target`. The
 //! other three mint a nominal struct id, recorded here by [`FfiStructKind`]:
 //!
-//! * `@FFI.Struct { layout: c }` is a real C-layout struct. Its one runtime
-//!   behavior is **zero-filled construction**: `StructType { ... }` and `StructType()` start from
-//!   a zeroed value and apply the explicit initializers over it, exactly the
-//!   oracle's construction rule. That lowers to an ordinary `StructNew` of zero
-//!   literals, so every backend agrees with no new opcode — the zero-fill is a
-//!   frontend rule, and the field types it can zero are the ones with a Kira
-//!   literal ([`Type::Int`]/[`Type::Float`]/[`Type::Bool`]), every pointer word
-//!   (`RawPtr`, `CString`, an `@FFI.Pointer` typedef), and nested C-layout
-//!   aggregates. A field with no such zero (an enum, a heap array, a `String`)
-//!   is refused precisely rather than mis-initialized.
-//! * `@FFI.Array` and `@FFI.Callback` are declared as nominal types so the
-//!   binding files that name them type-check, but their runtime behavior —
-//!   inline element storage for the array, a native function pointer for the
-//!   callback — is not yet executable, so any *use* is refused with a precise,
-//!   typed "not yet executable" diagnostic rather than mis-lowered.
+//! * `@FFI.Struct { layout: c }` is a real C-layout struct. Construction starts
+//!   from zero and applies explicit initializers. Scalars, pointer words, and
+//!   nested foreign aggregates have defined zero values; a field without one is
+//!   refused rather than mis-initialized.
+//! * `@FFI.Array` is a nominal fixed-size C array. Its `elements` field has the
+//!   declared extent and can appear in C-layout aggregates or fill a pointer to
+//!   its elements. A standalone C parameter or result is refused because C
+//!   decays an array to a pointer.
+//! * `@FFI.Callback` is a nominal function-pointer type with a `RawPtr` field.
+//!   A matching Kira function records a callback entry and receives a generated
+//!   C thunk; unsupported signature positions are refused at the use site.
 
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::{StructId, Type};
@@ -387,13 +382,11 @@ impl Analyzer<'_> {
     }
 
     /// The struct id of `name` when it is a `@FFI.*` type that constructs from
-    /// a zeroed value — a C-layout struct, an inline array, or a callback.
+    /// a zeroed value: a C-layout struct, an inline array, or a callback.
     ///
     /// All three describe C storage whose zero is defined: a zeroed struct, an
-    /// array of no elements, and a null pointer. An omitted field of one takes
-    /// that zero rather than being reported missing, which is the oracle's
-    /// construction rule for `@FFI.Struct` and the only sensible reading of the
-    /// other two.
+    /// array with its declared extent, and a null function pointer. An omitted
+    /// field takes that zero rather than being reported missing.
     pub(crate) fn ffi_c_layout_named(&self, name: &str) -> Option<StructId> {
         let id = self.visible_struct(name)?;
         self.ffi_structs.contains_key(&id).then_some(id)
@@ -426,8 +419,8 @@ impl Analyzer<'_> {
         })
     }
 
-    /// The zero value for one field of a C-layout struct, or an error node with
-    /// a precise refusal when the field's type cannot be zero-filled yet.
+    /// The zero value for one field of a C-layout struct, or an error node when
+    /// the field's type has no defined C zero.
     pub(crate) fn ffi_zero_field(&mut self, id: StructId, index: u32, span: Span) -> HirExprId {
         let field = self
             .program
@@ -439,6 +432,20 @@ impl Analyzer<'_> {
         let Some((field_name, field_ty)) = field else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        // An `@FFI.Array` field has the annotation's C extent, so every
+        // declared element has storage for indexed writes.
+        if let Some(&extent) = self.ffi_array_counts.get(&id)
+            && let Some(element) = self.program.types.element_of(field_ty)
+        {
+            let mut elements = Vec::with_capacity(extent as usize);
+            for _ in 0..extent {
+                elements.push(self.ffi_zero_field_value(element, field_ty, &field_name, id, span));
+            }
+            return self.program.exprs.alloc(HirExpr::ArrayNew {
+                ty: field_ty,
+                elements,
+            });
+        }
         match self.ffi_zero_value(field_ty, span) {
             Some(zero) => zero,
             None => {
@@ -449,7 +456,7 @@ impl Analyzer<'_> {
                     "KSEM186",
                     format!(
                         "field `{field_name}` of C-layout `{struct_name}` has type \
-                         `{type_name}`, which has no zero value yet: give it an explicit \
+                         `{type_name}`, which has no defined zero value: give it an explicit \
                          initializer in the `{struct_name} {{ ... }}` literal"
                     ),
                 );
@@ -458,14 +465,39 @@ impl Analyzer<'_> {
         }
     }
 
+    /// One element's zero, reporting against the containing field.
+    fn ffi_zero_field_value(
+        &mut self,
+        element: Type,
+        field_ty: Type,
+        field_name: &str,
+        owner: StructId,
+        span: Span,
+    ) -> HirExprId {
+        if let Some(zero) = self.ffi_zero_value(element, span) {
+            return zero;
+        }
+        let struct_name = self.program.types.type_name(Type::Struct(owner));
+        let type_name = self.type_name(field_ty);
+        self.emit(
+            span,
+            "KSEM186",
+            format!(
+                "field `{field_name}` of C-layout `{struct_name}` has type \
+                 `{type_name}`, which has no defined zero value: give it an explicit \
+                 initializer in the `{struct_name} {{ ... }}` literal"
+            ),
+        );
+        self.program.exprs.alloc(HirExpr::Error)
+    }
+
     /// A zero-filled HIR value of `ty`, or `None` when `ty` has no defined zero
     /// in this slice.
     ///
-    /// The scalars zero to their Kira literal; a nested C-layout aggregate (a
-    /// `@FFI.Struct`, or an empty `@FFI.Array`/`@FFI.Callback` nominal) zeroes
-    /// field by field; every pointer word — `RawPtr`, `CString`, and an
-    /// `@FFI.Pointer` typedef — zeroes to `NULL`. A `String`, enum, or heap
-    /// array has no literal zero here and yields `None`.
+    /// The scalars zero to their Kira literal; a nested foreign aggregate
+    /// zeroes field by field; every pointer word (`RawPtr`, `CString`, an
+    /// `@FFI.Pointer`, or callback storage) zeroes to `NULL`. An ordinary
+    /// `String`, enum, or heap array has no literal zero here and yields `None`.
     fn ffi_zero_value(&mut self, ty: Type, span: Span) -> Option<HirExprId> {
         let expr = match ty {
             Type::Int(_) => HirExpr::Int(0),
@@ -474,24 +506,12 @@ impl Analyzer<'_> {
             Type::Struct(id) if self.ffi_structs.contains_key(&id) => {
                 return Some(self.ffi_zero_filled_struct(id, span));
             }
-            // A pointer's zero is `NULL`, which is what C zero-fills a function
-            // pointer or an opaque handle member to. A `CString` member is a
-            // pointer too, and its zero is the same `NULL` — which is a
-            // different value from a pointer to `""`, and C tells them apart.
-            //
-            // An `@FFI.Pointer` member is the same word: `RawPtr` and
-            // `ForeignPtr` already widen into each other, so knowing what a
-            // pointer addresses cannot change what zeroing it means. Nearly
-            // every descriptor in a modern graphics header is built on this —
-            // WebGPU gives each one a `WGPUChainedStruct *nextInChain` and an
-            // optional `T const *` per feature, all of them `NULL` unless the
-            // caller wants them.
+            // Every foreign pointer word, including callback storage, zeroes
+            // to C's `NULL`.
             Type::RawPtr | Type::ForeignPtr(_) => HirExpr::RawPtrNull,
             Type::CString => HirExpr::CStringNull,
-            // An `@FFI.Array`'s storage zeroes to an empty Kira array, not to
-            // `count` zero elements: the seam zeroes the C bytes it does not
-            // receive an element for, so the two agree, and a `count` of 8176
-            // costs nothing to construct.
+            // An ordinary Kira array has an empty zero value. `@FFI.Array`
+            // fields are expanded to their declared extent by `ffi_zero_field`.
             Type::Array(_) => HirExpr::ArrayNew {
                 ty,
                 elements: Vec::new(),
@@ -501,9 +521,8 @@ impl Analyzer<'_> {
         Some(self.program.exprs.alloc(expr))
     }
 
-    /// Emits the "not yet executable" refusal for a `@FFI.Array`/`@FFI.Callback`
-    /// use, without minting an error node — for a position (a foreign seam type)
-    /// that reports through its own `None`.
+    /// Emits the refusal for an `@FFI.Array` used in a standalone foreign
+    /// position, without minting an error node for the caller's `None`.
     pub(crate) fn emit_ffi_not_executable(
         &mut self,
         kind: FfiStructKind,
@@ -512,18 +531,15 @@ impl Analyzer<'_> {
     ) {
         let name = self.program.types.type_name(Type::Struct(id));
         let detail = match kind {
-            // Inline storage crosses as a struct member, where C keeps it
-            // inline. In a parameter or result position C decays an array to a
-            // pointer, which is a different type with different ownership, so
-            // the seam refuses it rather than picking one.
+            // C keeps Array storage inline in a struct member but decays it to
+            // a pointer in a parameter or result position.
             FfiStructKind::Array => {
                 "an inline fixed-size C array. It crosses as a member of a `@FFI.Struct \
                  { layout: c }`; on its own, C decays an array to a pointer, so declare \
                  `RawPtr` when that is what the symbol takes"
             }
             FfiStructKind::Callback => {
-                "a native function-pointer typedef; passing a Kira function across the C ABI is \
-                 declared but not yet executable"
+                "a native function-pointer typedef, which uses a generated callback entry thunk"
             }
             FfiStructKind::CLayout => "a C-layout struct",
         };
@@ -531,8 +547,7 @@ impl Analyzer<'_> {
             span,
             "KSEM187",
             format!(
-                "`{name}` is `@{}` — {detail}. Its declaration type-checks, but this use is \
-                 not yet supported.",
+                "`{name}` is `@{}` — {detail}. This use is not supported in this position.",
                 kind.annotation()
             ),
         );

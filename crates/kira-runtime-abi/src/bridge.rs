@@ -126,21 +126,10 @@ impl BridgeValueTag {
     /// moves.
     pub const AGGREGATE: BridgeValueTag = BridgeValueTag(10);
 
-    /// A value of the top type, `Any`.
-    ///
-    /// **Describes, never travels** — the same standing as
-    /// [`BridgeValueTag::STRUCT`], [`BridgeValueTag::ARRAY`], and
-    /// [`BridgeValueTag::ENUM`], and for a sharper reason than any of them. A
-    /// tag exists so a reader that does not know the signature can still tell
-    /// what the payload is; an erased value's whole content is that its type is
-    /// no longer stated, so this tag names a value the far side is by
-    /// construction unable to read.
-    ///
-    /// It exists because a hybrid manifest carries a row for *every* function in
-    /// the program, most of which never cross. Without a spelling here, a
-    /// `@Runtime` function that merely mentions `Any` could not be described at
-    /// all. An actual crossing is refused where one is emitted — see
-    /// `kira-llvm-backend`'s `AnyAtSeam`.
+    /// A value of the top type, `Any`, carried as a pointer to a native-value
+    /// node tree. The tree retains the erased type identity beside its
+    /// recursively encoded payload, so the receiving backend can rebuild the
+    /// same owned `Any` box.
     pub const ANY: BridgeValueTag = BridgeValueTag(11);
 
     /// An aggregate carried as a native-value node tree.
@@ -232,6 +221,8 @@ pub enum BridgeData {
     /// dereferences it. The tree is transferred to whoever receives the value,
     /// and freed as it is read. See [`BridgeValueTag::NODE`].
     Node(u64),
+    /// An erased value as a pointer to a native-value node tree.
+    Any(u64),
 }
 
 impl BridgeValue {
@@ -273,6 +264,7 @@ impl BridgeValue {
             BridgeData::RawPtr(pointer) => (BridgeValueTag::RAW_PTR, pointer),
             BridgeData::Enum(tag) => (BridgeValueTag::ENUM, tag as u64),
             BridgeData::Node(node) => (BridgeValueTag::NODE, node),
+            BridgeData::Any(node) => (BridgeValueTag::ANY, node),
         };
         BridgeValue {
             tag,
@@ -303,6 +295,7 @@ impl BridgeValue {
             BridgeValueTag::RAW_PTR => BridgeData::RawPtr(self.payload),
             BridgeValueTag::ENUM => BridgeData::Enum(self.payload as i64),
             BridgeValueTag::NODE => BridgeData::Node(self.payload),
+            BridgeValueTag::ANY => BridgeData::Any(self.payload),
             _ => return None,
         })
     }
@@ -356,6 +349,8 @@ mod tests {
             BridgeData::Enum(i64::MAX),
             BridgeData::Node(0),
             BridgeData::Node(0x0123_4567_89ab_cdef),
+            BridgeData::Any(0),
+            BridgeData::Any(0x0123_4567_89ab_cdef),
         ] {
             let encoded = BridgeValue::encode(data);
             assert_eq!(
@@ -418,6 +413,7 @@ mod tests {
         assert_eq!(BridgeValueTag::ENUM.0, 7);
         assert_eq!(BridgeValueTag::HANDLE.0, 8);
         assert_eq!(BridgeValueTag::RAW_PTR.0, 9);
+        assert_eq!(BridgeValueTag::ANY.0, 11);
     }
 
     /// A handle is written as tag 8 with the producer's word in the payload,

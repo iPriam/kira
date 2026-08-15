@@ -10,107 +10,59 @@
 //! exactly the same way or the VM and native backends disagree about the bytes
 //! a C function received.
 
-use kira_runtime_abi::{ForeignType, ForeignTypeSpec};
-use kira_semantics_model::Type;
+use kira_runtime_abi::ForeignType;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
-use super::{Callable, Codegen};
+use super::Codegen;
 use crate::LlvmError;
 
-/// The LLVM attribute index of a function's return value.
-const RETURN_INDEX: u32 = 0;
-
 impl Codegen<'_> {
-    pub(super) fn declare_shim_function(
-        &self,
-        index: usize,
-        params: &[ForeignTypeSpec],
-        result: ForeignTypeSpec,
-    ) -> Callable {
-        let name = super::ffi::c_string(&crate::shim::shim_name(index));
-        let mut param_types: Vec<LLVMTypeRef> = Vec::with_capacity(params.len() + 1);
-        if result.aggregate().is_some() {
-            param_types.push(self.types.ptr);
-        }
-        for spec in params {
-            param_types.push(match spec {
-                ForeignTypeSpec::Aggregate(_) => self.types.ptr,
-                ForeignTypeSpec::Scalar(ty) => self.foreign_c_type(*ty),
-            });
-        }
-        let return_type = match result {
-            ForeignTypeSpec::Aggregate(_) => self.foreign_c_type(ForeignType::Void),
-            ForeignTypeSpec::Scalar(ty) => self.foreign_c_type(ty),
-        };
-        // SAFETY: every type belongs to this module's context, and `param_types`
-        // outlives the calls below.
+    /// Declares a foreign symbol only to obtain its address for libffi.
+    ///
+    /// The declaration is deliberately `void ()`: LLVM never calls it, so no
+    /// platform aggregate classification is encoded in the module. The
+    /// bundled libffi runtime receives the address and the shared descriptor
+    /// graph supplies the real C signature.
+    pub(super) fn declare_foreign_address(&self, symbol: &str) -> LLVMValueRef {
+        let name = super::ffi::c_string(symbol);
+        // SAFETY: the function type belongs to this context and is used only
+        // as an address declaration, never as a call signature.
         unsafe {
-            let ty = LLVMFunctionType(
-                return_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
-                0,
-            );
+            let ty = LLVMFunctionType(self.types.void, std::ptr::null_mut(), 0, 0);
             let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
-            let value = if existing.is_null() {
+            if existing.is_null() {
                 LLVMAddFunction(self.module, name.as_ptr(), ty)
             } else {
                 existing
-            };
-            Callable { ty, value }
+            }
         }
     }
 
-    /// Declares the real C symbol with its exact-width signature and the
-    /// sign/zero-extension attributes small integers need at the C ABI.
-    pub(super) fn declare_c_function(
+    /// Whether a foreign call on this target is a call to the symbol itself.
+    ///
+    /// A wasm module links its C in and has no loader to reach a second image
+    /// with, so there is nothing for the bundled libffi path to call through.
+    pub(super) fn calls_foreign_directly(&self) -> bool {
+        matches!(self.target, super::plan::CodegenTarget::Wasm(_))
+    }
+
+    /// The scalar an aggregate crosses as when it has exactly one member.
+    ///
+    /// `None` for every other aggregate, which crosses behind a pointer.
+    pub(super) fn single_scalar_member(
         &self,
-        symbol: &str,
-        params: &[ForeignType],
-        result: ForeignType,
-    ) -> Callable {
-        let name = super::ffi::c_string(symbol);
-        let mut param_types: Vec<LLVMTypeRef> =
-            params.iter().map(|ft| self.foreign_c_type(*ft)).collect();
-        let return_type = self.foreign_c_type(result);
-        // SAFETY: every type belongs to this module's context; `param_types`
-        // outlives the calls below.
-        unsafe {
-            let ty = LLVMFunctionType(
-                return_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
-                0,
-            );
-            let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
-            let value = if existing.is_null() {
-                let function = LLVMAddFunction(self.module, name.as_ptr(), ty);
-                if let Some(attr) = ext_attr(result) {
-                    self.add_ext_attr(function, RETURN_INDEX, attr);
-                }
-                for (i, ft) in params.iter().enumerate() {
-                    if let Some(attr) = ext_attr(*ft) {
-                        self.add_ext_attr(function, (i + 1) as u32, attr);
-                    }
-                }
-                function
-            } else {
-                existing
-            };
-            Callable { ty, value }
-        }
-    }
-
-    /// Adds an enum extension attribute (`signext`/`zeroext`) at `index`.
-    fn add_ext_attr(&self, function: LLVMValueRef, index: u32, name: &str) {
-        // SAFETY: `name` is a known enum attribute spelling, `function` is a live
-        // function in this context, and `index` is a valid attribute index.
-        unsafe {
-            let kind = LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len());
-            let attr = LLVMCreateEnumAttribute(self.context, kind, 0);
-            LLVMAddAttributeAtIndex(function, index, attr);
-        }
+        id: kira_runtime_abi::ForeignAggregateId,
+    ) -> Result<Option<ForeignType>, LlvmError> {
+        let aggregate = self
+            .program
+            .foreign_aggregates
+            .get(id)
+            .ok_or(LlvmError::internal("a call names an unknown aggregate"))?;
+        Ok(match aggregate.members() {
+            [kira_runtime_abi::ForeignMember::Scalar(ty)] => Some(*ty),
+            _ => None,
+        })
     }
 
     /// The LLVM type a foreign type crosses the C ABI as.
@@ -167,66 +119,12 @@ impl Codegen<'_> {
                     LLVMBuildIntToPtr(builder, payload, types.ptr, c"a.ptr".as_ptr())
                 }
                 ForeignType::Void => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a foreign argument the adapter cannot marshal",
                     ));
                 }
             }
         })
-    }
-
-    /// Writes the C call's result into `out`, tagged for the result foreign
-    /// type, with the reserved bytes zeroed.
-    pub(super) fn store_foreign_result(
-        &self,
-        out: LLVMValueRef,
-        rc: LLVMValueRef,
-        result: ForeignType,
-    ) -> Result<(), LlvmError> {
-        let types = self.types;
-        let builder = self.builder;
-        // SAFETY: `rc` has the C result type on the live current block, and `out`
-        // addresses one writable `BridgeValue`.
-        let payload = unsafe {
-            match result {
-                ForeignType::Void => LLVMConstInt(types.i64, 0, 0),
-                ForeignType::I8 | ForeignType::I16 | ForeignType::I32 => {
-                    LLVMBuildSExt(builder, rc, types.i64, c"r.sext".as_ptr())
-                }
-                ForeignType::U8 | ForeignType::U16 | ForeignType::U32 => {
-                    LLVMBuildZExt(builder, rc, types.i64, c"r.zext".as_ptr())
-                }
-                ForeignType::I64 | ForeignType::U64 => rc,
-                ForeignType::Bool => LLVMBuildZExt(builder, rc, types.i64, c"r.bool".as_ptr()),
-                ForeignType::F32 => {
-                    let wide = LLVMBuildFPExt(builder, rc, types.f64, c"r.f64".as_ptr());
-                    LLVMBuildBitCast(builder, wide, types.i64, c"r.bits".as_ptr())
-                }
-                ForeignType::F64 => LLVMBuildBitCast(builder, rc, types.i64, c"r.bits".as_ptr()),
-                ForeignType::RawPtr => {
-                    LLVMBuildPtrToInt(builder, rc, types.i64, c"r.word".as_ptr())
-                }
-                // A returned C string leaves the adapter as a **string handle**,
-                // exactly as an argument enters it as one: the adapter owns the
-                // C-side conversion in both directions, so no engine ever holds
-                // a `const char*`.
-                //
-                // Copying here rather than at the call site is what makes it
-                // correct, not just tidy. The cleanup block below frees this
-                // call's transient argument copies, and a C function may return
-                // a pointer *into* one of them — `strchr` does, and so does any
-                // "return the input unchanged" path. Reading it afterwards is a
-                // use-after-free nothing downstream could detect, so the bytes
-                // are taken while the pointer is still good.
-                ForeignType::CString => {
-                    let handle =
-                        self.call_runtime(self.runtime.str_from_cstr, &mut [rc], c"r.cstr.str");
-                    LLVMBuildPtrToInt(builder, handle, types.i64, c"r.handle".as_ptr())
-                }
-            }
-        };
-        self.store_bridge(out, result.bridge_tag().0, payload);
-        Ok(())
     }
 
     /// Pointer to element `index` of a `BridgeValue` array.
@@ -243,36 +141,6 @@ impl Codegen<'_> {
                 1,
                 c"bridge.elem".as_ptr(),
             )
-        }
-    }
-
-    /// Loads the tag byte of a `BridgeValue` at `slot`.
-    pub(super) fn load_bridge_tag(&self, slot: LLVMValueRef) -> LLVMValueRef {
-        // SAFETY: `slot` addresses a `BridgeValue` on the live current block.
-        unsafe {
-            let ptr = LLVMBuildStructGEP2(
-                self.builder,
-                self.types.bridge_value,
-                slot,
-                0,
-                c"tag.ptr".as_ptr(),
-            );
-            LLVMBuildLoad2(self.builder, self.types.i8, ptr, c"tag".as_ptr())
-        }
-    }
-
-    /// Loads the `i64` payload of a `BridgeValue` at `slot`.
-    pub(super) fn load_bridge_payload(&self, slot: LLVMValueRef) -> LLVMValueRef {
-        // SAFETY: `slot` addresses a `BridgeValue` on the live current block.
-        unsafe {
-            let ptr = LLVMBuildStructGEP2(
-                self.builder,
-                self.types.bridge_value,
-                slot,
-                2,
-                c"payload.ptr".as_ptr(),
-            );
-            LLVMBuildLoad2(self.builder, self.types.i64, ptr, c"payload".as_ptr())
         }
     }
 
@@ -317,116 +185,44 @@ impl Codegen<'_> {
 }
 
 impl Codegen<'_> {
-    /// Writes one foreign-call argument into a `BridgeValue`, tagged for the
-    /// foreign parameter type and encoded from the Kira argument value.
-    pub(super) fn write_foreign_arg(
+    /// Reads a scalar result from the raw storage libffi filled.
+    pub(super) fn read_raw_foreign_result(
         &self,
-        slot: LLVMValueRef,
-        value: LLVMValueRef,
-        kira_ty: Type,
-        foreign_ty: ForeignType,
-    ) -> Result<(), LlvmError> {
-        let types = self.types;
-        let builder = self.builder;
-        // SAFETY: `value` has `kira_ty`'s LLVM type on the live block.
-        let payload = unsafe {
-            match kira_ty {
-                // Every integer width shares the VM's `i64` representation and a
-                // pointer word is already an `i64` word; both cross as-is. A
-                // typed `@FFI.Pointer` is that same word — the two widen into
-                // each other, so a value one symbol handed back as `T *` is
-                // passed to the next by the name that symbol gave it.
-                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) => value,
-                Type::Float(_) => LLVMBuildBitCast(builder, value, types.i64, c"arg.bits".as_ptr()),
-                Type::Bool => LLVMBuildZExt(builder, value, types.i64, c"arg.wide".as_ptr()),
-                // A `String` argument crosses to a `CString` parameter as its
-                // opaque heap handle; the adapter copies it to transient C
-                // storage. `write_foreign_arg` never sees a `CString`-typed Kira
-                // value, only the `String` the caller passes.
-                Type::String => {
-                    LLVMBuildPtrToInt(builder, value, types.i64, c"arg.handle".as_ptr())
-                }
-                _ => {
-                    return Err(LlvmError::Unsupported(
-                        "a foreign argument whose Kira type cannot cross the seam",
-                    ));
-                }
-            }
-        };
-        self.store_bridge(slot, foreign_ty.bridge_tag().0, payload);
-        Ok(())
-    }
-
-    /// Reads a foreign adapter's result back as the Kira value of the call.
-    pub(super) fn read_foreign_result(
-        &self,
-        out: LLVMValueRef,
+        storage: LLVMValueRef,
         result: ForeignType,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let types = self.types;
-        let builder = self.builder;
-        let payload = self.load_bridge_payload(out);
-        // SAFETY: `payload` is the `i64` result payload on the live block.
-        Ok(unsafe {
-            match result {
-                // Every integer width and a `RawPtr` are an `i64` Kira value; the
-                // adapter already extended the C result into the payload.
-                //
-                // NOTE: the Rust seams (`foreign::check_pointer_width`,
-                // `kira-dynamic-ffi`, `kira-hybrid-runtime`) reject a `RawPtr`
-                // word with bits set above the target pointer width; this native
-                // read does not. A no-op on 64-bit hosts (the only supported
-                // targets today, where the payload width equals the pointer
-                // width). When a 32-bit target is added, mirror that width check
-                // here so both seams encode the identical contract.
-                ForeignType::I8
-                | ForeignType::I16
-                | ForeignType::I32
-                | ForeignType::I64
-                | ForeignType::U8
-                | ForeignType::U16
-                | ForeignType::U32
-                | ForeignType::U64
-                | ForeignType::RawPtr => payload,
-                ForeignType::Bool => LLVMBuildTrunc(builder, payload, types.i1, c"r.bool".as_ptr()),
-                ForeignType::F32 | ForeignType::F64 => {
-                    LLVMBuildBitCast(builder, payload, types.f64, c"r.float".as_ptr())
-                }
-                // A `Void` foreign call yields no value; the caller `Eval`s it and
-                // never names the placeholder.
-                ForeignType::Void => LLVMConstInt(types.i1, 0, 0),
-                // The adapter already copied the callee's bytes into a string
-                // handle, so this is the ordinary owned Kira `String` and there
-                // is nothing here to free — the same value the VM's seam and the
-                // hybrid host lift out of the same word.
-                ForeignType::CString => {
-                    LLVMBuildIntToPtr(builder, payload, types.ptr, c"r.str".as_ptr())
-                }
-            }
-        })
+        if result == ForeignType::Void {
+            // SAFETY: the type belongs to this live module context.
+            return Ok(unsafe { LLVMConstInt(self.types.i1, 0, 0) });
+        }
+        let layout = kira_runtime_abi::scalar_layout(
+            result,
+            if self.pointer_width == kira_runtime_abi::ForeignPointerWidth::Bits32 {
+                kira_runtime_abi::ForeignPointerWidth::Bits32
+            } else {
+                kira_runtime_abi::ForeignPointerWidth::Bits64
+            },
+        );
+        let c_type = self.foreign_c_type(result);
+        // SAFETY: `storage` is an alloca sized for this exact C scalar and the
+        // load's alignment is the same shared ABI layout used by libffi.
+        let loaded = unsafe {
+            let value = LLVMBuildLoad2(self.builder, c_type, storage, c"ffi.result".as_ptr());
+            LLVMSetAlignment(value, layout.align);
+            value
+        };
+        if result == ForeignType::CString {
+            // SAFETY: `loaded` is the pointer result of the C string storage
+            // load, and the runtime declaration belongs to this module.
+            return Ok(unsafe {
+                self.call_runtime(self.runtime.str_from_cstr, &mut [loaded], c"ffi.string")
+            });
+        }
+        self.c_value_to_kira(loaded, result)
     }
 }
 
 impl Codegen<'_> {
-    /// Writes a pointer into a `BridgeValue` slot under `tag`.
-    ///
-    /// The aggregate contract in one place: the payload word is the address of
-    /// C-layout bytes the *caller* owns for the length of the call, so nothing
-    /// crosses ownership in either direction.
-    pub(super) fn write_bridge_pointer(
-        &self,
-        slot: LLVMValueRef,
-        pointer: LLVMValueRef,
-        tag: kira_runtime_abi::BridgeValueTag,
-    ) {
-        // SAFETY: `pointer` is a live pointer value on the current block and
-        // `slot` addresses one writable bridge value.
-        let payload = unsafe {
-            LLVMBuildPtrToInt(self.builder, pointer, self.types.i64, c"agg.word".as_ptr())
-        };
-        self.store_bridge(slot, tag.0, payload);
-    }
-
     /// Converts a Kira scalar value to the exact C type `ft` names.
     ///
     /// Goes through the same payload encoding and narrowing the adapter applies
@@ -485,32 +281,11 @@ impl Codegen<'_> {
                     LLVMBuildPtrToInt(builder, value, types.i64, c"m.ptr".as_ptr())
                 }
                 ForeignType::Void => {
-                    return Err(LlvmError::Unsupported(
+                    return Err(LlvmError::internal(
                         "a `Void` member of a C-layout aggregate",
                     ));
                 }
             }
         })
-    }
-}
-
-/// The scalar a signature position names.
-///
-/// An aggregate position is refused rather than mapped: passing a C-layout
-/// struct by value needs the platform's aggregate classification, which is not
-/// something this backend derives. A signature carrying one is routed through
-/// the generated C shim instead, so reaching this is a backstop.
-pub(super) fn scalar_of(spec: ForeignTypeSpec) -> Result<ForeignType, LlvmError> {
-    spec.scalar().ok_or(LlvmError::Unsupported(
-        "a C-layout aggregate at the foreign seam",
-    ))
-}
-
-/// The sign/zero-extension attribute a small integer C type needs, if any.
-fn ext_attr(ft: ForeignType) -> Option<&'static str> {
-    match ft {
-        ForeignType::I8 | ForeignType::I16 => Some("signext"),
-        ForeignType::U8 | ForeignType::U16 | ForeignType::Bool => Some("zeroext"),
-        _ => None,
     }
 }

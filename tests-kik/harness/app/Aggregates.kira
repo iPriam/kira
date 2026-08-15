@@ -1,15 +1,13 @@
 // Aggregates IN DEPTH.
 //
-// Exercises aggregate data structures without tripping the known S2 nested
-// array-element-mutation bug:
+// Exercises aggregate data structures, including nested array-element
+// mutation:
 //   - deeply nested structs (struct holding struct holding struct), read & mutated
 //   - structs with multiple array fields, summed by reading the fields
 //   - arrays of structs summed by reading their fields
 //   - large/wide structs with many fields
 //   - value-copy independence (copying a struct must not alias)
-//   - borrow mut writeback on LOCAL struct vars (including nested fields)
-//   - the SAFE nested-array-element update idiom: copy element to a local var,
-//     mutate the local, then write it back with a single-projection arr[i] = local
+//   - borrow mut writeback on local struct vars (including nested fields)
 //
 // All sub-results fold into one deterministic Int checksum. No printing here.
 
@@ -257,19 +255,16 @@ function aggSection() -> Int {
     }
     acc = acc + aggSumLeaves(leaves)
 
-    // -- 6. SAFE nested-array-element update idiom. -------------------------
-    //   copy element to a local var, mutate the local, write back via arr[i]=local
+    // -- 6. Nested array-element mutation. ----------------------------------
     var u = 0
     while u < leaves.count {
-        var localLeaf = leaves[u]   // value copy out of the array
-        localLeaf.a = localLeaf.a + 10
-        localLeaf.b = localLeaf.b * 2
-        leaves[u] = localLeaf       // single-projection write-back (supported)
+        leaves[u].a = leaves[u].a + 10
+        leaves[u].b = leaves[u].b * 2
         u = u + 1
     }
     acc = acc + aggSumLeaves(leaves)
 
-    // Repeat the safe idiom on an array of wide structs to churn more.
+    // Repeat direct element mutation on wide structs.
     var wides: [AggWide] = []
     var q = 0
     while q < 24 {
@@ -278,10 +273,8 @@ function aggSection() -> Int {
     }
     var wq = 0
     while wq < wides.count {
-        var lw = wides[wq]          // copy out
-        lw.f0 = lw.f0 + 5
-        lw.f11 = lw.f11 + 7
-        wides[wq] = lw             // write back
+        wides[wq].f0 = wides[wq].f0 + 5
+        wides[wq].f11 = wides[wq].f11 + 7
         wq = wq + 1
     }
     var wsum = 0

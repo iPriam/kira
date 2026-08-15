@@ -290,4 +290,14 @@ typedef double (*ffi_quad_taker)(struct ffi_quad q, int tag);
 double ffi_call_quad_taker(ffi_quad_taker take, double a, double b, double c, double d,
                            int tag);
 
+/* A callback C enters with the userdata word it was handed, which is the shape
+ * every windowing and graphics library uses: the application gives a pointer
+ * once and gets it back on every event. Kira's callback state travels through
+ * one, and the callback recovers it on the other side of the crossing.
+ *
+ * Called twice from one C call, so what the first crossing wrote has to be
+ * there for the second. */
+typedef int (*ffi_userdata_taker)(unsigned long long userdata, int n);
+int ffi_call_userdata_twice(ffi_userdata_taker take, unsigned long long userdata, int n);
+
 #endif /* KIRA_FFI_FIXTURE_H */

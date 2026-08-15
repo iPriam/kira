@@ -1,8 +1,8 @@
 //! Running a VM program whose foreign half can call back into it.
 //!
-//! A `@FFI.Callback` value is the address of a generated entry thunk in the
-//! adapter sidecar. When C calls through it, the thunk marshals its arguments
-//! and asks for a Kira function to be run — and the only thing that can run one
+//! A `@FFI.Callback` value is the address of a libffi closure this session
+//! prepared. When C calls through it, the closure marshals its arguments and
+//! asks for a Kira function to be run — and the only thing that can run one
 //! under `--backend vm` is the interpreter that is already several frames up the
 //! stack, inside the foreign call C was reached from.
 //!
@@ -19,76 +19,156 @@
 //! installed for the run's duration. A thunk called from a thread the host never
 //! entered therefore finds nothing, and says so instead of running against a
 //! null pointer. This is the same shape `kira-hybrid-runtime` uses for the
-//! native half calling a `@Runtime` function — the two paths differ only in
-//! which library carries the thunk.
+//! native half calling a `@Runtime` function.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::ffi::{CStr, c_char, c_void};
 use std::path::Path;
+use std::pin::Pin;
+use std::ptr;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
-use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary, RuntimeInvoker};
+use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
+use kira_libffi::{FfiClosure, LibffiRuntime, RawFfiCif};
 use kira_runtime_abi::{
-    BridgeData, BridgeValue, FileRequest, FileResponse, FileSystemError, ForeignAggregates,
-    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeResult,
-    NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
-    NativeStateValue, file_system,
+    FileRequest, FileResponse, FileSystemError, ForeignAggregates, ForeignArg, ForeignCallError,
+    ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec, HostCapabilities, NativeArg,
+    NativeResult, NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken,
+    NativeStateTypeId, NativeStateValue, file_system,
 };
 use kira_vm_runtime::{Program, RunOutcome, VmError, debug::VmDebugObserver};
 
-use crate::ForeignBinding;
+use crate::{ForeignBinding, ForeignBindingTarget};
 
 thread_local! {
     /// The session the invoker on this thread should call back into.
     ///
     /// Null when no session is running here, which is a case this has to be able
     /// to represent: a C library may call a callback from anywhere.
-    static ACTIVE_SESSION: Cell<*const ForeignSession> = const { Cell::new(std::ptr::null()) };
+    static ACTIVE_SESSION: Cell<*const ForeignSession> = const { Cell::new(ptr::null()) };
 }
 
-/// A VM program, its adapter sidecar, and the state they share for one run.
+static FFI_DEBUG_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// A VM program, its native libraries, and the state they share for one run.
 ///
 /// Owns both halves so each nesting level can borrow them: the host handed to
 /// the interpreter carries nothing of its own, so a callback's nested run gets a
 /// fresh one without any `&mut` being aliased.
 pub struct ForeignSession {
     program: Program,
-    library: ForeignAdapterLibrary,
+    libraries: Vec<ForeignLibrary>,
+    libffi: LibffiRuntime,
     imports: Vec<ForeignBinding>,
-    callbacks: Vec<String>,
+    callback_signatures: Vec<ForeignSignature>,
+    callback_registry: Mutex<CallbackRegistry>,
+    aggregates: ForeignAggregates,
     /// Callback state, shared across nesting levels.
     ///
     /// A callback that recovers state boxed by the run that installed it has to
     /// find the same store; a per-level store would lose it at the boundary,
     /// which is exactly the case native callbacks exist for.
-    state: RefCell<NativeStateStore>,
+    state: Mutex<NativeStateStore>,
 }
 
 impl ForeignSession {
-    /// Loads the sidecar at `sidecar` and binds it to `program`.
-    ///
-    /// `callbacks` names the entry thunk of each callback row, in id order, so
-    /// the host resolves the symbol the backend defined rather than spelling the
-    /// contract a second time.
-    pub fn load(
+    /// Opens the program's native libraries and prepares libffi callback
+    /// closures for every callback row.
+    pub fn load_dynamic(
         program: Program,
-        sidecar: &Path,
         imports: Vec<ForeignBinding>,
-        callbacks: Vec<String>,
+        callbacks: Vec<ForeignSignature>,
         aggregates: ForeignAggregates,
-    ) -> Result<ForeignSession, ForeignAdapterError> {
-        let library = ForeignAdapterLibrary::load(sidecar, aggregates)?;
-        Ok(ForeignSession {
+    ) -> Result<ForeignSession, ForeignLibraryError> {
+        Self::load_dynamic_inner(program, imports, callbacks, aggregates, None)
+    }
+
+    /// Opens direct foreign bindings with libffi staged beside a live bundle.
+    pub fn load_dynamic_with_runtime_path(
+        program: Program,
+        imports: Vec<ForeignBinding>,
+        callbacks: Vec<ForeignSignature>,
+        aggregates: ForeignAggregates,
+        runtime_path: impl AsRef<Path>,
+    ) -> Result<ForeignSession, ForeignLibraryError> {
+        Self::load_dynamic_inner(
             program,
-            library,
             imports,
             callbacks,
-            state: RefCell::new(NativeStateStore::new()),
+            aggregates,
+            Some(runtime_path.as_ref().to_path_buf()),
+        )
+    }
+
+    fn load_dynamic_inner(
+        program: Program,
+        imports: Vec<ForeignBinding>,
+        callbacks: Vec<ForeignSignature>,
+        aggregates: ForeignAggregates,
+        runtime_path: Option<std::path::PathBuf>,
+    ) -> Result<ForeignSession, ForeignLibraryError> {
+        let mut libraries = Vec::new();
+        for binding in &imports {
+            match &binding.target {
+                ForeignBindingTarget::Library { path, .. } => {
+                    if libraries.iter().any(|library: &ForeignLibrary| {
+                        !library.is_process() && library.path() == path
+                    }) {
+                        continue;
+                    }
+                    let library = match runtime_path.as_deref() {
+                        Some(runtime_path) => ForeignLibrary::load_with_runtime_path(
+                            path,
+                            aggregates.clone(),
+                            runtime_path,
+                        ),
+                        None => ForeignLibrary::load(path, aggregates.clone()),
+                    }?;
+                    libraries.push(library);
+                }
+                ForeignBindingTarget::Process { .. } => {
+                    if libraries.iter().any(ForeignLibrary::is_process) {
+                        continue;
+                    }
+                    let library = match runtime_path.as_deref() {
+                        Some(runtime_path) => ForeignLibrary::load_process_with_runtime_path(
+                            aggregates.clone(),
+                            runtime_path,
+                        ),
+                        None => ForeignLibrary::load_process(aggregates.clone()),
+                    }?;
+                    libraries.push(library);
+                }
+                ForeignBindingTarget::Unavailable => {}
+            }
+        }
+        let libffi = match runtime_path.as_deref() {
+            Some(runtime_path) => LibffiRuntime::load_from(runtime_path),
+            None => LibffiRuntime::load(),
+        }?;
+        let callback_closures = (0..callbacks.len()).map(|_| None).collect();
+        Ok(ForeignSession {
+            program,
+            libraries,
+            libffi,
+            imports,
+            callback_signatures: callbacks,
+            callback_registry: Mutex::new(CallbackRegistry {
+                closures: callback_closures,
+                contexts: Vec::new(),
+            }),
+            aggregates,
+            state: Mutex::new(NativeStateStore::new()),
         })
     }
 
     /// Runs the program's entrypoint with the foreign half live.
     ///
-    /// The invoker is installed for exactly this call and cleared afterwards, so
-    /// the sidecar never holds a callback that outlives the session it reaches.
+    /// The session is installed as this thread's for exactly this call and
+    /// cleared afterwards, so no callback reaches a session that has ended.
     pub fn run(&self) -> Result<RunOutcome, VmError> {
         self.run_inner(None)
     }
@@ -110,7 +190,7 @@ impl ForeignSession {
         }
     }
 
-    /// Calls one foreign import through its generated adapter.
+    /// Calls one foreign import through libffi or a legacy adapter.
     fn call_foreign(
         &self,
         foreign_id: u32,
@@ -120,27 +200,121 @@ impl ForeignSession {
             .imports
             .get(foreign_id as usize)
             .ok_or(ForeignCallError::NoForeignHost)?;
-        self.library
-            .call(&binding.adapter_symbol, &binding.signature, args)
-            .map_err(|error| match error {
-                ForeignAdapterError::Call(call) => call,
-                // A sidecar that cannot answer at all is the same condition as
-                // having no foreign half: the detail is reported separately, and
-                // the VM's channel carries a typed reason, not a sentence.
-                _ => ForeignCallError::NoForeignHost,
-            })
+        if std::env::var_os("KIRA_DEBUG_FFI").is_some()
+            && FFI_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed) < 64
+        {
+            eprintln!("ffi call {foreign_id}: {:?}", binding.target);
+        }
+        match &binding.target {
+            ForeignBindingTarget::Library { path, symbol } => {
+                let Some(library) = self
+                    .libraries
+                    .iter()
+                    .find(|library| !library.is_process() && library.path() == path)
+                else {
+                    return Err(refused(
+                        foreign_id,
+                        &format!("native library `{}` was not opened", path.display()),
+                    ));
+                };
+                // SAFETY: the binding was resolved from the package declaration
+                // and the library was opened for this session with the same
+                // aggregate table.
+                unsafe { library.call(symbol, &binding.signature, args) }.map_err(|error| {
+                    match error {
+                        ForeignLibraryError::Call(call) => call,
+                        other => refused(foreign_id, &other.to_string()),
+                    }
+                })
+            }
+            ForeignBindingTarget::Process { symbol } => {
+                let Some(library) = self.libraries.iter().find(|library| library.is_process())
+                else {
+                    return Err(refused(
+                        foreign_id,
+                        &format!(
+                            "`{symbol}` is a host-process binding and the image was not opened"
+                        ),
+                    ));
+                };
+                // SAFETY: the process binding uses the declaration's exact
+                // LibFFI signature.
+                unsafe { library.call(symbol, &binding.signature, args) }.map_err(|error| {
+                    match error {
+                        ForeignLibraryError::Call(call) => call,
+                        other => refused(foreign_id, &other.to_string()),
+                    }
+                })
+            }
+            ForeignBindingTarget::Unavailable => Err(refused(
+                foreign_id,
+                "the declaring library resolved to no artifact for this target",
+            )),
+        }
     }
 
-    /// The address of one callback's entry thunk.
+    /// The address of one callback's libffi closure.
     fn callback_address(&self, callback_id: u32) -> Result<u64, ForeignCallError> {
-        let symbol = self
-            .callbacks
-            .get(callback_id as usize)
+        let index = callback_id as usize;
+        let signature = self
+            .callback_signatures
+            .get(index)
+            .cloned()
             .ok_or(ForeignCallError::NoForeignHost)?;
-        self.library
-            .callback_address(symbol)
-            .map_err(|_| ForeignCallError::NoForeignHost)
+        let mut registry = self
+            .callback_registry
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        if let Some(closure) = registry.closures.get(index).and_then(Option::as_ref) {
+            return Ok(closure.code() as usize as u64);
+        }
+        if registry.closures.get(index).is_none() {
+            return Err(ForeignCallError::NoForeignHost);
+        }
+        let runtime = &self.libffi;
+        let context = Box::pin(CallbackContext {
+            function_id: self
+                .program
+                .module()
+                .foreign_callbacks
+                .get(index)
+                .ok_or(ForeignCallError::NoForeignHost)?
+                .function(),
+            signature: signature.clone(),
+        });
+        let user_data = (&*context as *const CallbackContext).cast_mut().cast();
+        // SAFETY: `context` is moved into the locked callback registry after
+        // preparation, so its boxed address remains valid for the closure. The
+        // registry lock is held only across preparation and insertion;
+        // `FfiClosure::new` cannot invoke user or foreign code.
+        let closure = unsafe {
+            FfiClosure::new(
+                runtime,
+                &signature,
+                &self.aggregates,
+                ffi_callback_entry,
+                user_data,
+            )
+        }
+        .map_err(|_| ForeignCallError::NoForeignHost)?;
+        let address = closure.code() as usize as u64;
+        registry.contexts.push(context);
+        let Some(slot) = registry.closures.get_mut(index) else {
+            return Err(ForeignCallError::NoForeignHost);
+        };
+        *slot = Some(closure);
+        Ok(address)
     }
+}
+
+/// Owns callback closures and their pinned user-data in one lock domain.
+///
+/// A context is pinned because its address is what libffi hands the callback
+/// entry: it must stay valid until the registry drops, whatever the vector
+/// does as it grows.
+struct CallbackRegistry {
+    closures: Vec<Option<FfiClosure>>,
+    contexts: Vec<Pin<Box<CallbackContext>>>,
 }
 
 /// A [`HostCapabilities`] over a shared session.
@@ -184,7 +358,11 @@ impl HostCapabilities for SessionHost<'_> {
         ty: NativeStateTypeId,
         value: NativeStateValue,
     ) -> Result<NativeStateToken, NativeStateError> {
-        self.session.state.borrow_mut().create(ty, value)
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .create(ty, value)
     }
 
     fn native_state_recover(
@@ -192,7 +370,11 @@ impl HostCapabilities for SessionHost<'_> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
     ) -> Result<NativeStateValue, NativeStateError> {
-        self.session.state.borrow().recover(token, ty)
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .recover(token, ty)
     }
 
     fn native_state_replace(
@@ -201,7 +383,11 @@ impl HostCapabilities for SessionHost<'_> {
         ty: NativeStateTypeId,
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
-        self.session.state.borrow_mut().replace(token, ty, value)
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .replace(token, ty, value)
     }
 
     // The path-addressed operations, forwarded to the same store. Without these
@@ -213,7 +399,11 @@ impl HostCapabilities for SessionHost<'_> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
     ) -> Result<(), NativeStateError> {
-        self.session.state.borrow().check(token, ty)
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .check(token, ty)
     }
 
     fn native_state_read(
@@ -224,7 +414,8 @@ impl HostCapabilities for SessionHost<'_> {
     ) -> Result<NativeStateValue, NativeStateError> {
         self.session
             .state
-            .borrow()
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
             .read_at(token, ty, path)
             .cloned()
     }
@@ -236,7 +427,12 @@ impl HostCapabilities for SessionHost<'_> {
         path: &[NativeStatePathStep],
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
-        *self.session.state.borrow_mut().write_at(token, ty, path)? = value;
+        *self
+            .session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .write_at(token, ty, path)? = value;
         Ok(())
     }
 
@@ -247,7 +443,13 @@ impl HostCapabilities for SessionHost<'_> {
         path: &[NativeStatePathStep],
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
-        match self.session.state.borrow_mut().write_at(token, ty, path)? {
+        match self
+            .session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .write_at(token, ty, path)?
+        {
             // The elements are shared with whoever last read this array, so the
             // append buys a block of its own before it lands.
             NativeStateValue::Array(elements) => std::sync::Arc::make_mut(elements).push(value),
@@ -257,144 +459,230 @@ impl HostCapabilities for SessionHost<'_> {
     }
 
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.session.state.borrow_mut().free(token)
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .free(token)
     }
 }
 
 /// Marks a session as this thread's for as long as it is alive.
-struct ActiveSession<'a> {
-    session: &'a ForeignSession,
+struct ActiveSession {
     previous: *const ForeignSession,
 }
 
-impl<'a> ActiveSession<'a> {
-    fn install(session: &'a ForeignSession) -> ActiveSession<'a> {
+impl ActiveSession {
+    fn install(session: &ForeignSession) -> ActiveSession {
         let previous = ACTIVE_SESSION.replace(session);
-        let installed: Option<RuntimeInvoker> = Some(invoke_runtime);
-        // SAFETY: `invoke_runtime` is a `'static` function, so it stays callable
-        // for the process's life, and `Drop` clears it before this session's
-        // borrow ends regardless. A sidecar with no thunks has no installer to
-        // call, which is why the result is dropped rather than reported: there
-        // is nothing to install into and nothing that will ever call back.
-        let _ = unsafe { session.library.install_callback_invoker(installed) };
-        ActiveSession { session, previous }
+        ActiveSession { previous }
     }
 }
 
-impl Drop for ActiveSession<'_> {
+impl Drop for ActiveSession {
     fn drop(&mut self) {
-        // SAFETY: the run has returned, so no thunk of this sidecar is on the
-        // stack and nothing can be mid-callback.
-        let _ = unsafe { self.session.library.install_callback_invoker(None) };
         ACTIVE_SESSION.set(self.previous);
     }
 }
 
-/// The C-to-interpreter direction: what a generated entry thunk calls.
-///
-/// # Safety
-/// `args` must point at `count` readable [`BridgeValue`]s (or be null when
-/// `count` is 0), and `out` at one writable [`BridgeValue`].
-unsafe extern "C" fn invoke_runtime(
+/// The immutable data a libffi closure needs to enter one Kira function.
+struct CallbackContext {
     function_id: u32,
-    args: *const BridgeValue,
-    count: u32,
-    out: *mut BridgeValue,
+    signature: ForeignSignature,
+}
+
+/// The C-to-interpreter entry used by a bundled libffi closure.
+unsafe extern "C" fn ffi_callback_entry(
+    _cif: *mut RawFfiCif,
+    result: *mut c_void,
+    arguments: *mut *mut c_void,
+    user_data: *mut c_void,
 ) {
-    let pointer = ACTIVE_SESSION.get();
-    if pointer.is_null() {
+    if user_data.is_null() {
+        fatal("a libffi callback has no Kira function context");
+    }
+    // SAFETY: the context is a boxed value retained by `ForeignSession` until
+    // its closure is dropped, and libffi only calls this while that closure is live.
+    let context = unsafe { &*(user_data.cast::<CallbackContext>()) };
+    if std::env::var_os("KIRA_DEBUG_FFI").is_some()
+        && FFI_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed) < 64
+    {
+        eprintln!(
+            "ffi callback function={} params={:?}",
+            context.function_id, context.signature
+        );
+    }
+    let session_pointer = ACTIVE_SESSION.get();
+    if session_pointer.is_null() {
         fatal(&format!(
-            "a C callback entered Kira function {function_id} from a thread with no running \
-             program; callbacks are supported only on the thread that started the run"
+            "a C callback entered Kira function {} without a running program",
+            context.function_id
         ));
     }
-    // SAFETY: the pointer is non-null, so an `ActiveSession` guard is alive on
-    // this thread and borrows the session it points at for at least as long as
-    // this call — the guard lives across the whole run, and this call is reached
-    // from inside it.
-    let session = unsafe { &*pointer };
-
-    let values: &[BridgeValue] = if count == 0 {
+    // SAFETY: `ActiveSession` installs this pointer for the complete VM run and
+    // clears it only after the C call and all nested callbacks have returned.
+    let session = unsafe { &*session_pointer };
+    let count = context.signature.parameters().len();
+    if count != 0 && arguments.is_null() {
+        fatal("libffi supplied no argument array for a non-empty callback");
+    }
+    let pointers: &[*mut c_void] = if count == 0 {
         &[]
     } else {
-        // SAFETY: the caller guarantees `count` readable values at `args`.
-        unsafe { std::slice::from_raw_parts(args, count as usize) }
+        // SAFETY: libffi supplies one pointer for every prepared CIF parameter.
+        unsafe { std::slice::from_raw_parts(arguments.cast_const(), count) }
     };
-    // A `CString` callback argument arrives as a string handle from the
-    // sidecar's runtime, because the `const char*` C passed is only guaranteed
-    // for the length of *its* call — the thunk copied it before entering here.
-    // The bytes are taken (and the handle freed) into storage that outlives the
-    // borrowed argument list below, so the interpreter sees an ordinary `&str`.
-    let owned: Vec<Option<String>> = values
+    let mut strings: Vec<Option<String>> = (0..count).map(|_| None).collect();
+    for (index, (spec, pointer)) in context
+        .signature
+        .parameters()
         .iter()
-        .map(|value| match value.decode() {
-            Some(BridgeData::String(handle)) => {
-                // SAFETY: the thunk transfers the handle to this call; it comes
-                // from this sidecar and is freed exactly once here.
-                Some(unsafe { session.library.take_string(handle) })
-            }
-            _ => None,
-        })
-        .collect();
-    let arguments: Vec<NativeArg<'_>> = values
+        .copied()
+        .zip(pointers.iter().copied())
+        .enumerate()
+    {
+        if pointer.is_null() {
+            fatal(&format!("libffi supplied a null argument slot {index}"));
+        }
+        if let ForeignTypeSpec::Scalar(ForeignType::CString) = spec {
+            // SAFETY: `pointer` addresses the C pointer word libffi decoded for
+            // this parameter. The pointed-to bytes are valid for this callback.
+            let address = unsafe { ptr::read_unaligned(pointer.cast::<*const c_char>()) };
+            let text = if address.is_null() {
+                String::new()
+            } else {
+                // SAFETY: a CString callback parameter is NUL-terminated by its
+                // C caller and remains live through this synchronous callback.
+                unsafe { String::from_utf8_lossy(CStr::from_ptr(address).to_bytes()) }.into_owned()
+            };
+            strings[index] = Some(text);
+        }
+    }
+    let native_arguments: Vec<NativeArg<'_>> = context
+        .signature
+        .parameters()
         .iter()
-        .zip(&owned)
-        .map(|(value, text)| match text {
-            Some(text) => NativeArg::Str(text),
-            None => scalar_arg(*value),
-        })
+        .copied()
+        .zip(pointers.iter().copied())
+        .enumerate()
+        .map(|(index, (spec, pointer))| callback_argument(spec, pointer, &strings[index]))
         .collect();
-
     let mut host = SessionHost { session };
-    match session.program.call(&mut host, function_id, &arguments) {
-        Ok(result) => {
-            // SAFETY: the caller guarantees `out` is one writable value.
-            unsafe { *out = scalar_result(result) };
-        }
-        // A trap has nowhere to go from here: unwinding out of an `extern "C"`
-        // frame aborts, and the C caller has no error channel. Report and exit
-        // as the runtime's own traps do, so a trap reached through a callback
-        // and one reached directly look the same to a user.
-        Err(trap) => fatal(&format!("runtime trap: {trap}")),
+    match session
+        .program
+        .call(&mut host, context.function_id, &native_arguments)
+    {
+        Ok(value) => write_callback_result(context.signature.result(), value, result),
+        Err(trap) => fatal(&format!("runtime trap in C callback: {trap}")),
     }
 }
 
-/// One callback argument, which is always a scalar.
+fn callback_argument<'a>(
+    spec: ForeignTypeSpec,
+    pointer: *mut c_void,
+    string: &'a Option<String>,
+) -> NativeArg<'a> {
+    match spec {
+        ForeignTypeSpec::Aggregate(_) => {
+            // C passes an aggregate by value, so libffi points directly at its
+            // temporary bytes. The Kira callback contract receives that address.
+            NativeArg::RawPtr(pointer as usize as u64)
+        }
+        ForeignTypeSpec::Scalar(ty) => match ty {
+            ForeignType::Void => NativeArg::Void,
+            ForeignType::I8 => NativeArg::Int(i64::from(read_unaligned::<i8>(pointer))),
+            ForeignType::I16 => NativeArg::Int(i64::from(read_unaligned::<i16>(pointer))),
+            ForeignType::I32 => NativeArg::Int(i64::from(read_unaligned::<i32>(pointer))),
+            ForeignType::I64 => NativeArg::Int(read_unaligned::<i64>(pointer)),
+            ForeignType::U8 => NativeArg::Int(i64::from(read_unaligned::<u8>(pointer))),
+            ForeignType::U16 => NativeArg::Int(i64::from(read_unaligned::<u16>(pointer))),
+            ForeignType::U32 => NativeArg::Int(i64::from(read_unaligned::<u32>(pointer))),
+            ForeignType::U64 => NativeArg::Int(read_unaligned::<u64>(pointer) as i64),
+            ForeignType::Bool => NativeArg::Bool(read_unaligned::<u8>(pointer) != 0),
+            ForeignType::F32 => NativeArg::Float(f64::from(read_unaligned::<f32>(pointer))),
+            ForeignType::F64 => NativeArg::Float(read_unaligned::<f64>(pointer)),
+            ForeignType::RawPtr => NativeArg::RawPtr(read_unaligned::<usize>(pointer) as u64),
+            ForeignType::CString => match string.as_deref() {
+                Some(value) => NativeArg::Str(value),
+                None => fatal("a CString callback argument was not decoded"),
+            },
+        },
+    }
+}
+
+fn write_callback_result(spec: ForeignTypeSpec, result: NativeResult, output: *mut c_void) {
+    if spec == ForeignTypeSpec::Scalar(ForeignType::Void) {
+        if !matches!(result, NativeResult::Void) {
+            fatal("a void C callback returned a value");
+        }
+        return;
+    }
+    if output.is_null() {
+        fatal("libffi supplied no result storage for a non-void callback");
+    }
+    match (spec, result) {
+        (ForeignTypeSpec::Scalar(ForeignType::I8), NativeResult::Int(value)) => {
+            write_unaligned(output, value as i8)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::I16), NativeResult::Int(value)) => {
+            write_unaligned(output, value as i16)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::I32), NativeResult::Int(value)) => {
+            write_unaligned(output, value as i32)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::I64), NativeResult::Int(value)) => {
+            write_unaligned(output, value)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::U8), NativeResult::Int(value)) => {
+            write_unaligned(output, value as u8)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::U16), NativeResult::Int(value)) => {
+            write_unaligned(output, value as u16)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::U32), NativeResult::Int(value)) => {
+            write_unaligned(output, value as u32)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::U64), NativeResult::Int(value)) => {
+            write_unaligned(output, value as u64)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::Bool), NativeResult::Bool(value)) => {
+            write_unaligned(output, u8::from(value))
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::F32), NativeResult::Float(value)) => {
+            write_unaligned(output, value as f32)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::F64), NativeResult::Float(value)) => {
+            write_unaligned(output, value)
+        }
+        (ForeignTypeSpec::Scalar(ForeignType::RawPtr), NativeResult::RawPtr(value)) => {
+            if (value as usize) as u64 != value {
+                fatal("a callback returned a pointer wider than the target");
+            }
+            write_unaligned(output, value as usize)
+        }
+        _ => fatal("a Kira callback returned a value with the wrong C type"),
+    }
+}
+
+fn read_unaligned<T: Copy>(pointer: *mut c_void) -> T {
+    // SAFETY: libffi supplies a pointer to initialized storage for the type
+    // described by the callback CIF; unaligned access handles all valid C layouts.
+    unsafe { ptr::read_unaligned(pointer.cast::<T>()) }
+}
+
+fn write_unaligned<T: Copy>(pointer: *mut c_void, value: T) {
+    // SAFETY: libffi supplies writable storage sized for the callback result CIF.
+    unsafe { ptr::write_unaligned(pointer.cast::<T>(), value) };
+}
+
+/// Names the import a foreign call could not reach, and why.
 ///
-/// A callback signature carries fixed-width scalars, `Bool`, and `RawPtr` — and
-/// a struct C passes by value, which the generated C entry has already turned
-/// into the pointer word that reaches here. The frontend refuses everything
-/// else, so a handle arriving here is a generated thunk and a signature that
-/// disagree, not a program.
-fn scalar_arg(value: BridgeValue) -> NativeArg<'static> {
-    match value.decode() {
-        Some(BridgeData::Void) => NativeArg::Void,
-        Some(BridgeData::Int(value)) => NativeArg::Int(value),
-        Some(BridgeData::Float(value)) => NativeArg::Float(value),
-        Some(BridgeData::Bool(value)) => NativeArg::Bool(value),
-        Some(BridgeData::RawPtr(value)) => NativeArg::RawPtr(value),
-        _ => fatal("a C callback passed an argument this seam does not carry"),
-    }
-}
-
-/// One callback result, on the same terms.
-fn scalar_result(result: NativeResult) -> BridgeValue {
-    match result {
-        NativeResult::Void => BridgeValue::VOID,
-        NativeResult::Int(value) => BridgeValue::encode(BridgeData::Int(value)),
-        NativeResult::Float(value) => BridgeValue::encode(BridgeData::Float(value)),
-        NativeResult::Bool(value) => BridgeValue::encode(BridgeData::Bool(value)),
-        NativeResult::RawPtr(value) => BridgeValue::encode(BridgeData::RawPtr(value)),
-        // An enum crosses the *hybrid* seam, where both sides are Kira and the
-        // receiver can rebuild one from a tag. A C callback's caller is C,
-        // which has nothing to rebuild it into, so this seam still refuses it.
-        NativeResult::Str(_)
-        | NativeResult::Handle(_)
-        | NativeResult::Enum(_)
-        | NativeResult::Aggregate(_) => {
-            fatal("a Kira callback returned a value this seam does not carry")
-        }
-    }
+/// The trap this becomes carries no room for either — a `ForeignCallError`
+/// crosses the seam as a tag — and "this host has no adapter" sends a reader
+/// looking through every declaration in the program.
+fn refused(foreign_id: u32, reason: &str) -> ForeignCallError {
+    eprintln!("kira: foreign import {foreign_id} cannot be called: {reason}");
+    ForeignCallError::NoForeignHost
 }
 
 /// Reports a condition the seam cannot return from, and exits.

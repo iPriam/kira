@@ -74,7 +74,7 @@ impl Codegen<'_> {
             .enums()
             .get(id)
             .map(|def| def.variants.iter().map(|variant| variant.payload).collect())
-            .ok_or(LlvmError::Unsupported("an enum the program never declared"))?;
+            .ok_or(LlvmError::internal("an enum the program never declared"))?;
         // SAFETY: the helper has one pointer parameter.
         let value = unsafe { LLVMGetParam(function, 0) };
         let tag = self.call(self.runtime.enum_tag, &mut [value], c"enum.tag");
@@ -130,7 +130,7 @@ impl Codegen<'_> {
             .enums()
             .get(id)
             .map(|def| def.variants.iter().map(|variant| variant.payload).collect())
-            .ok_or(LlvmError::Unsupported("an enum the program never declared"))?;
+            .ok_or(LlvmError::internal("an enum the program never declared"))?;
         // SAFETY: the helper has one node-pointer parameter.
         let node = unsafe { LLVMGetParam(function, 0) };
         let tag32 = self.call(
@@ -191,7 +191,7 @@ impl Codegen<'_> {
         value: LLVMValueRef,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
-        if matches!(ty, Type::Struct(_)) {
+        if matches!(ty, Type::Struct(_) | Type::Array(_)) {
             let llvm_type = self.llvm_type(ty)?;
             // SAFETY: `llvm_type` belongs to this context and the runtime writes
             // one owned aggregate value into this slot.
@@ -220,7 +220,7 @@ impl Codegen<'_> {
         ty: Type,
         value: LLVMValueRef,
     ) -> Result<LLVMValueRef, LlvmError> {
-        if matches!(ty, Type::Struct(_)) {
+        if matches!(ty, Type::Struct(_) | Type::Array(_)) {
             let llvm_type = self.llvm_type(ty)?;
             let size = self.abi_size(ty)?;
             // SAFETY: the slot belongs to this context and `value` has its type.
@@ -251,7 +251,7 @@ impl Codegen<'_> {
         // SAFETY: the enum runtime produced this word for the declared payload.
         Ok(unsafe {
             match ty {
-                Type::Int(_) | Type::RawPtr => word,
+                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) => word,
                 Type::Float(_) => LLVMBuildBitCast(
                     self.builder,
                     word,
@@ -261,13 +261,13 @@ impl Codegen<'_> {
                 Type::Bool => {
                     LLVMBuildTrunc(self.builder, word, self.types.i1, c"payload.bool".as_ptr())
                 }
-                Type::String | Type::Enum(_) => LLVMBuildIntToPtr(
+                Type::String | Type::Enum(_) | Type::Any | Type::Cell(_) => LLVMBuildIntToPtr(
                     self.builder,
                     word,
                     self.types.ptr,
                     c"payload.handle".as_ptr(),
                 ),
-                _ => return Err(LlvmError::Unsupported("an unsupported enum payload")),
+                _ => return Err(LlvmError::internal("an unsupported enum payload")),
             }
         })
     }
@@ -279,9 +279,11 @@ impl Codegen<'_> {
     ) -> Result<(LLVMValueRef, LLVMValueRef), LlvmError> {
         let kind = match ty {
             Type::String => EnumPayloadKind::STR,
-            Type::Enum(_) => EnumPayloadKind::ENUM,
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::RawPtr => EnumPayloadKind::INERT,
-            _ => return Err(LlvmError::Unsupported("an unsupported enum payload")),
+            Type::Enum(_) | Type::Any | Type::Cell(_) => EnumPayloadKind::ENUM,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::RawPtr | Type::ForeignPtr(_) => {
+                EnumPayloadKind::INERT
+            }
+            _ => return Err(LlvmError::internal("an unsupported enum payload")),
         };
         // SAFETY: `value` has the declared payload type and each conversion targets
         // the enum runtime's i64 payload word.
@@ -300,13 +302,14 @@ impl Codegen<'_> {
                     self.types.i64,
                     c"payload.bits".as_ptr(),
                 ),
-                Type::String | Type::Enum(_) => LLVMBuildPtrToInt(
+                Type::RawPtr | Type::ForeignPtr(_) => value,
+                Type::String | Type::Enum(_) | Type::Any | Type::Cell(_) => LLVMBuildPtrToInt(
                     self.builder,
                     value,
                     self.types.i64,
                     c"payload.bits".as_ptr(),
                 ),
-                _ => return Err(LlvmError::Unsupported("an unsupported enum payload")),
+                _ => return Err(LlvmError::internal("an unsupported enum payload")),
             }
         };
         Ok((self.const_int(kind.as_i64()), word))
@@ -354,5 +357,75 @@ impl Codegen<'_> {
             );
             phi
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kira_runtime_abi::Execution;
+    use kira_semantics_model::hir::{HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
+    use kira_semantics_model::{EnumDef, OwnershipMode, StructDef, Type, VariantDef};
+    use kira_source::Span;
+
+    use crate::codegen::Module;
+
+    #[test]
+    fn a_native_state_enum_supports_foreign_pointer_and_cell_payloads() {
+        let mut program = HirProgram::default();
+        let target = program
+            .types
+            .structs_mut()
+            .declare(StructDef {
+                name: "Target".to_owned(),
+                fields: Vec::new(),
+            })
+            .expect("the pointer target declaration succeeds");
+        let pointer = program.types.foreign_ptr_to(target);
+        let cell = program.types.cell_of(Type::INT);
+        let enum_id = program
+            .types
+            .enums_mut()
+            .declare(EnumDef {
+                name: "Payload".to_owned(),
+                variants: vec![
+                    VariantDef {
+                        name: "Pointer".to_owned(),
+                        payload: Some(pointer),
+                    },
+                    VariantDef {
+                        name: "Cell".to_owned(),
+                        payload: Some(cell),
+                    },
+                ],
+            })
+            .expect("the enum declaration succeeds");
+        let ty = Type::Enum(enum_id);
+        let value = program.exprs.alloc(HirExpr::Local {
+            local: LocalId(0),
+            ty,
+        });
+        let ret = program.stmts.alloc(HirStmt::Return { value: Some(value) });
+        program.functions.push(HirFunction {
+            name: "echoPayload".to_owned(),
+            param_count: 1,
+            return_type: ty,
+            locals: vec![HirLocal {
+                name: "payload".to_owned(),
+                ty,
+                mutable: false,
+                ownership: OwnershipMode::Owned,
+                native_state: None,
+            }],
+            body: vec![ret],
+            is_main: false,
+            is_async: false,
+            execution: Execution::Native,
+            mutates_self: false,
+            name_span: Span::new(0, 11),
+        });
+
+        let ir = kira_ir::lower(&program);
+        Module::build_hybrid(&ir, "enum_foreign_cell_probe", &[])
+            .expect("frontend-valid enum payloads have native-state leaves");
     }
 }

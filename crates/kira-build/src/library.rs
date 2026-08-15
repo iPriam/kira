@@ -11,40 +11,13 @@
 //!     src/lib.rs
 //! ```
 //!
-//! # Why the bytecode is written twice
+//! The copy inside the generated crate is what `include_bytes!` reads. Keeping
+//! it there makes the crate relocatable, while `.kira-build/lib/` remains the
+//! shared artifact location for the other engines.
 //!
-//! `.kira-build/lib/` is where the library artifact lives, and it is what the
-//! other two engines write their own artifacts beside. The copy inside the
-//! generated crate is what `include_bytes!` reads, and it lives *in* the crate
-//! so the crate is relocatable: copy the directory anywhere — into a container,
-//! into another checkout — and it still finds its bytes. A generated crate that
-//! reached back out to an absolute path would work exactly until someone moved
-//! it, and then fail at build time with a path nobody wrote.
-//!
-//! The duplication costs a few kilobytes and buys the property outright, which
-//! is the trade every embedded-artifact scheme makes.
-//!
-//! # Why `@Native` is not refused here
-//!
-//! The export design proposed refusing a `@Native` function in a library built
-//! for this engine, on the ground that `@Native` cannot execute on a pure VM.
-//! That refusal is not implemented, and the reason is in the code rather than
-//! in a preference.
-//!
-//! Nothing native executes here. [`kira_bytecode::compile`] compiles every
-//! function to bytecode whatever it was annotated with, so a `@Native` body
-//! never becomes machine code on this engine and there is no pure-VM execution
-//! of native code to prevent. That rule is repo-wide and load-bearing — it is
-//! what makes `--backend vm` and `--backend llvm` comparable on *any* program,
-//! which is the premise the whole differential parity suite rests on.
-//!
-//! Refusing here would also open a parity hole rather than close one: the same
-//! package would build on the native and hybrid engines and fail on this one,
-//! and the consumer-facing claim this feature is measured on is one API over
-//! three engines. The hybrid engine's own refusals
-//! ([`crate::hybrid::check_library`]) are a different thing — they name what
-//! that engine cannot represent (a handle minted by machine code, a re-entered
-//! instance), not an annotation it dislikes.
+//! The VM compiler emits bytecode for every function, so `@Native` annotations
+//! do not request native execution in this path. Shared analysis and
+//! backend-specific validation keep library builds consistent across engines.
 
 use std::path::{Path, PathBuf};
 
@@ -135,14 +108,10 @@ pub fn build_library(
     })
 }
 
-/// Removes what the native engine left in this crate directory.
+/// Removes native-engine build files from a shared wrapper directory.
 ///
-/// Building the same package for the other engine writes into the same
-/// directory, and the native engine's `build.rs` would otherwise survive the
-/// switch — cargo runs a build script it *finds*, so the VM-engine crate would
-/// go on linking a stale archive. `build = false` in the generated manifest says
-/// the same thing a second way; this is the half that also stops the file being
-/// read by anything else looking at the directory.
+/// The directory is reused across backend builds. Deleting a stale `build.rs`
+/// prevents Cargo from linking a native archive into a VM wrapper.
 fn remove_foreign_engine_files(
     wrapper_crate: &Path,
     library: &str,
@@ -177,18 +146,10 @@ fn write(path: &Path, contents: &[u8]) -> Result<(), LibraryBuildError> {
     })
 }
 
-/// The Kira checkout this build of the compiler came from.
+/// Returns the checkout root embedded in this compiler build.
 ///
-/// The generated crate depends on `kira-main` and the crates under it by path,
-/// because none of them is published yet, and the only path that is true is the
-/// one this compiler was built from. Baked in at compile time rather than
-/// discovered at run time: a discovered root would depend on where `kira`
-/// happens to be invoked, and would silently generate a crate pointing at
-/// somebody else's checkout.
-///
-/// This is v1's answer and it is stated as such in the generated README. When
-/// the runtime crates publish, this becomes a version requirement and the
-/// generated crate becomes something you could commit.
+/// Generated crates use this root for path dependencies. Resolving it from the
+/// invocation directory could select a different checkout.
 pub fn toolchain_root() -> PathBuf {
     // `<root>/crates/kira-build` — two levels up is the checkout.
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));

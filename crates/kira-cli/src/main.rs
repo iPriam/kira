@@ -15,7 +15,6 @@ mod foreign_libs;
 mod hybrid;
 mod hybrid_library;
 mod inspect;
-mod instruments;
 mod library;
 mod live;
 mod migrate;
@@ -23,6 +22,7 @@ mod native;
 mod native_library;
 mod options;
 mod pipeline;
+mod profile;
 mod progress;
 mod scaffold;
 mod serve;
@@ -36,6 +36,9 @@ mod wasm;
 use command::Command;
 
 fn main() {
+    // A direct binding to the host process resolves out of `kira` itself, so
+    // the exported runtime symbols must reach this binary's link graph.
+    kira_native_bridge::retain_process_exports();
     // Granted before anything runs, because a program reaches the compiler from
     // whichever engine it happens to be on and both are started below.
     compiler_host::grant();

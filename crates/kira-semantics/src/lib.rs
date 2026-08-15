@@ -526,15 +526,14 @@ fn collected(db: &dyn salsa::Database, source: SourceProgram) -> String {
     } else {
         Some(shaders)
     };
-    // Every collector still runs: `TestRunner` generates the suite entry point
-    // and `kira test` needs it whatever verb is compiling. What lint mode gates
-    // is the *lint* collector, which reads `Build.linting` and returns nothing
-    // when no one asked — so the decision stays in the Kira that owns it.
+    // Collectors decide whether their verb is active through the compile-time
+    // Build context: TestRunner reads testing, and LintRunner reads linting.
     let (appended, reported) = kira_macros::collect_program(
         environment,
         &sources,
         pipeline,
         context.platform(db),
+        *source.build_kind(db) == BuildKind::Test,
         *context.lint(db),
     );
     for diagnostic in reported {

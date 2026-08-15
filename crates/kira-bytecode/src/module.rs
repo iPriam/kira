@@ -2,8 +2,9 @@
 //!
 //! A [`Module`] is what the compiler produces and the VM runs. It also has a
 //! self-describing byte format ([`Module::to_bytes`] / [`Module::from_bytes`])
-//! behind the `KBC1` magic, so a module is a real serializable artifact and not
-//! just an in-memory structure. The format is append-only.
+//! behind a versioned magic, so a module is a real serializable artifact and
+//! not just an in-memory structure. KBC1 remains readable while KBC2 carries
+//! wide bytecode-owned counts and operands.
 
 use crate::exports::{ExportTable, ExportType, ModuleExport};
 use crate::module_foreign::{
@@ -11,25 +12,35 @@ use crate::module_foreign::{
     write_foreign_aggregates, write_foreign_callbacks,
 };
 use crate::module_release::{read_releases, write_releases};
-use crate::op::{DecodeError, Instruction, decode, encode};
+use crate::op::{DecodeError, Instruction, decode, decode_legacy, encode};
 use kira_runtime_abi::{
     BridgeValueTag, Execution, ForeignAggregateError, ForeignAggregates, ForeignCallback,
     ForeignImport,
 };
 
-/// The magic bytes that open a serialized module: "KBC1".
-pub const MAGIC: [u8; 4] = *b"KBC1";
+/// The magic bytes that open the current serialized module format: "KBC2".
+pub const MAGIC: [u8; 4] = *b"KBC2";
 
-/// The entrypoint slot's value when a module has no entrypoint (a library).
-///
-/// A sentinel in the existing `u32` rather than a new field, which keeps the
-/// format append-only in the strictest sense — the byte layout does not move at
-/// all. `u32::MAX` is safe to claim because [`crate::validate`] has always
-/// rejected an entrypoint index at or past the function count, so no module
-/// that ever decoded cleanly carries this value, and a decoder from before
-/// libraries existed rejects a library loudly instead of calling function
-/// 4294967295.
+/// The magic bytes accepted for the previous serialized module format.
+pub const LEGACY_MAGIC: [u8; 4] = *b"KBC1";
+
+/// The KBC1 entrypoint value when a module has no entrypoint (a library).
+/// KBC2 uses the width-matched `u64::MAX` sentinel internally.
 pub const NO_ENTRYPOINT: u32 = u32::MAX;
+
+const NO_ENTRYPOINT_WIDE: u64 = u64::MAX;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Format {
+    Legacy,
+    Wide,
+}
+
+impl Format {
+    fn is_legacy(self) -> bool {
+        matches!(self, Self::Legacy)
+    }
+}
 
 /// A compiled program: a set of functions plus a shared string pool.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +49,8 @@ pub struct Module {
     pub functions: Vec<FuncProto>,
     /// Index of the entrypoint function, or `None` for a library.
     ///
-    /// Serialized as [`NO_ENTRYPOINT`] when absent.
+    /// Serialized as the width-matched all-ones sentinel when absent: the
+    /// KBC1 sentinel is [`NO_ENTRYPOINT`], and KBC2 uses `u64::MAX`.
     pub main: Option<u32>,
     /// Deduplicated string constants referenced by `ConstStr`.
     pub strings: Vec<String>,
@@ -81,9 +93,9 @@ pub struct FuncProto {
     /// The function's name (for diagnostics and disassembly).
     pub name: String,
     /// Number of leading local slots that are parameters.
-    pub param_count: u16,
+    pub param_count: u64,
     /// Total number of local slots the function uses.
-    pub local_count: u16,
+    pub local_count: u64,
     /// Which engine owns this function's body.
     ///
     /// [`Execution::Runtime`] for everything a VM-only build produces. A hybrid
@@ -129,18 +141,39 @@ pub enum FrameRelease {
     #[default]
     EveryLocal,
     /// Exactly these slots, ascending and distinct.
-    Planned(Vec<u16>),
+    Planned(Vec<u64>),
 }
 
 /// An error decoding a serialized module.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ModuleDecodeError {
-    /// The stream did not begin with the `KBC1` magic.
+    /// The stream did not begin with a supported KBC magic.
     #[error("not a Kira bytecode module (bad magic)")]
     BadMagic,
     /// The stream ended before a full module was read.
     #[error("truncated module")]
     Truncated,
+    /// A wide count or length cannot be represented by this host's `usize`.
+    #[error("module count or length {value} is too large for this host")]
+    LengthTooLarge {
+        /// The value that could not be represented.
+        value: u64,
+    },
+    /// A wide entrypoint cannot be represented by the public function-id seam.
+    #[error("module entrypoint {index} is too large for the function-id seam")]
+    EntrypointTooLarge {
+        /// The decoded entrypoint index.
+        index: u64,
+    },
+    /// A table has more entries than the `u32` index used by its bytecode or
+    /// ABI references.
+    #[error("{table} table has {count} entries, beyond its u32 index")]
+    IndexTableTooLarge {
+        /// The table whose rows cannot all be named by its index type.
+        table: &'static str,
+        /// The decoded row count.
+        count: u64,
+    },
     /// A string in the module was not valid UTF-8.
     #[error("invalid UTF-8 in module string")]
     InvalidString,
@@ -187,7 +220,7 @@ pub enum ModuleDecodeError {
     #[error("aggregate {index} names member type tag `{tag}`, which this build does not know")]
     UnknownForeignAggregateMember {
         /// The offending aggregate's table index.
-        index: u32,
+        index: u64,
         /// The unrecognized member tag byte.
         tag: u8,
     },
@@ -195,7 +228,7 @@ pub enum ModuleDecodeError {
     #[error("aggregate {index} in this module is malformed")]
     MalformedForeignAggregate {
         /// The offending aggregate's table index.
-        index: u32,
+        index: u64,
         /// Why the aggregate table rejected the row.
         #[source]
         source: ForeignAggregateError,
@@ -217,9 +250,9 @@ pub enum ModuleDecodeError {
     #[error("release section names {entries} functions; the module has {functions}")]
     ReleaseCountMismatch {
         /// How many functions the module actually has.
-        functions: u32,
+        functions: u64,
         /// How many the section claimed.
-        entries: u32,
+        entries: u64,
     },
     /// Bytes remained after the last section the format defines.
     ///
@@ -235,12 +268,18 @@ impl Module {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&self.main.unwrap_or(NO_ENTRYPOINT).to_le_bytes());
-        write_u32(&mut out, self.strings.len() as u32);
+        out.extend_from_slice(
+            &self
+                .main
+                .map(u64::from)
+                .unwrap_or(NO_ENTRYPOINT_WIDE)
+                .to_le_bytes(),
+        );
+        write_u64(&mut out, self.strings.len() as u64);
         for string in &self.strings {
             write_bytes(&mut out, string.as_bytes());
         }
-        write_u32(&mut out, self.functions.len() as u32);
+        write_u64(&mut out, self.functions.len() as u64);
         for function in &self.functions {
             write_bytes(&mut out, function.name.as_bytes());
             out.extend_from_slice(&function.param_count.to_le_bytes());
@@ -295,16 +334,16 @@ impl Module {
         if self.exports.is_empty() && !force {
             return;
         }
-        write_u32(out, self.exports.classes.len() as u32);
+        write_count(out, self.exports.classes.len());
         for class in &self.exports.classes {
             write_bytes(out, class.as_bytes());
         }
-        write_u32(out, self.exports.functions.len() as u32);
+        write_count(out, self.exports.functions.len());
         for export in &self.exports.functions {
             write_bytes(out, export.name.as_bytes());
             write_bytes(out, export.kira_name.as_bytes());
             write_u32(out, export.function);
-            write_u32(out, export.params.len() as u32);
+            write_count(out, export.params.len());
             for param in &export.params {
                 write_export_type(out, *param);
             }
@@ -315,29 +354,48 @@ impl Module {
     /// Deserializes a module from its byte format.
     pub fn from_bytes(bytes: &[u8]) -> Result<Module, ModuleDecodeError> {
         let mut reader = Reader { bytes, offset: 0 };
-        if reader.take(4)? != MAGIC {
-            return Err(ModuleDecodeError::BadMagic);
-        }
-        let main = match reader.read_u32()? {
-            NO_ENTRYPOINT => None,
-            index => Some(index),
+        let format = match reader.take(4)? {
+            magic if magic == MAGIC => Format::Wide,
+            magic if magic == LEGACY_MAGIC => Format::Legacy,
+            _ => return Err(ModuleDecodeError::BadMagic),
         };
-        let string_count = reader.read_u32()?;
-        let mut strings = Vec::with_capacity(string_count as usize);
+        let main = if format.is_legacy() {
+            match reader.read_u32()? {
+                NO_ENTRYPOINT => None,
+                index => Some(index),
+            }
+        } else {
+            match reader.read_u64()? {
+                NO_ENTRYPOINT_WIDE => None,
+                index => Some(
+                    u32::try_from(index)
+                        .map_err(|_| ModuleDecodeError::EntrypointTooLarge { index })?,
+                ),
+            }
+        };
+        let string_count = reader.read_count(format)?;
+        let mut strings = Vec::new();
         for _ in 0..string_count {
-            strings.push(reader.read_string()?);
+            strings.push(reader.read_string(format)?);
         }
-        let function_count = reader.read_u32()?;
-        let mut functions = Vec::with_capacity(function_count as usize);
+        let function_count = reader.read_count(format)?;
+        let mut functions = Vec::new();
         for _ in 0..function_count {
-            let name = reader.read_string()?;
-            let param_count = reader.read_u16()?;
-            let local_count = reader.read_u16()?;
+            let name = reader.read_string(format)?;
+            let (param_count, local_count) = if format.is_legacy() {
+                (u64::from(reader.read_u16()?), u64::from(reader.read_u16()?))
+            } else {
+                (reader.read_u64()?, reader.read_u64()?)
+            };
             let byte = reader.take(1)?[0];
             let execution =
                 Execution::from_byte(byte).ok_or(ModuleDecodeError::UnknownExecution(byte))?;
-            let code_bytes = reader.read_len_prefixed()?;
-            let code = decode(code_bytes)?;
+            let code_bytes = reader.read_len_prefixed(format)?;
+            let code = if format.is_legacy() {
+                decode_legacy(code_bytes)?
+            } else {
+                decode(code_bytes)?
+            };
             functions.push(FuncProto {
                 name,
                 param_count,
@@ -347,11 +405,11 @@ impl Module {
                 releases: FrameRelease::EveryLocal,
             });
         }
-        let exports = read_exports(&mut reader)?;
-        let foreign_imports = read_foreign(&mut reader)?;
-        let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports)?;
-        let foreign_callbacks = read_foreign_callbacks(&mut reader)?;
-        read_releases(&mut reader, &mut functions)?;
+        let exports = read_exports(&mut reader, format)?;
+        let foreign_imports = read_foreign(&mut reader, format)?;
+        let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports, format)?;
+        let foreign_callbacks = read_foreign_callbacks(&mut reader, format)?;
+        read_releases(&mut reader, &mut functions, format)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -375,22 +433,22 @@ impl Module {
 /// that absence is the whole compatibility story: no exports, which is exactly
 /// what such a module has. A *partial* section is a different thing entirely and
 /// is a truncation error, never an empty table.
-fn read_exports(reader: &mut Reader<'_>) -> Result<ExportTable, ModuleDecodeError> {
+fn read_exports(reader: &mut Reader<'_>, format: Format) -> Result<ExportTable, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(ExportTable::default());
     }
-    let class_count = reader.read_u32()?;
+    let class_count = reader.read_index_count(format, "export class")?;
     let mut classes = Vec::new();
     for _ in 0..class_count {
-        classes.push(reader.read_string()?);
+        classes.push(reader.read_string(format)?);
     }
-    let export_count = reader.read_u32()?;
+    let export_count = reader.read_index_count(format, "export")?;
     let mut functions = Vec::new();
     for _ in 0..export_count {
-        let name = reader.read_string()?;
-        let kira_name = reader.read_string()?;
+        let name = reader.read_string(format)?;
+        let kira_name = reader.read_string(format)?;
         let function = reader.read_u32()?;
-        let param_count = reader.read_u32()?;
+        let param_count = reader.read_count(format)?;
         let mut params = Vec::new();
         for _ in 0..param_count {
             params.push(reader.read_export_type(&name)?);
@@ -416,8 +474,16 @@ pub(crate) fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+pub(crate) fn write_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+pub(crate) fn write_count(out: &mut Vec<u8>, count: usize) {
+    write_u64(out, count as u64);
+}
+
 pub(crate) fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    write_u32(out, bytes.len() as u32);
+    write_count(out, bytes.len());
     out.extend_from_slice(bytes);
 }
 
@@ -429,7 +495,10 @@ pub(crate) struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], ModuleDecodeError> {
-        let end = self.offset + n;
+        let end = self
+            .offset
+            .checked_add(n)
+            .ok_or(ModuleDecodeError::Truncated)?;
         let slice = self
             .bytes
             .get(self.offset..end)
@@ -465,13 +534,41 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn read_len_prefixed(&mut self) -> Result<&'a [u8], ModuleDecodeError> {
-        let len = self.read_u32()? as usize;
+    pub(crate) fn read_u64(&mut self) -> Result<u64, ModuleDecodeError> {
+        let bytes = self.take(8)?;
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    pub(crate) fn read_count(&mut self, format: Format) -> Result<u64, ModuleDecodeError> {
+        if format.is_legacy() {
+            Ok(u64::from(self.read_u32()?))
+        } else {
+            self.read_u64()
+        }
+    }
+
+    pub(crate) fn read_index_count(
+        &mut self,
+        format: Format,
+        table: &'static str,
+    ) -> Result<u64, ModuleDecodeError> {
+        let count = self.read_count(format)?;
+        u32::try_from(count)
+            .map(|_| count)
+            .map_err(|_| ModuleDecodeError::IndexTableTooLarge { table, count })
+    }
+
+    fn read_len_prefixed(&mut self, format: Format) -> Result<&'a [u8], ModuleDecodeError> {
+        let len = self.read_count(format)?;
+        let len =
+            usize::try_from(len).map_err(|_| ModuleDecodeError::LengthTooLarge { value: len })?;
         self.take(len)
     }
 
-    pub(crate) fn read_string(&mut self) -> Result<String, ModuleDecodeError> {
-        let bytes = self.read_len_prefixed()?;
+    pub(crate) fn read_string(&mut self, format: Format) -> Result<String, ModuleDecodeError> {
+        let bytes = self.read_len_prefixed(format)?;
         core::str::from_utf8(bytes)
             .map(str::to_owned)
             .map_err(|_| ModuleDecodeError::InvalidString)

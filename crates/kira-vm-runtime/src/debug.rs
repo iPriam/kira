@@ -185,6 +185,12 @@ impl VmLldbObserver {
 
 impl VmDebugObserver for VmLldbObserver {
     fn before_instruction(&mut self, event: VmDebugEvent<'_>) -> VmDebugAction {
+        // Checked before anything is encoded: a debugger that has stopped
+        // stepping turns this off, and the remaining run must cost what an
+        // undebugged one costs.
+        if !debug_active() {
+            return VmDebugAction::Continue;
+        }
         let requested_stop = self.initial_breakpoints.iter().any(|breakpoint| {
             breakpoint.function_id == event.function_id
                 && usize::try_from(breakpoint.pc).is_ok_and(|pc| pc == event.pc)
@@ -348,6 +354,29 @@ pub static mut KIRA_VM_DEBUG_TEXT: [u8; DEBUG_TEXT_CAPACITY] = [0; DEBUG_TEXT_CA
 #[unsafe(no_mangle)]
 pub static mut KIRA_VM_DEBUG_TEXT_LEN: u32 = 0;
 
+/// Whether a debugger still wants an instruction stop, as `1` or `0`.
+///
+/// Once the LLDB observer has stopped once it publishes state before every
+/// interpreted instruction, because the debugger may resume into any of them.
+/// A debugger that has finished stepping and only wants the program to run to
+/// its end has no way to say so through a breakpoint — an interpreter that
+/// encodes its locals, operand stack, and backtrace for every instruction of a
+/// recursive program takes minutes to reach an end it would otherwise reach at
+/// once.
+///
+/// Writing `0` here from the stopped process is that channel. The debugger
+/// pokes one byte and the interpreter runs at full speed; writing `1` again
+/// brings the stops back.
+#[unsafe(no_mangle)]
+pub static mut KIRA_VM_DEBUG_ACTIVE: u32 = 1;
+
+/// Whether the debugged process should still report instruction stops.
+fn debug_active() -> bool {
+    // SAFETY: a plain word written only by the debugger, which does it while
+    // the process is stopped and this thread is not running.
+    unsafe { KIRA_VM_DEBUG_ACTIVE != 0 }
+}
+
 /// Prints the stopped VM frame, decoded values, instruction bytes, and
 /// backtrace from inside the debugged process.
 ///
@@ -367,7 +396,12 @@ pub extern "C" fn kira_vm_debug_dump() {
     print!("{}", format_debug_state(state));
 }
 
-fn format_debug_state(state: KiraVmDebugState) -> String {
+/// Renders a stop into the text `KIRA_VM_DEBUG_TEXT` mirrors.
+///
+/// This is what a debugger frontend reads out of a stopped process without
+/// calling into it, so the shape is public and `kira-debug` parses it back.
+#[must_use]
+pub fn format_debug_state(state: KiraVmDebugState) -> String {
     let name = unsafe_bytes(state.function_name, state.function_name_len);
     let instruction = unsafe_byte_slice(state.instruction, state.instruction_len);
     let mut output = String::new();
@@ -522,6 +556,12 @@ static KIRA_VM_DEBUG_TEXT_EXPORT: [u8; b"/EXPORT:KIRA_VM_DEBUG_TEXT\0".len()] =
 #[unsafe(link_section = ".drectve")]
 static KIRA_VM_DEBUG_TEXT_LEN_EXPORT: [u8; b"/EXPORT:KIRA_VM_DEBUG_TEXT_LEN\0".len()] =
     *b"/EXPORT:KIRA_VM_DEBUG_TEXT_LEN\0";
+
+#[cfg(windows)]
+#[used]
+#[unsafe(link_section = ".drectve")]
+static KIRA_VM_DEBUG_ACTIVE_EXPORT: [u8; b"/EXPORT:KIRA_VM_DEBUG_ACTIVE\0".len()] =
+    *b"/EXPORT:KIRA_VM_DEBUG_ACTIVE\0";
 
 fn debug_word(value: usize) -> u32 {
     value.min(u32::MAX as usize) as u32

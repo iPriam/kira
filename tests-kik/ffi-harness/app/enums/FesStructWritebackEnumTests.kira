@@ -1,0 +1,79 @@
+import Foundation
+
+// Mutable native-struct writeback with enum fields. Prefix: fes / Fes.
+//
+// A borrow-mut native struct passed into a @Runtime callback is materialized as a
+// VM struct, then written back into the original native layout. Enum fields in
+// that native layout must remain native-owned, because the native epilogue frees
+// them after the callback returns.
+
+enum FesMode { Cold Warm Hot }
+
+struct FesFrame {
+    var mode: FesMode = .Cold
+    var count: Int
+}
+
+@Runtime
+function fesBumpFrame(frame: borrow mut FesFrame, delta: Int) {
+    frame.count = frame.count + delta
+    return
+}
+
+@Runtime
+function fesHeatFrame(frame: borrow mut FesFrame, delta: Int) {
+    frame.mode = .Hot
+    frame.count = frame.count + delta
+    return
+}
+
+@Native
+function fesModeScore(mode: borrow FesMode) -> Int {
+    match mode {
+        Cold -> { return 1 }
+        Warm -> { return 2 }
+        Hot -> { return 3 }
+    }
+}
+
+@Native
+function fesNativeCallbackKeepsEnumOwned(seed: Int) -> Int {
+    var frame = FesFrame { mode: .Warm, count: seed }
+    fesBumpFrame(frame, 5)
+    return frame.count + fesModeScore(frame.mode)
+}
+
+@Native
+function fesNativeCallbackRewritesEnumOwned(seed: Int) -> Int {
+    var frame = FesFrame { mode: .Cold, count: seed }
+    fesHeatFrame(frame, 7)
+    return frame.count + fesModeScore(frame.mode)
+}
+
+Test FesBorrowMutStructEnumWritebackLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            total = total + fesNativeCallbackKeepsEnumOwned(i)
+            i = i + 1
+        }
+        return total
+    }
+    // Per seed: seed + 5 + Warm(2). Sum 0..19 + 7*20 = 190 + 140.
+    expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
+}
+
+Test FesBorrowMutStructEnumRewriteLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 20 {
+            total = total + fesNativeCallbackRewritesEnumOwned(i)
+            i = i + 1
+        }
+        return total
+    }
+    // Per seed: seed + 7 + Hot(3). Sum 0..19 + 10*20 = 190 + 200.
+    expect { let e: Result<Int, TestFailure> = .Ok(390); return e }
+}

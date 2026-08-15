@@ -47,8 +47,11 @@ pub enum HybridMainError {
         /// The library whose native half failed.
         library: String,
         /// What the hybrid runtime said about it.
+        ///
+        /// Boxed because this is the widest failure the loader carries and
+        /// every wrapper method returns this enum by value.
         #[source]
-        source: kira_hybrid_runtime::HybridError,
+        source: Box<kira_hybrid_runtime::HybridError>,
     },
     /// The two halves do not describe the same program.
     ///

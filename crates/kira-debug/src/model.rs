@@ -139,17 +139,45 @@ pub fn function_symbol(index: usize, name: &str) -> String {
     format!("kira_fn_{index}_{sanitized}")
 }
 
+/// The line a function is declared on, recovered from the source text.
+///
+/// A declaration is looked for first — `function name`, and the `class Grid`
+/// that owns a `Grid.step`. Only when there is none does the first mention of
+/// the name count, because a call is not a declaration: `print(fib(32))` on the
+/// program's third line would otherwise make every frame of `fib` report line
+/// three, and a debugger and a profiler would both point at the caller.
 fn declaration_line(lines: Option<&[String]>, name: &str, fallback: usize) -> u32 {
     let Some(lines) = lines else {
         return fallback.saturating_add(1) as u32;
     };
-    lines
-        .iter()
-        .position(|line| {
-            line.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .any(|word| word == name)
-        })
+    let owned = name.split_once('.');
+    let declared = lines.iter().position(|line| {
+        let words = words_of(line);
+        match owned {
+            // A method's declaration is the member's line inside its type.
+            Some((_, member)) => declares(&words, member),
+            None => declares(&words, name),
+        }
+    });
+    let mentioned = || lines.iter().position(|line| words_of(line).contains(&name));
+    declared
+        .or_else(mentioned)
         .map_or(fallback.saturating_add(1) as u32, |line| line as u32 + 1)
+}
+
+/// The identifier-shaped words of one source line.
+fn words_of(line: &str) -> Vec<&str> {
+    line.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// Whether `words` declares `name`: a declaration keyword, then the name.
+fn declares(words: &[&str], name: &str) -> bool {
+    const KEYWORDS: [&str; 4] = ["function", "class", "struct", "enum"];
+    words
+        .windows(2)
+        .any(|pair| KEYWORDS.contains(&pair[0]) && pair[1] == name)
 }
 
 #[cfg(test)]
@@ -158,6 +186,37 @@ mod tests {
     use kira_runtime_abi::Execution;
     use kira_semantics_model::Type;
     use la_arena::Arena;
+
+    #[test]
+    fn a_declaration_outranks_an_earlier_call_of_the_same_name() {
+        let lines = [
+            "@Main".to_owned(),
+            "function main() {".to_owned(),
+            "    print(fib(32))".to_owned(),
+            "}".to_owned(),
+            "function fib(n: Int) -> Int {".to_owned(),
+        ];
+        assert_eq!(declaration_line(Some(&lines), "fib", 0), 5);
+        assert_eq!(declaration_line(Some(&lines), "main", 0), 2);
+    }
+
+    #[test]
+    fn a_method_is_found_by_the_member_its_qualified_name_ends_in() {
+        let lines = [
+            "class Grid {".to_owned(),
+            "    function step() {".to_owned(),
+            "    }".to_owned(),
+            "}".to_owned(),
+        ];
+        assert_eq!(declaration_line(Some(&lines), "Grid.step", 0), 2);
+    }
+
+    #[test]
+    fn a_name_the_source_never_declares_falls_back_to_its_first_mention() {
+        let lines = ["let generated = 1".to_owned()];
+        assert_eq!(declaration_line(Some(&lines), "generated", 7), 1);
+        assert_eq!(declaration_line(Some(&lines), "absent", 7), 8);
+    }
 
     #[test]
     fn native_symbols_are_stable_and_safe_for_linkers() {

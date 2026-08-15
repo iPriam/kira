@@ -50,7 +50,7 @@ pub(super) const HELPER_NAME: &str = "<widen>";
 /// One variant whose payload type differs between the two rows.
 struct ChangedVariant {
     /// The variant's discriminant, which the tag test compares against.
-    tag: u32,
+    tag: u64,
     /// The payload type the source row declares.
     from: Type,
     /// The payload type the destination row declares.
@@ -65,22 +65,22 @@ struct ChangedVariant {
 #[derive(Default)]
 pub(super) struct WidenHelpers {
     /// The helper for each pair, memoized. `None` means no rebuild is needed.
-    registered: HashMap<(Type, Type), Option<u32>>,
+    registered: HashMap<(Type, Type), Option<u64>>,
     /// Helpers whose body is not emitted yet, in registration order.
     ///
     /// Emitting one may register more, so this is drained as a worklist rather
     /// than iterated.
-    pending: Vec<(u32, Type, Type)>,
+    pending: Vec<(u64, Type, Type)>,
     /// Bodies already emitted, by helper index, ready to append to the module.
-    emitted: Vec<(u32, Vec<Instruction>)>,
+    emitted: Vec<(u64, Vec<Instruction>)>,
     /// The index the next helper takes, counting on from the program's own
     /// functions so an existing call site keeps the index it was lowered with.
-    next_index: u32,
+    next_index: u64,
 }
 
 impl WidenHelpers {
     /// A registry whose helpers begin after `function_count` program functions.
-    pub(super) fn new(function_count: u32) -> Self {
+    pub(super) fn new(function_count: u64) -> Self {
         Self {
             next_index: function_count,
             ..Self::default()
@@ -98,7 +98,7 @@ impl WidenHelpers {
         program: &IrProgram,
         from: Type,
         to: Type,
-    ) -> Result<Option<u32>, CompileError> {
+    ) -> Result<Option<u64>, CompileError> {
         if let Some(&cached) = self.registered.get(&(from, to)) {
             return Ok(cached);
         }
@@ -124,7 +124,7 @@ impl WidenHelpers {
     }
 
     /// The emitted helpers in index order, ready to append to the module.
-    pub(super) fn into_protos(mut self) -> Vec<(u32, Vec<Instruction>)> {
+    pub(super) fn into_protos(mut self) -> Vec<(u64, Vec<Instruction>)> {
         self.emitted.sort_by_key(|(index, _)| *index);
         self.emitted
     }
@@ -144,7 +144,7 @@ impl WidenHelpers {
             // still holds the value the next test reads.
             code.push(Instruction::LoadLocal(0));
             code.push(Instruction::EnumTag);
-            code.push(Instruction::ConstInt(i64::from(variant.tag)));
+            code.push(Instruction::ConstInt(variant.tag as i64));
             code.push(Instruction::EqInt);
             let to_next = code.len();
             code.push(Instruction::JumpIfFalse(0));
@@ -153,15 +153,12 @@ impl WidenHelpers {
             code.push(Instruction::EnumPayload);
             self.emit_payload_crossing(program, &mut code, variant.from, variant.to)?;
             code.push(Instruction::NewEnum {
-                tag: u16::try_from(variant.tag).map_err(|_| CompileError::TooManyVariants {
-                    function: HELPER_NAME.to_owned(),
-                    tag: variant.tag,
-                })?,
+                tag: variant.tag,
                 has_payload: true,
             });
             code.push(Instruction::Return);
 
-            code[to_next] = Instruction::JumpIfFalse(code.len() as u32);
+            code[to_next] = Instruction::JumpIfFalse(code.len() as u64);
         }
         // No changed tag matched: the value passes through, copied out of the
         // slot the frame is about to drop.
@@ -231,7 +228,7 @@ fn changed_variants(
         match (source.payload, target.payload) {
             (Some(source_ty), Some(target_ty)) if source_ty != target_ty => {
                 changed.push(ChangedVariant {
-                    tag: tag as u32,
+                    tag: tag as u64,
                     from: source_ty,
                     to: target_ty,
                 });
