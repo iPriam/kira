@@ -130,7 +130,19 @@ mod tests {
         kira_network_websocket_client, kira_network_websocket_server,
     };
 
-    const TIMEOUT: Duration = Duration::from_secs(10);
+    /// Long enough to survive a full-workspace run, where this test shares a
+    /// machine with every other test binary. The operation itself is a loopback
+    /// round trip and takes milliseconds; the deadline exists to fail rather
+    /// than hang, not to measure anything.
+    const TIMEOUT: Duration = Duration::from_secs(60);
+
+    /// How long the waiter sleeps between polls.
+    ///
+    /// Sleeping rather than spinning, because the work being waited on runs on
+    /// this machine's other threads: a `yield_now` loop holds a core against
+    /// the runtime it is waiting for, which under load is how a round trip that
+    /// takes milliseconds misses a ten-second deadline.
+    const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
     fn wait_for(handle: i64) -> Result<i64, i64> {
         if handle <= 0 {
@@ -144,7 +156,7 @@ mod tests {
                     kira_network_close(handle);
                     return Err(-1);
                 }
-                std::thread::yield_now();
+                std::thread::sleep(POLL_INTERVAL);
                 continue;
             }
             let result = kira_network_result(handle);

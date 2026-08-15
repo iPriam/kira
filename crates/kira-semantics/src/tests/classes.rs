@@ -276,16 +276,9 @@ fn an_array_of_a_parent_is_refused_a_subclass_element() {
 
 #[test]
 fn a_subclass_is_assignable_to_its_parents_type() {
-    // This used to be refused, on the reasoning that admitting it would
-    // reintroduce the dispatch question the per-class method copy avoids. It
-    // does not: the copy is what makes it safe. A parameter typed `Base` is
-    // registered again with that parameter typed `Child`, so the argument
-    // reaches a body where `b` is statically a `Child` and an override wins —
-    // still with nothing to dispatch at run time.
-    //
-    // The layout costs nothing either: a class flattens its parents' fields
-    // first, so `Child` already *has* `Base`'s prefix and a position expecting
-    // `Base` reads the slots it means to.
+    // A class flattens its parent fields first, so `Child` has `Base`'s prefix.
+    // The specialized call body keeps the receiver statically typed as `Child`,
+    // so an override wins without runtime dispatch.
     assert_eq!(
         codes(
             "class Base { let a: Int = 1 }\nclass Child extends Base {}\n\

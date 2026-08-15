@@ -235,7 +235,7 @@ fn the_resource_digest_matches_the_shape_the_graphics_host_parses() {
     let digest = ir.resource_digest();
     // Stage mask 1 is vertex alone: `camera` is read there and nowhere else.
     assert!(
-        digest.contains("u|camera:0:64:1:1:view_projection@0#64:f;"),
+        digest.contains("u|camera:0:64:1:1:view_projection@0#64:f:0;"),
         "{digest}"
     );
     // `Surface` is `Float3` then `Float`: the vector sits at 0 and the scalar at
@@ -243,13 +243,13 @@ fn the_resource_digest_matches_the_shape_the_graphics_host_parses() {
     // host maps it onto `FLOAT3` rather than `FLOAT4`.
     // `surface` is declared and never read, so no stage claims it — mask 0.
     assert!(
-        digest.contains("u|surface:0:32:0:2:albedo@0#12,alpha@16#4:ff;"),
+        digest.contains("u|surface:0:32:0:2:albedo@0#12,alpha@16#4:ff:1;"),
         "{digest}"
     );
     // The texture carries the slot of the sampler its body samples it with, and
     // the name the two collapse into in GLSL.
-    assert!(digest.contains("t|albedo:1:2:2:albedo;"), "{digest}");
-    assert!(digest.contains("m|linear:2:2;"), "{digest}");
+    assert!(digest.contains("t|albedo:1:2:2:albedo:1;"), "{digest}");
+    assert!(digest.contains("m|linear:2:2:1;"), "{digest}");
 }
 
 #[test]
@@ -290,14 +290,14 @@ shader Blit {
     // Unsigned members are `u`: a size of 4 alone would leave the host loading
     // them through `glUniform1fv`, which a `uint` uniform refuses.
     assert!(
-        digest.contains("u|extent:0:16:4:2:width@0#4,height@4#4:uu;"),
+        digest.contains("u|extent:0:16:4:2:width@0#4,height@4#4:uu:0;"),
         "{digest}"
     );
     // The sampled texture stays a `t` record with its sampler and GLSL name;
     // the written one is an `i` record carrying its image unit and that the
     // shader only writes it.
-    assert!(digest.contains("t|src:2:4:1:src;"), "{digest}");
-    assert!(digest.contains("i|dst:3:4:1:1;"), "{digest}");
+    assert!(digest.contains("t|src:2:4:1:src:0;"), "{digest}");
+    assert!(digest.contains("i|dst:3:4:1:1:0;"), "{digest}");
 }
 
 #[test]

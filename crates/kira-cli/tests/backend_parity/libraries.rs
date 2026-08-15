@@ -154,8 +154,8 @@ fn a_library_artifact_is_not_an_executable() {
 // must be identical on all three; what differs is only what runs underneath.
 // ---------------------------------------------------------------------------
 
-/// The motivating library, in the shapes v1 supports: a handle-eligible class,
-/// a constructor-shaped export, and scalars in both directions.
+/// A library with a handle-eligible class, a constructor-shaped export, and
+/// scalar arguments and results.
 const EXPORTING_LIBRARY: &str = "\
 @Export\n\
 class Button {\n\
@@ -329,11 +329,7 @@ fn every_engine_generates_the_same_public_surface_over_different_internals() {
 }
 
 // ---------------------------------------------------------------------------
-// `@Native` in a library, and the one-library-per-process rule
-//
-// One agreement and one refusal. The agreement is that no engine refuses a
-// `@Native` library; the refusal is the linker's, and it is proven to be real
-// rather than only documented.
+// `@Native` in a library and the one-library-per-process rule
 // ---------------------------------------------------------------------------
 
 /// A library with a `@Native` helper among ordinary exports.
@@ -349,15 +345,8 @@ function fast(value: Int) -> Int { return value * 2 }";
 
 #[test]
 fn every_engine_builds_a_native_library() {
-    // `@Native` is not a refusal on any engine, and this is where that is
-    // pinned. Each engine reaches the same yes by a different route: the VM
-    // engine compiles every function to bytecode, the native engine compiles
-    // every function to machine code, and the hybrid engine is the one that
-    // honors the split and puts this body in the native half.
-    //
-    // Asserted as one test rather than three because the agreement *is* the
-    // claim. An engine that refused here would be a parity hole in a feature
-    // whose whole premise is one API over three engines.
+    // Every backend must build this library. VM emits bytecode for the helper,
+    // native emits machine code, and hybrid places it in the native half.
     let path = write_library(NATIVE_LIBRARY);
     let package = path.parent().expect("package directory").to_path_buf();
     let runs: Vec<(&str, Output)> = BACKENDS
@@ -377,20 +366,9 @@ fn every_engine_builds_a_native_library() {
 
 #[test]
 fn two_native_libraries_really_do_collide_on_the_runtime() {
-    // The one-library-per-process rule, proven rather than asserted. It is a
-    // rule about the *linker*, so what has to be true is that two independently
-    // built archives define the same `kira_rt_*` symbols — that is the whole
-    // mechanism, and a documented rule with no mechanism under it is the kind
-    // of claim this repo has been bitten by.
-    //
-    // Read out of the archive bytes rather than through `nm`, so the test needs
-    // no tool the machine might not have: an ar archive carries member names
-    // and its symbol index as plain bytes.
-    //
-    // The recorded fix is per-library runtime prefixing — `kira_rt_*` becoming
-    // `kira_rt_<library>_*`, at which point two archives stop naming the same
-    // thing. Until then this fails at link, loudly and by symbol name, which is
-    // the acceptable v1 answer precisely *because* it cannot be missed.
+    // Two independently built archives define the same `kira_rt_*` symbols.
+    // Read the archive symbol index directly so this test does not depend on
+    // an external `nm` executable.
     let first = write_library(LIBRARY);
     let second = write_library(LIBRARY);
     let built_first = build_on(&first, "llvm");

@@ -462,3 +462,215 @@ function takesBare(f: borrow Family) -> Int {
         library_codes(source)
     );
 }
+
+/// A declaration with more than one child slot fills the first from its bare
+/// content block and the rest by name, written after the block or inside it.
+#[test]
+fn named_fills_reach_every_child_slot() {
+    assert!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split(gap: Int = 0) {
+    let sidebar: some Family
+    let detail: some Family
+    function value() -> Int { return sidebar.value() + detail.value() + gap }
+}
+
+function build() -> Any Family {
+    let after = Split { Leaf(number: 1) } detail: { Leaf(number: 2) }
+    let inside = Split { Leaf(number: 3) detail: Leaf(number: 4) }
+    let all = Split { } sidebar: { Leaf(number: 5) } detail: Leaf(number: 6)
+    return after
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// The bare content block is the first slot's, so naming that slot as well
+/// fills it twice.
+#[test]
+fn a_child_slot_filled_twice_is_refused() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split() {
+    let sidebar: some Family
+    let detail: some Family
+    function value() -> Int { return sidebar.value() + detail.value() }
+}
+
+function build() -> Any Family {
+    return Split { Leaf(number: 1) } sidebar: { Leaf(number: 2) } detail: { Leaf(number: 3) }
+}
+"#,
+        ),
+        vec!["KSEM274"]
+    );
+}
+
+/// A `{ … }` content block fills a slot by name; it is not a value, so it is
+/// refused anywhere a value is expected.
+#[test]
+fn a_content_block_is_not_a_value() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split() {
+    let sidebar: some Family
+    let detail: some Family
+    function value() -> Int { return sidebar.value() + detail.value() }
+}
+
+function build() -> Any Family {
+    return Split { Leaf(number: 1) } gap: { Leaf(number: 2) }
+}
+"#,
+        ),
+        vec!["KSEM273", "KSEM204", "KSEM208"]
+    );
+}
+
+/// A single slot nobody filled and with no declared default is a missing
+/// construction input, reported the way any other unfilled field is.
+#[test]
+fn an_unfilled_child_slot_without_a_default_is_missing() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split() {
+    let sidebar: some Family
+    let detail: some Family
+    function value() -> Int { return sidebar.value() + detail.value() }
+}
+
+function build() -> Any Family {
+    return Split { Leaf(number: 1) }
+}
+"#,
+        ),
+        vec!["KSEM208"]
+    );
+}
+
+/// A child slot may declare a default, which stands in for the slot nobody
+/// filled.
+#[test]
+fn a_child_slot_default_stands_in_for_an_unfilled_slot() {
+    assert!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split() {
+    let sidebar: some Family
+    let detail: some Family = Leaf(number: 9)
+    function value() -> Int { return sidebar.value() + detail.value() }
+}
+
+function build() -> Any Family {
+    return Split { Leaf(number: 1) }
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// A named fill is checked against its slot's type, the way a child written in
+/// the block is.
+#[test]
+fn a_named_fill_of_the_wrong_type_is_refused() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Family {
+    function value() -> Int { return 0 }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Split() {
+    let sidebar: some Family
+    let detail: some Family
+    function value() -> Int { return sidebar.value() + detail.value() }
+}
+
+function build() -> Any Family {
+    return Split { Leaf(number: 1) } detail: 7
+}
+"#,
+        ),
+        vec!["KSEM232"]
+    );
+}
+
+/// A child slot declared by a construct family is a slot of every declaration
+/// backed by it, filled at a construction the same way an own slot is.
+#[test]
+fn an_inherited_family_child_slot_is_filled_like_an_own_slot() {
+    assert!(
+        library_codes(
+            r#"
+construct Family {
+    let children: [some Family]
+    function value() -> Int { return children.count }
+}
+
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
+}
+
+Family Wrap() {
+    function value() -> Int { return children.count * 2 }
+}
+
+function build() -> Any Family {
+    return Wrap { Leaf(number: 1) Leaf(number: 2) }
+}
+"#,
+        )
+        .is_empty()
+    );
+}

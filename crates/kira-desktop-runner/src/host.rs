@@ -20,10 +20,12 @@ use std::sync::Arc;
 
 use kira_bytecode::{Module, ModuleDecodeError};
 use kira_live::{Bundle, BundleError, PayloadKind, RunnerHost};
+use kira_main::{ForeignBinding, ForeignSession};
 use kira_runtime_abi::{HostCapabilities, NativeStateHost};
 use kira_vm_runtime::{Program, VmError};
 
 use crate::VmHotPatch;
+use crate::native::NativeProgram;
 use crate::staged::Staged;
 
 /// Why the desktop runner could not load, link, or start a bundle.
@@ -61,6 +63,32 @@ pub enum DesktopRunnerError {
     /// The hybrid session could not be loaded or run.
     #[error("hybrid: {0}")]
     Hybrid(#[from] kira_hybrid_runtime::HybridError),
+    /// A VM direct foreign session could not be loaded.
+    #[error("foreign session: {0}")]
+    ForeignSession(#[from] kira_dynamic_ffi::ForeignLibraryError),
+    /// A whole-program native live library could not be loaded or completed.
+    #[error("native program: {0}")]
+    Native(#[from] crate::native::NativeProgramError),
+    /// The VM bytecode declares a foreign boundary but the bundle has no
+    /// direct binding metadata payload for it.
+    #[error("vm bytecode requires direct foreign binding metadata")]
+    MissingForeignBindings,
+    /// A VM direct binding manifest is malformed or names an invalid payload.
+    #[error("foreign binding manifest `{path}` is invalid at line {line}: {reason}")]
+    InvalidForeignBindings {
+        /// The staged binding manifest.
+        path: PathBuf,
+        /// The one-based manifest line that failed validation.
+        line: usize,
+        /// Why the line cannot be consumed as a binding.
+        reason: String,
+    },
+    /// The bundle contains more than one direct binding metadata payload.
+    #[error("bundle contains more than one foreign binding manifest: `{path}`")]
+    DuplicateForeignBindings {
+        /// The later manifest payload that made the bundle ambiguous.
+        path: PathBuf,
+    },
     /// The bundle's entrypoint is a kind this runner does not host.
     ///
     /// Reported precisely rather than skipped: a runner that ignored a payload
@@ -68,7 +96,7 @@ pub enum DesktopRunnerError {
     /// and call the session ready.
     #[error(
         "the desktop runner cannot host a `{kind}` entrypoint; \
-         it hosts `vm-bytecode` and `hybrid-manifest` entrypoints"
+         it hosts `vm-bytecode`, `native-library`, and `hybrid-manifest` entrypoints"
     )]
     UnsupportedEntry {
         /// The entry payload's kind.
@@ -151,9 +179,14 @@ impl DesktopHost {
         self.hotpatch_disabled
     }
 
-    /// The VM reload control shared with the protocol thread.
+    /// The VM reload control for the app thread.
     pub fn hotpatch(&self) -> VmHotPatch {
         self.hotpatch.clone()
+    }
+
+    /// The thread-safe VM hot-patch status for the protocol relay.
+    pub fn hotpatch_status(&self) -> crate::hotpatch::VmHotPatchStatus {
+        self.hotpatch.status()
     }
 
     /// Why the entrypoint could not start, or `Ok(())` if it can.
@@ -200,6 +233,8 @@ impl RunnerHost for DesktopHost {
         self.staged = match entry.kind {
             PayloadKind::VmBytecode => Staged::VmLoaded {
                 module: Module::from_bytes(bundle.entry_bytes())?,
+                bindings: foreign_bindings_from_bundle(&self.cache, bundle)?,
+                runtime: foreign_runtime_path(&self.cache, bundle),
             },
             PayloadKind::HybridManifest => Staged::HybridLoaded {
                 // The bundle's payload directory is the hybrid bundle's
@@ -208,7 +243,13 @@ impl RunnerHost for DesktopHost {
                 // sibling is exactly what makes that resolve.
                 manifest: self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name),
             },
-            kind @ (PayloadKind::NativeLibrary | PayloadKind::Asset) => {
+            PayloadKind::NativeLibrary => Staged::NativeLoaded {
+                library: self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name),
+            },
+            kind @ (PayloadKind::Asset
+            | PayloadKind::ForeignAdapter
+            | PayloadKind::NativeDependency
+            | PayloadKind::ForeignBindings) => {
                 return Err(DesktopRunnerError::UnsupportedEntry { kind: kind.label() });
             }
         };
@@ -217,12 +258,11 @@ impl RunnerHost for DesktopHost {
 
     fn link(&mut self) -> Result<(), DesktopRunnerError> {
         self.staged = match std::mem::replace(&mut self.staged, Staged::Empty) {
-            Staged::VmLoaded { module } => Staged::VmLinked {
-                // Validation is the VM's link step: it is where an out-of-range
-                // jump or an unbound call becomes an error instead of a trap
-                // halfway through a frame.
-                program: Arc::new(Program::load(module)?),
-            },
+            Staged::VmLoaded {
+                module,
+                bindings,
+                runtime,
+            } => link_vm(module, bindings, runtime)?,
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
                 // Loading a hybrid session dlopens the native half and binds
                 // every symbol the manifest names, so a missing symbol fails
@@ -233,7 +273,13 @@ impl RunnerHost for DesktopHost {
                     session
                 },
             },
-            already @ (Staged::VmLinked { .. } | Staged::HybridLinked { .. }) => already,
+            Staged::NativeLoaded { library } => Staged::NativeLinked {
+                program: NativeProgram::load(&library)?,
+            },
+            already @ (Staged::VmLinked { .. }
+            | Staged::VmForeignLinked { .. }
+            | Staged::NativeLinked { .. }
+            | Staged::HybridLinked { .. }) => already,
             Staged::Empty => {
                 return Err(DesktopRunnerError::OutOfOrder {
                     step: "link",
@@ -287,16 +333,27 @@ impl RunnerHost for DesktopHost {
         // the old is still open keeps the refcount above zero throughout, so
         // the image is never unmapped and the addresses stay put.
         let replacement = match entry.kind {
-            PayloadKind::VmBytecode => Staged::VmLinked {
-                program: Arc::new(Program::load(Module::from_bytes(bundle.entry_bytes())?)?),
-            },
+            PayloadKind::VmBytecode => link_vm(
+                Module::from_bytes(bundle.entry_bytes())?,
+                foreign_bindings_from_bundle(&self.cache, bundle)?,
+                foreign_runtime_path(&self.cache, bundle),
+            )?,
             PayloadKind::HybridManifest => {
                 let manifest = self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name);
                 Staged::HybridLinked {
                     session: Arc::new(kira_hybrid_runtime::Session::load(&manifest)?),
                 }
             }
-            kind @ (PayloadKind::NativeLibrary | PayloadKind::Asset) => {
+            PayloadKind::NativeLibrary => {
+                let library = self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name);
+                Staged::NativeLinked {
+                    program: NativeProgram::load(&library)?,
+                }
+            }
+            kind @ (PayloadKind::Asset
+            | PayloadKind::ForeignAdapter
+            | PayloadKind::NativeDependency
+            | PayloadKind::ForeignBindings) => {
                 return Err(DesktopRunnerError::UnsupportedEntry { kind: kind.label() });
             }
         };
@@ -326,8 +383,16 @@ impl RunnerHost for DesktopHost {
                 program.run(&mut host)?;
                 Ok(())
             }
+            Staged::VmForeignLinked { session } => {
+                session.run()?;
+                Ok(())
+            }
             Staged::HybridLinked { session } => {
                 session.run()?;
+                Ok(())
+            }
+            Staged::NativeLinked { program } => {
+                program.run()?;
                 Ok(())
             }
             not_linked => Err(DesktopRunnerError::OutOfOrder {
@@ -336,6 +401,162 @@ impl RunnerHost for DesktopHost {
             }),
         }
     }
+}
+
+/// Parses the VM live binding payload into loader paths and process markers the
+/// foreign session can open.
+///
+/// Live manifests carry names rather than build-machine paths. A name matching
+/// a `NativeDependency` resolves inside the runner cache; any other plain name
+/// is left for the platform loader to resolve, which preserves system-library
+/// bindings without making them fake bundle payloads.
+fn foreign_bindings_from_bundle(
+    cache: &Path,
+    bundle: &Bundle,
+) -> Result<Option<Vec<Option<PathBuf>>>, DesktopRunnerError> {
+    let payload_directory = cache.join(kira_live::PAYLOAD_DIR);
+    let mut manifest_path = None;
+    for payload in &bundle.manifest().payloads {
+        if payload.kind != PayloadKind::ForeignBindings {
+            continue;
+        }
+        let path = payload_directory.join(&payload.name);
+        if manifest_path.replace(path.clone()).is_some() {
+            return Err(DesktopRunnerError::DuplicateForeignBindings { path });
+        }
+    }
+    let Some(path) = manifest_path else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|source| DesktopRunnerError::Stage {
+        path: path.clone(),
+        source,
+    })?;
+    let mut bindings = Vec::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let line_number = line_index + 1;
+        if line.is_empty() {
+            bindings.push(None);
+            continue;
+        }
+        if line == kira_dynamic_ffi::PROCESS_BINDING_MARKER {
+            bindings.push(Some(PathBuf::from(line)));
+            continue;
+        }
+        if !is_plain_loader_name(line) {
+            return Err(DesktopRunnerError::InvalidForeignBindings {
+                path: path.clone(),
+                line: line_number,
+                reason: "binding names must be plain file or loader names".to_owned(),
+            });
+        }
+        let binding = match bundle.manifest().payload(line) {
+            Some(payload) if payload.kind == PayloadKind::NativeDependency => {
+                let staged = payload_directory.join(line);
+                if !staged.is_file() {
+                    return Err(DesktopRunnerError::InvalidForeignBindings {
+                        path: path.clone(),
+                        line: line_number,
+                        reason: format!(
+                            "native dependency payload `{line}` was not staged as a file"
+                        ),
+                    });
+                }
+                Some(staged)
+            }
+            Some(payload) => {
+                return Err(DesktopRunnerError::InvalidForeignBindings {
+                    path: path.clone(),
+                    line: line_number,
+                    reason: format!(
+                        "binding name `{line}` refers to a `{}` payload, not a native dependency",
+                        payload.kind.label()
+                    ),
+                });
+            }
+            None => Some(PathBuf::from(line)),
+        };
+        bindings.push(binding);
+    }
+    Ok(Some(bindings))
+}
+
+/// Accepts only the relocatable names written by a live bundle.
+fn is_plain_loader_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':'])
+        && !Path::new(name).is_absolute()
+}
+
+/// Returns the staged bundled libffi path named by `bundle`, if it has one.
+fn foreign_runtime_path(cache: &Path, bundle: &Bundle) -> Option<PathBuf> {
+    let name = kira_libffi::bundled_file_name();
+    bundle
+        .manifest()
+        .payloads
+        .iter()
+        .find(|payload| payload.kind == PayloadKind::NativeDependency && payload.name == name)
+        .map(|payload| cache.join(kira_live::PAYLOAD_DIR).join(&payload.name))
+}
+
+/// Links a VM module with the ordinary VM foreign-session contract.
+fn link_vm(
+    module: Module,
+    bindings: Option<Vec<Option<PathBuf>>>,
+    runtime_path: Option<PathBuf>,
+) -> Result<Staged, DesktopRunnerError> {
+    let program = Program::load(module)?;
+    if program.module().foreign_imports.is_empty() && program.module().foreign_callbacks.is_empty()
+    {
+        return Ok(Staged::VmLinked {
+            program: Arc::new(program),
+        });
+    }
+
+    let paths = bindings.unwrap_or_default();
+    if paths.len() != program.module().foreign_imports.len() {
+        return Err(DesktopRunnerError::MissingForeignBindings);
+    }
+    let imports = program
+        .module()
+        .foreign_imports
+        .iter()
+        .zip(paths)
+        .map(|(entry, path)| {
+            path.map_or_else(
+                || ForeignBinding::unavailable(entry.signature().clone()),
+                |path| {
+                    if path == Path::new(kira_dynamic_ffi::PROCESS_BINDING_MARKER) {
+                        ForeignBinding::process(entry.symbol(), entry.signature().clone())
+                    } else {
+                        ForeignBinding::dynamic(path, entry.symbol(), entry.signature().clone())
+                    }
+                },
+            )
+        })
+        .collect();
+    let callbacks = program
+        .module()
+        .foreign_callbacks
+        .iter()
+        .map(|callback| callback.signature().clone())
+        .collect();
+    let aggregates = program.module().foreign_aggregates.clone();
+    let session = match runtime_path {
+        Some(runtime_path) => ForeignSession::load_dynamic_with_runtime_path(
+            program,
+            imports,
+            callbacks,
+            aggregates,
+            runtime_path,
+        )?,
+        None => ForeignSession::load_dynamic(program, imports, callbacks, aggregates)?,
+    };
+    Ok(Staged::VmForeignLinked {
+        session: Arc::new(session),
+    })
 }
 
 #[cfg(test)]

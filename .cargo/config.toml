@@ -1,0 +1,19 @@
+# The stack reserve for the toolchain's own binaries on Windows.
+#
+# A PE gets 1 MiB by default, which is a fraction of the 8 MiB every other
+# platform gives a main thread. The frontend recurses over a program's syntax,
+# types, and IR, so a large package — a UI framework and an app on top of it —
+# overflows that reserve on Windows and nowhere else. `kira check` on
+# KiraUI's example app did exactly that.
+#
+# The number is the one `kira_toolchain::WINDOWS_STACK_RESERVE` names, which is
+# also what the LLVM backend reserves for the executables Kira produces: a
+# compiler that cannot compile a program its own output could run would be an
+# odd place to economise. Cargo cannot read a Rust constant, so the two are
+# tied by this comment and by the test beside the constant.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:33554432"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:33554432"]

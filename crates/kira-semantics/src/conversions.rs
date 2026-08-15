@@ -1,4 +1,5 @@
-//! Scalar type-conversion calls: `Target(expr)` where `Target` is a numeric scalar type.
+//! Scalar type-conversion calls: `Target(expr)` where `Target` is a numeric
+//! scalar type or the opaque `RawPtr` word type.
 //!
 //! The call form `Int(x)`, `U32(x)`, `Float(x)`, and the rest of the sized set
 //! is a **value conversion**, not a function call. The scalar *types* already
@@ -6,15 +7,14 @@
 //! and lowers it to a [`HirExpr::Convert`] the backends execute, so what was a
 //! `KSEM061` "call to undefined function" becomes a real cast.
 //!
-//! The conversion matrix mirrors the language oracle: the operand must be an
-//! `Int` or a `Float`, and the target must be an integer width (`Int`,
-//! `I8`..`I32`, `U8`..`U64`) or a float width (`Float`, `F32`). `Bool`
+//! The conversion matrix mirrors the language oracle: numeric conversions take
+//! an `Int` or a `Float`, and `RawPtr(expr)` takes an integer word. `Bool`
 //! is neither a source nor a target, so `Bool(x)` is not a conversion and falls
 //! through to the ordinary call path. Because every integer shares one 64-bit
-//! representation and every float one 64-bit representation, an int-to-int and
-//! a float-to-float conversion re-tag the type and copy the value unchanged;
-//! only `Int`<->`Float` does runtime work. See [`ConvertKind`] for the exact
-//! rules each kind carries.
+//! representation and every float one 64-bit representation, an int-to-int,
+//! float-to-float, or integer-to-`RawPtr` conversion only changes the VM tag;
+//! only `Int`<->`Float` does arithmetic work. `rawPointerWord(pointer)` is the
+//! inverse tag change from an opaque pointer word to `U64`.
 
 use kira_semantics_model::hir::{ConvertKind, HirExpr, HirExprId};
 use kira_semantics_model::{IntSpelling, Type};
@@ -26,8 +26,8 @@ use crate::analyze::{Analyzer, FnCtx};
 impl Analyzer<'_> {
     /// Recognizes and type-checks a scalar conversion call `Target(operand)`.
     ///
-    /// Returns `None` when the call is not a numeric conversion at all — the
-    /// callee does not name a numeric scalar type, or a local of that name
+    /// Returns `None` when the call is not a scalar conversion at all — the
+    /// callee does not name a numeric or `RawPtr` type, or a local of that name
     /// shadows it — so the caller carries on to the ordinary call paths.
     /// Otherwise it owns the call and returns `Some`, reporting any mistake with
     /// a typed diagnostic rather than letting it reach the undefined-function
@@ -40,9 +40,9 @@ impl Analyzer<'_> {
         span: Span,
     ) -> Option<HirExprId> {
         let target = Type::from_name(name)?;
-        // Only the numeric scalar types convert; `Bool`, `String`, and the rest
-        // are not conversions and keep their ordinary meaning.
-        if !target.is_numeric() {
+        // Numeric scalar types and `RawPtr` convert; `Bool`, `String`, and the
+        // rest keep their ordinary meaning.
+        if !target.is_numeric() && target != Type::RawPtr {
             return None;
         }
         // A local of the same name shadows the type: `Int(x)` calls the local,
@@ -82,21 +82,78 @@ impl Analyzer<'_> {
             return Some(self.program.exprs.alloc(HirExpr::Error));
         }
         let Some(kind) = conversion_kind(operand_ty, target) else {
-            self.emit(
-                span,
-                "KSEM209",
+            let message = if target == Type::RawPtr {
+                format!(
+                    "`{}` cannot be converted to `{name}`: `RawPtr` takes an integer word",
+                    self.type_name(operand_ty)
+                )
+            } else {
                 format!(
                     "`{}` cannot be converted to `{name}`: a numeric conversion takes an `Int` or \
                      a `Float`",
                     self.type_name(operand_ty)
-                ),
-            );
+                )
+            };
+            self.emit(span, "KSEM209", message);
             return Some(self.program.exprs.alloc(HirExpr::Error));
         };
         Some(self.program.exprs.alloc(HirExpr::Convert {
             operand,
             kind,
             ty: target,
+        }))
+    }
+
+    /// Recognizes `rawPointerWord(pointer)`, the explicit conversion from an
+    /// opaque pointer word to the integer representation used by a C callback
+    /// ABI. Keeping this separate from numeric conversions makes the source
+    /// and target types visible in the diagnostic and prevents an arbitrary
+    /// integer from being mistaken for a valid pointer value.
+    pub(super) fn analyze_raw_pointer_word(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<HirExprId> {
+        if name != "rawPointerWord" || ctx.resolve(name).is_some() {
+            return None;
+        }
+        let values = Self::argument_values(args);
+        if values.len() != 1 {
+            for &value in &values {
+                self.analyze_expr(ctx, value);
+            }
+            self.emit(
+                span,
+                "KSEM210",
+                format!(
+                    "`rawPointerWord` takes exactly one argument, found {}",
+                    values.len()
+                ),
+            );
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        let operand = self.analyze_expr(ctx, values[0]);
+        let operand_ty = self.program.expr(operand).type_of();
+        if operand_ty == Type::Error {
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        if !matches!(operand_ty, Type::RawPtr | Type::ForeignPtr(_)) {
+            self.emit(
+                span,
+                "KSEM209",
+                format!(
+                    "`rawPointerWord` takes a `RawPtr`, found `{}`",
+                    self.type_name(operand_ty)
+                ),
+            );
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        Some(self.program.exprs.alloc(HirExpr::Convert {
+            operand,
+            kind: ConvertKind::RawPtrToInt,
+            ty: Type::Int(IntSpelling::U64),
         }))
     }
 
@@ -203,6 +260,7 @@ fn conversion_kind(from: Type, to: Type) -> Option<ConvertKind> {
         (Type::Int(_), Type::Float(_)) => ConvertKind::IntToFloat,
         (Type::Float(_), Type::Int(_)) => ConvertKind::FloatToInt,
         (Type::Float(_), Type::Float(_)) => ConvertKind::FloatToFloat,
+        (Type::Int(_), Type::RawPtr) => ConvertKind::IntToRawPtr,
         _ => return None,
     })
 }

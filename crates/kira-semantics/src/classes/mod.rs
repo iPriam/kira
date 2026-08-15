@@ -588,14 +588,7 @@ impl<'a> Analyzer<'a> {
                 origin: Some(*owner),
                 specialize: Vec::new(),
                 function,
-                // The file the body was *written* in, which is what
-                // `method_ast` answers with and what every span inside it is an
-                // offset into. This used to prefer the class declaration's file
-                // whenever the method belonged to the class itself — true for a
-                // method in the class body, and wrong for one an `extend` block
-                // in another file added: its spans were offsets into the extend
-                // file resolved against the class file, so a diagnostic pointed
-                // at whatever text happened to sit at that offset.
+                // Spans are offsets in the file containing the method body.
                 source: origin_source,
             });
         }

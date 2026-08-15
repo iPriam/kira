@@ -1,0 +1,18 @@
+struct BrowserTab {
+    var title: String
+    var visits: Int
+}
+
+function score(tab: BrowserTab) -> Int {
+    return tab.visits * 2
+}
+
+@Main
+function main() {
+    var tab = BrowserTab { title: "Harmony Browser" visits: 2 }
+    tab.visits = tab.visits + 1
+    print(tab.title)
+    print(tab.visits)
+    print(score(move tab))
+    return
+}

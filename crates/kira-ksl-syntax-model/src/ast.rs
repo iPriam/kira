@@ -59,10 +59,8 @@ pub struct Import {
 
 /// `const name: Type = <literal>`
 ///
-/// A name for a number, which KSL previously spelled as a zero-argument
-/// function — `function washCeiling() -> Float { return 0.9 }` — because there
-/// was nothing else to spell it with. Folded during checking, so nothing
-/// downstream sees a constant at all.
+/// A literal-valued name folded during checking, so nothing downstream sees a
+/// constant at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstDecl {
     /// The declared name.

@@ -16,11 +16,12 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use kira_hybrid_definition::{HybridForeign, HybridFunction};
+use kira_hybrid_definition::HybridFunction;
 use kira_runtime_abi::{
-    BridgeValue, FOREIGN_ADAPTER_ABI_MARKER, ForeignAdapterFn, NativeStateError, NativeStateStatus,
-    NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+    BridgeValue, NativeStateError, NativeStateStatus, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, NativeStateValueTag,
 };
 
 use crate::error::HybridError;
@@ -76,7 +77,14 @@ type LiveReloadMarkFn = unsafe extern "C" fn();
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
 type StateNode = *mut c_void;
 type StateIntFn = unsafe extern "C" fn(i64) -> StateNode;
+type StateAnyFn = unsafe extern "C" fn(u64, StateNode) -> StateNode;
+type StateReadAnyTypeFn = unsafe extern "C" fn(StateNode) -> u64;
 type StateRawPtrFn = unsafe extern "C" fn(u64) -> StateNode;
+type StateCellFn = unsafe extern "C" fn(u64) -> StateNode;
+type StateReadCellFn = unsafe extern "C" fn(StateNode) -> u64;
+type CellFreeFn = unsafe extern "C" fn(u64);
+type CellProxyNewFn = unsafe extern "C" fn(u64) -> u64;
+type CellProxyHandleFn = unsafe extern "C" fn(u64) -> u64;
 type StateFloatFn = unsafe extern "C" fn(f64) -> StateNode;
 type StateBoolFn = unsafe extern "C" fn(u8) -> StateNode;
 type StateStringFn = unsafe extern "C" fn(*mut c_void) -> StateNode;
@@ -96,10 +104,28 @@ type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
 type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
 type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
 type StateFreeFn = unsafe extern "C" fn(u64) -> u32;
-/// The versioned foreign-adapter marker; resolving it proves the native half
-/// carries this build's adapter ABI, exactly as [`FOREIGN_ADAPTER_ABI_MARKER`]
-/// names. A no-argument function whose body is irrelevant — it is never called.
-type ForeignMarkerFn = unsafe extern "C" fn();
+/// The loaded library lease carried by a decoded cell's release closure.
+struct CellReleaseOwner<L> {
+    /// Keeps the image containing `free` loaded until all cell shares release.
+    _library: Arc<L>,
+    /// Resolved from the library held by `_library`.
+    free: CellFreeFn,
+}
+
+impl<L> CellReleaseOwner<L> {
+    fn new(library: Arc<L>, free: CellFreeFn) -> CellReleaseOwner<L> {
+        CellReleaseOwner {
+            _library: library,
+            free,
+        }
+    }
+
+    fn release(&self, handle: u64) {
+        // SAFETY: `free` came from the library held by this owner, and the
+        // owner remains alive for the duration of the call.
+        unsafe { (self.free)(handle) };
+    }
+}
 
 /// The symbols every hybrid library must export, whatever the program does.
 const STR_NEW: &[u8] = b"kira_rt_str_new\0";
@@ -111,7 +137,14 @@ const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 /// Optional, unlike the rest: an older library simply has no accounting.
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
 const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
+const STATE_VALUE_ANY: &[u8] = b"kira_rt_native_value_any\0";
+const STATE_VALUE_READ_ANY_TYPE: &[u8] = b"kira_rt_native_value_read_any_type\0";
 const STATE_VALUE_RAW_PTR: &[u8] = b"kira_rt_native_value_raw_ptr\0";
+const CELL_FREE: &[u8] = b"kira_rt_cell_free\0";
+const CELL_VM_PROXY_NEW: &[u8] = b"kira_rt_cell_vm_proxy_new\0";
+const CELL_VM_PROXY_HANDLE: &[u8] = b"kira_rt_cell_vm_proxy_handle\0";
+const STATE_VALUE_CELL: &[u8] = b"kira_rt_native_value_cell\0";
+const STATE_VALUE_READ_CELL: &[u8] = b"kira_rt_native_value_read_cell\0";
 const STATE_VALUE_FLOAT: &[u8] = b"kira_rt_native_value_float\0";
 const STATE_VALUE_BOOL: &[u8] = b"kira_rt_native_value_bool\0";
 const STATE_VALUE_STRING: &[u8] = b"kira_rt_native_value_string\0";
@@ -150,13 +183,6 @@ pub struct NativeLibrary {
     /// trampoline needs it, so it lives with the trampoline rather than being
     /// looked up again from a manifest each host would have to hold.
     mutable_params: Vec<Vec<bool>>,
-    /// Each foreign import's generated adapter by import id.
-    ///
-    /// Bound out of this same library — never a second `dlopen` of the C library
-    /// or a separate sidecar — so a runtime-half foreign call and a native-half
-    /// one reach one copy of the C code. Indexed by import id, so reaching an
-    /// adapter is a total function of the id the bytecode's `CallForeign` names.
-    adapters: Vec<ForeignAdapterFn>,
     /// The address of each generated callback entry thunk, by callback id.
     callbacks: Vec<u64>,
     str_new: StrNewFn,
@@ -168,7 +194,14 @@ pub struct NativeLibrary {
     install_invoker: InstallInvokerFn,
     live_reload_mark: LiveReloadMarkFn,
     state_value_int: StateIntFn,
+    state_value_any: StateAnyFn,
+    state_value_read_any_type: StateReadAnyTypeFn,
     state_value_raw_ptr: StateRawPtrFn,
+    state_value_cell: StateCellFn,
+    state_value_read_cell: StateReadCellFn,
+    cell_release: Arc<CellReleaseOwner<libloading::Library>>,
+    cell_proxy_new: CellProxyNewFn,
+    cell_proxy_handle: CellProxyHandleFn,
     state_value_float: StateFloatFn,
     state_value_bool: StateBoolFn,
     state_value_string: StateStringFn,
@@ -190,7 +223,7 @@ pub struct NativeLibrary {
     state_free: StateFreeFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
-    _library: libloading::Library,
+    _library: Arc<libloading::Library>,
 }
 
 /// The entry thunk symbol for callback `index`.
@@ -205,12 +238,10 @@ fn kira_llvm_backend_callback_name(index: usize) -> String {
 impl NativeLibrary {
     /// Loads `path` and binds every symbol the host needs: the string helpers,
     /// the runtime invoker, one trampoline per native function in `functions`,
-    /// and — when `foreign` is non-empty — the foreign-adapter marker and one
-    /// adapter per import.
+    /// and one callback thunk per callback row.
     pub fn load(
         path: &Path,
         functions: &[HybridFunction],
-        foreign: &[HybridForeign],
         callbacks: usize,
     ) -> Result<NativeLibrary, HybridError> {
         // Through the shared opener rather than `libloading::Library::new`: the
@@ -219,11 +250,12 @@ impl NativeLibrary {
         // those unless it is told to search the loaded module's. The library is
         // one this toolchain built and named in a manifest it also wrote; a host
         // that cannot trust its own build has already lost.
-        let library =
+        let library = Arc::new(
             kira_dynamic_ffi::open_shared_library(path).map_err(|source| HybridError::Library {
                 path: path.to_path_buf(),
                 source,
-            })?;
+            })?,
+        );
 
         let str_new = bind(&library, path, STR_NEW)?;
         let str_free = bind(&library, path, STR_FREE)?;
@@ -235,7 +267,15 @@ impl NativeLibrary {
         // no such symbol, and that is not a reason to refuse to load it.
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
         let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
+        let state_value_any = bind(&library, path, STATE_VALUE_ANY)?;
+        let state_value_read_any_type = bind(&library, path, STATE_VALUE_READ_ANY_TYPE)?;
         let state_value_raw_ptr = bind(&library, path, STATE_VALUE_RAW_PTR)?;
+        let state_value_cell = bind(&library, path, STATE_VALUE_CELL)?;
+        let state_value_read_cell = bind(&library, path, STATE_VALUE_READ_CELL)?;
+        let cell_free = bind(&library, path, CELL_FREE)?;
+        let cell_release = Arc::new(CellReleaseOwner::new(Arc::clone(&library), cell_free));
+        let cell_proxy_new = bind(&library, path, CELL_VM_PROXY_NEW)?;
+        let cell_proxy_handle = bind(&library, path, CELL_VM_PROXY_HANDLE)?;
         let state_value_float = bind(&library, path, STATE_VALUE_FLOAT)?;
         let state_value_bool = bind(&library, path, STATE_VALUE_BOOL)?;
         let state_value_string = bind(&library, path, STATE_VALUE_STRING)?;
@@ -283,22 +323,6 @@ impl NativeLibrary {
             *slot = Some(trampoline);
         }
 
-        // Foreign adapters live in this same library. Prove its adapter ABI
-        // before binding any: a marker that will not resolve means a stale or
-        // incompatible native half, caught here by name rather than by a wrong
-        // answer at the first foreign call.
-        let mut adapters = Vec::with_capacity(foreign.len());
-        if !foreign.is_empty() {
-            let mut marker = FOREIGN_ADAPTER_ABI_MARKER.as_bytes().to_vec();
-            marker.push(0);
-            let _: ForeignMarkerFn = bind(&library, path, &marker)?;
-            for import in foreign {
-                let mut name = import.adapter_symbol.clone().into_bytes();
-                name.push(0);
-                adapters.push(bind::<ForeignAdapterFn>(&library, path, &name)?);
-            }
-        }
-
         // One entry thunk per callback row, bound by the name the backend gave
         // it. Their addresses are what a `@FFI.Callback` value carries; nothing
         // here ever calls one, because C is what does.
@@ -314,7 +338,6 @@ impl NativeLibrary {
             path: path.to_path_buf(),
             trampolines,
             mutable_params,
-            adapters,
             callbacks: callback_entries,
             str_new,
             heap_report,
@@ -324,7 +347,14 @@ impl NativeLibrary {
             install_invoker,
             live_reload_mark,
             state_value_int,
+            state_value_any,
+            state_value_read_any_type,
             state_value_raw_ptr,
+            state_value_cell,
+            state_value_read_cell,
+            cell_release,
+            cell_proxy_new,
+            cell_proxy_handle,
             state_value_float,
             state_value_bool,
             state_value_string,
@@ -393,12 +423,6 @@ impl NativeLibrary {
             .get(function_id as usize)
             .map(Vec::as_slice)
             .unwrap_or_default()
-    }
-
-    /// The generated adapter for foreign import `foreign_id`, or `None` when the
-    /// id names no import this library bound.
-    pub fn adapter(&self, foreign_id: u32) -> Option<ForeignAdapterFn> {
-        self.adapters.get(foreign_id as usize).copied()
     }
 
     /// The address C enters Kira at for callback `callback_id`, or `None` when
@@ -552,6 +576,13 @@ impl NativeLibrary {
         Ok(match value {
             // SAFETY: the constructor accepts its scalar by value.
             NativeStateValue::Int(value) => unsafe { (self.state_value_int)(*value) },
+            NativeStateValue::Any { type_id, payload } => {
+                // SAFETY: the child is allocated by this library and ownership
+                // moves into the parent node.
+                let child = unsafe { self.encode_state_value(payload)? };
+                // SAFETY: the constructor consumes the live child exactly once.
+                unsafe { (self.state_value_any)(*type_id, child) }
+            }
             // SAFETY: the constructor accepts its opaque word by value.
             NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(*value) },
             // SAFETY: the constructor accepts its scalar by value.
@@ -575,6 +606,27 @@ impl NativeLibrary {
                 let values = payload.as_deref().map_or(&[][..], std::slice::from_ref);
                 // SAFETY: the aggregate owns every child this builds.
                 unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, *tag, values)? }
+            }
+            // A cell crosses as an opaque handle; the declaring half owns its
+            // storage.
+            NativeStateValue::Cell(cell) => {
+                if cell.is_vm_owned() {
+                    // SAFETY: the proxy is a fresh native cell box. The state
+                    // node takes one share, and this releases the constructor
+                    // share immediately below.
+                    let proxy = unsafe { (self.cell_proxy_new)(cell.handle()) };
+                    // SAFETY: `proxy` is that fresh box, so the node takes its
+                    // own share of a live cell.
+                    let node = unsafe { (self.state_value_cell)(proxy) };
+                    // SAFETY: this releases the constructor share only; the
+                    // node above holds the one that keeps the box alive.
+                    unsafe { (self.cell_release.free)(proxy) };
+                    node
+                } else {
+                    // SAFETY: the constructor takes the box by handle and
+                    // takes its own share; this node keeps the one it had.
+                    unsafe { (self.state_value_cell)(cell.handle()) }
+                }
             }
         })
     }
@@ -615,9 +667,27 @@ impl NativeLibrary {
                 // SAFETY: tag validation established the node shape.
                 NativeStateValue::Int(unsafe { (self.state_value_read_int)(node) })
             }
+            NativeStateValueTag::ANY => {
+                // SAFETY: tag validation established the node shape.
+                let type_id = unsafe { (self.state_value_read_any_type)(node) };
+                // SAFETY: the `Any` node has exactly one owned payload child.
+                let child = unsafe { (self.state_value_child)(node, 0) };
+                // SAFETY: recursion consumes the child node.
+                let payload = unsafe { self.decode_state_value(child)? };
+                NativeStateValue::any_of(type_id, payload)
+            }
             NativeStateValueTag::RAW_PTR => {
                 // SAFETY: tag validation established the node shape.
                 NativeStateValue::RawPtr(unsafe { (self.state_value_read_raw_ptr)(node) })
+            }
+            NativeStateValueTag::CELL => {
+                // SAFETY: tag validation established the node shape.
+                let handle = unsafe { (self.state_value_read_cell)(node) };
+                // Keep the loaded library with the share's release function.
+                let release = Arc::clone(&self.cell_release);
+                NativeStateValue::Cell(kira_runtime_abi::NativeCell::new(handle, move |handle| {
+                    release.release(handle);
+                }))
             }
             NativeStateValueTag::FLOAT => {
                 // SAFETY: tag validation established the node shape.
@@ -681,6 +751,14 @@ impl NativeLibrary {
         Ok(value)
     }
 
+    /// Returns the VM word carried by a native callback-state cell proxy.
+    pub(crate) fn vm_cell_proxy_handle(&self, handle: u64) -> Option<u64> {
+        // SAFETY: the loaded library validates null, inline, and ordinary
+        // handles before reading the proxy tag.
+        let value = unsafe { (self.cell_proxy_handle)(handle) };
+        (value != u64::MAX).then_some(value)
+    }
+
     fn check_state_status(&self, status: u32, token: u64) -> Result<(), NativeStateError> {
         match NativeStateStatus(status) {
             NativeStateStatus::OK => Ok(()),
@@ -715,4 +793,39 @@ fn bind<T: Copy>(
             source,
         })?;
     Ok(*resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    struct DropProbe(Arc<AtomicUsize>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    unsafe extern "C" fn test_cell_free(_handle: u64) {}
+
+    #[test]
+    fn a_cell_release_keeps_its_library_lease_alive() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let library = Arc::new(DropProbe(Arc::clone(&drops)));
+        let owner = Arc::new(CellReleaseOwner::new(Arc::clone(&library), test_cell_free));
+        drop(library);
+
+        let release = Arc::clone(&owner);
+        let cell = kira_runtime_abi::NativeCell::new(7, move |handle| {
+            release.release(handle);
+        });
+        drop(owner);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+        drop(cell);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
 }

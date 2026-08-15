@@ -1,9 +1,10 @@
 //! The `.klbundle` artifact boundary: the `KLB1` manifest and its payloads.
 //!
 //! A `.klbundle` is the only thing a runner ever consumes. It carries the
-//! payloads a runner loads (bytecode, a native library, a hybrid manifest,
-//! assets), each named by its [`ContentHash`], plus the platform metadata that
-//! says which runner and profile the bundle was built for. A runner never
+//! payloads a runner loads (bytecode, a foreign-adapter sidecar, a native
+//! library, a hybrid manifest, assets, native dependencies), each carrying its
+//! [`ContentHash`], plus the platform metadata that says which runner and
+//! profile the bundle was built for. A runner never
 //! reaches into compiler internals — it reads this and nothing else, which is
 //! what lets the compiler's insides change without breaking every runner.
 //!
@@ -40,12 +41,19 @@ pub const PAYLOAD_DIR: &str = "payloads";
 pub enum PayloadKind {
     /// A `KBC1` bytecode module, run by the VM.
     VmBytecode,
-    /// A native dynamic library, loaded and linked by the runner.
+    /// A native dynamic library. As an entry it is a whole native live program;
+    /// as a hybrid dependency it is the native half named by the manifest.
     NativeLibrary,
     /// A `KHM1` hybrid manifest, pairing a bytecode module with a native half.
     HybridManifest,
     /// An opaque resource the app reads at runtime.
     Asset,
+    /// A native library containing only VM foreign-call adapters and callbacks.
+    ForeignAdapter,
+    /// A native file required by a payload's load-time dependency closure.
+    NativeDependency,
+    /// Import-ordered direct Libffi bindings for a VM payload.
+    ForeignBindings,
 }
 
 impl PayloadKind {
@@ -59,6 +67,9 @@ impl PayloadKind {
             Self::NativeLibrary => 1,
             Self::HybridManifest => 2,
             Self::Asset => 3,
+            Self::ForeignAdapter => 4,
+            Self::NativeDependency => 5,
+            Self::ForeignBindings => 6,
         }
     }
 
@@ -69,6 +80,9 @@ impl PayloadKind {
             1 => Some(Self::NativeLibrary),
             2 => Some(Self::HybridManifest),
             3 => Some(Self::Asset),
+            4 => Some(Self::ForeignAdapter),
+            5 => Some(Self::NativeDependency),
+            6 => Some(Self::ForeignBindings),
             _ => None,
         }
     }
@@ -80,22 +94,24 @@ impl PayloadKind {
             Self::NativeLibrary => "native-library",
             Self::HybridManifest => "hybrid-manifest",
             Self::Asset => "asset",
+            Self::ForeignAdapter => "foreign-adapter",
+            Self::NativeDependency => "native-dependency",
+            Self::ForeignBindings => "foreign-bindings",
         }
     }
 
-    /// Whether a change to this payload can be applied to a running process
-    /// without relaunching it.
+    /// Whether the runner has an in-process replacement operation for this kind.
     ///
-    /// Only the VM's bytecode can: the VM swaps a module between frames while
-    /// its heap stays put. Native code cannot be swapped in place — the loaded
-    /// library's code and layouts are already baked into the running process —
-    /// so a change to one forces a relaunch. This is the fact the reload tier
-    /// decision is built on, and it belongs to the payload kind rather than to
-    /// the supervisor that asks.
-    pub fn is_hot_swappable(self) -> bool {
+    /// This does not prove that a particular replacement is safe.
+    pub fn has_in_process_replacement(self) -> bool {
         match self {
             Self::VmBytecode => true,
-            Self::NativeLibrary | Self::HybridManifest | Self::Asset => false,
+            Self::NativeLibrary
+            | Self::HybridManifest
+            | Self::Asset
+            | Self::ForeignAdapter
+            | Self::NativeDependency => false,
+            Self::ForeignBindings => false,
         }
     }
 }
@@ -408,9 +424,23 @@ mod tests {
             PayloadKind::NativeLibrary,
             PayloadKind::HybridManifest,
             PayloadKind::Asset,
+            PayloadKind::ForeignAdapter,
+            PayloadKind::NativeDependency,
+            PayloadKind::ForeignBindings,
         ] {
             assert_eq!(PayloadKind::from_byte(kind.as_byte()), Some(kind));
         }
+    }
+
+    #[test]
+    fn payload_kind_wire_bytes_are_append_only() {
+        assert_eq!(PayloadKind::VmBytecode.as_byte(), 0);
+        assert_eq!(PayloadKind::NativeLibrary.as_byte(), 1);
+        assert_eq!(PayloadKind::HybridManifest.as_byte(), 2);
+        assert_eq!(PayloadKind::Asset.as_byte(), 3);
+        assert_eq!(PayloadKind::ForeignAdapter.as_byte(), 4);
+        assert_eq!(PayloadKind::NativeDependency.as_byte(), 5);
+        assert_eq!(PayloadKind::ForeignBindings.as_byte(), 6);
     }
 
     /// The wire bytes are pinned literally. `runner_byte` delegates to
@@ -449,15 +479,16 @@ mod tests {
         }
     }
 
-    /// Only bytecode may be hot-patched into a running process. If this ever
-    /// reads otherwise the reload tier decision starts swapping native code
-    /// under a live process, so it is pinned rather than left to inspection.
+    /// Only VM bytecode has an in-process replacement operation.
     #[test]
-    fn only_bytecode_is_hot_swappable() {
-        assert!(PayloadKind::VmBytecode.is_hot_swappable());
-        assert!(!PayloadKind::NativeLibrary.is_hot_swappable());
-        assert!(!PayloadKind::HybridManifest.is_hot_swappable());
-        assert!(!PayloadKind::Asset.is_hot_swappable());
+    fn only_bytecode_has_an_in_process_replacement() {
+        assert!(PayloadKind::VmBytecode.has_in_process_replacement());
+        assert!(!PayloadKind::NativeLibrary.has_in_process_replacement());
+        assert!(!PayloadKind::HybridManifest.has_in_process_replacement());
+        assert!(!PayloadKind::Asset.has_in_process_replacement());
+        assert!(!PayloadKind::ForeignAdapter.has_in_process_replacement());
+        assert!(!PayloadKind::NativeDependency.has_in_process_replacement());
+        assert!(!PayloadKind::ForeignBindings.has_in_process_replacement());
     }
 
     #[test]

@@ -32,6 +32,14 @@ pub enum DecodeError {
         /// Byte offset of the opcode.
         offset: usize,
     },
+    /// A boolean operand was neither its canonical false nor true byte.
+    #[error("invalid boolean byte {value:#04x} at offset {offset}")]
+    InvalidBoolean {
+        /// The byte found on the wire.
+        value: u8,
+        /// Byte offset of the invalid operand.
+        offset: usize,
+    },
 }
 
 /// Appends the byte encoding of one instruction to `out`.
@@ -86,20 +94,19 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&func.to_le_bytes());
             encode_place(*slot, path, out);
         }
-        Instruction::CallWriteback { func, targets }
-        | Instruction::CallNativeWriteback { func, targets } => {
-            out.push(
-                if matches!(instruction, Instruction::CallWriteback { .. }) {
-                    o::CALL_WRITEBACK
-                } else {
-                    o::CALL_NATIVE_WRITEBACK
-                },
-            );
+        Instruction::CallWriteback { func, targets } => {
+            out.push(o::CALL_WRITEBACK);
             out.extend_from_slice(&func.to_le_bytes());
-            // The count is a `u16`, and the compiler cannot build more targets
-            // than a function has parameters — itself a `u16` slot count — so
-            // the cast is exact by construction.
-            out.extend_from_slice(&(targets.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(targets.len() as u64).to_le_bytes());
+            for target in targets {
+                out.extend_from_slice(&target.param.to_le_bytes());
+                encode_place(target.slot, &target.path, out);
+            }
+        }
+        Instruction::CallNativeWriteback { func, targets } => {
+            out.push(o::CALL_NATIVE_WRITEBACK);
+            out.extend_from_slice(&func.to_le_bytes());
+            out.extend_from_slice(&(targets.len() as u64).to_le_bytes());
             for target in targets {
                 out.extend_from_slice(&target.param.to_le_bytes());
                 encode_place(target.slot, &target.path, out);
@@ -223,6 +230,8 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
+        Instruction::ConvertIntToRawPtr => out.push(o::CONVERT_INT_TO_RAW_PTR),
+        Instruction::ConvertRawPtrToInt => out.push(o::CONVERT_RAW_PTR_TO_INT),
         Instruction::NativeUserData => out.push(o::NATIVE_USER_DATA),
         Instruction::NativeStateFree => out.push(o::NATIVE_STATE_FREE),
         Instruction::ConstRawPtrNull => out.push(o::RAW_PTR_NULL),
@@ -288,7 +297,7 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
 }
 
 /// Appends a place operand — slot, step count, then one tagged step each.
-fn encode_place(slot: u16, path: &PlacePath, out: &mut Vec<u8>) {
+fn encode_place(slot: u64, path: &PlacePath, out: &mut Vec<u8>) {
     out.extend_from_slice(&slot.to_le_bytes());
     out.extend_from_slice(&path.len().to_le_bytes());
     for step in path.steps() {
@@ -314,10 +323,19 @@ pub fn encode(code: &[Instruction]) -> Vec<u8> {
 
 /// Decodes a byte stream back into an instruction sequence.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
+    decode_with_width(bytes, false)
+}
+
+/// Decodes the instruction widths used by a KBC1 module.
+pub(crate) fn decode_legacy(bytes: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
+    decode_with_width(bytes, true)
+}
+
+fn decode_with_width(bytes: &[u8], legacy: bool) -> Result<Vec<Instruction>, DecodeError> {
     let mut cursor = Cursor { bytes, offset: 0 };
     let mut code = Vec::new();
     while cursor.offset < bytes.len() {
-        code.push(cursor.next_instruction()?);
+        code.push(cursor.next_instruction(legacy)?);
     }
     Ok(code)
 }
@@ -329,7 +347,12 @@ struct Cursor<'a> {
 
 impl Cursor<'_> {
     fn take<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
-        let end = self.offset + N;
+        let end = self
+            .offset
+            .checked_add(N)
+            .ok_or(DecodeError::UnexpectedEnd {
+                offset: self.offset,
+            })?;
         let slice = self
             .bytes
             .get(self.offset..end)
@@ -342,31 +365,57 @@ impl Cursor<'_> {
         Ok(array)
     }
 
-    fn next_instruction(&mut self) -> Result<Instruction, DecodeError> {
+    fn read_word(&mut self, legacy: bool) -> Result<u64, DecodeError> {
+        if legacy {
+            Ok(u64::from(u32::from_le_bytes(self.take()?)))
+        } else {
+            Ok(u64::from_le_bytes(self.take()?))
+        }
+    }
+
+    fn read_slot(&mut self, legacy: bool) -> Result<u64, DecodeError> {
+        if legacy {
+            Ok(u64::from(u16::from_le_bytes(self.take()?)))
+        } else {
+            Ok(u64::from_le_bytes(self.take()?))
+        }
+    }
+
+    fn read_bool(&mut self) -> Result<bool, DecodeError> {
+        let offset = self.offset;
+        let [value] = self.take()?;
+        match value {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(DecodeError::InvalidBoolean { value, offset }),
+        }
+    }
+
+    fn next_instruction(&mut self, legacy: bool) -> Result<Instruction, DecodeError> {
         let opcode_offset = self.offset;
         let [op] = self.take::<1>()?;
         let instruction = match op {
             o::CONST_INT => Instruction::ConstInt(i64::from_le_bytes(self.take()?)),
             o::CONST_FLOAT => Instruction::ConstFloat(f64::from_le_bytes(self.take()?)),
-            o::CONST_BOOL => Instruction::ConstBool(self.take::<1>()?[0] != 0),
-            o::CONST_STR => Instruction::ConstStr(u32::from_le_bytes(self.take()?)),
+            o::CONST_BOOL => Instruction::ConstBool(self.read_bool()?),
+            o::CONST_STR => Instruction::ConstStr(self.read_word(legacy)?),
             o::ERASE => Instruction::Erase(u64::from_le_bytes(self.take()?)),
             o::CONST_VOID => Instruction::ConstVoid,
-            o::LOAD_LOCAL => Instruction::LoadLocal(u16::from_le_bytes(self.take()?)),
-            o::ARRAY_GET_LOCAL => Instruction::ArrayGetLocal(u16::from_le_bytes(self.take()?)),
-            o::CELL_GET => Instruction::CellGet(u16::from_le_bytes(self.take()?)),
-            o::CELL_SET => Instruction::CellSet(u16::from_le_bytes(self.take()?)),
-            o::STORE_LOCAL => Instruction::StoreLocal(u16::from_le_bytes(self.take()?)),
-            o::JUMP => Instruction::Jump(u32::from_le_bytes(self.take()?)),
-            o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
-            o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
+            o::LOAD_LOCAL => Instruction::LoadLocal(self.read_slot(legacy)?),
+            o::ARRAY_GET_LOCAL => Instruction::ArrayGetLocal(self.read_slot(legacy)?),
+            o::CELL_GET => Instruction::CellGet(self.read_slot(legacy)?),
+            o::CELL_SET => Instruction::CellSet(self.read_slot(legacy)?),
+            o::STORE_LOCAL => Instruction::StoreLocal(self.read_slot(legacy)?),
+            o::JUMP => Instruction::Jump(self.read_word(legacy)?),
+            o::JUMP_IF_FALSE => Instruction::JumpIfFalse(self.read_word(legacy)?),
+            o::CALL => Instruction::Call(self.read_word(legacy)?),
             o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
             o::CALL_FOREIGN => Instruction::CallForeign(u32::from_le_bytes(self.take()?)),
             o::FOREIGN_CALLBACK => Instruction::ForeignCallback(u32::from_le_bytes(self.take()?)),
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
-            o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),
-            o::GET_FIELD => Instruction::GetField(u16::from_le_bytes(self.take()?)),
+            o::NEW_STRUCT => Instruction::NewStruct(self.read_slot(legacy)?),
+            o::GET_FIELD => Instruction::GetField(self.read_slot(legacy)?),
             o::FOREIGN_OFFSET => Instruction::ForeignOffset(u32::from_le_bytes(self.take()?)),
             o::FOREIGN_INDEX => Instruction::ForeignIndex(u32::from_le_bytes(self.take()?)),
             o::FOREIGN_LOAD => {
@@ -382,53 +431,55 @@ impl Cursor<'_> {
                 Instruction::ForeignLoad { offset, ty }
             }
             o::STORE_FIELD => {
-                let slot = u16::from_le_bytes(self.take()?);
-                let count = u16::from_le_bytes(self.take()?);
-                let mut steps = Vec::with_capacity(count as usize);
+                let slot = self.read_slot(legacy)?;
+                let count = self.read_slot(legacy)?;
+                let mut steps = Vec::new();
                 for _ in 0..count {
-                    steps.push(u16::from_le_bytes(self.take()?));
+                    steps.push(self.read_slot(legacy)?);
                 }
-                // `count` is a `u16`, so the path just read is encodable by
-                // construction and this never takes the error arm — but it is
-                // written as a `Result` rather than an unwrap, because a
-                // decoder never gets to end its caller's process.
-                let path = FieldPath::new(steps).map_err(|_| DecodeError::UnexpectedEnd {
-                    offset: opcode_offset,
-                })?;
+                let path = FieldPath::new(steps);
                 Instruction::StoreField { slot, path }
             }
-            o::NEW_ARRAY => Instruction::NewArray(u32::from_le_bytes(self.take()?)),
+            o::NEW_ARRAY => Instruction::NewArray(self.read_word(legacy)?),
             o::STORE_PLACE => {
-                let (slot, path) = self.next_place(opcode_offset)?;
+                let (slot, path) = self.next_place(legacy)?;
                 Instruction::StorePlace { slot, path }
             }
             o::ARRAY_APPEND => {
-                let (slot, path) = self.next_place(opcode_offset)?;
+                let (slot, path) = self.next_place(legacy)?;
                 Instruction::ArrayAppend { slot, path }
             }
             o::CALL_MUT => {
-                let func = u32::from_le_bytes(self.take()?);
-                let (slot, path) = self.next_place(opcode_offset)?;
+                let func = self.read_word(legacy)?;
+                let (slot, path) = self.next_place(legacy)?;
                 Instruction::CallMut { func, slot, path }
             }
             o::CALL_WRITEBACK | o::CALL_NATIVE_WRITEBACK => {
-                let func = u32::from_le_bytes(self.take()?);
-                let count = u16::from_le_bytes(self.take()?);
-                let mut targets = Vec::with_capacity(count as usize);
+                let native = op == o::CALL_NATIVE_WRITEBACK;
+                let (func, native_func) = if native {
+                    (0, u32::from_le_bytes(self.take()?))
+                } else {
+                    (self.read_word(legacy)?, 0)
+                };
+                let count = self.read_slot(legacy)?;
+                let mut targets = Vec::new();
                 for _ in 0..count {
-                    let param = u16::from_le_bytes(self.take()?);
-                    let (slot, path) = self.next_place(opcode_offset)?;
+                    let param = self.read_slot(legacy)?;
+                    let (slot, path) = self.next_place(legacy)?;
                     targets.push(WritebackTarget { param, slot, path });
                 }
-                if op == o::CALL_WRITEBACK {
+                if !native {
                     Instruction::CallWriteback { func, targets }
                 } else {
-                    Instruction::CallNativeWriteback { func, targets }
+                    Instruction::CallNativeWriteback {
+                        func: native_func,
+                        targets,
+                    }
                 }
             }
             o::NEW_ENUM => {
-                let tag = u16::from_le_bytes(self.take()?);
-                let has_payload = self.take::<1>()?[0] != 0;
+                let tag = self.read_slot(legacy)?;
+                let has_payload = self.read_bool()?;
                 Instruction::NewEnum { tag, has_payload }
             }
             o::CLAYOUT_ADDRESS => Instruction::CLayoutAddress(u32::from_le_bytes(self.take()?)),
@@ -510,15 +561,15 @@ impl Cursor<'_> {
     ///
     /// An unknown step tag is rejected rather than guessed — a decoder never
     /// trusts its input, and a step it cannot name is a step it cannot walk.
-    fn next_place(&mut self, opcode_offset: usize) -> Result<(u16, PlacePath), DecodeError> {
-        let slot = u16::from_le_bytes(self.take()?);
-        let count = u16::from_le_bytes(self.take()?);
-        let mut steps = Vec::with_capacity(count as usize);
+    fn next_place(&mut self, legacy: bool) -> Result<(u64, PlacePath), DecodeError> {
+        let slot = self.read_slot(legacy)?;
+        let count = self.read_slot(legacy)?;
+        let mut steps = Vec::new();
         for _ in 0..count {
             let tag_offset = self.offset;
             let [tag] = self.take::<1>()?;
             steps.push(match tag {
-                step_tag::FIELD => PathStep::Field(u16::from_le_bytes(self.take()?)),
+                step_tag::FIELD => PathStep::Field(self.read_slot(legacy)?),
                 step_tag::INDEX => PathStep::Index,
                 other => {
                     return Err(DecodeError::UnknownOpcode {
@@ -528,13 +579,7 @@ impl Cursor<'_> {
                 }
             });
         }
-        // `count` is a `u16`, so the path just read is encodable by
-        // construction and this never takes the error arm — but it is written
-        // as a `Result` rather than an unwrap, because a decoder never gets to
-        // end its caller's process.
-        let path = PlacePath::new(steps).map_err(|_| DecodeError::UnexpectedEnd {
-            offset: opcode_offset,
-        })?;
+        let path = PlacePath::new(steps);
         Ok((slot, path))
     }
 }
@@ -608,6 +653,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::ENUM_PAYLOAD => Instruction::EnumPayload,
         o::CONVERT_INT_TO_FLOAT => Instruction::ConvertIntToFloat,
         o::CONVERT_FLOAT_TO_INT => Instruction::ConvertFloatToInt,
+        o::CONVERT_INT_TO_RAW_PTR => Instruction::ConvertIntToRawPtr,
+        o::CONVERT_RAW_PTR_TO_INT => Instruction::ConvertRawPtrToInt,
         o::NATIVE_USER_DATA => Instruction::NativeUserData,
         o::NATIVE_STATE_FREE => Instruction::NativeStateFree,
         o::RAW_PTR_NULL => Instruction::ConstRawPtrNull,

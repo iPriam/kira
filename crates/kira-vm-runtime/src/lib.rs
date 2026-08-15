@@ -24,11 +24,12 @@ pub mod debug;
 pub mod error;
 pub mod instance;
 pub mod interp;
+pub mod profile;
 pub mod value;
 
 pub use debug::{
-    KiraVmDebugFrame, KiraVmDebugState, KiraVmDebugValue, VmLldbBreakpoint, VmLldbObserver,
-    kira_vm_debug_dump, kira_vm_debug_probe,
+    KIRA_VM_DEBUG_ACTIVE, KiraVmDebugFrame, KiraVmDebugState, KiraVmDebugValue, VmLldbBreakpoint,
+    VmLldbObserver, format_debug_state, kira_vm_debug_dump, kira_vm_debug_probe,
 };
 pub use error::{NativeStateOperation, VmError};
 pub use instance::{Instance, RootId};
@@ -38,6 +39,10 @@ pub use value::{Heap, HeapStats, StrId, Value};
 #[cfg(test)]
 #[path = "compiler_tests.rs"]
 mod compiler_tests;
+
+#[cfg(test)]
+#[path = "capacity_tests.rs"]
+mod capacity_tests;
 
 #[cfg(test)]
 #[path = "foreign_tests.rs"]
@@ -69,7 +74,7 @@ mod tests {
         (host.lines().to_vec(), outcome)
     }
 
-    fn func(name: &str, params: u16, locals: u16, code: Vec<I>) -> FuncProto {
+    fn func(name: &str, params: u64, locals: u64, code: Vec<I>) -> FuncProto {
         FuncProto {
             name: name.to_owned(),
             param_count: params,

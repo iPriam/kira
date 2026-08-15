@@ -105,8 +105,8 @@ impl Codegen<'_> {
             .program
             .functions
             .get(index)
-            .ok_or(LlvmError::Unsupported("an export naming no function"))?;
-        let target = self.functions[index].ok_or(LlvmError::Unsupported(
+            .ok_or(LlvmError::internal("an export naming no function"))?;
+        let target = self.functions[index].ok_or(LlvmError::internal(
             "an export whose function has no native body",
         ))?;
         let (return_type, param_count) = (function.return_type, function.param_count);
@@ -115,7 +115,7 @@ impl Codegen<'_> {
             param_types.push(
                 function
                     .param_type(slot)
-                    .ok_or(LlvmError::Unsupported("a parameter with no type"))?,
+                    .ok_or(LlvmError::internal("a parameter with no type"))?,
             );
         }
 
@@ -210,7 +210,7 @@ impl Codegen<'_> {
             .types
             .structs()
             .lookup(name)
-            .ok_or(LlvmError::Unsupported(
+            .ok_or(LlvmError::internal(
                 "an exported class the program never declared",
             ))
     }

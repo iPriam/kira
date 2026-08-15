@@ -35,19 +35,16 @@ names its width. A Kira `String` in a signature is refused.
 written. As a **parameter**, a call passes a Kira `String` — the one implicit
 coercion — and the bytes are copied into transient NUL-terminated storage for
 the duration of the call; the caller keeps its `String`. An interior NUL byte is
-a typed trap rather than a truncated string. `CString` is illegal as a local, as
-an ordinary parameter or result, or as an extern **result**: returned-string
-ownership is unspecified and deferred.
+a typed trap rather than a truncated string. `CString` is illegal in an
+ordinary Kira local or function parameter. An extern result may be `CString`:
+the seam copies the returned `const char*` into an owned Kira `String` while the
+pointer is valid, so no C storage crosses the result boundary.
 
 As a **member of a C-layout struct** it is a pointer word, and its storage is
-never released. That is not an oversight. A descriptor is handed to C once and
-read for the rest of the run — a window title, a canvas selector — so a pointer
-valid only for the call that passed it would be read after free, which is the
-worst failure this seam can produce. Leaking is safe where freeing on a schedule
-this side guesses is not, and the cost is one allocation per distinct string a
-program hands over. A program that builds one per frame would grow without
-bound. A member left out of the literal zero-fills to `NULL`, which is a
-different value from a pointer to `""` and which C tells apart.
+never released because C may retain the descriptor after the call and the seam
+cannot know when it is safe to free it. This leaks one allocation per distinct
+string; building one per frame grows memory. A member left out of the literal
+zero-fills to `NULL`, which is different from a pointer to `""`.
 
 `RawPtr` is an opaque target-width word. Kira may store it, return it, and pass
 it back to C, but never dereferences it, does arithmetic on it, or frees it — a
@@ -179,8 +176,10 @@ taking every aggregate through a pointer. The target's own C compiler builds it
 — the managed clang for a host build, `emcc` for wasm — and applies the ABI it
 defines. Everything Kira emits speaks only pointers and scalars.
 
-A field the seam cannot carry is refused by name: any Kira heap type. A
-`CString` field does cross — see above for the storage it gets.
+A field the seam cannot carry is refused by name: an ordinary Kira heap value
+such as `String`, an array, or an enum with a payload. `CString`,
+`@FFI.Array`, and `@FFI.Callback` fields cross in their supported positions;
+see above for their storage rules.
 
 ### A struct passed by address
 
@@ -375,8 +374,9 @@ literal that descriptor can only be built in a C helper.
 
 ## Callbacks
 
-A `@FFI.Callback` declares a C function pointer, and its value is one. It
-crosses both as a struct member and on its own:
+A `@FFI.Callback` declares a C function-pointer type. Its value can be a C
+function pointer or a named top-level Kira function. It crosses both as a
+struct member and on its own:
 
 ```text
 @FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
@@ -390,9 +390,9 @@ var scale: I32 }
 function runHooks(h: Hooks, a: I32, b: I32) -> I32;
 ```
 
-A pointer C hands out can be stored and passed back. A **Kira function** can
-also fill one — `Hooks { add: combine, scale: 2 }`, where `combine` is an
-ordinary Kira function — and C then calls into Kira through it:
+A pointer C hands out can be stored and passed back. A named top-level Kira
+function fills one: `Hooks { add: combine, scale: 2 }`. C then calls into Kira
+through the generated entry:
 
 - The value is the address of a generated entry thunk, one per (function,
   signature) pair, named `kira_ffi_callback_<i>`.
@@ -403,26 +403,28 @@ ordinary Kira function — and C then calls into Kira through it:
 - The function's declared types must match the callback's, position for
   position, under the same exact-width rule the extern seam applies: a bare
   `Int` is not a callback parameter any more than it is an extern one.
-- A bare function name means this **only** where a callback is expected. Kira
-  has no function type, so it is not a value anywhere else, and a local of the
-  same name wins.
+- A bare top-level function name is accepted only where a C callback is
+  expected. Function-typed closure values are a separate
+  `@Native`/`@Runtime` bridge feature, and a local of the same name wins.
 
 Zero-fill gives a callback member `NULL`, so `Hooks {}` is the no-callback case
 and C sees it as null.
 
-A callback signature carries fixed-width scalars, `Bool`, `RawPtr`, `CString`,
-and a `@FFI.Struct { layout: c }` C passes by value, and returns one of the
-scalars or nothing. A generated binding may declare callbacks whose types the
-seam cannot carry — or has never seen defined — and declaring one is clean; the
-refusal (`KSEM245`) comes when a Kira function is handed to it. Closures and
-methods are not callbacks: nothing captures across the boundary.
+A callback signature may carry fixed-width scalars, `Bool`, `RawPtr`,
+`CString`, and a `@FFI.Struct { layout: c }` that C passes by value. Its result
+may be a scalar or nothing. Aggregate callback results remain unsupported. A
+generated binding may declare a callback shape the seam cannot carry, or has
+not seen defined; handing a Kira function to that shape is refused with
+`KSEM245`.
+
+The closure bridge currently covers scalar `let` captures. It does not make a
+closure or method a `@FFI.Callback` value, and aggregate captures remain
+outside this path.
 
 ### A struct C passes by value
 
-`WGPURequestAdapterCallback` takes a `WGPUStringView` by value, and
-`wgpuInstanceRequestAdapter` is Dawn's only route to an adapter — so this is not
-a shape a binding can route around. It reaches Kira **as a pointer to the
-struct**, the way a `const sapp_event*` argument already does:
+A C callback may receive a C-layout struct by value. Kira receives it **as a
+pointer to the struct**, the way a `const sapp_event*` argument does:
 
 ```text
 @FFI.Struct { layout: c; }
@@ -445,9 +447,8 @@ calls the thunk with `&param`. The pointer is good for the call, which is the
 lifetime a callback argument has, so members are read through it rather than
 kept.
 
-A callback **result** stays scalar. A parameter is storage C already owns and
-its address is the whole answer; a result would have to be C-layout bytes built
-out of a Kira value, which this seam does not carry back.
+A callback **result** stays scalar. A parameter is storage C already owns, but a
+result would require the seam to build and return C-layout bytes.
 
 ## Wasm
 
@@ -529,6 +530,10 @@ clang and writes the scalar the target actually uses, so `VkFlags` arrives as
 
 ## Deferred to later milestones
 
-Kira enums and heap types across the seam, an aggregate *result* in a callback
-signature, non-C ABIs, variadics, generic externs, and dynamic-only C libraries.
-Each is refused today with a typed diagnostic rather than mislowered.
+Payload-carrying Kira enums as direct C values, direct `@FFI.Array` values in
+parameter or result positions, aggregate callback results, non-C ABIs,
+variadics, generic externs, and dynamic-only C libraries. Payload-less enums
+cross as C enum integers. `@FFI.Array` values cross as C-layout members or
+pointer-backed storage, and `@FFI.Callback` values cross as callback members or
+parameters. Each deferred shape is refused with a typed diagnostic rather than
+mislowered.

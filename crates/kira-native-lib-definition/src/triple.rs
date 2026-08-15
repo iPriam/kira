@@ -79,6 +79,16 @@ impl TargetTriple {
     pub fn resolves_symbols_at_load(&self) -> bool {
         self.os != "windows"
     }
+
+    /// Whether a foreign call on this target reaches its C through a library
+    /// the process opens at run time.
+    ///
+    /// A wasm module has no loader and no second image: every declared archive
+    /// is linked into the module itself, so nothing there is reached the way a
+    /// host build reaches a shared library.
+    pub fn opens_libraries_at_run_time(&self) -> bool {
+        self.os != "emscripten"
+    }
 }
 
 impl fmt::Display for TargetTriple {

@@ -33,6 +33,7 @@ thiserror.workspace = true
 # embeds a Kira library and is itself compiled to wasm needs no foreign host).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 kira-dynamic-ffi.workspace = true
+kira-libffi.workspace = true
 
 [lints]
 workspace = true

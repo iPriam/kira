@@ -236,8 +236,14 @@ Test CfxSDivModIdentity {
     expect { let e: Result<Int, TestFailure> = .Ok(12345); return e }
 }
 
-// CfxSDivModIdentityNeg removed: identity breaks when / and % have mismatched
-// sign conventions for negative operands (Kira bug documented in report).
+Test CfxSDivModIdentityNeg {
+    test {
+        let a = 0 - 17
+        let b = 5
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 17); return e }
+}
 
 Test CfxSModPositive {
     test { return 17 % 5 }
@@ -249,8 +255,10 @@ Test CfxSModExact {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-// CfxSModNegNum removed: Kira's modulo for negative left operand does not match
-// truncated-toward-zero convention (bug: % sign may differ from /). Documented below.
+Test CfxSModNegNum {
+    test { return (0 - 17) % 5 }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+}
 
 Test CfxSModLargeBase {
     test { return 3 % 1000 }

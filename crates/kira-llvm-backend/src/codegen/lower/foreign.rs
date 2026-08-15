@@ -1,13 +1,10 @@
-//! Foreign call lowering: marshalling a Kira call site to a generated adapter.
+//! Foreign call lowering: marshalling a Kira call site to libffi.
 //!
-//! The mirror of the VM's `CALL_FOREIGN` interpreter path. Arguments are packed
-//! into a stack array of `BridgeValue`s tagged for the import's exact-width
-//! signature, the generated adapter is called directly, and the checked result
-//! is read back as a Kira value. A non-success status is a runtime trap, exactly
-//! as the VM surfaces a `ForeignCallError` — there is no value to hand back.
+//! Arguments are copied into exact C storage, a shared recursive descriptor
+//! selects libffi's CIF, and the checked result is read back as a Kira value.
 
 use kira_ir::IrExprId;
-use kira_runtime_abi::{BridgeValueTag, ForeignPointerWidth, ForeignTypeSpec};
+use kira_runtime_abi::{ForeignAdapterStatus, ForeignPointerWidth, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::Type;
 use llvm_sys::LLVMIntPredicate;
 use llvm_sys::core::*;
@@ -17,12 +14,7 @@ use super::FunctionLowering;
 use crate::LlvmError;
 
 impl FunctionLowering<'_, '_> {
-    /// Lowers a call to foreign import `index`.
-    ///
-    /// `result_ty` is the Kira type of the call expression, which an aggregate
-    /// result needs and a scalar one ignores: rebuilding a struct out of C bytes
-    /// takes the struct's own LLVM type, and the signature only names the
-    /// aggregate's table row.
+    /// Lowers a call to foreign import `index` through the bundled libffi path.
     pub(super) fn lower_foreign_call(
         &mut self,
         index: u32,
@@ -32,15 +24,30 @@ impl FunctionLowering<'_, '_> {
         let idx = index as usize;
         let import = self.codegen.program.foreign_imports[idx].import.clone();
         let signature = import.signature();
-        let params: Vec<ForeignTypeSpec> = signature.parameters().to_vec();
+        let params = signature.parameters().to_vec();
         let result_spec = signature.result();
-        let adapter = *self
-            .codegen
-            .foreign_adapters
-            .get(idx)
-            .ok_or(LlvmError::Unsupported(
-                "a call to an undeclared foreign adapter",
-            ))?;
+
+        if self.codegen.unavailable.contains(&idx) {
+            let library = self.codegen.string_constant(import.library());
+            let symbol = self.codegen.string_constant(import.symbol());
+            self.call(
+                self.codegen.runtime.trap_foreign_unavailable,
+                &mut [library, symbol],
+                c"",
+            );
+            // What follows this call site still lowers somewhere, and a
+            // terminated block takes no more instructions.
+            let function = self.current_function();
+            let unreached = self.append_block(function, c"foreign.unavailable");
+            // SAFETY: the trap never returns; `unreached` belongs to this
+            // function and no value out of it is observed.
+            let undef = unsafe {
+                LLVMBuildUnreachable(self.codegen.builder);
+                LLVMGetUndef(self.codegen.llvm_type(result_ty)?)
+            };
+            self.position_at(unreached);
+            return Ok(undef);
+        }
 
         // Arguments evaluate left to right, as the VM pushes them.
         let mut values = Vec::with_capacity(args.len());
@@ -51,136 +58,329 @@ impl FunctionLowering<'_, '_> {
 
         let types = self.codegen.types;
         let builder = self.codegen.builder;
-
-        // An aggregate argument's C-layout bytes live in a buffer this frame
-        // owns for the length of the call, and the bridge slot carries a pointer
-        // to it — the same contract the VM host follows, so both sides hand the
-        // adapter the identical thing.
-        let mut aggregate_buffers = Vec::new();
-        for ((value, ty), spec) in values.iter().copied().zip(params.iter().copied()) {
-            let Some(id) = spec.aggregate() else {
-                continue;
-            };
-            aggregate_buffers.push(self.write_aggregate_buffer(id, value, ty)?);
-        }
-
-        // The stack this call's buffers take is given back the moment it
-        // returns. Reserving without restoring leaks a frame's worth per
-        // iteration when the call sits in a loop; hoisting to the entry block
-        // instead would reserve *every* call site's buffers on entry, which on
-        // a large dispatch function is a quarter-megabyte frame.
-        //
-        // A scalar-only signature was given fixed-size storage and no
-        // save/restore at one point, on the theory that a dynamic alloca is
-        // what stops LLVM inlining the adapter and folding the marshalling
-        // away. Measured over 9.6 million scalar foreign calls it made no
-        // difference at all — 3.1 ns a call either way — so the optimizer was
-        // already doing it, and the special case was removed again.
         let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"stack.save");
-        // SAFETY: every type and value belongs to this live module and the
-        // builder is on a live block; `argv` is sized to hold exactly the
-        // arguments written into it, and `out` addresses one bridge value.
-        let (out, result_buffer, status) = unsafe {
-            let count = LLVMConstInt(types.i64, values.len() as u64, 0);
-            let argv =
-                LLVMBuildArrayAlloca(builder, types.bridge_value, count, c"foreign.args".as_ptr());
-            let mut buffers = aggregate_buffers.into_iter();
-            for (slot, ((value, ty), spec)) in values
-                .iter()
-                .copied()
-                .zip(params.iter().copied())
-                .enumerate()
-            {
-                let element = self.codegen.bridge_element_ptr(argv, slot as u64);
-                match spec {
-                    ForeignTypeSpec::Aggregate(_) => {
-                        let buffer = buffers.next().ok_or(LlvmError::Unsupported(
-                            "an aggregate argument with no marshalling buffer",
-                        ))?;
-                        self.codegen.write_bridge_pointer(
-                            element,
-                            buffer,
-                            BridgeValueTag::AGGREGATE,
-                        );
-                    }
-                    ForeignTypeSpec::Scalar(ft) => {
-                        self.codegen.write_foreign_arg(element, value, ty, ft)?;
-                    }
+        let mut argument_pointers = Vec::with_capacity(values.len());
+        let mut cstring_pointers = Vec::new();
+
+        for ((value, ty), spec) in values.iter().copied().zip(params.iter().copied()) {
+            let pointer = match spec {
+                ForeignTypeSpec::Aggregate(id) => self.write_aggregate_buffer(id, value, ty)?,
+                ForeignTypeSpec::Scalar(ForeignType::Void) => {
+                    return Err(LlvmError::internal(
+                        "a void parameter reached the native libffi path",
+                    ));
                 }
-            }
-            let out = LLVMBuildAlloca(builder, types.bridge_value, c"foreign.out".as_ptr());
-            // The caller presents the result buffer: the adapter writes into it
-            // and never allocates, so nothing crosses ownership.
-            let result_buffer = match result_spec.aggregate() {
-                Some(id) => {
-                    let buffer = self.aggregate_alloca(id)?;
-                    self.codegen
-                        .write_bridge_pointer(out, buffer, BridgeValueTag::AGGREGATE);
-                    Some((id, buffer))
+                ForeignTypeSpec::Scalar(ForeignType::CString) => {
+                    let c_string = self.call(
+                        self.codegen.runtime.cstring_new,
+                        &mut [value],
+                        c"ffi.cstring.new",
+                    );
+                    // SAFETY: the builder is positioned in this function and
+                    // both operands are values of this module's pointer type.
+                    let is_null = unsafe {
+                        LLVMBuildICmp(
+                            builder,
+                            LLVMIntPredicate::LLVMIntEQ,
+                            c_string,
+                            LLVMConstPointerNull(types.ptr),
+                            c"ffi.cstring.null".as_ptr(),
+                        )
+                    };
+                    let function = self.current_function();
+                    let bad = self.append_block(function, c"ffi.cstring.bad");
+                    let good = self.append_block(function, c"ffi.cstring.good");
+                    // SAFETY: both blocks belong to the active function and the
+                    // current block is unterminated.
+                    unsafe { LLVMBuildCondBr(builder, is_null, bad, good) };
+                    self.position_at(bad);
+                    // SAFETY: the integer type belongs to this live module.
+                    let status = unsafe {
+                        LLVMConstInt(
+                            types.i32,
+                            u64::from(ForeignAdapterStatus::INTERIOR_NUL.0),
+                            0,
+                        )
+                    };
+                    self.call(self.codegen.runtime.trap_foreign, &mut [status], c"");
+                    // SAFETY: the foreign trap never returns.
+                    unsafe { LLVMBuildUnreachable(builder) };
+                    self.position_at(good);
+                    cstring_pointers.push(c_string);
+                    // SAFETY: the builder is positioned in this function and the
+                    // pointer type belongs to this live module.
+                    let storage =
+                        unsafe { LLVMBuildAlloca(builder, types.ptr, c"ffi.cstring.arg".as_ptr()) };
+                    let layout =
+                        kira_runtime_abi::scalar_layout(ForeignType::CString, self.pointer_width());
+                    // Libffi receives an array of addresses to argument
+                    // values, not the argument values themselves. Keep the
+                    // transient C pointer in pointer-sized storage so the
+                    // foreign call reads the pointer rather than the first
+                    // bytes of the pointed-to string.
+                    // SAFETY: `storage` is the alloca above, sized and aligned
+                    // for one C pointer, which is what this stores into it.
+                    unsafe {
+                        LLVMSetAlignment(storage, layout.align);
+                        let store = LLVMBuildStore(builder, c_string, storage);
+                        LLVMSetAlignment(store, layout.align);
+                    }
+                    storage
                 }
-                None => None,
+                ForeignTypeSpec::Scalar(ft) => {
+                    let layout = kira_runtime_abi::scalar_layout(ft, self.pointer_width());
+                    // SAFETY: the builder is positioned in this function and the
+                    // C type belongs to this live module.
+                    let storage = unsafe {
+                        LLVMBuildAlloca(
+                            builder,
+                            self.codegen.foreign_c_type(ft),
+                            c"ffi.arg".as_ptr(),
+                        )
+                    };
+                    // SAFETY: the alloca and store use the scalar's shared C
+                    // alignment, so libffi sees correctly aligned storage.
+                    unsafe { LLVMSetAlignment(storage, layout.align) };
+                    let converted = self.codegen.kira_value_to_c(value, ft)?;
+                    // SAFETY: `storage` is the alloca above, whose type is this
+                    // scalar's own C type.
+                    let store = unsafe { LLVMBuildStore(builder, converted, storage) };
+                    // SAFETY: `store` is that instruction, aligned as its type.
+                    unsafe { LLVMSetAlignment(store, layout.align) };
+                    storage
+                }
             };
-            let mut call_args = [argv, LLVMConstInt(types.i32, values.len() as u64, 0), out];
-            let status = self
-                .codegen
-                .call_runtime(adapter, &mut call_args, c"foreign.status");
-            (out, result_buffer, status)
+            argument_pointers.push(pointer);
+        }
+
+        let argument_array = if argument_pointers.is_empty() {
+            // SAFETY: the pointer type belongs to this live module context.
+            unsafe { LLVMConstPointerNull(types.ptr) }
+        } else {
+            // SAFETY: the builder is positioned in this function and both the
+            // pointer and integer types belong to this live module.
+            let array = unsafe {
+                LLVMBuildArrayAlloca(
+                    builder,
+                    types.ptr,
+                    LLVMConstInt(types.i64, argument_pointers.len() as u64, 0),
+                    c"ffi.args".as_ptr(),
+                )
+            };
+            for (index, pointer) in argument_pointers.iter().copied().enumerate() {
+                // SAFETY: `array` is the alloca above and the index is within
+                // the length it was allocated with.
+                let element = unsafe {
+                    let mut offset = [LLVMConstInt(types.i64, index as u64, 0)];
+                    LLVMBuildInBoundsGEP2(
+                        builder,
+                        types.ptr,
+                        array,
+                        offset.as_mut_ptr(),
+                        1,
+                        c"ffi.arg.ptr".as_ptr(),
+                    )
+                };
+                // SAFETY: `element` is one slot in the argument pointer array.
+                unsafe { LLVMBuildStore(builder, pointer, element) };
+            }
+            array
         };
 
-        // A call owns the values its argument expressions produced. The
-        // adapter only borrows them while it marshals and invokes C: even a
-        // `String -> CString` crossing copies the bytes into separate,
-        // transient C storage. Reclaim the Kira values as soon as the adapter
-        // returns, exactly as the VM drops the operand-stack arguments after
-        // `call_foreign`. Omitting this leaked every heap-owning argument once
-        // per call -- most visibly one string handle for every Metal selector
-        // literal on every frame.
-        for (value, ty) in values {
-            self.drop_value(value, ty)?;
-        }
-
-        // A non-success status is a runtime trap (an interior NUL, say): there is
-        // no value to hand back, so native code reports it and exits, mirroring
-        // the VM surfacing a `ForeignCallError`.
-        let function = self.current_function();
-        let ok = self.append_block(function, c"foreign.ok");
-        let fail = self.append_block(function, c"foreign.fail");
-        // SAFETY: the builder is on the call's block; `status` is the adapter's
-        // `i32` return.
-        unsafe {
-            let zero = LLVMConstInt(types.i32, 0, 0);
-            let failed = LLVMBuildICmp(
-                builder,
-                LLVMIntPredicate::LLVMIntNE,
-                status,
-                zero,
-                c"foreign.failed".as_ptr(),
-            );
-            LLVMBuildCondBr(builder, failed, fail, ok);
-        }
-        self.position_at(fail);
-        self.call(self.codegen.runtime.trap_foreign, &mut [status], c"");
-        // SAFETY: `kira_rt_trap_foreign` never returns; the block is terminated.
-        unsafe { LLVMBuildUnreachable(builder) };
-        self.position_at(ok);
-
-        // Read the result *before* giving the stack back: the buffers holding
-        // it are the ones about to be released.
-        let value = match result_buffer {
-            Some((id, buffer)) => self.read_aggregate_buffer(id, buffer, result_ty)?,
-            None => {
-                let scalar = crate::codegen::foreign_scalar::scalar_of(result_spec)?;
-                self.codegen.read_foreign_result(out, scalar)?
+        let result_storage = match result_spec {
+            ForeignTypeSpec::Scalar(ForeignType::Void) => {
+                // SAFETY: the pointer type belongs to this live module context.
+                unsafe { LLVMConstPointerNull(types.ptr) }
+            }
+            ForeignTypeSpec::Aggregate(id) => self.aggregate_alloca(id)?,
+            ForeignTypeSpec::Scalar(ft) => {
+                let layout = kira_runtime_abi::scalar_layout(ft, self.pointer_width());
+                // SAFETY: the builder is positioned in this function and the C
+                // type belongs to this live module.
+                let storage = unsafe {
+                    LLVMBuildAlloca(
+                        builder,
+                        self.codegen.foreign_c_type(ft),
+                        c"ffi.result".as_ptr(),
+                    )
+                };
+                // SAFETY: this alloca is the result storage for the same scalar
+                // layout the descriptor hands to libffi.
+                unsafe { LLVMSetAlignment(storage, layout.align) };
+                storage
             }
         };
+
+        if self.codegen.calls_foreign_directly() {
+            self.emit_direct_foreign_call(
+                import.symbol(),
+                &params,
+                result_spec,
+                &argument_pointers,
+                result_storage,
+            )?;
+            // The call owns the values its argument expressions produced.
+            for (value, ty) in values {
+                self.drop_value(value, ty)?;
+            }
+        } else {
+            let function = self.codegen.declare_foreign_address(import.symbol());
+            let descriptor = self.codegen.foreign_ffi_descriptor(idx)?;
+            let mut call_args = [function, descriptor, argument_array, result_storage];
+            let status = self.call(
+                self.codegen.runtime.ffi_call,
+                &mut call_args,
+                c"foreign.status",
+            );
+
+            // The call owns the values its argument expressions produced. The C
+            // storage is separate, so Kira values can be released before lifting.
+            for (value, ty) in values {
+                self.drop_value(value, ty)?;
+            }
+
+            let function = self.current_function();
+            let ok = self.append_block(function, c"foreign.ok");
+            let fail = self.append_block(function, c"foreign.fail");
+            // SAFETY: the builder is on the call's block and `status` is the
+            // helper's i32 return value.
+            unsafe {
+                let failed = LLVMBuildICmp(
+                    builder,
+                    LLVMIntPredicate::LLVMIntNE,
+                    status,
+                    LLVMConstInt(types.i32, 0, 0),
+                    c"foreign.failed".as_ptr(),
+                );
+                LLVMBuildCondBr(builder, failed, fail, ok);
+            }
+            self.position_at(fail);
+            self.call(self.codegen.runtime.trap_foreign, &mut [status], c"");
+            // SAFETY: `kira_rt_trap_foreign` never returns.
+            unsafe { LLVMBuildUnreachable(builder) };
+            self.position_at(ok);
+        }
+
+        // Lift before freeing transient C strings: a C function may return a
+        // pointer into one of its input strings.
+        let value = match result_spec {
+            ForeignTypeSpec::Aggregate(id) => {
+                self.read_aggregate_buffer(id, result_storage, result_ty)?
+            }
+            ForeignTypeSpec::Scalar(ft) => {
+                self.codegen.read_raw_foreign_result(result_storage, ft)?
+            }
+        };
+        for pointer in cstring_pointers {
+            self.call(
+                self.codegen.runtime.cstring_free,
+                &mut [pointer],
+                c"ffi.cstring.free",
+            );
+        }
         self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
         Ok(value)
     }
 
-    /// The layout width the host this build targets uses.
+    /// Calls the declared symbol itself, for a target with no run-time loader.
     ///
-    /// A native build runs on the machine it was built for, so the pointer width
-    /// the shim was compiled with and the width used here are the same one.
+    /// The C is linked into the module, so the address is a real function and
+    /// its ABI is the one the target's own compiler applied to the archive. The
+    /// wasm rules are the whole of it: a struct crosses behind a pointer, and a
+    /// struct with one scalar member crosses as that member.
+    fn emit_direct_foreign_call(
+        &mut self,
+        symbol: &str,
+        params: &[ForeignTypeSpec],
+        result_spec: ForeignTypeSpec,
+        argument_pointers: &[LLVMValueRef],
+        result_storage: LLVMValueRef,
+    ) -> Result<(), LlvmError> {
+        let builder = self.codegen.builder;
+        let mut call_types = Vec::with_capacity(params.len() + 1);
+        let mut call_args = Vec::with_capacity(params.len() + 1);
+        let indirect_result = match result_spec {
+            ForeignTypeSpec::Aggregate(id) => self.codegen.single_scalar_member(id)?.is_none(),
+            ForeignTypeSpec::Scalar(_) => false,
+        };
+        if indirect_result {
+            call_types.push(self.codegen.types.ptr);
+            call_args.push(result_storage);
+        }
+        for (pointer, spec) in argument_pointers
+            .iter()
+            .copied()
+            .zip(params.iter().copied())
+        {
+            let crossing = match spec {
+                ForeignTypeSpec::Aggregate(id) => self.codegen.single_scalar_member(id)?,
+                ForeignTypeSpec::Scalar(ty) => Some(ty),
+            };
+            match crossing {
+                None => {
+                    call_types.push(self.codegen.types.ptr);
+                    call_args.push(pointer);
+                }
+                Some(ty) => {
+                    let c_type = self.codegen.foreign_c_type(ty);
+                    // SAFETY: the storage was written with this argument's own
+                    // C layout, which is what is loaded back out of it.
+                    let value =
+                        unsafe { LLVMBuildLoad2(builder, c_type, pointer, c"ffi.direct".as_ptr()) };
+                    call_types.push(c_type);
+                    call_args.push(value);
+                }
+            }
+        }
+        let return_type = match (indirect_result, result_spec) {
+            (true, _) | (_, ForeignTypeSpec::Scalar(ForeignType::Void)) => self.codegen.types.void,
+            (false, ForeignTypeSpec::Aggregate(id)) => {
+                let ty = self
+                    .codegen
+                    .single_scalar_member(id)?
+                    .ok_or(LlvmError::internal("a direct aggregate with no scalar"))?;
+                self.codegen.foreign_c_type(ty)
+            }
+            (false, ForeignTypeSpec::Scalar(ty)) => self.codegen.foreign_c_type(ty),
+        };
+        // SAFETY: every type belongs to this module's context and the argument
+        // arrays outlive the calls below.
+        let produced = unsafe {
+            let function_type = LLVMFunctionType(
+                return_type,
+                call_types.as_mut_ptr(),
+                call_types.len() as u32,
+                0,
+            );
+            let name = crate::codegen::ffi::c_string(symbol);
+            let existing = LLVMGetNamedFunction(self.codegen.module, name.as_ptr());
+            let callee = if existing.is_null() {
+                LLVMAddFunction(self.codegen.module, name.as_ptr(), function_type)
+            } else {
+                existing
+            };
+            LLVMBuildCall2(
+                builder,
+                function_type,
+                callee,
+                call_args.as_mut_ptr(),
+                call_args.len() as u32,
+                if return_type == self.codegen.types.void {
+                    c"".as_ptr()
+                } else {
+                    c"ffi.direct.result".as_ptr()
+                },
+            )
+        };
+        if !indirect_result && return_type != self.codegen.types.void {
+            // SAFETY: `result_storage` is the C-layout storage this result is
+            // read back out of, and `produced` has the result's own C type.
+            unsafe { LLVMBuildStore(builder, produced, result_storage) };
+        }
+        Ok(())
+    }
+
+    /// The layout width the host this build targets uses.
     pub(super) fn pointer_width(&self) -> ForeignPointerWidth {
         self.codegen.pointer_width
     }
@@ -195,7 +395,7 @@ impl FunctionLowering<'_, '_> {
             .program
             .foreign_aggregates
             .layout_of(id, self.pointer_width())
-            .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?;
+            .map_err(|_| LlvmError::internal("an aggregate with no computable C layout"))?;
         let types = self.codegen.types;
         let builder = self.codegen.builder;
         // SAFETY: the builder is on a live block and `types.i8` belongs to this
@@ -203,8 +403,6 @@ impl FunctionLowering<'_, '_> {
         Ok(unsafe {
             let count = LLVMConstInt(types.i64, u64::from(layout.size), 0);
             let buffer = LLVMBuildArrayAlloca(builder, types.i8, count, c"foreign.agg".as_ptr());
-            // C alignment, not the `i8` array's: the shim dereferences this as
-            // the struct type, and an under-aligned load is undefined.
             LLVMSetAlignment(buffer, layout.align);
             buffer
         })

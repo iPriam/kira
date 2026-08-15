@@ -70,9 +70,9 @@ impl Vm<'_> {
     }
 
     /// The tag of the enum a deferred read landed on, consuming the read.
-    pub(super) fn snapshot_enum_tag(&mut self, id: SnapshotId) -> Result<u32, VmError> {
+    pub(super) fn snapshot_enum_tag(&mut self, id: SnapshotId) -> Result<u64, VmError> {
         let tag = match self.heap.snapshot_node(id) {
-            Some(NativeStateValue::Enum { tag, .. }) => Some(*tag),
+            Some(NativeStateValue::Enum { tag, .. }) => Some(u64::from(*tag)),
             _ => None,
         };
         self.heap.free_snapshot(id);
@@ -97,13 +97,13 @@ impl Vm<'_> {
 
     pub(super) fn native_state_new(&mut self, type_word: u64) -> Result<(), VmError> {
         let value = self.pop()?;
+        let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
         let stored = self.heap.into_native_state(value).map_err(|kind| {
             VmError::NativeStateValueMismatch {
                 operation: NativeStateOperation::Store,
                 kind,
             }
         })?;
-        let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
         let token = self
             .host
             .native_state_create(type_id, stored)

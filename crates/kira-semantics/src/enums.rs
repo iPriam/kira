@@ -156,12 +156,107 @@ impl<'a> Analyzer<'a> {
         (EnumDef { name, variants }, defaults)
     }
 
+    /// Reports every enum that has no finite value, and breaks the one it
+    /// reports so that later passes can build one.
+    ///
+    /// An enum whose every variant carries a payload leading back into the enum
+    /// has no value at all: writing one would need a value of itself first.
+    /// `KSEM052` catches the struct-only spelling of that, and the escape it
+    /// recommends is an enum — so this is where the escape's own failure is
+    /// caught, at the declaration, rather than in whichever later pass first
+    /// tries to build a value of the type.
+    ///
+    /// Runs after every body, because a body is what mints a generic
+    /// instantiation, and before the closure desugar, which is the first pass to
+    /// ask for a value of a type nobody wrote.
+    ///
+    /// A reported enum keeps its variants and loses their payloads, exactly as a
+    /// broken struct field becomes `Error`: the program is already rejected, and
+    /// what every later walk needs is a shape it can finish.
+    pub(crate) fn check_enum_terminates(&mut self) {
+        let names: Vec<String> = self
+            .program
+            .types
+            .enums()
+            .defs()
+            .iter()
+            .map(|def| def.name.clone())
+            .collect();
+        for name in names {
+            let Some(id) = self.program.types.enums().lookup(&name) else {
+                continue;
+            };
+            // An enum with no variants at all is uninhabited by declaration
+            // rather than by mistake, and a construct family that no declaration
+            // backs yet is exactly that shape. Nothing can write a value of one,
+            // so there is nothing to warn the author about.
+            if self
+                .program
+                .types
+                .enums()
+                .get(id)
+                .is_none_or(|def| def.variants.is_empty())
+            {
+                continue;
+            }
+            if self.has_finite_value(Type::Enum(id)) {
+                continue;
+            }
+            let Some(broken) = self.program.types.enums().get(id).map(|def| {
+                def.variants
+                    .iter()
+                    .map(|variant| VariantDef {
+                        name: variant.name.clone(),
+                        payload: variant.payload.map(|_| Type::Error),
+                    })
+                    .collect()
+            }) else {
+                continue;
+            };
+            self.program.types.enums_mut().set_variants(id, broken);
+            let span = match self.enum_declaration_site(&name) {
+                Some((source, span)) => {
+                    self.source = source;
+                    span
+                }
+                None => Span::new(0, 0),
+            };
+            self.emit(
+                span,
+                "KSEM272",
+                format!(
+                    "enum `{name}` has no variant with a finite value: every variant carries a \
+                     payload that leads back into `{name}`, so no value of it can ever be built. \
+                     Give it a variant with no payload, or hold the recursive payload behind an \
+                     array (`[{name}]`)."
+                ),
+            );
+        }
+    }
+
+    /// The file and span of the `enum` declaration written under `name`.
+    ///
+    /// A generic instantiation is named for its template and its arguments
+    /// (`Result<Int, AppError>`), and the only line there is to point at is the
+    /// template's, so the lookup is by the name before the arguments.
+    fn enum_declaration_site(&self, name: &str) -> Option<(SourceId, Span)> {
+        let written = name.split_once('<').map_or(name, |(base, _)| base);
+        self.tree
+            .items_with_source()
+            .find_map(|(source, item)| match item {
+                Item::Enum(declaration) if self.interner.resolve(declaration.name) == written => {
+                    Some((source, declaration.name_span))
+                }
+                _ => None,
+            })
+    }
+
     /// Restricts an enum payload to a type the runtime box can carry.
     ///
-    /// The box holds one type-erased value slot. A scalar fits directly; a
-    /// `String` or nested enum is an owned handle; a struct or an array uses the
-    /// erased aggregate box, whose compiler-generated clone/free leaves carry
-    /// the element callbacks the payload word cannot.
+    /// The box holds one type-erased value slot. A scalar or pointer word fits
+    /// directly; a `String`, nested enum, or capture cell is an owned handle; a
+    /// struct or an array uses the erased aggregate box, whose compiler-generated
+    /// clone/free leaves carry the element callbacks the payload word cannot.
     ///
     /// A nested enum is admitted because `Result`-shaped values are built from
     /// one: `Error` carries the failure enum, which is what
@@ -173,15 +268,16 @@ impl<'a> Analyzer<'a> {
     ///
     /// What is left out is not short of room in the box — it is a type no
     /// declaration may name a payload of at all: `Void`, a `CString` view the
-    /// payload would not own, a `RawPtr` the box could never reclaim, an
-    /// in-flight `Task`, and a `NativeState` handle whose lifetime is the
-    /// host's.
+    /// payload would not own, an in-flight `Task`, and a `NativeState` handle
+    /// whose lifetime is the host's.
     fn check_payload_type(&mut self, ty: Type, span: Span) -> Type {
         match ty {
             Type::Int(_)
             | Type::Float(_)
             | Type::Bool
             | Type::String
+            | Type::RawPtr
+            | Type::ForeignPtr(_)
             | Type::Struct(_)
             | Type::Enum(_)
             // A struct and an array both travel as an aggregate: the box owns a
@@ -194,6 +290,10 @@ impl<'a> Analyzer<'a> {
             // nothing of its own: `EnumPayloadKind::ENUM` on native reclaims it,
             // and the VM's `Value` was never told the difference.
             | Type::Any
+            // A cell is a retained shared handle. The enum owns one share and
+            // releases it with the rest of its payload, while the captured
+            // binding and any other closure keep their own shares.
+            | Type::Cell(_)
             | Type::Error => ty,
             _ => {
                 self.emit(
@@ -201,7 +301,8 @@ impl<'a> Analyzer<'a> {
                     "KSEM118",
                     format!(
                         "an enum payload may not be of type `{}`; a payload may be \
-                         `Int`, `Float`, `Bool`, `String`, an array, a struct, or another enum",
+                         `Int`, `Float`, `Bool`, `String`, `Any`, a pointer, an array, a \
+                         struct, or another enum",
                         self.type_name(ty)
                     ),
                 );

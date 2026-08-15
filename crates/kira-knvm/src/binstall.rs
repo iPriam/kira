@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kira_toolchain::{
-    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, executable_name,
-    static_archive_name,
+    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, bundled_libffi_name,
+    executable_name, static_archive_name,
 };
 
 use crate::install::{
@@ -135,12 +135,13 @@ pub enum BinstallError {
 /// depends on it at all, so only naming it builds it, and `kira live` starts it
 /// beside the compiler — a toolchain without it builds a bundle and then has
 /// nowhere to run it.
-const BUILD_PACKAGES: [&str; 5] = [
+const BUILD_PACKAGES: [&str; 6] = [
     "kira-cli",
     "kira-lsp",
     "kira-desktop-runner",
     "kira-native-bridge",
     "kira-compiler-bridge",
+    "kira-libffi",
 ];
 
 /// Builds the enclosing checkout and installs it as the selected dev toolchain.
@@ -215,6 +216,11 @@ pub fn binstall(
     // that one rather than the host toolchain.
     let host_archive = built_dir.join(static_archive_name("kira_native_bridge"));
     let compiler_archive = built_dir.join(static_archive_name("kira_compiler_bridge"));
+    // Every native artifact links the libffi helper and loads the libffi binary
+    // beside it, so a toolchain that shipped neither could build no program
+    // with a foreign import.
+    let libffi_archive = built_dir.join(static_archive_name("kira_libffi"));
+    let libffi_binary = built_dir.join(bundled_libffi_name());
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
         .join(profile.target_subdirectory())
@@ -225,6 +231,8 @@ pub fn binstall(
         &desktop_runner,
         &host_archive,
         &compiler_archive,
+        &libffi_archive,
+        &libffi_binary,
         &wasm_archive,
     ] {
         if !artifact.is_file() {
@@ -257,6 +265,22 @@ pub fn binstall(
     let staged_runner = bin.join(executable_name(DESKTOP_RUNNER_BINARY));
     std::fs::copy(&desktop_runner, &staged_runner)
         .map_err(|error| InstallError::io("copy the desktop runner to", &staged_runner, error))?;
+    // The debug information beside each executable, where a profiler and a
+    // debugger look for it.
+    //
+    // Without it a sampled profile of a VM run resolves only the *exported*
+    // symbols of the compiler — a handful of `kira_rt_*` and the debugger's own
+    // probe — and attributes the whole interpreter to whichever of those
+    // happens to precede it in the image. That is not a degraded profile, it is
+    // a wrong one: it named `kira_vm_debug_probe` as half of an editor frame in
+    // a run that never entered the debugger.
+    for (built, staged) in [
+        (&compiler, &staged_compiler),
+        (&language_server, &staged_server),
+        (&desktop_runner, &staged_runner),
+    ] {
+        copy_debug_info(built, staged)?;
+    }
     // The runtime archives ride beside the compiler, where its archive
     // resolution looks: the host's under its cargo name, the Web's under a
     // target-suffixed one so neither can be linked in the other's place.
@@ -270,6 +294,18 @@ pub fn binstall(
             &staged_compiler,
             error,
         )
+    })?;
+    let staged_libffi_archive = bin.join(static_archive_name("kira_libffi"));
+    std::fs::copy(&libffi_archive, &staged_libffi_archive).map_err(|error| {
+        InstallError::io(
+            "copy the libffi helper archive to",
+            &staged_libffi_archive,
+            error,
+        )
+    })?;
+    let staged_libffi_binary = bin.join(bundled_libffi_name());
+    std::fs::copy(&libffi_binary, &staged_libffi_binary).map_err(|error| {
+        InstallError::io("copy the libffi binary to", &staged_libffi_binary, error)
     })?;
     let staged_wasm = bin.join("libkira_native_bridge-wasm32-emscripten.a");
     std::fs::copy(&wasm_archive, &staged_wasm).map_err(|error| {
@@ -372,6 +408,24 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), InstallError> {
                 .map_err(|error| InstallError::io("copy into", &target, error))?;
         }
     }
+    Ok(())
+}
+
+/// Copies the separate debug-information file an executable has, if it has one.
+///
+/// Windows keeps it beside the image as `<stem>.pdb` and a profiler finds it by
+/// that name, so an install that leaves it behind installs a binary nothing can
+/// attribute a sample inside. Every other host this ships to keeps its debug
+/// information *in* the binary, so there is nothing beside it to carry and the
+/// absent file is the normal case rather than a failure.
+fn copy_debug_info(built: &Path, staged: &Path) -> Result<(), InstallError> {
+    let source = built.with_extension("pdb");
+    if !source.is_file() {
+        return Ok(());
+    }
+    let destination = staged.with_extension("pdb");
+    std::fs::copy(&source, &destination)
+        .map_err(|error| InstallError::io("copy the debug information to", &destination, error))?;
     Ok(())
 }
 

@@ -3,6 +3,8 @@
 //! Hand-rolled like the rest of the CLI. Backend and device selection are both
 //! structured enums, resolved once here, so no handler branches on a string.
 
+use std::time::Duration;
+
 use kira_backend_api::BackendMode;
 use kira_backend_api::WasmDevice;
 
@@ -63,6 +65,15 @@ pub struct CompileOptions {
     /// Arguments passed to the Kira program after the command-line `--`
     /// separator. Empty when the invocation did not provide any.
     pub program_arguments: Vec<String>,
+    /// How long the program may run before `run` ends it, if the invocation
+    /// bounded it.
+    ///
+    /// A program that owns a window runs until a person closes it, which makes
+    /// it unscriptable: a build server, a capture, or an agent has no way to
+    /// end one and no way to tell a hang from a program doing its job. This is
+    /// what `--quit-after` on `live` already is, for the verb that runs the
+    /// program directly.
+    pub quit_after: Option<Duration>,
 }
 
 /// The path a `run`/`build`/`check` uses when the invocation names none: the
@@ -84,6 +95,12 @@ pub enum OptionsError {
     /// `--device` was given an unknown value.
     #[error("unknown device `{0}`; expected one of: host, wasm32, wasm64")]
     UnknownDevice(String),
+    /// `--quit-after` was given without a value.
+    #[error("`--quit-after` expects a duration such as 500ms, 5s, or 2m")]
+    QuitAfterMissingValue,
+    /// `--quit-after` was given something that is not a duration.
+    #[error("`{0}` is not a duration; expected one such as 500ms, 5s, or 2m")]
+    BadQuitAfter(String),
     /// An unrecognized flag.
     #[error("unknown option `{0}`")]
     UnknownFlag(String),
@@ -113,6 +130,7 @@ impl CompileOptions {
         let mut timings = false;
         let mut show_notes = false;
         let mut program_arguments = Vec::new();
+        let mut quit_after = None;
         let mut forwarding = false;
 
         let mut index = 0;
@@ -138,6 +156,13 @@ impl CompileOptions {
                         .ok_or(OptionsError::DeviceMissingValue)?;
                     device = parse_device(value)?;
                     device_explicit = true;
+                    index += 1;
+                }
+                "--quit-after" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::QuitAfterMissingValue)?;
+                    quit_after = Some(parse_duration(value)?);
                     index += 1;
                 }
                 "--emit-llvm-ir" => emit_llvm_ir = true,
@@ -200,8 +225,28 @@ impl CompileOptions {
             timings,
             show_notes,
             program_arguments,
+            quit_after,
         })
     }
+}
+
+/// Parses `5s`, `500ms`, or `2m` into a duration.
+pub fn parse_duration(value: &str) -> Result<Duration, OptionsError> {
+    let bad = || OptionsError::BadQuitAfter(value.to_owned());
+    // Longest suffix first: `ms` ends in `s`, so checking `s` first would read
+    // `500ms` as 500-something-seconds.
+    let (number, scale) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1u64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60_000)
+    } else {
+        return Err(bad());
+    };
+    let amount: u64 = number.parse().map_err(|_| bad())?;
+    let millis = amount.checked_mul(scale).ok_or_else(bad)?;
+    Ok(Duration::from_millis(millis))
 }
 
 /// Resolves a `--device` value.

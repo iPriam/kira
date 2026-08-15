@@ -1,17 +1,10 @@
 //! Counting what the native runtime allocates and frees, so a native run can
 //! prove its heap balanced.
 //!
-//! The VM has always been able to prove this: its heap counts allocations and
-//! frees, and `current == 0` at exit means every object it made was released.
-//! Native code had no equivalent, and the gap showed in the test suite — a
-//! struct test in `backend_parity` says outright that the VM proves its heap
-//! balances and *"the native backend has no such proof, so this is what stands
-//! in for one"*. A leak on the native side was invisible until something ran
-//! out of memory.
-//!
-//! This is that proof. Every helper that really allocates records one, every
-//! helper that really frees records one, and [`kira_rt_heap_live`] is zero for
-//! a run that balanced.
+//! The VM proves this with its heap counters, and the native runtime exposes the
+//! same proof through [`kira_rt_heap_live`]. Every helper that really allocates
+//! records one, every helper that really frees records one, and a balanced run
+//! reports equal allocation and free totals with no live objects.
 //!
 //! # Real allocations only
 //!

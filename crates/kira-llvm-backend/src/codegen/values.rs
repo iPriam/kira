@@ -32,7 +32,7 @@ impl Codegen<'_> {
         self.program
             .types
             .element_of(ty)
-            .ok_or(crate::LlvmError::Unsupported("an element of a non-array"))
+            .ok_or(crate::LlvmError::internal("an element of a non-array"))
     }
 
     /// Takes a share of everything the value at `at` owns, mirroring the VM's
@@ -121,7 +121,7 @@ impl Codegen<'_> {
                 Ok(())
             }
             // `owns_heap` is only true for the cases above.
-            _ => Err(crate::LlvmError::Unsupported("a copy of an unowned value")),
+            _ => Err(crate::LlvmError::internal("a copy of an unowned value")),
         }
     }
 
@@ -187,7 +187,7 @@ impl Codegen<'_> {
                     )
                 })
             }
-            Type::Int(_) | Type::Bool | Type::RawPtr => {
+            Type::Int(_) | Type::Bool | Type::RawPtr | Type::ForeignPtr(_) => {
                 let (a, b) = self.load_operands(left, right, ty)?;
                 // SAFETY: both operands share one integer type and the builder
                 // is live.
@@ -198,6 +198,26 @@ impl Codegen<'_> {
                         a,
                         b,
                         c"eq.scalar".as_ptr(),
+                    )
+                })
+            }
+            // A cell has reference semantics, so identity *is* its equality:
+            // two boxes holding equal values are still two places to write.
+            // The same rule the VM applies (`Heap::objects_equal`), and it has
+            // to be the same one — a captured `var` inside a struct reaches
+            // here whenever that struct is erased, because erasing an aggregate
+            // emits the equality leaf that walks it.
+            Type::Cell(_) => {
+                let (a, b) = self.load_operands(left, right, ty)?;
+                // SAFETY: a cell is one opaque pointer on both sides and the
+                // builder is live; `icmp eq` on two pointers is their identity.
+                Ok(unsafe {
+                    LLVMBuildICmp(
+                        builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                        a,
+                        b,
+                        c"eq.cell".as_ptr(),
                     )
                 })
             }
@@ -250,9 +270,9 @@ impl Codegen<'_> {
             // `CString`, a cell, a task, and callback state are all refused by
             // `Type::assignable_to` before `Any` takes them, and none is a
             // struct field type that could carry one in sideways.
-            _ => Err(crate::LlvmError::Unsupported(
-                "an equality of a type that never erases",
-            )),
+            other => Err(crate::LlvmError::internal(format!(
+                "an equality of `{other:?}`, which no erasure admits,"
+            ))),
         }
     }
 
@@ -348,7 +368,7 @@ impl Codegen<'_> {
                 self.drop_shared(handle, self.types.enum_box, &mut [], last, "cell");
                 Ok(())
             }
-            _ => Err(crate::LlvmError::Unsupported("a drop of an unowned value")),
+            _ => Err(crate::LlvmError::internal("a drop of an unowned value")),
         }
     }
 
@@ -568,7 +588,7 @@ impl Codegen<'_> {
             .get(id)
             .and_then(|def| def.variant(tag))
             .and_then(|variant| variant.payload)
-            .ok_or(crate::LlvmError::Unsupported(
+            .ok_or(crate::LlvmError::internal(
                 "an enum payload the program never declared",
             ))
     }
@@ -580,7 +600,7 @@ impl Codegen<'_> {
             .structs()
             .get(id)
             .map(|def| def.fields.iter().map(|field| field.ty).collect())
-            .ok_or(crate::LlvmError::Unsupported(
+            .ok_or(crate::LlvmError::internal(
                 "a struct the program never declared",
             ))
     }

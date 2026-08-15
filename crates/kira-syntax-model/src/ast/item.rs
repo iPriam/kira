@@ -185,9 +185,11 @@ pub struct ConstructField {
     /// Whether this is a **child slot**: a field whose type was written
     /// `some X` / `[some X]`, or that carried the compat `@Content` annotation.
     ///
-    /// A slot is filled at a construction site only by the bare children of the
-    /// trailing `{ … }` content block — never by a constructor argument or a
-    /// default. [`ty`](ConstructField::ty) carries the inner element type (`X`
+    /// A slot is filled at a construction site by content, never by a
+    /// positional argument: the bare children of the trailing `{ … }` block
+    /// fill the first slot, and a named fill (`detail: { … }`, `detail: View()`)
+    /// fills the slot it names. A slot may declare a default, which stands in
+    /// when nothing filled it. [`ty`](ConstructField::ty) carries the inner element type (`X`
     /// for `some X`, `[X]` for `[some X]`), so a single slot and a list slot are
     /// told apart by whether the type is an array.
     pub slot: bool,

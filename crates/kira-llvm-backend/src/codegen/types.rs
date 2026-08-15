@@ -139,7 +139,7 @@ pub(crate) struct Runtime {
     pub(super) array_eq: Callable,
     /// Boxes a moved aggregate payload with clone/free **and** equality leaves.
     pub(super) enum_new_aggregate_eq: Callable,
-    /// Boxes a moved struct payload with type-specific clone/free leaves.
+    /// Boxes a moved aggregate payload with type-specific clone/free leaves.
     pub(super) enum_new_aggregate: Callable,
     pub(super) enum_tag: Callable,
     /// Reads an enum's payload as an owned word (`match` arm bindings).
@@ -198,10 +198,6 @@ pub(crate) struct Runtime {
     pub(super) abi_marker: Callable,
     /// Reports the native heap balance at exit; silent unless asked.
     pub(super) heap_report: Callable,
-    /// The foreign-adapter version marker every generated adapter references, so
-    /// a stale sidecar fails to link by name; see
-    /// [`kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER`].
-    pub(super) foreign_marker: Callable,
     /// `kira_rt_str_from_cstr`: copies a `CString` result's bytes out of the
     /// storage the callee keeps, which is how a returned C string becomes an
     /// owned Kira `String` with nothing to free on this side.
@@ -237,6 +233,10 @@ pub(crate) struct Runtime {
     pub(super) cstring_new: Callable,
     /// `kira_rt_cstring_free`: frees the storage `kira_rt_cstring_new` produced.
     pub(super) cstring_free: Callable,
+    /// `kira_rt_ffi_call_bytes`: the shared libffi call path for native code.
+    pub(super) ffi_call: Callable,
+    /// `kira_rt_ffi_closure`: the C-callable address of one callback entry.
+    pub(super) ffi_closure: Callable,
     /// `kira_rt_cstring_retain`: C storage for a `CString` struct member, never
     /// freed because C keeps reading it after the call returns.
     pub(super) cstring_retain: Callable,
@@ -246,7 +246,12 @@ pub(crate) struct Runtime {
     /// `kira_hybrid_call_runtime`: how native code reaches the VM half.
     pub(super) call_runtime: Callable,
     pub(super) native_value_int: Callable,
+    pub(super) native_value_any: Callable,
+    pub(super) native_value_read_any_type: Callable,
     pub(super) native_value_raw_ptr: Callable,
+    /// A capture cell into a state node, and the box back out of one.
+    pub(super) native_value_cell: Callable,
+    pub(super) native_value_read_cell: Callable,
     pub(super) native_value_float: Callable,
     pub(super) native_value_bool: Callable,
     pub(super) native_value_string: Callable,
@@ -512,12 +517,18 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             ),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
             heap_report: declare(c"kira_rt_heap_report", types.void, &mut []),
-            // Appended after the runtime marker; the foreign helpers are an
-            // append-only addition to the `kira_rt_*` surface. An adapter
-            // references the marker so a stale sidecar fails to link by name.
-            foreign_marker: declare(&foreign_marker_symbol(), types.void, &mut []),
             cstring_new: declare(c"kira_rt_cstring_new", types.ptr, &mut [types.ptr]),
             cstring_free: declare(c"kira_rt_cstring_free", types.void, &mut [types.ptr]),
+            ffi_call: declare(
+                c"kira_rt_ffi_call_bytes",
+                types.i32,
+                &mut [types.ptr, types.ptr, types.ptr, types.ptr],
+            ),
+            ffi_closure: declare(
+                c"kira_rt_ffi_closure",
+                types.i64,
+                &mut [types.ptr, types.ptr],
+            ),
             cstring_retain: declare(c"kira_rt_cstring_retain", types.i64, &mut [types.ptr]),
             clayout_retain: declare(
                 c"kira_rt_clayout_retain",
@@ -597,10 +608,26 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 &mut [types.i32, types.ptr, types.i32, types.ptr],
             ),
             native_value_int: declare(c"kira_rt_native_value_int", types.ptr, &mut [types.i64]),
+            native_value_any: declare(
+                c"kira_rt_native_value_any",
+                types.ptr,
+                &mut [types.i64, types.ptr],
+            ),
+            native_value_read_any_type: declare(
+                c"kira_rt_native_value_read_any_type",
+                types.i64,
+                &mut [types.ptr],
+            ),
             native_value_raw_ptr: declare(
                 c"kira_rt_native_value_raw_ptr",
                 types.ptr,
                 &mut [types.i64],
+            ),
+            native_value_cell: declare(c"kira_rt_native_value_cell", types.ptr, &mut [types.ptr]),
+            native_value_read_cell: declare(
+                c"kira_rt_native_value_read_cell",
+                types.ptr,
+                &mut [types.ptr],
             ),
             native_value_float: declare(c"kira_rt_native_value_float", types.ptr, &mut [types.f64]),
             native_value_bool: declare(c"kira_rt_native_value_bool", types.ptr, &mut [types.i8]),
@@ -758,12 +785,4 @@ fn file_system_signature(op: FileSystemOp, types: &Types) -> (LLVMTypeRef, Vec<L
 /// the runtime archive cannot drift apart silently.
 fn abi_marker_symbol() -> CString {
     c_string(kira_runtime_abi::RUNTIME_ABI_MARKER)
-}
-
-/// The foreign-adapter ABI marker's symbol, as a C string.
-///
-/// Built from the shared constant so the backend and the native bridge that
-/// defines it cannot drift apart silently.
-fn foreign_marker_symbol() -> CString {
-    c_string(kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER)
 }

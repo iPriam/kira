@@ -1,18 +1,17 @@
 //! End-to-end C-FFI on the built `kira`: a real VM foreign call through a
-//! generated adapter sidecar, and the typed diagnostics a misdeclared package
+//! direct Libffi binding path, and the typed diagnostics a misdeclared package
 //! gets.
 //!
-//! The sidecar call is the one that proves the VM path is not a smoke surface:
-//! `kira run --backend vm` builds a foreign-adapter sidecar, loads it through a
-//! native-capable host, and answers `call_foreign` out of it — the VM itself
-//! still links and `dlopen`s nothing. The output is Kira-produced, computed by
-//! real C symbols reached through the generated adapters.
+//! The direct binding call is the one that proves the VM path is not a smoke
+//! surface: `kira run --backend vm` resolves the imports, opens the selected
+//! libraries through Libffi, and answers `call_foreign` in the VM host. The
+//! output is Kira-produced, computed by real C symbols.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// The output the full fixture prints on the VM, through the sidecar.
+/// The output the full fixture prints on the VM, through direct Libffi calls.
 pub(crate) const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n\
      4\n42\n0\n7\nhello from C\nround trip\n|\nhello from C!\n1\n2\n";
 
@@ -106,9 +105,14 @@ fn run(args: &[&str]) -> Output {
 }
 
 #[test]
-fn a_vm_run_calls_c_through_a_generated_adapter_sidecar() {
-    let dir = scratch("sidecar");
+fn a_vm_run_calls_c_through_direct_libffi_bindings() {
+    let dir = scratch("direct-bindings");
     build_host_archive(&dir);
+    std::fs::write(
+        dir.join("package.kira"),
+        "Package FfiE2e {\n    let allowThinFfiShim = true\n}\n",
+    )
+    .expect("package manifest");
     std::fs::write(dir.join("NativeLibs/ffifixture.toml"), HOST_MANIFEST).expect("manifest");
     let entry = dir.join("main.kira");
     std::fs::write(&entry, include_str!("../fixtures/ffi/ffi_program.kira")).expect("program");
@@ -117,7 +121,7 @@ fn a_vm_run_calls_c_through_a_generated_adapter_sidecar() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         EXPECTED,
-        "the VM sidecar run produced unexpected output\nstderr: {}",
+        "the VM direct-binding run produced unexpected output\nstderr: {}",
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(output.status.code(), Some(0));
@@ -153,10 +157,8 @@ fn an_undeclared_native_library_is_a_typed_diagnostic() {
 
 #[test]
 fn the_seam_accepts_a_cstring_result_and_still_refuses_a_string() {
-    // Both halves of one rule, proven through the CLI: `CString` is the seam's
-    // spelling for C text in either direction, and `String` is Kira's — naming
-    // Kira's at the seam is still the mistake it always was, and the refusal
-    // reaches the CLI as a rendered diagnostic with its stable code.
+    // `CString` is the C text representation at this boundary. `String` remains
+    // a Kira heap value, so analysis rejects it with the stable diagnostic code.
     let dir = scratch("cstring-result");
 
     let good = dir.join("good.kira");

@@ -24,7 +24,7 @@
 //! trampoline's arguments mean. A library carries both markers, and either one
 //! going stale fails the same way.
 //!
-//! # Where these names are used, and where they are not yet
+//! # Where these names are used
 //!
 //! The VM engine needs none of this: it verifies data rather than symbols (see
 //! [`Library::verify`](crate::Library)), because a `.kbc` embedded in a wrapper
@@ -126,7 +126,7 @@ mod tests {
     /// one never silently moves the other.
     #[test]
     fn the_export_version_is_not_the_runtime_version() {
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 7);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 9);
         assert_eq!(EXPORT_ABI_VERSION, 1);
     }
 }

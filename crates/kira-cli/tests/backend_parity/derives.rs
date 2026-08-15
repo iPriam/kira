@@ -105,6 +105,64 @@ function main() {
     );
 }
 
+/// An enum serializes by VARIANT NAME, carries its payload in parentheses, and
+/// round-trips inside a struct field — on every backend.
+///
+/// The name is the contract: an ordinal would tie the wire format to
+/// declaration order, so inserting a variant would re-read every stored value
+/// as its neighbour.
+#[test]
+fn the_foundation_serde_derives_agree_over_enums() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Equatable, Serializable, Deserializable)
+enum DsxTool { Select Move Rotate }
+
+@Derive(Equatable, Serializable, Deserializable)
+enum DsxNote { Blank Rank(Int) Tag(String) }
+
+@Derive(Equatable, Serializable, Deserializable)
+struct DsxSlot {
+    var tool: DsxTool
+    var note: DsxNote
+    var count: Int
+}
+
+@Main
+function main() {
+    print(serialize_DsxTool(DsxTool.Rotate))
+    print(serialize_DsxNote(DsxNote.Blank))
+    print(serialize_DsxNote(DsxNote.Rank(-7)))
+    print(serialize_DsxNote(DsxNote.Tag("edge")))
+
+    print(eq_DsxTool(DsxTool.Move, deserialize_DsxTool("DsxTool.Move")))
+    print(eq_DsxNote(DsxNote.Rank(42), deserialize_DsxNote(serialize_DsxNote(DsxNote.Rank(42)))))
+    print(eq_DsxNote(DsxNote.Tag("x"), deserialize_DsxNote(serialize_DsxNote(DsxNote.Tag("x")))))
+
+    let slot = DsxSlot { tool: DsxTool.Select, note: DsxNote.Tag("hi"), count: 3 }
+    let wire = serialize_DsxSlot(slot)
+    print(wire)
+    print(eq_DsxSlot(slot, deserialize_DsxSlot(wire)))
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "DsxTool.Rotate\n\
+         DsxNote.Blank\n\
+         DsxNote.Rank(-7)\n\
+         DsxNote.Tag(\"edge\")\n\
+         true\n\
+         true\n\
+         true\n\
+         DsxSlot{tool=DsxTool.Select;note=DsxNote.Tag(\"hi\");count=3}\n\
+         true\n"
+    );
+}
+
 /// Malformed wire text traps on every backend rather than parsing partially.
 #[test]
 fn malformed_serialized_text_traps_on_every_backend() {

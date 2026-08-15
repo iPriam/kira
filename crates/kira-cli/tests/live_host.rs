@@ -6,7 +6,7 @@
 //! everywhere except live, which is the worst place for a gap to hide: the
 //! program compiles, the bundle links, and the trap arrives at the entrypoint.
 //!
-//! VM backend, so this runs wherever the CLI's suite runs.
+//! The test runs VM, LLVM, and hybrid bundles through the desktop runner.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -58,15 +58,15 @@ impl Drop for Session {
     }
 }
 
-/// Runs one unwatched `kira live --backend vm` session and returns
+/// Runs one unwatched `kira live` session on `backend` and returns
 /// (stdout, stderr, ok).
 ///
 /// `--no-watch` in words: the output is read to end of file, which only arrives
 /// when the session ends, and a watched session does not end on its own.
-fn live(scratch: &Scratch) -> (String, String, bool) {
+fn live(scratch: &Scratch, backend: &str) -> (String, String, bool) {
     let mut session = Session(
         Command::new(env!("CARGO_BIN_EXE_kira"))
-            .args(["live", "--no-watch", "--backend", "vm"])
+            .args(["live", "--no-watch", "--backend", backend])
             .arg(scratch.program())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -93,54 +93,47 @@ fn live(scratch: &Scratch) -> (String, String, bool) {
     (stdout, stderr, status.success())
 }
 
-/// A program whose answer only a host with callback-state storage can produce.
-const NATIVE_STATE_PROGRAM: &str = r#"
-struct State { var count: Int }
-
-@Main
-function main() {
-    var original = State { count: 3 }
-    var state = nativeState(original)
-    original.count = 9
-    var recovered = nativeRecover<State>(nativeUserData(state))
-    print(original.count)
-    print(recovered.count)
-    nativeStateFree(state)
-}
-"#;
-
-/// Callback state works over a live session.
-///
-/// The storage is the host's, not the VM's, so a runner that hands the program
-/// a bare stdout host traps here with "this host does not provide native
-/// callback-state storage" — at the entrypoint, after a bundle that built,
-/// linked, and reported ready. Every UI app boxes state for a native callback
-/// on its first frame, so that trap is the difference between live working and
-/// live being unusable for the programs it exists to serve.
-#[test]
-fn the_runner_provides_native_callback_state() {
-    let scratch = Scratch::new("native-state", NATIVE_STATE_PROGRAM);
-
-    let (stdout, stderr, ok) = live(&scratch);
-
-    assert!(ok, "the session must exit 0.\nstderr: {stderr}");
-    // The program's own lines, with the session's markers taken out. The two
-    // write to one pipe and the runner's next marker can land between the
-    // program's two prints, so asserting they are adjacent asserts a race:
-    // `live.bundle.linked` arriving between `9` and `3` failed a run that was
-    // entirely correct.
-    let printed: Vec<&str> = stdout
+/// The program's own lines, without live-session milestones.
+fn app_output(stdout: &str) -> Vec<String> {
+    stdout
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("live.") && !line.starts_with("@kira"))
-        .collect();
+        .filter(|line| !line.starts_with("live.") && !line.starts_with("@kira"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A user-defined callback-state value completes its lifecycle over live.
+///
+/// The fixture creates a user-defined value, recovers and reads it, writes
+/// through the recovered view, reads the write back, and frees the state.
+#[test]
+fn all_live_backends_provide_native_callback_state() {
+    let scratch = Scratch::new(
+        "native-state",
+        include_str!("fixtures/live/native_state.kira"),
+    );
+
+    let (vm_stdout, vm_stderr, vm_ok) = live(&scratch, "vm");
+    let (llvm_stdout, llvm_stderr, llvm_ok) = live(&scratch, "llvm");
+    let (hybrid_stdout, hybrid_stderr, hybrid_ok) = live(&scratch, "hybrid");
+
+    assert!(vm_ok, "the vm session failed.\nstderr: {vm_stderr}");
+    assert!(llvm_ok, "the llvm session failed.\nstderr: {llvm_stderr}");
     assert_eq!(
-        printed,
-        ["9", "3"],
-        "the program's own output must be the VM's.\nstdout: {stdout}\nstderr: {stderr}"
+        app_output(&vm_stdout),
+        vec!["Harmony Browser", "1", "3"],
+        "the program's own output must be the VM's.\nstdout: {vm_stdout}\nstderr: {vm_stderr}"
     );
     assert!(
-        !stderr.contains("callback-state"),
-        "no host-capability trap belongs here.\nstderr: {stderr}"
+        hybrid_ok,
+        "the hybrid session failed.\nstderr: {hybrid_stderr}"
     );
+    assert!(
+        !vm_stderr.contains("callback-state")
+            && !llvm_stderr.contains("callback-state")
+            && !hybrid_stderr.contains("callback-state"),
+        "no host-capability trap belongs here.\nvm stderr: {vm_stderr}\nllvm stderr: {llvm_stderr}\nhybrid stderr: {hybrid_stderr}"
+    );
+    assert_eq!(app_output(&llvm_stdout), app_output(&vm_stdout));
+    assert_eq!(app_output(&hybrid_stdout), app_output(&vm_stdout));
 }

@@ -65,7 +65,7 @@ pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridEr
                 function.name, function.execution, proto.execution,
             )));
         }
-        if function.params.len() != usize::from(proto.param_count) {
+        if function.params.len() as u64 != proto.param_count {
             return Err(HybridError::Mismatch(format!(
                 "function `{}` takes {} parameters in the manifest and {} in the bytecode half",
                 function.name,
@@ -131,7 +131,7 @@ pub fn hot_reload(
             .enumerate()
             .filter(|(_, prototype)| {
                 prototype.name == function.name
-                    && prototype.param_count == function.params.len() as u16
+                    && prototype.param_count == function.params.len() as u64
             })
             .map(|(index, _)| index as u32)
             .collect();

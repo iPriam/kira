@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use kira_core::Interner;
 use kira_manifest::{NativeLibParseError, parse_native_lib_manifest};
 use kira_native_lib_definition::{
-    NativeLibraryError, NativeLibrarySpec, ResolvedNativeLibraries, ResolvedNativeLibrary,
-    TargetTriple,
+    LinkMode, NativeLibraryError, NativeLibrarySpec, ResolvedNativeLibraries,
+    ResolvedNativeLibrary, TargetTriple,
 };
 
 use crate::native_sources::{NativeSourceBuildError, ensure_archive_current};
@@ -60,6 +60,15 @@ pub enum NativeLibraryResolveError {
     /// A library's declared C sources could not be built into its archive.
     #[error(transparent)]
     SourceBuild(#[from] NativeSourceBuildError),
+    /// A static archive would bypass the shared libffi path without an explicit
+    /// package migration choice.
+    #[error(
+        "static native library `{library}` is not allowed on the shared FFI path; set `allowThinFfiShim = true` in package.kira"
+    )]
+    StaticArchiveRequiresThinShim {
+        /// The package library that declared the archive.
+        library: String,
+    },
 }
 
 /// Resolves everything a package declares about its C libraries into one
@@ -84,11 +93,28 @@ pub fn resolve_native_libraries(
     manifest_paths: &[String],
     target: &TargetTriple,
 ) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
+    resolve_native_libraries_with_policy(package_root, inline, manifest_paths, target, false)
+}
+
+/// Resolves one package's declarations with an explicit static-carrier policy.
+///
+/// The ordinary resolver keeps the migration default closed. This entry point
+/// exists for callers that already carry the package-level opt-in, and for
+/// tests and tools that need to exercise the resolved model without fabricating
+/// a dependency-closure package.
+pub fn resolve_native_libraries_with_policy(
+    package_root: &Path,
+    inline: &[NativeLibrarySpec],
+    manifest_paths: &[String],
+    target: &TargetTriple,
+    allow_thin_ffi_shim: bool,
+) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
     resolve_native_library_packages(
         &[NativeLibraryPackage {
             root: package_root.to_path_buf(),
             inline: inline.to_vec(),
             manifest_paths: manifest_paths.to_vec(),
+            allow_thin_ffi_shim,
         }],
         target,
     )
@@ -101,6 +127,8 @@ pub struct NativeLibraryPackage {
     pub root: PathBuf,
     /// What its `package.kira` declares inline.
     pub inline: Vec<NativeLibrarySpec>,
+    /// The package-level opt-in for thin static-archive carriers.
+    pub allow_thin_ffi_shim: bool,
     /// Its `NativeLibs/*.toml` files, relative to `root`.
     pub manifest_paths: Vec<String>,
 }
@@ -115,13 +143,18 @@ pub fn resolve_native_library_packages(
     packages: &[NativeLibraryPackage],
     target: &TargetTriple,
 ) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
-    let mut resolved: Vec<ResolvedNativeLibrary> = Vec::new();
+    let mut groups: Vec<(Vec<ResolvedNativeLibrary>, bool)> = Vec::with_capacity(packages.len());
     for package in packages {
         // Within one package a library declared twice is still an error, so
         // each group resolves on its own before being merged.
         let mut group = Vec::new();
         resolve_one(package, target, &mut group)?;
         ResolvedNativeLibraries::from_resolved(Interner::new(), group.clone())?;
+        groups.push((group, package.allow_thin_ffi_shim));
+    }
+
+    let mut resolved: Vec<ResolvedNativeLibrary> = Vec::new();
+    for (group, _) in &groups {
         for library in group {
             // Across packages the nearest declaration wins. An app and the
             // engine it depends on both declaring `sokol` is the normal case
@@ -133,10 +166,22 @@ pub fn resolve_native_library_packages(
             {
                 continue;
             }
-            resolved.push(library);
+            resolved.push(library.clone());
         }
     }
     let catalog = ResolvedNativeLibraries::from_resolved(Interner::new(), resolved)?;
+    for (group, allow_thin_ffi_shim) in groups {
+        // The carrier exists for a host run that opens the library; a wasm
+        // build links the archive into the module and never opens anything.
+        if allow_thin_ffi_shim || !target.opens_libraries_at_run_time() {
+            continue;
+        }
+        if let Some(library) = group.iter().find(|library| requires_thin_carrier(library)) {
+            return Err(NativeLibraryResolveError::StaticArchiveRequiresThinShim {
+                library: library.name().to_owned(),
+            });
+        }
+    }
     Ok(NativeLinkResolution {
         catalog,
         target: target.clone(),
@@ -192,6 +237,13 @@ fn resolve_one(
         resolved.push(locate(&spec, &base_dir, target)?);
     }
     Ok(())
+}
+
+/// Whether a resolved library contributes an archive that a shared libffi
+/// host would otherwise bypass.
+fn requires_thin_carrier(library: &ResolvedNativeLibrary) -> bool {
+    library.link_mode() == LinkMode::Static
+        && library.targets().iter().any(|row| row.artifact().is_some())
 }
 
 /// Locates one declaration's files against `base_dir`, reading the disk.
@@ -273,9 +325,14 @@ staticLib = "lib/libffimath-wasm.a"
         write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
         write(&root.join("NativeLibs/lib/libffimath-wasm.a"), "");
 
-        let mut resolution =
-            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
-                .expect("resolution succeeds");
+        let mut resolution = resolve_native_libraries_with_policy(
+            root,
+            &[],
+            &["NativeLibs/ffimath.toml".to_owned()],
+            &host(),
+            true,
+        )
+        .expect("resolution succeeds");
         assert_eq!(resolution.catalog.len(), 1);
         let symbol = resolution
             .catalog
@@ -325,9 +382,14 @@ Package Demo {
         )
         .expect("a readable manifest");
 
-        let mut resolution =
-            resolve_native_libraries(root, &manifest.native_libraries, &[], &host())
-                .expect("resolution succeeds");
+        let mut resolution = resolve_native_libraries_with_policy(
+            root,
+            &manifest.native_libraries,
+            &[],
+            &host(),
+            true,
+        )
+        .expect("resolution succeeds");
         let symbol = resolution
             .catalog
             .intern_library("sokol")
@@ -411,9 +473,14 @@ Package Demo {
         write(&root.join("NativeLibs/ffimath.toml"), FFIMATH_TOML);
         write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
 
-        let resolution =
-            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
-                .expect("the host archive is all this build needs");
+        let resolution = resolve_native_libraries_with_policy(
+            root,
+            &[],
+            &["NativeLibs/ffimath.toml".to_owned()],
+            &host(),
+            true,
+        )
+        .expect("the host archive is all this build needs");
         assert_eq!(resolution.target, host());
         assert_eq!(resolution.catalog.len(), 1);
     }
@@ -440,6 +507,21 @@ Package Demo {
         assert!(matches!(
             error,
             NativeLibraryResolveError::Model(NativeLibraryError::DuplicateLibrary { .. })
+        ));
+    }
+
+    #[test]
+    fn static_archives_require_the_explicit_package_opt_in() {
+        let dir = TempDir::new("static-policy");
+        let root = dir.path();
+        write(&root.join("NativeLibs/ffimath.toml"), FFIMATH_TOML);
+        write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
+        let error =
+            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
+                .expect_err("the default policy rejects a static archive");
+        assert!(matches!(
+            error,
+            NativeLibraryResolveError::StaticArchiveRequiresThinShim { .. }
         ));
     }
 

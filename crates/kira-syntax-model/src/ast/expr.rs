@@ -96,14 +96,19 @@ pub enum Expr {
         type_args: Vec<TypeRefId>,
         /// The arguments, in written order, each optionally labeled with the
         /// parameter it binds.
+        ///
+        /// A construction's named child fills (`detail: { … }`) arrive here too,
+        /// labeled with the slot they name; analysis tells a fill from an input
+        /// by looking the label up among the declaration's child slots.
         args: Vec<CallArg>,
         /// The bare children of a trailing `{ … }` content block, in order;
         /// empty when none was written.
         ///
-        /// Only a construct-backed declaration accepts child content (its child
-        /// slot fields, `some X` / `[some X]`, are filled from these). Analysis
-        /// refuses children on anything else. A closure trailing block is not
-        /// this — that attaches as a final argument in [`args`](Expr::Call::args).
+        /// Only a construct-backed declaration accepts child content — these
+        /// fill its **first** child slot, and any other slot is filled by name
+        /// through [`args`](Expr::Call::args). Analysis refuses children on
+        /// anything else. A closure trailing block is not this — that attaches
+        /// as a final argument in [`args`](Expr::Call::args).
         children: Vec<ExprId>,
         /// Span covering the whole call.
         span: Span,
@@ -264,6 +269,19 @@ pub enum Expr {
         /// Span covering the whole `if … { … }`.
         span: Span,
     },
+    /// A bare `{ … }` content block written as a named child fill's value:
+    /// the `{ … }` of `NavigationSplitView { … } detail: { … }`.
+    ///
+    /// Holds content items, so a `For`/`if` builder inside it produces children
+    /// exactly as one inside a trailing block does. It is not a value: analysis
+    /// accepts it only where a named child fill is expected and refuses it
+    /// everywhere else.
+    Content {
+        /// The block's content items, in order.
+        children: Vec<ExprId>,
+        /// Span covering the braces and their contents.
+        span: Span,
+    },
     /// A deferred task spawn (`Task { work(1, 2) }`).
     ///
     /// The braces hold one expression, not a content block: `Task` is not a
@@ -358,6 +376,7 @@ impl Expr {
             | Expr::Closure { span, .. }
             | Expr::ContentFor { span, .. }
             | Expr::ContentIf { span, .. }
+            | Expr::Content { span, .. }
             | Expr::TaskSpawn { span, .. }
             | Expr::Error { span } => *span,
         }

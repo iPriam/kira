@@ -336,9 +336,7 @@ function main() {
 
 #[test]
 fn a_closure_returning_a_string_agrees_on_every_backend() {
-    // The dispatcher's tail used to fabricate an `Int(0)` for any result type
-    // it had no literal for, which the VM ran and the LLVM verifier rejected.
-    // A non-scalar result is what makes that visible.
+    // A non-scalar result exercises the dispatcher's return path.
     let output = assert_parity(
         r#"
 @Main

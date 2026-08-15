@@ -1,8 +1,7 @@
 //! Foreign pointer types and the program's interning table.
 //!
 //! An `@FFI.Pointer { target: T; }` names a C pointer. At the wire it is one
-//! pointer word and nothing more — which is exactly what [`Type::RawPtr`]
-//! already says, and why every such typedef used to erase to it.
+//! pointer word, like [`Type::RawPtr`], while the type retains its target.
 //!
 //! What that lost is the target. `const sapp_event*` arriving in a callback is a
 //! pointer Kira can hold but not read: `event.kind` asks a targetless pointer

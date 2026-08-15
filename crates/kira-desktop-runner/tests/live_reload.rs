@@ -1,17 +1,11 @@
 //! Reload, end to end: a real runner process taking new code without dying.
 //!
-//! The tier logic has its own unit tests, and they are about manifests. These are
-//! about the thing itself: a bundle served over a socket to the real runner
-//! binary, then a *second* bundle offered to the same process — and the assertion
-//! is on what the app printed, because that is the only evidence that the new
-//! code ran and the old process is what ran it.
+//! The tier logic has its own unit tests, and these exercise manifest decisions
+//! through a real runner process.
 //!
-//! The distinction the whole feature turns on is process identity. A hot patch
-//! that quietly relaunched would print exactly the same output; what says
-//! otherwise is that the runner reported `reload.completed` on the connection it
-//! already had, without the server ever accepting a second one.
+//! Changed bytecode requests a relaunch until the bundle carries live-value
+//! compatibility evidence.
 
-use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -111,12 +105,6 @@ impl Drop for TempDir {
 /// A child process that is killed when it goes out of scope.
 struct ChildGuard(Option<Child>);
 
-impl ChildGuard {
-    fn take(&mut self) -> Child {
-        self.0.take().expect("the child is taken exactly once")
-    }
-}
-
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(child) = &mut self.0 {
@@ -140,32 +128,19 @@ fn spawn_runner(address: SocketAddr, cache: &PathBuf, hotpatch: bool) -> ChildGu
         command.env(kira_live::reload::NO_HOTPATCH_VAR, "1");
     } else {
         // Never inherit the switch from whoever ran the tests: a developer with
-        // it exported would silently turn the hot-patch tests into relaunch
-        // tests that still pass.
+        // it exported would silently change the reload decision under test.
         command.env_remove(kira_live::reload::NO_HOTPATCH_VAR);
     }
     ChildGuard(Some(command.spawn().expect("the runner binary spawns")))
 }
 
-/// Reads a finished child's stdout.
-fn stdout_of(child: &mut Child) -> String {
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .expect("stdout is piped")
-        .read_to_string(&mut stdout)
-        .expect("read stdout");
-    stdout
-}
-
-/// The headline: a real runner takes new code and runs it, in place.
+/// A changed bytecode module requests a relaunch.
 #[test]
-fn a_hot_patch_runs_the_new_code_in_the_running_process() {
+fn a_changed_bytecode_requests_a_relaunch() {
     let dir = TempDir::new("hotpatch");
     let server = LiveServer::bind(loopback(), vm_bundle("BEFORE")).expect("bind");
     let address = server.local_addr().expect("addr");
-    let mut runner = spawn_runner(address, &dir.0, true);
+    let _runner = spawn_runner(address, &dir.0, true);
 
     let mut events = Vec::new();
     let mut session = server
@@ -175,30 +150,21 @@ fn a_hot_patch_runs_the_new_code_in_the_running_process() {
     let outcome = session
         .reload(vm_bundle("AFTER"), false, &mut |event| events.push(event))
         .expect("the reload runs");
-    assert_eq!(outcome, ReloadOutcome::HotPatched);
-
+    assert_eq!(
+        outcome,
+        ReloadOutcome::NeedsRelaunch {
+            reason: kira_live::RelaunchReason::BytecodeChanged {
+                payload: "app.kbc".to_owned(),
+            },
+        }
+    );
     session.shutdown().expect("shutdown");
-    let mut child = runner.take();
-    let stdout = stdout_of(&mut child);
-    child.wait().expect("the runner exits");
-
-    // Both versions ran, in one process, on one connection. The server never
-    // accepted a second runner, so nothing was relaunched.
-    assert!(
-        stdout.contains("BEFORE"),
-        "the original app must have run. stdout: {stdout:?}"
-    );
-    assert!(
-        stdout.contains("AFTER"),
-        "the swapped-in code must have run. stdout: {stdout:?}"
-    );
 }
 
-/// The reload's events are the four the specification names, in order, and each
-/// means something different: staged is loaded, applied is committed, completed
-/// is proven to have run.
+/// A relaunch decision does not stage or apply a replacement in the current
+/// runner process.
 #[test]
-fn a_hot_patch_reports_its_milestones_in_order() {
+fn a_changed_bytecode_reports_only_the_relaunch_decision() {
     let dir = TempDir::new("order");
     let server = LiveServer::bind(loopback(), vm_bundle("BEFORE")).expect("bind");
     let address = server.local_addr().expect("addr");
@@ -209,24 +175,23 @@ fn a_hot_patch_reports_its_milestones_in_order() {
         .expect("the session comes up");
 
     let mut events = Vec::new();
-    session
+    let outcome = session
         .reload(vm_bundle("AFTER"), false, &mut |event| events.push(event))
         .expect("the reload runs");
+
+    assert!(matches!(
+        outcome,
+        ReloadOutcome::NeedsRelaunch {
+            reason: kira_live::RelaunchReason::BytecodeChanged { .. }
+        }
+    ));
 
     let names: Vec<&str> = events
         .iter()
         .map(LiveEvent::name)
         .filter(|name| name.starts_with("live.reload"))
         .collect();
-    assert_eq!(
-        names,
-        vec![
-            "live.reload.notified",
-            "live.reload.staged",
-            "live.reload.applied",
-            "live.reload.completed",
-        ]
-    );
+    assert_eq!(names, vec!["live.reload.notified"]);
     let _ = session.shutdown();
 }
 
@@ -247,7 +212,7 @@ fn a_native_library_change_needs_a_relaunch() {
     let mut events = Vec::new();
     let outcome = session
         .reload(
-            bundle_with_library("AFTER", b"\x7fELF new"),
+            bundle_with_library("BEFORE", b"\x7fELF new"),
             false,
             &mut |event| events.push(event),
         )
@@ -276,10 +241,10 @@ fn a_native_library_change_needs_a_relaunch() {
     let _ = session.shutdown();
 }
 
-/// The bytecode moved and the native half did not: the case tier 1 exists for,
-/// proven over a real session rather than in the decision's unit tests.
+/// Changed bytecode requests a relaunch even when another native payload stays
+/// byte-identical.
 #[test]
-fn a_bytecode_only_change_beside_a_native_library_hot_patches() {
+fn a_bytecode_only_change_beside_a_native_library_needs_a_relaunch() {
     let dir = TempDir::new("beside");
     let loaded = bundle_with_library("BEFORE", b"\x7fELF same");
     let server = LiveServer::bind(loopback(), loaded.clone()).expect("bind");
@@ -297,7 +262,14 @@ fn a_bytecode_only_change_beside_a_native_library_hot_patches() {
             &mut |_| {},
         )
         .expect("the reload runs");
-    assert_eq!(outcome, ReloadOutcome::HotPatched);
+    assert_eq!(
+        outcome,
+        ReloadOutcome::NeedsRelaunch {
+            reason: kira_live::RelaunchReason::BytecodeChanged {
+                payload: "app.kbc".to_owned(),
+            },
+        }
+    );
     let _ = session.shutdown();
 }
 
@@ -327,11 +299,10 @@ fn an_unchanged_rebuild_does_not_disturb_the_app() {
     let _ = session.shutdown();
 }
 
-/// The kill switch, proven against the real runner binary: with it set, the
-/// runner refuses the swap and the session is told to relaunch instead. This is
-/// what makes it possible to tell whether a bug belongs to the hot-patch path.
+/// Changed bytecode is rejected before a runner-side hot-patch kill switch is
+/// consulted.
 #[test]
-fn a_runner_with_the_kill_switch_set_refuses_to_hot_patch() {
+fn a_changed_bytecode_does_not_reach_the_runner_kill_switch() {
     let dir = TempDir::new("killswitch");
     let server = LiveServer::bind(loopback(), vm_bundle("BEFORE")).expect("bind");
     let address = server.local_addr().expect("addr");
@@ -341,8 +312,6 @@ fn a_runner_with_the_kill_switch_set_refuses_to_hot_patch() {
         .accept_session(vm_bundle("BEFORE"), true, &mut |_| {})
         .expect("the session comes up");
 
-    // The supervisor still attempts tier 1 — the switch is the runner's, and the
-    // runner is the one that says no.
     let mut events = Vec::new();
     let outcome = session
         .reload(vm_bundle("AFTER"), false, &mut |event| events.push(event))
@@ -352,17 +321,12 @@ fn a_runner_with_the_kill_switch_set_refuses_to_hot_patch() {
         matches!(
             outcome,
             ReloadOutcome::NeedsRelaunch {
-                reason: kira_live::RelaunchReason::RunnerRefused { .. }
+                reason: kira_live::RelaunchReason::BytecodeChanged { .. }
             }
         ),
         "got {outcome:?}"
     );
-    assert!(
-        events
-            .iter()
-            .any(|event| event.name() == "live.reload.restart_required"),
-        "the runner's refusal must be reported: {events:?}"
-    );
+    assert_eq!(events.len(), 1);
     let _ = session.shutdown();
 }
 
@@ -404,8 +368,8 @@ fn a_supervisor_with_hotpatch_disabled_never_attempts_a_swap() {
 }
 
 /// A bundle's payloads are hashed, and the hash is what the decision reads. If
-/// two different programs hashed the same, a hot patch would swap code the
-/// process cannot take — so this pins that the two test bundles really do differ.
+/// two different programs hashed the same, a reload could accept stale code, so
+/// this pins that the two test bundles really do differ.
 #[test]
 fn the_test_bundles_actually_differ() {
     let before = vm_bundle("BEFORE");

@@ -56,6 +56,7 @@ impl<'a> Program<'a> {
             shaders: self.shaders,
             platform: self.platform,
             enums: self.registry.enums(),
+            testing: false,
         }
     }
 }
@@ -151,6 +152,7 @@ pub(crate) fn collect<'a>(
     declarations: impl Iterator<Item = &'a Declaration>,
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
+    testing: bool,
     lint: bool,
 ) -> (Vec<String>, Vec<Diagnostic>) {
     let collectors = registry.of_kind(ProceduralKind::Collector);
@@ -180,6 +182,7 @@ pub(crate) fn collect<'a>(
             shaders,
             platform,
             enums: registry.enums(),
+            testing,
         };
         match eval::run(&body, vec![(parameter, all.clone())], comptime, lint) {
             Ok(outcome) => {

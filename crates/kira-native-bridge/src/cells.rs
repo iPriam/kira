@@ -71,6 +71,7 @@ pub type KCell = KEnum;
 /// at zero rather than leaving it arbitrary keeps a cell box byte-identical
 /// whatever built it, which is what makes the layout test below meaningful.
 const CELL_TAG: i64 = 0;
+const VM_CELL_PROXY_TAG: i64 = i64::MIN;
 
 /// Boxes `payload` into a fresh cell holding one hold.
 ///
@@ -81,6 +82,29 @@ const CELL_TAG: i64 = 0;
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_cell_new(payload_kind: i64, payload: u64) -> KCell {
     kira_rt_enum_new(CELL_TAG, payload_kind, payload)
+}
+
+/// Creates a native handle carrying a VM cell word for a callback round trip.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_cell_vm_proxy_new(handle: u64) -> KCell {
+    kira_rt_enum_new(VM_CELL_PROXY_TAG, crate::enums::PAYLOAD_INERT, handle)
+}
+
+/// Reads a VM cell word from a proxy, or `u64::MAX` for another handle.
+///
+/// # Safety
+/// `value` must be null or a live cell handle from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_cell_vm_proxy_handle(value: KCell) -> u64 {
+    if value.is_null() || crate::enums::is_inline(value) {
+        return u64::MAX;
+    }
+    // SAFETY: the caller guarantees a live native cell box.
+    if unsafe { crate::enums::kira_rt_enum_tag(value) } != VM_CELL_PROXY_TAG {
+        return u64::MAX;
+    }
+    // SAFETY: the proxy stores its VM word as an inert payload.
+    unsafe { kira_rt_enum_payload(value) }
 }
 
 /// Boxes a wide value into a fresh cell by moving its bytes into erased runtime

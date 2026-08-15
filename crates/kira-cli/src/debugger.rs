@@ -3,12 +3,16 @@
 use std::path::{Path, PathBuf};
 
 use kira_backend_api::BackendMode;
-use kira_debug::{Backend, DebugInfo, LldbLaunch, VmDebugger, VmDebuggerMode};
+use kira_debug::{
+    Backend, DebugInfo, LldbDapBreakpoint, LldbDapLaunch, LldbLaunch, VM_PROBE_SYMBOL,
+    VM_TEXT_SYMBOL, VmDebugger, VmDebuggerMode,
+};
 use kira_hybrid_definition::{HybridFunction, HybridManifest};
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_main::StdoutHost;
 use kira_runtime_abi::{Execution, NativeStateHost, env};
+use kira_vm_runtime::VmLldbObserver;
 
 use crate::hybrid;
 use crate::native;
@@ -16,6 +20,7 @@ use crate::options::{CompileOptions, OptionsError};
 use crate::pipeline::{EXIT_FAILURE, EXIT_OK};
 use crate::progress::{err, out};
 
+mod prepare;
 mod vm_lldb;
 
 pub(crate) use vm_lldb::run_host as run_vm_host;
@@ -51,6 +56,12 @@ pub struct DebugOptions {
     pub lldb_dap: bool,
     /// Number of explicit DAP `continue` requests after the first stop.
     pub dap_continues: usize,
+    /// Whether to build and describe the target instead of debugging it.
+    ///
+    /// A frontend that owns its own debugger session builds through this and
+    /// then drives LLDB itself, so the compiler is asked for artifacts and
+    /// identities rather than for a transcript.
+    pub prepare: bool,
 }
 
 /// Why `kira debug` arguments were rejected.
@@ -79,6 +90,7 @@ pub fn parse(args: &[String]) -> Result<DebugOptions, DebugOptionsError> {
     let mut lldb = false;
     let mut lldb_dap = false;
     let mut dap_continues = 0;
+    let mut prepare = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -101,6 +113,7 @@ pub fn parse(args: &[String]) -> Result<DebugOptions, DebugOptionsError> {
             "--no-disassemble" => disassemble = false,
             "--lldb" => lldb = true,
             "--lldb-dap" => lldb_dap = true,
+            "--prepare" => prepare = true,
             "--dap-continues" => {
                 let value = args
                     .get(index + 1)
@@ -133,7 +146,19 @@ pub fn parse(args: &[String]) -> Result<DebugOptions, DebugOptionsError> {
         lldb,
         lldb_dap,
         dap_continues,
+        prepare,
     })
+}
+
+/// Builds the target and describes it without starting a debugger.
+pub fn prepare_target(
+    ir: &IrProgram,
+    source: &Path,
+    foreign_link: &NativeLinkInputs,
+    options: &DebugOptions,
+    info: &DebugInfo,
+) -> i32 {
+    prepare::run(ir, source, foreign_link, options, info)
 }
 
 /// Runs a verified IR program under the VM debugger or real LLDB.
@@ -186,8 +211,8 @@ pub fn run_vm(
         };
     }
 
-    let sidecar = match native::build_adapter_sidecar(ir, source, foreign_link) {
-        Ok(path) => path,
+    let imports = match native::direct_foreign_bindings(ir, source, foreign_link) {
+        Ok(imports) => imports,
         Err(error) => {
             err!("kira: {error}");
             return EXIT_FAILURE;
@@ -200,24 +225,23 @@ pub fn run_vm(
             return EXIT_FAILURE;
         }
     };
-    let callbacks = (0..ir.foreign_callbacks.len())
-        .map(kira_llvm_backend::callback_name)
-        .collect();
-    let session = match kira_main::ForeignSession::load(
+    let session = match kira_main::ForeignSession::load_dynamic(
         program,
-        &sidecar,
-        foreign_bindings(ir),
-        callbacks,
+        imports,
+        ir.foreign_callbacks
+            .iter()
+            .map(|callback| callback.signature().clone())
+            .collect(),
         ir.foreign_aggregates.clone(),
     ) {
         Ok(session) => session,
         Err(error) => {
-            err!("kira: cannot load the foreign-adapter sidecar: {error}");
+            err!("kira: cannot load the direct foreign-library session: {error}");
             return EXIT_FAILURE;
         }
     };
-    // SAFETY: this is the same CLI-owned debugger boundary with the adapter
-    // sidecar loaded.
+    // SAFETY: this is the same CLI-owned debugger boundary with direct
+    // foreign libraries loaded.
     match unsafe {
         env::with_arguments(&options.compile.program_arguments, || {
             session.run_with_debug(&mut debugger)
@@ -228,83 +252,6 @@ pub fn run_vm(
     }
 }
 
-/// Runs the VM half with instruction accounting instead of interactive stops.
-pub fn run_profile_vm(
-    ir: &IrProgram,
-    source: &Path,
-    foreign_link: &NativeLinkInputs,
-    program_arguments: &[String],
-    max_functions: usize,
-    max_sites: usize,
-) -> i32 {
-    let module = match kira_bytecode::compile(ir) {
-        Ok(module) => module,
-        Err(error) => {
-            err!("kira instruments: bytecode compilation failed: {error}");
-            return EXIT_FAILURE;
-        }
-    };
-    let mut profiler = kira_instruments::VmProfiler::new();
-    let outcome = if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
-        let mut host = NativeStateHost::new(StdoutHost);
-        // SAFETY: the CLI owns this profiling run and keeps process-environment
-        // access exclusive for the duration of the VM.
-        unsafe {
-            env::with_arguments(program_arguments, || {
-                kira_vm_runtime::execute_with_debug(&module, &mut host, &mut profiler).map(|_| ())
-            })
-        }
-    } else {
-        let sidecar = match native::build_adapter_sidecar(ir, source, foreign_link) {
-            Ok(path) => path,
-            Err(error) => {
-                err!("kira instruments: {error}");
-                return EXIT_FAILURE;
-            }
-        };
-        let program = match kira_vm_runtime::Program::load(module) {
-            Ok(program) => program,
-            Err(error) => {
-                err!("kira instruments: {error}");
-                return EXIT_FAILURE;
-            }
-        };
-        let callbacks = (0..ir.foreign_callbacks.len())
-            .map(kira_llvm_backend::callback_name)
-            .collect();
-        let session = match kira_main::ForeignSession::load(
-            program,
-            &sidecar,
-            foreign_bindings(ir),
-            callbacks,
-            ir.foreign_aggregates.clone(),
-        ) {
-            Ok(session) => session,
-            Err(error) => {
-                err!("kira instruments: cannot load the foreign-adapter sidecar: {error}");
-                return EXIT_FAILURE;
-            }
-        };
-        // SAFETY: see the no-foreign branch above; the sidecar is still part
-        // of this single CLI-owned run boundary.
-        unsafe {
-            env::with_arguments(program_arguments, || {
-                session.run_with_debug(&mut profiler).map(|_| ())
-            })
-        }
-    };
-    if let Err(error) = outcome {
-        err!("kira instruments: runtime trap: {error}");
-        return EXIT_FAILURE;
-    }
-    let report = profiler.finish();
-    out!(
-        "{}",
-        kira_instruments::render_text(&report, max_functions, max_sites)
-    );
-    EXIT_OK
-}
-
 /// Builds and runs a hybrid bundle with the VM debugger attached to its VM half.
 pub fn run_hybrid(
     ir: &IrProgram,
@@ -313,10 +260,6 @@ pub fn run_hybrid(
     options: &DebugOptions,
     info: &DebugInfo,
 ) -> i32 {
-    if options.lldb_dap {
-        err!("kira debug: `--lldb-dap` currently supports only the VM backend");
-        return EXIT_FAILURE;
-    }
     let bundle =
         match hybrid::build_debug(ir, source, options.compile.emit_llvm_ir, foreign_link, info) {
             Ok(bundle) => bundle,
@@ -326,6 +269,9 @@ pub fn run_hybrid(
             }
         };
     out!("hybrid debug bundle: {}", bundle.manifest.display());
+    if options.lldb_dap {
+        return run_hybrid_under_lldb_dap(source, options, info, &bundle);
+    }
     if options.lldb {
         return run_hybrid_under_lldb(source, options, info, &bundle);
     }
@@ -443,6 +389,50 @@ fn run_hybrid_under_lldb(
     }
 }
 
+/// Runs a hybrid host through LLDB's Debug Adapter Protocol.
+fn run_hybrid_under_lldb_dap(
+    source: &Path,
+    options: &DebugOptions,
+    info: &DebugInfo,
+    bundle: &hybrid::HybridBundle,
+) -> i32 {
+    let manifest = match read_hybrid_manifest(&bundle.manifest) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let target = match std::env::current_exe() {
+        Ok(target) => target,
+        Err(error) => {
+            err!("kira debug: cannot locate the LLDB DAP host executable: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let (native_symbols, needs_vm_probe) = match hybrid_breakpoints(&manifest, options) {
+        Ok(breakpoints) => breakpoints,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let mut launch = LldbDapLaunch::new(&target);
+    for symbol in &native_symbols {
+        launch.add_breakpoint(LldbDapBreakpoint::new(symbol));
+    }
+    if needs_vm_probe {
+        launch.add_breakpoint(LldbDapBreakpoint::new(VM_PROBE_SYMBOL));
+        launch.set_text_symbol(VM_TEXT_SYMBOL);
+    }
+    launch.set_disassemble(options.disassemble);
+    launch.set_continue_count(options.dap_continues);
+    launch.arguments = hybrid_host_arguments(&bundle.manifest, source, options);
+    print_llvm_source_context(source, info, &native_symbols);
+    out!("LLDB DAP hybrid host: {}", target.display());
+    run_dap_launch(launch)
+}
+
 /// Runs the private host command an LLDB launch uses for a hybrid session.
 pub(crate) fn run_hybrid_host(args: &[String]) -> i32 {
     let options = match parse_hybrid_host_args(args) {
@@ -459,30 +449,56 @@ pub(crate) fn run_hybrid_host(args: &[String]) -> i32 {
             return EXIT_FAILURE;
         }
     };
-    let mut debugger = VmDebugger::new(VmDebuggerMode::Batch);
-    debugger.set_disassemble_on_stop(options.disassemble);
     let functions = session
         .manifest()
         .functions
         .iter()
         .map(|function| (function.id, function.name.as_str()))
         .collect::<Vec<_>>();
-    if let Some(source) = options.source.as_deref() {
-        debugger.set_source_file(source, &functions);
-    }
-    for breakpoint in &options.breakpoints {
-        if !debugger.add_breakpoint_text(breakpoint) {
-            err!("kira: invalid VM breakpoint `{breakpoint}`");
-            return EXIT_FAILURE;
+
+    // Two observers, because a hybrid host is driven two ways. `--lldb` runs
+    // this host beside an LLDB that owns the native half, and the VM half
+    // reports its own stops as text. A frontend that owns the whole session
+    // instead needs the stops to come through the native probe, so that one
+    // debugger controls both halves.
+    let result = match options.probe {
+        true => {
+            let breakpoints = match vm_lldb::probe_breakpoints(&options.breakpoints, &functions) {
+                Ok(breakpoints) => breakpoints,
+                Err(error) => {
+                    err!("kira: {error}");
+                    return EXIT_FAILURE;
+                }
+            };
+            let mut observer = VmLldbObserver::with_breakpoints(breakpoints);
+            // SAFETY: this private host owns the entire debugged process and
+            // does not access the process environment from another thread
+            // while the session runs.
+            unsafe {
+                env::with_arguments(&options.program_arguments, || {
+                    session.run_with_debug(&mut observer)
+                })
+            }
         }
-    }
-    // SAFETY: this private host owns the entire debugged process and does not
-    // access the process environment from another thread while the session
-    // runs. The values are the user arguments after the host's `--` marker.
-    let result = unsafe {
-        env::with_arguments(&options.program_arguments, || {
-            session.run_with_debug(&mut debugger)
-        })
+        false => {
+            let mut debugger = VmDebugger::new(VmDebuggerMode::Batch);
+            debugger.set_disassemble_on_stop(options.disassemble);
+            if let Some(source) = options.source.as_deref() {
+                debugger.set_source_file(source, &functions);
+            }
+            for breakpoint in &options.breakpoints {
+                if !debugger.add_breakpoint_text(breakpoint) {
+                    err!("kira: invalid VM breakpoint `{breakpoint}`");
+                    return EXIT_FAILURE;
+                }
+            }
+            // SAFETY: the same host-owned environment boundary as above.
+            unsafe {
+                env::with_arguments(&options.program_arguments, || {
+                    session.run_with_debug(&mut debugger)
+                })
+            }
+        }
     };
     match result {
         Ok(()) => EXIT_OK,
@@ -499,6 +515,8 @@ struct HybridHostOptions {
     source: Option<PathBuf>,
     breakpoints: Vec<String>,
     disassemble: bool,
+    /// Whether the VM half reports through the native probe rather than as text.
+    probe: bool,
     program_arguments: Vec<String>,
 }
 
@@ -507,6 +525,7 @@ fn parse_hybrid_host_args(args: &[String]) -> Result<HybridHostOptions, String> 
     let mut source = None;
     let mut breakpoints = Vec::new();
     let mut disassemble = false;
+    let mut probe = false;
     let mut program_arguments = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -534,6 +553,7 @@ fn parse_hybrid_host_args(args: &[String]) -> Result<HybridHostOptions, String> 
             }
             "--vm-disassemble" => disassemble = true,
             "--vm-no-disassemble" => disassemble = false,
+            "--vm-probe" => probe = true,
             "--" => {
                 program_arguments.extend(args[index + 1..].iter().cloned());
                 break;
@@ -547,6 +567,7 @@ fn parse_hybrid_host_args(args: &[String]) -> Result<HybridHostOptions, String> 
         source,
         breakpoints,
         disassemble,
+        probe,
         program_arguments,
     })
 }
@@ -568,6 +589,9 @@ fn hybrid_host_arguments(manifest: &Path, source: &Path, options: &DebugOptions)
     } else {
         "--vm-no-disassemble".to_owned()
     });
+    if options.prepare || options.lldb_dap {
+        arguments.push("--vm-probe".to_owned());
+    }
     arguments.push("--".to_owned());
     arguments.extend(options.compile.program_arguments.iter().cloned());
     arguments
@@ -602,6 +626,50 @@ fn manifest_function<'a>(
     })
 }
 
+fn hybrid_breakpoints(
+    manifest: &HybridManifest,
+    options: &DebugOptions,
+) -> Result<(Vec<String>, bool), String> {
+    let mut native_symbols = Vec::new();
+    let mut needs_vm_probe = false;
+    if options.breakpoints.is_empty() {
+        if let Some(entry) = manifest
+            .entry
+            .and_then(|id| manifest.functions.iter().find(|function| function.id == id))
+        {
+            match entry.execution {
+                Execution::Native => {
+                    if let Some(symbol) = entry.exported_name.as_deref() {
+                        native_symbols.push(symbol.to_owned());
+                    }
+                }
+                Execution::Runtime | Execution::Inherited => needs_vm_probe = true,
+            }
+        }
+    } else {
+        for requested in &options.breakpoints {
+            let name = breakpoint_function_name(requested);
+            let Some(function) = manifest_function(&manifest.functions, name) else {
+                return Err(format!(
+                    "no Hybrid function matches breakpoint `{requested}`"
+                ));
+            };
+            match function.execution {
+                Execution::Native => {
+                    let Some(symbol) = function.exported_name.as_deref() else {
+                        return Err(format!(
+                            "Hybrid function `{name}` has no native breakpoint symbol"
+                        ));
+                    };
+                    native_symbols.push(symbol.to_owned());
+                }
+                Execution::Runtime | Execution::Inherited => needs_vm_probe = true,
+            }
+        }
+    }
+    Ok((native_symbols, needs_vm_probe))
+}
+
 /// Builds a native executable with debug metadata and hands it to real LLDB.
 pub fn run_llvm(
     ir: &IrProgram,
@@ -610,10 +678,6 @@ pub fn run_llvm(
     options: &DebugOptions,
     info: &DebugInfo,
 ) -> i32 {
-    if options.lldb_dap {
-        err!("kira debug: `--lldb-dap` currently supports only the VM backend");
-        return EXIT_FAILURE;
-    }
     let artifacts = match native::build_debug(
         ir,
         source,
@@ -632,42 +696,101 @@ pub fn run_llvm(
         err!("kira debug: the LLVM build produced no executable");
         return EXIT_FAILURE;
     };
+    if options.lldb_dap {
+        return run_llvm_under_lldb_dap(ir.main, source, options, info, target);
+    }
     let mut launch = LldbLaunch::from_info(&target, info);
     launch.breakpoints.clear();
-    if options.breakpoints.is_empty() {
-        if let Some(function) = ir
-            .main
-            .and_then(|id| info.functions.iter().find(|function| function.id == id))
-            && let Some(symbol) = function.symbol.as_deref()
-        {
-            launch.add_breakpoint(symbol);
+    let symbols = match llvm_breakpoint_symbols(ir.main, &options.breakpoints, info) {
+        Ok(symbols) => symbols,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
         }
-    } else {
-        for requested in &options.breakpoints {
-            let name = requested
-                .rsplit_once(':')
-                .filter(|(_, pc)| pc.parse::<usize>().is_ok())
-                .map_or(requested.as_str(), |(name, _)| name);
-            let Some(function) = info.functions.iter().find(|function| {
-                function.name == name
-                    || function.symbol.as_deref() == Some(name)
-                    || function.id.to_string() == name
-            }) else {
-                err!("kira debug: no LLVM function matches breakpoint `{requested}`");
-                return EXIT_FAILURE;
-            };
-            let Some(symbol) = function.symbol.as_deref() else {
-                err!("kira debug: `{name}` has no native body in this build");
-                return EXIT_FAILURE;
-            };
-            launch.add_breakpoint(symbol);
-        }
+    };
+    for symbol in &symbols {
+        launch.add_breakpoint(symbol);
     }
     launch.disassemble = options.disassemble;
     launch.batch = options.batch;
     launch.arguments = options.compile.program_arguments.clone();
     print_llvm_source_context(source, info, &launch.breakpoints);
     out!("LLDB target: {}", target.display());
+    match launch.launch() {
+        Ok(output) => {
+            if !output.stdout.is_empty() {
+                print!("{}", output.stdout);
+            }
+            if !output.stderr.is_empty() {
+                eprint!("{}", output.stderr);
+            }
+            EXIT_OK
+        }
+        Err(error) => {
+            err!("kira: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+fn run_llvm_under_lldb_dap(
+    main: Option<u32>,
+    source: &Path,
+    options: &DebugOptions,
+    info: &DebugInfo,
+    target: PathBuf,
+) -> i32 {
+    let symbols = match llvm_breakpoint_symbols(main, &options.breakpoints, info) {
+        Ok(symbols) => symbols,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let mut launch = LldbDapLaunch::new(&target);
+    for symbol in &symbols {
+        launch.add_breakpoint(LldbDapBreakpoint::new(symbol));
+    }
+    launch.set_disassemble(options.disassemble);
+    launch.set_continue_count(options.dap_continues);
+    launch.arguments = options.compile.program_arguments.clone();
+    print_llvm_source_context(source, info, &symbols);
+    out!("LLDB DAP target: {}", target.display());
+    run_dap_launch(launch)
+}
+
+fn llvm_breakpoint_symbols(
+    main: Option<u32>,
+    requested: &[String],
+    info: &DebugInfo,
+) -> Result<Vec<String>, String> {
+    if requested.is_empty() {
+        return Ok(main
+            .and_then(|id| info.functions.iter().find(|function| function.id == id))
+            .and_then(|function| function.symbol.clone())
+            .into_iter()
+            .collect());
+    }
+    requested
+        .iter()
+        .map(|requested| {
+            let name = breakpoint_function_name(requested);
+            let Some(function) = info.functions.iter().find(|function| {
+                function.name == name
+                    || function.symbol.as_deref() == Some(name)
+                    || function.id.to_string() == name
+            }) else {
+                return Err(format!("no LLVM function matches breakpoint `{requested}`"));
+            };
+            function
+                .symbol
+                .clone()
+                .ok_or_else(|| format!("`{name}` has no native body in this build"))
+        })
+        .collect()
+}
+
+fn run_dap_launch(launch: LldbDapLaunch) -> i32 {
     match launch.launch() {
         Ok(output) => {
             if !output.stdout.is_empty() {
@@ -716,19 +839,6 @@ fn print_llvm_source_context(source: &Path, info: &DebugInfo, breakpoints: &[Str
 fn runtime_error(error: impl std::fmt::Display) -> i32 {
     err!("kira: runtime trap: {error}");
     EXIT_FAILURE
-}
-
-fn foreign_bindings(ir: &IrProgram) -> Vec<kira_main::ForeignBinding> {
-    ir.foreign_imports
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            kira_main::ForeignBinding::new(
-                kira_llvm_backend::adapter_name(index),
-                entry.import.signature().clone(),
-            )
-        })
-        .collect()
 }
 
 /// Maps compiler backend selection to shared debugger metadata.

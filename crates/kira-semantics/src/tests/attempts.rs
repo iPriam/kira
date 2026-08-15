@@ -238,8 +238,6 @@ fn an_array_payload_resolves() {
 /// struct exists so a payload may name a struct. Both directions work because
 /// the enum declaration arrives in two parts.
 ///
-/// This case previously recorded the opposite — a struct payload could not
-/// resolve at all — as accepted behavior. It was a hole, not a rule.
 #[test]
 fn a_struct_payload_resolves_against_a_struct_declared_anywhere() {
     assert!(

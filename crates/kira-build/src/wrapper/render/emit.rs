@@ -229,9 +229,9 @@ fn library_struct(model: &Model) -> String {
          /// `Sync`: one instance belongs to one thread, and the `Rc` inside says so\n\
          /// to the compiler rather than to a comment.\n\
          ///\n\
-         /// `{param}` is the host the library's effects go to — `print` and nothing\n\
-         /// else in v1. It defaults to `StdoutHost`, so `load()` needs no type\n\
-         /// annotation; supply your own with `load_with`.\n\
+         /// `{param}` supplies the library's host capabilities. It defaults to\n\
+         /// `StdoutHost`, so `load()` needs no type annotation; supply your own\n\
+         /// with `load_with`.\n\
          pub struct {ty}<{bound} = StdoutHost> {{\n\
          \x20   /// The running instance, shared with every handle into it so that\n\
          \x20   /// dropping a handle can release the object it names.\n\

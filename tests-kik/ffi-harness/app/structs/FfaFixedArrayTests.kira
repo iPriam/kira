@@ -1,0 +1,66 @@
+import Foundation
+
+// @FFI.Array inline fixed-array element stores/reads inside @Native code.
+// Prefix: ffa / Ffa. this file imports Foundation explicitly (imports are file-scoped).
+//
+// An @FFI.Array field is INLINE `[count x element]` C storage, not a heap
+// kira-array. Regression guarded here: the element assignment used to lower to
+// a kira-array runtime store against the inline bytes — a silent no-op that
+// lost the store AND leaked the cloned element shell (the
+// ffi_nested_fixed_array_assignment native leak). The store now writes the
+// element into the inline storage and the read-back proves it persisted.
+
+@FFI.Struct { layout: c; }
+struct FfaColorAction {
+    var load_action: I32
+}
+
+@FFI.Array { element: FfaColorAction; count: 4; }
+struct FfaColorArray4 {}
+
+@FFI.Struct { layout: c; }
+struct FfaPassAction {
+    var colors: FfaColorArray4
+}
+
+@FFI.Struct { layout: c; }
+struct FfaPass {
+    var action: FfaPassAction
+}
+
+// Store into two inline slots through the nested field chain, then score the
+// read-backs: slot 0 and 2 must hold the stored value, slot 1 must stay
+// zero-initialized.
+@Native
+function ffaStoreReadback() -> Int {
+    var pass = FfaPass {}
+    var color = FfaColorAction {}
+    color.load_action = 7
+    pass.action.colors.elements[0] = color
+    pass.action.colors.elements[2] = color
+    var total = 0
+    if pass.action.colors.elements[0].load_action == 7 { total = total + 100 }
+    if pass.action.colors.elements[1].load_action == 0 { total = total + 10 }
+    if pass.action.colors.elements[2].load_action == 7 { total = total + 1 }
+    return total
+}
+
+Test FfaInlineArrayStoreReadback {
+    test { return ffaStoreReadback() }
+    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+}
+
+// Churn the store/read cycle so a per-iteration native leak (the old orphaned
+// element clone) scales and surfaces in the harness leak run.
+Test FfaInlineArrayChurn {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 100 {
+            acc = acc + ffaStoreReadback()
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(11100); return e }
+}

@@ -99,6 +99,93 @@ fn a_path_outside_a_crate_names_no_package() {
     assert_eq!(package_of("AGENTS.md"), None);
 }
 
+/// A suite whose tests live in their own binary selects that binary.
+///
+/// `cargo test -p kira-cli -- backend_parity` matched nothing and exited zero:
+/// a binary's name is no part of any test's name. The gate ran the parity
+/// suite for months and proved nothing by it.
+#[test]
+fn a_suite_that_names_a_test_binary_selects_it_with_the_target_flag() {
+    let args = cargo_arguments(
+        Some("backend_parity"),
+        None,
+        "debug",
+        None,
+        Fallback::Workspace,
+    );
+    assert_eq!(
+        args,
+        vec![
+            "test",
+            "-p",
+            "kira-cli",
+            "--test",
+            "backend_parity",
+            "--no-fail-fast"
+        ]
+    );
+}
+
+/// A suite whose tests are a module of a shared binary still narrows by name.
+#[test]
+fn a_suite_that_names_a_module_still_filters_by_name() {
+    let args = cargo_arguments(Some("hybrid"), None, "debug", None, Fallback::Workspace);
+    assert_eq!(
+        args,
+        vec![
+            "test",
+            "-p",
+            "kira-hybrid-runtime",
+            "-p",
+            "kira-cli",
+            "--no-fail-fast",
+            "--",
+            "seam"
+        ]
+    );
+}
+
+/// A caller's own package wins over the suite's, and the suite's binary is not
+/// forced onto it: a package with no such target would fail the run outright.
+#[test]
+fn a_named_package_drops_the_suites_target() {
+    let args = cargo_arguments(
+        Some("backend_parity"),
+        Some("kira-vm-runtime"),
+        "debug",
+        None,
+        Fallback::Workspace,
+    );
+    assert_eq!(
+        args,
+        vec!["test", "-p", "kira-vm-runtime", "--no-fail-fast"]
+    );
+}
+
+/// A named suite that matched no test proved nothing, whatever cargo exited.
+#[test]
+fn a_suite_that_matched_no_test_is_not_a_pass() {
+    let run = Run {
+        command: vec!["cargo".to_owned(), "test".to_owned()],
+        cwd: ".".to_owned(),
+        exit_code: Some(0),
+        timed_out: false,
+        duration_seconds: 1.0,
+        stdout: "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured\n".to_owned(),
+        stderr: String::new(),
+    };
+    let tally = parse_tally(&run.stdout);
+    let failure = ran_nothing("backend_parity", &run, &tally).expect("an empty suite is reported");
+    assert_eq!(failure.kind, FailureKind::CapabilityMissing);
+
+    // A suite that ran tests is left alone.
+    let ran = Run {
+        stdout: "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured\n".to_owned(),
+        ..run
+    };
+    assert!(ran_nothing("backend_parity", &ran, &parse_tally(&ran.stdout)).is_none());
+}
+
 /// An unknown suite is refused before anything is spawned, so a typo never
 /// silently becomes the whole workspace.
 #[test]

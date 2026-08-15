@@ -1,5 +1,5 @@
-//! A native build large enough to be split across codegen units, proved to run
-//! as the one module it used to be.
+//! A native build large enough to be split across codegen units, with behavior
+//! matching the equivalent VM program.
 //!
 //! The split is invisible by design — the bodies are dealt out, the linker puts
 //! them back — so the only proof worth having is behavioural: the same program

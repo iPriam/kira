@@ -145,24 +145,34 @@ mod tests {
     }
 
     fn bundle(bytecode: &[u8], library: &[u8]) -> Bundle {
-        Bundle::build(
-            RunnerId::Desktop,
-            BuildProfile::Debug,
-            vec![
-                NamedPayload {
-                    name: "app.kbc".to_owned(),
-                    kind: PayloadKind::VmBytecode,
-                    bytes: bytecode.to_vec(),
-                },
-                NamedPayload {
-                    name: "libapp.dylib".to_owned(),
-                    kind: PayloadKind::NativeLibrary,
-                    bytes: library.to_vec(),
-                },
-            ],
-            0,
-        )
-        .expect("a valid bundle")
+        bundle_with_dependency(bytecode, library, None)
+    }
+
+    fn bundle_with_dependency(
+        bytecode: &[u8],
+        library: &[u8],
+        dependency: Option<&[u8]>,
+    ) -> Bundle {
+        let mut payloads = vec![
+            NamedPayload {
+                name: "app.kbc".to_owned(),
+                kind: PayloadKind::VmBytecode,
+                bytes: bytecode.to_vec(),
+            },
+            NamedPayload {
+                name: "libapp.dylib".to_owned(),
+                kind: PayloadKind::NativeLibrary,
+                bytes: library.to_vec(),
+            },
+        ];
+        if let Some(dependency) = dependency {
+            payloads.push(NamedPayload {
+                name: "sibling.dll".to_owned(),
+                kind: PayloadKind::NativeDependency,
+                bytes: dependency.to_vec(),
+            });
+        }
+        Bundle::build(RunnerId::Desktop, BuildProfile::Debug, payloads, 0).expect("a valid bundle")
     }
 
     /// The runner must never delete a directory it did not stage. `--cache` is
@@ -237,6 +247,28 @@ mod tests {
 
         let bytecode = dir.0.join(kira_live::PAYLOAD_DIR).join("app.kbc");
         assert_eq!(fs::read(&bytecode).expect("read"), b"KBC1 after!");
+    }
+
+    #[test]
+    fn restaging_writes_a_changed_native_dependency() {
+        let dir = TempDir::new("dependency-changed");
+        stage_fresh(
+            &dir.0,
+            &bundle_with_dependency(b"KBC1", b"library", Some(b"sibling before")),
+        )
+        .expect("stage");
+        restage_changed(
+            &dir.0,
+            &bundle_with_dependency(b"KBC1", b"library", Some(b"sibling after")),
+        )
+        .expect("restage");
+
+        let dependency = dir.0.join(kira_live::PAYLOAD_DIR).join("sibling.dll");
+        assert_eq!(
+            fs::read(&dependency).expect("read"),
+            b"sibling after",
+            "a changed load-time dependency was not restaged"
+        );
     }
 
     /// A payload on disk is trusted only if it hashes right. Something else

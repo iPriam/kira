@@ -444,7 +444,18 @@ impl Analyzer<'_> {
         }
 
         if arms.is_empty() {
-            let ctx = FnCtx::new(result);
+            let mut ctx = FnCtx::new(result);
+            // The parameters are declared even though nothing reads them, on the
+            // same terms the tree below declares them: `param_count` counts the
+            // receiver and every argument, and a function whose locals do not
+            // hold them is one whose two halves disagree about its arity. The
+            // hybrid loader checks exactly that and refuses the program —
+            // "takes N parameters in the manifest and 0 in the bytecode half" —
+            // for a family none of whose declarations implement the member.
+            ctx.declare_hidden_as(Type::Enum(enum_id), false, OwnershipMode::BorrowRead);
+            for &ty in &params {
+                ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead);
+            }
             let body = if result == Type::Void {
                 vec![self.program.stmts.alloc(HirStmt::Return { value: None })]
             } else {

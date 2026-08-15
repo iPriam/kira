@@ -239,6 +239,40 @@ impl Analyzer<'_> {
             .native_state_target(self.program.expr(*state).type_of())
     }
 
+    /// Re-answers every callback-state identity once the program's shapes are
+    /// final.
+    ///
+    /// A type id fingerprints a declaration's shape, and one shape is not final
+    /// while bodies are still being analyzed: a closure's representation struct
+    /// gains a field per capture, so a function type's repr grows as literals of
+    /// it are found. A `nativeState` in the first file analyzed and a
+    /// `nativeRecover<T>` in the last would fingerprint two different shapes of
+    /// one type, and a correct program's recovery would be refused at run time.
+    ///
+    /// So an id is written twice: where the call is analyzed, so a type with no
+    /// identity is refused at its own line, and again here, when every shape is
+    /// final and the two sites cannot disagree.
+    pub(crate) fn finalize_native_state_type_ids(&mut self) {
+        let types = &self.program.types;
+        for (_, expr) in self.program.exprs.iter_mut() {
+            match expr {
+                HirExpr::NativeState { type_id, ty, .. } => {
+                    if let Some(target) = types.native_state_target(*ty)
+                        && let Some(final_id) = types.native_state_type_id(target)
+                    {
+                        *type_id = final_id;
+                    }
+                }
+                HirExpr::NativeRecover { type_id, ty, .. } => {
+                    if let Some(final_id) = types.native_state_type_id(*ty) {
+                        *type_id = final_id;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn native_state_eligible(&self, ty: Type) -> bool {
         self.native_state_eligible_inner(ty, &mut HashSet::new())
     }
@@ -262,20 +296,28 @@ impl Analyzer<'_> {
                 .element(id)
                 .is_some_and(|element| self.native_state_eligible_inner(element, visiting)),
             Type::Enum(id) => self.native_state_enum_eligible(id, visiting),
+            // A capture cell goes in *shared*, which is the only way it could
+            // go in at all: a closure inside the state and the frame that
+            // declared the `var` are two holders of one box, and a copy would
+            // give them a box each. The state holds a share like any other
+            // holder, and gives it back when the state is freed — nothing is
+            // handed to a host, which only ever sees an opaque token. What the
+            // box holds still answers this question on its own terms.
+            Type::Cell(id) => self
+                .program
+                .types
+                .cells()
+                .inner(id)
+                .is_some_and(|inner| self.native_state_eligible_inner(inner, visiting)),
             // Recovering callback state is *typed*: `nativeRecover<T>` checks a
             // runtime identity against `T`. `Any` has no identity to check
             // (`TypeTable::native_state_type_id` gives it none), so boxing one
             // would produce state nothing could ever recover.
-            // A capture cell is refused with them: boxing one would hand a host
-            // shared mutable storage whose count this runtime owns, and
-            // `native_state_type_id` gives a cell no identity to recover
-            // against either.
             Type::Void
             | Type::Error
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
-            | Type::Cell(_)
             | Type::Any => false,
         };
         visiting.remove(&ty);
@@ -307,13 +349,10 @@ impl Analyzer<'_> {
 
     /// Whether an enum may be boxed as callback state.
     ///
-    /// A variant's payload answers by the same rule as any other value, with no
-    /// list of admitted shapes: [`kira_runtime_abi::NativeStateValue`] carries a
-    /// tag beside an optional payload of *any* of its own forms, so a struct or
-    /// an array payload boxes exactly as one held directly in a field does. The
-    /// shorter list this used to carry predated a variant being able to hold a
-    /// struct at all, and outliving that is what kept an application's own view
-    /// tree — an enum of shapes, each with its own payload — out of a box.
+    /// A variant's payload answers by the same rule as any other value.
+    /// [`kira_runtime_abi::NativeStateValue`] carries a tag beside an optional
+    /// payload, so struct and array payloads use the same boxed representation
+    /// as direct fields.
     fn native_state_enum_eligible(&self, id: EnumId, visiting: &mut HashSet<Type>) -> bool {
         self.program.types.enums().get(id).is_some_and(|def| {
             def.variants.iter().all(|variant| {
