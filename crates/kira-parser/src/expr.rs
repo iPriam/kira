@@ -423,6 +423,7 @@ impl Parser<'_> {
                 type_args,
                 args,
                 children: Vec::new(),
+                trailing_closure: None,
                 span,
             })
         } else if self.at_bare_construct_block() || self.at_content_block() {
@@ -432,7 +433,7 @@ impl Parser<'_> {
             // `HGroup { child spacing: 8 }` names the enclosing construction's
             // input the way a construction with an argument list would.
             let mut args = Vec::new();
-            let children = self.parse_trailing_block(&mut args);
+            let brace = self.parse_deferred_brace(&mut args);
             let span = Span::from_bounds(name_span.start, self.previous_end());
             self.tree.add_expr(Expr::Call {
                 callee: symbol,
@@ -440,7 +441,8 @@ impl Parser<'_> {
                 braced: true,
                 type_args,
                 args,
-                children,
+                children: brace.children,
+                trailing_closure: brace.closure,
                 span,
             })
         } else if self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()

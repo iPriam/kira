@@ -110,6 +110,15 @@ pub enum Expr {
         /// anything else. A closure trailing block is not this — that attaches
         /// as a final argument in [`args`](Expr::Call::args).
         children: Vec<ExprId>,
+        /// The same trailing brace read as a zero-parameter closure, when it
+        /// reads that way.
+        ///
+        /// A `{` with no `in` is genuinely ambiguous — `HStack { Text("a") }`
+        /// passes children and `doThing { print("a") }` passes a closure — and
+        /// only the callee tells them apart. The parser cannot know the callee,
+        /// so it stops guessing: both readings are carried and analysis, which
+        /// holds the signature, takes the one the parameter asks for.
+        trailing_closure: Option<TrailingClosure>,
         /// Span covering the whole call.
         span: Span,
     },
@@ -279,6 +288,10 @@ pub enum Expr {
     Content {
         /// The block's content items, in order.
         children: Vec<ExprId>,
+        /// The same brace read as a zero-parameter closure, when it reads
+        /// cleanly both ways — see
+        /// [`Call::trailing_closure`](Expr::Call::trailing_closure).
+        closure: Option<ExprId>,
         /// Span covering the braces and their contents.
         span: Span,
     },
@@ -311,6 +324,24 @@ pub struct ClosureParam {
     pub name: Symbol,
     /// Span of the name token.
     pub span: Span,
+}
+
+/// A trailing `{ … }` with no `in`, read as a zero-parameter closure.
+///
+/// Carried beside the content reading of the same brace, with everything
+/// analysis needs to swap one reading for the other: a brace that turns out to
+/// be a closure both *adds* an argument and *removes* the ones its content
+/// reading contributed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrailingClosure {
+    /// The brace read as a zero-parameter closure.
+    pub closure: ExprId,
+    /// Where the closure sits among [`Expr::Call::args`] — after the
+    /// parenthesized arguments, before any named fill written after the brace.
+    pub slot: u32,
+    /// How many arguments the content reading of this brace contributed at
+    /// [`slot`](Self::slot), which the closure reading replaces.
+    pub content_args: u32,
 }
 
 /// One argument of an [`Expr::Call`] or [`Expr::MethodCall`].

@@ -94,6 +94,7 @@ impl Analyzer<'_> {
                 Expr::Content {
                     children: items,
                     span: block,
+                    ..
                 } => self.fill_slot_from_children(ctx, &slot, &items, name, initializers, block),
                 _ => self.fill_slot_from_value(ctx, &slot, fill.value, name, initializers),
             }

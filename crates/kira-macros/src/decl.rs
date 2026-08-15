@@ -787,8 +787,7 @@ mod tests {
     fn a_parenthesized_payload_is_the_variants_type_not_a_variant() {
         // The `Name(Type)` form went unscanned, so the payload type came back as
         // a variant of its own and every derive emitted an arm for it.
-        let declaration =
-            scan_text("enum Note {\n    Blank\n    Rank(Int)\n    Tag(String)\n}\n");
+        let declaration = scan_text("enum Note {\n    Blank\n    Rank(Int)\n    Tag(String)\n}\n");
         let names: Vec<&str> = declaration
             .fields
             .iter()

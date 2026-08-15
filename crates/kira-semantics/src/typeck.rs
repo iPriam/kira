@@ -25,6 +25,7 @@ mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
+mod overloads;
 mod print;
 mod qualified;
 
@@ -243,6 +244,7 @@ impl Analyzer<'_> {
                 type_args,
                 args,
                 children,
+                trailing_closure,
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
@@ -261,6 +263,37 @@ impl Analyzer<'_> {
                 let is_construct_construction = (self.construct_backed_named(&name).is_some()
                     && local.is_none())
                     || is_construct_update;
+                // The callee decides what the brace was. A parameter of function
+                // type at the slot the brace sits in means it was a closure
+                // written without an `in`; it joins the arguments the way a
+                // written trailing closure does, and the children are dropped
+                // unanalyzed, having never been the reading this call meant.
+                let closure_wanted = trailing_closure.as_ref().is_some_and(|trailing| {
+                    !is_construct_construction
+                        && self.visible_overloads(&name).iter().any(|&id| {
+                            self.param_types(id)
+                                .get(trailing.slot as usize)
+                                .is_some_and(|&ty| self.as_function_type(ty).is_some())
+                        })
+                });
+                let (args, children) = match trailing_closure {
+                    Some(trailing) if closure_wanted => {
+                        let mut args = args;
+                        let slot = (trailing.slot as usize).min(args.len());
+                        let taken = (trailing.content_args as usize).min(args.len() - slot);
+                        args.splice(
+                            slot..slot + taken,
+                            [CallArg {
+                                label: None,
+                                label_span: None,
+                                value: trailing.closure,
+                                span: self.tree.expr(trailing.closure).span(),
+                            }],
+                        );
+                        (args, Vec::new())
+                    }
+                    _ => (args, children),
+                };
                 if !children.is_empty() && !is_construct_construction {
                     for &child in &children {
                         self.analyze_expr(ctx, child);
@@ -341,7 +374,7 @@ impl Analyzer<'_> {
                     && local.is_none()
                 {
                     self.link_type_name(&name, callee_span);
-                    return self.analyze_construct_new(ctx, id, &args, &children, callee_span);
+                    return self.analyze_construction(ctx, id, &args, &children, callee_span);
                 }
                 // Empty bare braces are also the spelling of an empty data
                 // struct literal. The parser keeps the braces on the call so
@@ -629,7 +662,19 @@ impl Analyzer<'_> {
             // A bare `{ … }` block is the anonymous spelling of a named child
             // fill, so it is a value nowhere else. Its children are analyzed so
             // their own mistakes surface before it is refused.
-            Expr::Content { ref children, span } => {
+            // Unless the position asks for a function: then the same brace is a
+            // closure the author wrote without an `in`. The parser carried both
+            // readings because only the expectation tells them apart, and here
+            // it is.
+            Expr::Content {
+                closure: Some(closure),
+                ..
+            } if expected.is_some_and(|ty| self.as_function_type(ty).is_some()) => {
+                self.analyze_expr_expecting(ctx, closure, expected)
+            }
+            Expr::Content {
+                ref children, span, ..
+            } => {
                 let children = children.clone();
                 for &child in &children {
                     self.analyze_expr(ctx, child);

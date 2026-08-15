@@ -57,6 +57,13 @@ pub(crate) struct Callable<'a> {
     /// subclass's `speak`, so an override wins with nothing to dispatch at run
     /// time. Empty for the function as written.
     pub(crate) specialize: Vec<(usize, StructId)>,
+    /// The construct-backed declaration this is an `init(…)` of.
+    ///
+    /// An initializer produces a value rather than running on one, so it carries
+    /// no [`receiver`](Callable::receiver): it is a free function whose result is
+    /// the declaration. Set here so the signature pass can give it that result
+    /// and a name of the declaration's own.
+    pub(crate) initializes: Option<StructId>,
     /// The declaration as written.
     pub(crate) function: &'a Function,
     /// The file the declaration was written in.
@@ -65,6 +72,20 @@ pub(crate) struct Callable<'a> {
     /// and so its body resolves qualified names against *that* file's imports —
     /// which is the whole of file scoping.
     pub(crate) source: SourceId,
+}
+
+/// The parameter of one `init(…)` that its construction's trailing children
+/// fill.
+#[derive(Clone, Copy)]
+pub(crate) struct InitContent {
+    /// Which parameter it is. Always the last one: the children are written
+    /// after every parenthesized argument, so they fill the slot that follows
+    /// them.
+    pub(crate) slot: usize,
+    /// Whether it holds an ordered list rather than exactly one child.
+    pub(crate) list: bool,
+    /// The type each child must satisfy.
+    pub(crate) element: Type,
 }
 
 /// One declared default initializer — a struct field's or a function
@@ -126,7 +147,13 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) interner: &'a Names,
     sigs: Vec<FuncSig>,
-    pub(crate) sig_index: HashMap<String, FuncId>,
+    /// Every declaration answering to one written name, in declaration order.
+    ///
+    /// A name carries more than one entry when it is **overloaded**: several
+    /// declarations share it and are told apart by what they take. Resolution
+    /// picks among them at each call; the vector is what makes that possible,
+    /// and a name declared once has a vector of one.
+    pub(crate) sig_index: HashMap<String, Vec<FuncId>>,
     /// Whether each callable, by [`FuncId`], is a method that mutates its
     /// receiver. Computed to a fixpoint after signatures and before bodies (see
     /// [`crate::mutation`]); empty until then.
@@ -242,6 +269,14 @@ pub(crate) struct Analyzer<'a> {
     /// the only place that remembers which struct ids came from one. It never
     /// leaves analysis.
     pub(crate) fn_types: crate::closures::FnTypeTable,
+    /// The **content parameter** of each `init(…)` that declared one, by
+    /// [`FuncId`] index.
+    ///
+    /// An init parameter written `some X` / `[some X]` takes the construction's
+    /// trailing children rather than a written argument, the way a declaration's
+    /// child slot does. This is what makes `NavigationLink(value: v) { Text(…) }`
+    /// reach an init instead of only the parenthesized header.
+    pub(crate) init_content: HashMap<u32, InitContent>,
     /// The id every synthesized function is offset from: the number of
     /// functions the source declares.
     pub(crate) synth_base: u32,
@@ -401,6 +436,7 @@ impl<'a> Analyzer<'a> {
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
+            init_content: HashMap::new(),
             synth_base: 0,
             synth: Vec::new(),
             closure_sites: Vec::new(),
@@ -471,6 +507,9 @@ impl<'a> Analyzer<'a> {
         // here, before any signature can reserve one.
         self.synth_base = callables.len() as u32;
         self.collect_signatures(&callables);
+        // Which init parameters take content is a question about the written
+        // `some X`, and the ids the answer is filed under exist only now.
+        self.record_init_content(&callables);
         // Each `extend` modifier lowers to one synthesized function; its id is
         // reserved here, once `synth_base` is fixed, so an uncalled modifier is
         // still checked and lowered. The bodies are filled after ordinary ones.
@@ -577,6 +616,7 @@ impl<'a> Analyzer<'a> {
                     receiver: None,
                     origin: None,
                     specialize: Vec::new(),
+                    initializes: None,
                     function,
                     source,
                 }),
@@ -595,6 +635,7 @@ impl<'a> Analyzer<'a> {
                             receiver: owner,
                             origin: None,
                             specialize: Vec::new(),
+                            initializes: None,
                             function: method,
                             source,
                         });
@@ -728,6 +769,12 @@ impl<'a> Analyzer<'a> {
     /// colliding with a free function — `.` cannot appear in an identifier, so
     /// no user name can collide with a qualified one.
     pub(crate) fn callable_name(&self, callable: &Callable<'_>) -> String {
+        // Every `init(…)` of one declaration answers to one name, so the
+        // overload set under it is that declaration's initializers and nothing
+        // else. A construction site consults it beside the primary form.
+        if let Some(id) = callable.initializes {
+            return self.initializer_name(id);
+        }
         let written = self.interner.resolve(callable.function.name);
         // A specialization is a distinct callable, so it needs a distinct name.
         // `$` is already the separator inheritance uses for the same reason and
@@ -755,8 +802,15 @@ impl<'a> Analyzer<'a> {
         // is what `ClsSquare.scaledArea()` inside `ClsCube` resolves to. `$`
         // cannot appear in an identifier, so neither can collide with a user
         // name.
+        // Bare lookup is asked with the *member key*, which carries the
+        // parameters an overloaded name is told apart by; the specialization
+        // suffix is not part of what the class declared.
+        let key = self.member_key(
+            self.interner.resolve(callable.function.name),
+            &callable.function.params,
+        );
         match callable.origin {
-            Some(origin) if !self.is_most_derived(id, origin, written) => {
+            Some(origin) if !self.is_most_derived(id, origin, &key) => {
                 let origin = self.program.types.type_name(Type::Struct(origin));
                 format!("{receiver}.{origin}${written}")
             }
@@ -764,13 +818,41 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Whether `origin`'s copy of `method` is the one bare lookup on `class`
-    /// finds.
-    pub(crate) fn is_most_derived(&self, class: StructId, origin: StructId, method: &str) -> bool {
+    /// The name every `init(…)` of `id` is registered under.
+    ///
+    /// `$` cannot appear in an identifier, so this collides with nothing a
+    /// program can write, and the declaration's own name is in it so two
+    /// declarations' initializers never share an overload set.
+    pub(crate) fn initializer_name(&self, id: StructId) -> String {
+        format!("{}$init", self.program.types.type_name(Type::Struct(id)))
+    }
+
+    /// What a class member is known by: its name together with what it takes.
+    ///
+    /// A name alone stopped being an identity when names became overloadable —
+    /// `bump()` and `bump(step: Int)` are two members of one class. The written
+    /// type spelling is used rather than the resolved type because members are
+    /// keyed while classes are being flattened, which is before every type a
+    /// parameter may name has an id.
+    pub(crate) fn member_key(
+        &self,
+        name: &str,
+        params: &[kira_syntax_model::ast::Param],
+    ) -> String {
+        let written: Vec<String> = params
+            .iter()
+            .map(|param| self.written_type_name(param.ty))
+            .collect();
+        format!("{name}({})", written.join(","))
+    }
+
+    /// Whether `origin`'s copy of the member `key` names is the one bare lookup
+    /// on `class` finds.
+    pub(crate) fn is_most_derived(&self, class: StructId, origin: StructId, key: &str) -> bool {
         matches!(
             self.classes
                 .get(&class)
-                .and_then(|info| info.bare_methods.get(method)),
+                .and_then(|info| info.bare_methods.get(key)),
             Some(crate::classes::Member::One(winner)) if *winner == origin
         )
     }
@@ -784,11 +866,10 @@ impl<'a> Analyzer<'a> {
     fn check_main(&mut self) {
         // Snapshot the entrypoint's identity before emitting, so the
         // immutable borrow of `self.sigs` does not overlap `self.emit`.
-        let main = self
-            .sigs
-            .iter()
-            .find(|sig| sig.is_main)
-            .map(|sig| (sig.name.clone(), sig.params.is_empty(), sig.name_span));
+        let main = self.sigs.iter().position(|sig| sig.is_main).map(|index| {
+            let sig = &self.sigs[index];
+            (FuncId(index as u32), sig.params.is_empty(), sig.name_span)
+        });
         match (self.build_kind, main) {
             (BuildKind::Application, None) => {
                 self.emit(
@@ -797,21 +878,21 @@ impl<'a> Analyzer<'a> {
                     "program has no `@Main` function to run",
                 );
             }
-            (BuildKind::Application, Some((name, no_params, name_span))) => {
+            (BuildKind::Application, Some((id, no_params, name_span))) => {
                 if !no_params {
                     self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
                 }
-                self.program.main = self.sig_index.get(&name).copied();
+                self.program.main = Some(id);
             }
             // A library has no entrypoint by definition, so its absence is not
             // an error and `program.main` stays `None`. A test run is the same
             // about absence, and unlike a library it accepts one when written.
             (BuildKind::Library | BuildKind::Test, None) => {}
-            (BuildKind::Test, Some((name, no_params, name_span))) => {
+            (BuildKind::Test, Some((id, no_params, name_span))) => {
                 if !no_params {
                     self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
                 }
-                self.program.main = self.sig_index.get(&name).copied();
+                self.program.main = Some(id);
             }
             (BuildKind::Library, Some((_, _, name_span))) => {
                 self.emit(
@@ -904,7 +985,9 @@ impl<'a> Analyzer<'a> {
             );
         }
         HirFunction {
-            name: self.callable_name(callable),
+            // The symbol, not the written name: two overloads share a name and
+            // a backend has one function per symbol.
+            name: self.function_symbol(id),
             param_count,
             return_type: sig_return,
             locals: ctx.locals,

@@ -215,9 +215,14 @@ impl Analyzer<'_> {
         let Some(receiver) = ctx.receiver else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        // A parent-qualified call names a method, not one of its overloads —
+        // which one it means is decided at the call by the arguments — so the
+        // question here is whether the qualifier declares the name at all.
+        let prefix = format!("{method}(");
         let known = self.classes.get(&receiver).is_some_and(|info| {
             info.qualified_methods
-                .contains(&(qualifier, method.to_owned()))
+                .iter()
+                .any(|(owner, key)| *owner == qualifier && key.starts_with(&prefix))
         });
         if !known {
             let qualifier_name = self.program.types.type_name(Type::Struct(qualifier));
@@ -237,7 +242,7 @@ impl Analyzer<'_> {
             local,
             ty: Type::Struct(receiver),
         });
-        let target = self.parent_call_name(receiver, qualifier, method);
+        let target = self.parent_call_name(ctx, receiver, qualifier, method, &[self_hir], args);
         let call = self.analyze_user_call_from_syntax(ctx, &target, &[self_hir], args, span);
         // A parent-qualified call still runs on this instance's `self`, so a
         // mutating parent method writes `self` back.
@@ -245,14 +250,62 @@ impl Analyzer<'_> {
         call
     }
 
-    /// The registered name of `qualifier`'s copy of `method` for `receiver`.
-    fn parent_call_name(&self, receiver: StructId, qualifier: StructId, method: &str) -> String {
+    /// The registered name `qualifier`'s copy of `method` answers to on
+    /// `receiver`.
+    ///
+    /// A copy an override shadows is registered under a qualified name and one
+    /// that wins bare lookup under the plain one, so an overloaded name can put
+    /// its overloads under *both*: a subclass that overrode one of them shadows
+    /// that one alone. The call therefore picks the name whose declarations
+    /// these arguments fit.
+    fn parent_call_name(
+        &mut self,
+        ctx: &FnCtx,
+        receiver: StructId,
+        qualifier: StructId,
+        method: &str,
+        leading: &[HirExprId],
+        args: &[CallArg],
+    ) -> String {
         let receiver_name = self.program.types.type_name(Type::Struct(receiver));
-        if self.is_most_derived(receiver, qualifier, method) {
-            return format!("{receiver_name}.{method}");
-        }
         let qualifier_name = self.program.types.type_name(Type::Struct(qualifier));
-        format!("{receiver_name}.{qualifier_name}${method}")
+        let plain = format!("{receiver_name}.{method}");
+        let shadowed = format!("{receiver_name}.{qualifier_name}${method}");
+        let prefix = format!("{method}(");
+        let keys: Vec<String> = self
+            .classes
+            .get(&receiver)
+            .into_iter()
+            .flat_map(|info| info.qualified_methods.iter())
+            .filter(|(owner, key)| *owner == qualifier && key.starts_with(&prefix))
+            .map(|(_, key)| key.clone())
+            .collect();
+        let mut names: Vec<String> = keys
+            .iter()
+            .map(|key| {
+                if self.is_most_derived(receiver, qualifier, key) {
+                    plain.clone()
+                } else {
+                    shadowed.clone()
+                }
+            })
+            .collect();
+        names.dedup();
+        match names.as_slice() {
+            [] => plain,
+            [only] => only.clone(),
+            _ => {
+                let actual = self.try_argument_types(ctx, leading, args);
+                names
+                    .iter()
+                    .find(|name| {
+                        let candidates = self.visible_overloads(name);
+                        self.resolve_overload(&candidates, &actual).is_ok()
+                    })
+                    .cloned()
+                    .unwrap_or(plain)
+            }
+        }
     }
 
     /// Type-checks `Parent.field` inside a class method.
@@ -314,10 +367,23 @@ impl Analyzer<'_> {
         method: bool,
     ) -> bool {
         let owners = match self.classes.get(&owner) {
-            Some(info) if method => match info.bare_methods.get(name) {
-                Some(Member::Ambiguous(owners)) => owners.clone(),
-                _ => return false,
-            },
+            // A name is ambiguous when any of its overloads is: two unrelated
+            // parents declaring the same member leave the class with two bodies
+            // and no rule saying which one a bare call means.
+            Some(info) if method => {
+                let prefix = format!("{name}(");
+                match info
+                    .bare_methods
+                    .iter()
+                    .filter(|(key, _)| key.starts_with(&prefix))
+                    .find_map(|(_, member)| match member {
+                        Member::Ambiguous(owners) => Some(owners.clone()),
+                        Member::One(_) => None,
+                    }) {
+                    Some(owners) => owners,
+                    None => return false,
+                }
+            }
             Some(info) => match info.bare_fields.get(name) {
                 Some(Member::Ambiguous(owners)) => owners.clone(),
                 _ => return false,

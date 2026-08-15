@@ -35,6 +35,10 @@ impl Analyzer<'_> {
         let mut fields = Vec::new();
         let mut defaults = Vec::new();
         let mut seen = HashSet::new();
+        // Method members are counted separately from fields, and by member key
+        // rather than by name, because two methods sharing a name and differing
+        // in what they take are two members rather than one restated.
+        let mut method_keys: HashSet<String> = HashSet::new();
         for param in params {
             let field_name = self.interner.resolve(param.name).to_owned();
             self.note_duplicate_member(&mut seen, &field_name, param.name_span);
@@ -91,7 +95,23 @@ impl Analyzer<'_> {
                 );
                 continue;
             }
-            self.note_duplicate_member(&mut seen, &member, method.function.name_span);
+            // A method member is told apart by what it takes, so a declaration
+            // may overload one: `scaled(by:)` and `scaled(by:plus:)` are two
+            // members. Its plain name still joins `seen`, because that is what
+            // discharges a family requirement and shadows a family field.
+            let key = self.member_key(&member, &method.function.params);
+            if !method_keys.insert(key) {
+                self.emit(
+                    method.function.name_span,
+                    "KSEM202",
+                    format!(
+                        "construct member `{member}` is declared more than once with these \
+                         parameters"
+                    ),
+                );
+                continue;
+            }
+            seen.insert(member.clone());
             own_methods.insert(member.clone());
             if method.computed {
                 computed.insert(member);
