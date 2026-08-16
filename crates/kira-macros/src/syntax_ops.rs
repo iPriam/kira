@@ -161,6 +161,18 @@ pub(crate) fn rewrite_property(
             index += 1;
             continue;
         }
+        // `f(name = value)` is a named ARGUMENT. The label is the parameter's
+        // name, so it is neither a read of the property nor a place to write
+        // one — only the value beside it belongs to the enclosing form. An
+        // assignment is never preceded by `(` or `,`, which is what separates
+        // the two.
+        if file.kind(index + 1) == TokenKind::Equals
+            && index > 0
+            && matches!(file.kind(index - 1), TokenKind::LParen | TokenKind::Comma)
+        {
+            index += 2;
+            continue;
+        }
         if file.kind(index + 1) == TokenKind::Equals {
             let value_end = statement_end(&file, index + 2);
             buffer.replace(file.span_of(index, index + 1), format!("{write_callee}("));
@@ -356,6 +368,13 @@ mod tests {
         let text = "struct S {\n    var a: Int\n    function f() -> Int {\n        return other.count\n    }\n}\n";
         let rewritten = rewrite_property(text, "count", "get()", "set").expect("a rewrite");
         assert!(rewritten.contains("other.count"), "{rewritten}");
+    }
+
+    #[test]
+    fn a_named_argument_labelled_after_the_property_is_a_label() {
+        let text = "struct S {\n    var a: Int\n    function f() -> Int {\n        return g(count = count, other = 1)\n    }\n}\n";
+        let rewritten = rewrite_property(text, "count", "get()", "set").expect("a rewrite");
+        assert!(rewritten.contains("g(count = get(), other = 1)"), "{rewritten}");
     }
 
     #[test]

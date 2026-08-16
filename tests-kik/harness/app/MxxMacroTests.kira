@@ -326,3 +326,92 @@ Test MxxPropertyWrapperNoProjected {
     test { return has_MxPlainWrapper_projectedValue() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
+
+// --- Wrapper rewrite: a wrapped property as a named argument ------------------
+// `f(count = count)` is a call with a LABEL, not an assignment. The rewrite
+// leaves the label where it is and routes only the value beside it through the
+// wrapper's reader; treating the label as a write produced `f(set_count(...))`,
+// which is neither the call the author wrote nor a legal one.
+
+comptime macro MxWrap {
+    kind { wrapper }
+    appliesTo { form }
+
+    expand(target: Declaration, wrapper: Declaration) -> Syntax {
+        if target.name.asString() == wrapper.name.asString() {
+            return quote { }
+        }
+        var monos: [Syntax] = []
+        var accessors: [Syntax] = []
+        var rewritten: Syntax = target.syntax
+        for field in target.fields {
+            if field.hasAnnotation(wrapper.name.asString()) {
+                let monoName = "__mx_" + target.name.asString() + "_" + field.name.asString()
+                var mono: Syntax = wrapper.syntax.replaceIdentifier(wrapper.name.asString(), monoName)
+                mono = mono.replaceIdentifier("Wrapped", field.type.asSyntax())
+                monos.append(mono)
+                accessors.append(quote {
+                    function __mx_#{target.name}_get_#{field.name}() -> #{field.type.asSyntax()} {
+                        let backing = __mx_#{target.name}_#{field.name} {
+                            wrappedValue: #{field.initializer}
+                        }
+                        return backing.get()
+                    }
+                    function __mx_#{target.name}_set_#{field.name}(value: #{field.type.asSyntax()}) {
+                        let backing = __mx_#{target.name}_#{field.name} {
+                            wrappedValue: #{field.initializer}
+                        }
+                        backing.set(move value)
+                        return
+                    }
+                })
+                rewritten = rewritten.dropField(field.name)
+                rewritten = rewritten.rewriteProperty(
+                    field.name,
+                    quote { __mx_#{target.name}_get_#{field.name}() },
+                    quote { __mx_#{target.name}_set_#{field.name} }
+                )
+            }
+        }
+        return quote {
+            #{monos}
+            #{accessors}
+            #{rewritten}
+        }
+    }
+}
+
+@MxWrap
+struct MxSeed {
+    var wrappedValue: Wrapped
+
+    function get() -> Wrapped {
+        return self.wrappedValue
+    }
+
+    function set(value: Wrapped) {
+        let ignored = value
+        return
+    }
+}
+
+construct MxCounter {
+    @Required function total() -> Int
+}
+
+function mxAddOne(count: Int) -> Int {
+    return count + 1
+}
+
+MxCounter MxLabelledCall() {
+    @MxSeed var count: Int = 7
+
+    function total() -> Int {
+        return mxAddOne(count = count)
+    }
+}
+
+Test MxxWrappedPropertyIsANamedArgumentLabel {
+    test { return MxLabelledCall().total() }
+    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+}
