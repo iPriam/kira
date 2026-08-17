@@ -1,0 +1,313 @@
+// The Linux kernel, called directly.
+//
+// Every declaration below is an `@FFI.Syscall`: one instruction, with the call
+// number and the arguments in registers. No libc is involved, nothing is
+// resolved at startup, and nothing has to be present on the target for a call to
+// work — which is what lets a program built from this be PID 1 in an initramfs.
+//
+// The raw entry points are named `linuxSys*` and are not what ordinary code
+// should call. A system call answers a non-negative value or a small negative
+// number that is `-errno`, and that is one integer carrying two meanings. Read
+// wrong it looks like success: `-2` back from `read` is `ENOENT`, and a caller
+// that took it for a byte count would advance a buffer backwards. So the wrapper
+// beside each one decodes that convention exactly once, in `linuxDecode`, and
+// answers a `Result`.
+//
+// See README.md for why this is a package rather than part of Foundation.
+
+import Foundation
+
+// ─── The `-errno` convention ────────────────────────────────────────────────
+
+// Why a kernel call did not do what was asked.
+//
+// `errno` is the positive number `man errno` lists — the negation of what the
+// register held. Positive because that is the number every table, manual page,
+// and `strerror` output uses, and a caller comparing against `-2` would be
+// writing the ABI's encoding into their own code.
+struct LinuxError {
+    var errno: Int
+}
+
+// The largest `errno` the kernel returns.
+//
+// The boundary matters: a call that legitimately answers a large negative
+// number would otherwise be read as a failure. `lseek` can return an offset
+// past 2^63 - 4096 on a sparse file, and `read` answers a count that is never
+// negative — so the test is "small and negative", not "negative".
+function linuxMaxErrno() -> Int { return 4095 }
+
+// Decodes one raw kernel answer.
+//
+// The single place the convention is read. Every wrapper below goes through it,
+// so there is one definition of what failure means rather than one per call.
+function linuxDecode(answer: Int) -> Result<Int, LinuxError> {
+    if answer < 0 && answer >= -linuxMaxErrno() {
+        let failure: Result<Int, LinuxError> = .Error(LinuxError { errno: -answer })
+        return failure
+    }
+    let ok: Result<Int, LinuxError> = .Ok(answer)
+    return ok
+}
+
+// The `errno` name for a failure, or its number when this list does not carry it.
+//
+// The names, not a sentence: `ENOENT` is what a manual page, a strace line, and
+// every other tool call it, so a message carrying it can be looked up. The list
+// covers what the calls in this package actually produce. Anything else answers
+// the empty string rather than a guess at what the number meant — the number
+// itself is on the error, and a caller reporting an unnamed failure should print
+// `error.errno`.
+function linuxErrorName(error: borrow LinuxError) -> String {
+    if error.errno == 1 { return "EPERM" }
+    if error.errno == 2 { return "ENOENT" }
+    if error.errno == 4 { return "EINTR" }
+    if error.errno == 5 { return "EIO" }
+    if error.errno == 9 { return "EBADF" }
+    if error.errno == 10 { return "ECHILD" }
+    if error.errno == 11 { return "EAGAIN" }
+    if error.errno == 12 { return "ENOMEM" }
+    if error.errno == 13 { return "EACCES" }
+    if error.errno == 14 { return "EFAULT" }
+    if error.errno == 16 { return "EBUSY" }
+    if error.errno == 19 { return "ENODEV" }
+    if error.errno == 20 { return "ENOTDIR" }
+    if error.errno == 21 { return "EISDIR" }
+    if error.errno == 22 { return "EINVAL" }
+    if error.errno == 28 { return "ENOSPC" }
+    if error.errno == 32 { return "EPIPE" }
+    if error.errno == 36 { return "ENAMETOOLONG" }
+    return ""
+}
+
+// ─── Raw entry points ───────────────────────────────────────────────────────
+
+@FFI.Syscall { name: write; }
+function linuxSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+@FFI.Syscall { name: read; }
+function linuxSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int;
+
+@FFI.Syscall { name: mount; }
+function linuxSysMount(
+    source: CString,
+    target: CString,
+    filesystem: CString,
+    flags: U64,
+    data: RawPtr,
+) -> Int;
+
+@FFI.Syscall { name: umount2; }
+function linuxSysUmount2(target: CString, flags: Int) -> Int;
+
+@FFI.Syscall { name: reboot; }
+function linuxSysReboot(magic: Int, magic2: Int, command: Int, argument: RawPtr) -> Int;
+
+@FFI.Syscall { name: execve; }
+function linuxSysExecve(path: CString, argv: RawPtr, envp: RawPtr) -> Int;
+
+@FFI.Syscall { name: wait4; }
+function linuxSysWait4(pid: Int, status: RawPtr, options: Int, usage: RawPtr) -> Int;
+
+@FFI.Syscall { name: sync; }
+function linuxSysSync() -> Int;
+
+// The one call control does not come back from, so it names no result: there is
+// no value for the kernel to answer with and no next instruction to answer it
+// to. The compiler knows this and tells the optimizer, which is why a caller need
+// not write code after it that could never run.
+@FFI.Syscall { name: exit_group; }
+function linuxSysExitGroup(status: Int);
+
+// ─── File descriptors ───────────────────────────────────────────────────────
+
+// The three descriptors every process starts with.
+//
+// Functions rather than values because Kira has no top-level constant: a name
+// bound at file scope is not a declaration the language admits, and a function
+// that answers a literal is what a caller writes `linuxStdout()` for. Every
+// number below is spelled the same way for the same reason.
+function linuxStdin() -> Int { return 0 }
+function linuxStdout() -> Int { return 1 }
+function linuxStderr() -> Int { return 2 }
+
+// ─── Reading and writing ────────────────────────────────────────────────────
+
+// Writes `text`'s bytes to `fd`, answering how many were taken.
+//
+// A short write is a success, not a failure: the kernel takes what it can and
+// says how much, and a pipe with a full buffer is the ordinary case. A caller
+// that must write all of it loops on the count — which is why the count is
+// handed back rather than compared to the length here.
+//
+// `text.count` is the byte count, not a character count, which is what `write`
+// takes. A `String` whose bytes contain a NUL cannot become a C string and traps
+// rather than writing a silently truncated prefix.
+function linuxWrite(fd: Int, text: borrow String) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysWrite(fd, text, U64(text.count)))
+}
+
+// Writes `text` to standard output.
+function linuxPrint(text: borrow String) -> Result<Int, LinuxError> {
+    return linuxWrite(linuxStdout(), text)
+}
+
+// Writes `text` and a newline to standard output.
+//
+// Two calls rather than one, because building the joined string would allocate —
+// and this is the surface a program with no allocator to speak of reaches for
+// when it wants to say something before anything else works.
+function linuxPrintLine(text: borrow String) -> Result<Int, LinuxError> {
+    let written = linuxWrite(linuxStdout(), text)
+    match written {
+        Error(failure) -> {
+            let out: Result<Int, LinuxError> = .Error(failure)
+            return out
+        }
+        Ok(count) -> {
+            let newline = linuxWrite(linuxStdout(), "\n")
+            match newline {
+                Error(failure) -> {
+                    let out: Result<Int, LinuxError> = .Error(failure)
+                    return out
+                }
+                Ok(extra) -> {
+                    let out: Result<Int, LinuxError> = .Ok(count + extra)
+                    return out
+                }
+            }
+        }
+    }
+}
+
+// Reads at most `count` bytes from `fd` into `buffer`, answering how many
+// arrived. Zero means end of file; `buffer` is storage the caller owns and this
+// never allocates.
+function linuxRead(fd: Int, buffer: RawPtr, count: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysRead(fd, buffer, U64(count)))
+}
+
+// ─── Mounting ───────────────────────────────────────────────────────────────
+
+// The mount flags a userland bringing up its own filesystems uses.
+function linuxMountReadOnly() -> Int { return 1 }
+function linuxMountNoSuid() -> Int { return 2 }
+function linuxMountNoDev() -> Int { return 4 }
+function linuxMountNoExec() -> Int { return 8 }
+function linuxMountSynchronous() -> Int { return 16 }
+function linuxMountRemount() -> Int { return 32 }
+
+// Mounts `filesystem` from `source` at `target`.
+//
+// `data` is the filesystem-specific option string, which most of them do not
+// need; `linuxMountVirtual` is the shape that covers `proc`, `sysfs`, and
+// `devtmpfs` without a caller having to write a null pointer.
+function linuxMount(
+    source: borrow String,
+    target: borrow String,
+    filesystem: borrow String,
+    flags: Int,
+    data: RawPtr,
+) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysMount(source, target, filesystem, U64(flags), data))
+}
+
+// Mounts a kernel-provided filesystem — `proc`, `sysfs`, `devtmpfs` — at
+// `target`.
+//
+// These three are the first thing an init does and none of them has a device or
+// an option string, so the source is the filesystem's own name (which is what
+// `/proc/mounts` then shows) and the option pointer is null.
+function linuxMountVirtual(
+    filesystem: borrow String,
+    target: borrow String,
+    flags: Int,
+) -> Result<Int, LinuxError> {
+    return linuxMount(filesystem, target, filesystem, flags, RawPtr(0))
+}
+
+// Unmounts `target`. `flags` is zero for an ordinary unmount.
+function linuxUmount(target: borrow String, flags: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysUmount2(target, flags))
+}
+
+// ─── Processes ──────────────────────────────────────────────────────────────
+
+// Replaces this process with the program at `path`.
+//
+// On success nothing comes back — the image is gone — so a returned `Result` is
+// always a failure. It is still a `Result` rather than a value that never
+// arrives, because the failure is the whole of what a caller can act on: an
+// `ENOENT` here is the difference between a userland that booted and one that
+// did not.
+//
+// `argv` and `envp` are NULL-terminated arrays of C string pointers, which Kira
+// has no way to build from a `[String]` yet. A caller passes storage it laid out
+// itself, or `RawPtr(0)` for a program that reads neither.
+function linuxExecve(
+    path: borrow String,
+    argv: RawPtr,
+    envp: RawPtr,
+) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysExecve(path, argv, envp))
+}
+
+// Waits for a child to change state, answering the pid that did.
+//
+// `pid` is -1 for any child, and `status` is storage the caller owns for the
+// wait status, or `RawPtr(0)` when only the pid matters. An init calls this in
+// a loop for as long as it runs: it is what keeps a finished child from staying
+// a zombie in a process table nobody else will clean.
+function linuxWait(pid: Int, status: RawPtr, options: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysWait4(pid, status, options, RawPtr(0)))
+}
+
+// Ends every thread in this process with `status`.
+//
+// This never returns, and the compiler knows: the code generator marks the point
+// after it unreachable, so a caller writes no statement it could not reach and
+// nothing after it runs. `exit_group` rather than `exit` because `exit` ends one
+// thread — a process with more than one would carry on running without the
+// thread that asked to stop.
+function linuxExit(status: Int) {
+    linuxSysExitGroup(status)
+    return
+}
+
+// ─── Shutdown ───────────────────────────────────────────────────────────────
+
+// The magic numbers `reboot` refuses to act without.
+//
+// Two of them, and they are not decoration: a stray call into the kernel with a
+// plausible command and no magic does nothing, which is the kernel refusing to
+// power a machine off because a register happened to hold the right small
+// integer. They are supplied here so a caller names only what they want to
+// happen.
+function linuxRebootMagic1() -> Int { return 0xfee1dead }
+function linuxRebootMagic2() -> Int { return 672274793 }
+
+// What `linuxReboot` should do.
+function linuxRebootRestart() -> Int { return 0x1234567 }
+function linuxRebootHalt() -> Int { return 0xcdef0123 }
+function linuxRebootPowerOff() -> Int { return 0x4321fedc }
+
+// Restarts, halts, or powers off the machine.
+//
+// Answers only on failure — `EPERM` from a process that is not privileged — and
+// otherwise the machine is going down. Call `linuxSync` first: `reboot` does not
+// flush anything, so an unsynced filesystem is one that comes back needing a
+// check.
+function linuxReboot(command: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(
+        linuxSysReboot(linuxRebootMagic1(), linuxRebootMagic2(), command, RawPtr(0))
+    )
+}
+
+// Flushes every filesystem's cached writes to its device.
+//
+// The call the kernel offers no failure for in practice, and it is still decoded
+// rather than ignored, because the one thing worse than a `sync` that failed is a
+// `reboot` that followed one.
+function linuxSync() -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysSync())
+}
