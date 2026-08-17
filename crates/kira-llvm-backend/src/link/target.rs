@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use kira_backend_api::{NativeTarget, RelocationModel};
+use kira_backend_api::{Linkage, NativeTarget, RelocationModel};
 
 /// The environment variable that names the sysroot a cross link uses when the
 /// invocation did not name one.
@@ -98,6 +98,18 @@ impl NativeBuildTarget {
     #[must_use]
     pub fn is_windows(&self) -> bool {
         self.target_os() == "windows"
+    }
+
+    /// Whether this build folds its libraries into the image rather than
+    /// resolving them at startup.
+    ///
+    /// A host build is never one: this machine has a loader, and the artifacts
+    /// the compiler itself loads are shared objects by construction.
+    #[must_use]
+    pub fn is_statically_linked(&self) -> bool {
+        self.target
+            .cross()
+            .is_some_and(|cross| cross.linkage() == Linkage::Static)
     }
 
     /// The sysroot this build's system headers and libraries come from, or
@@ -187,6 +199,17 @@ impl NativeBuildTarget {
             // address the loader picked, which is not the one the code assumes.
             arguments.push("-no-pie".to_owned());
         }
+        if let Some(cross) = self.target.cross()
+            && cross.linkage() == Linkage::Static
+        {
+            // Folds every library into the image, so the program names no
+            // interpreter and needs no shared object present to start. A
+            // freestanding userland has neither: `-no-pie` alone still produces
+            // a binary whose `PT_INTERP` names a loader that is not there, and
+            // the kernel refuses it before `main` — with no output, because the
+            // program never ran to produce any.
+            arguments.push("-static".to_owned());
+        }
         arguments
     }
 }
@@ -229,10 +252,15 @@ mod tests {
     use kira_native_lib_definition::TargetTriple;
 
     fn cross(text: &str, relocation: RelocationModel) -> NativeBuildTarget {
+        linked(text, relocation, Linkage::Dynamic)
+    }
+
+    fn linked(text: &str, relocation: RelocationModel, linkage: Linkage) -> NativeBuildTarget {
         NativeBuildTarget::new(
             NativeTarget::Cross(CrossTarget::new(
                 TargetTriple::parse(text).expect("a valid triple"),
                 relocation,
+                linkage,
             )),
             None,
         )
@@ -286,12 +314,55 @@ mod tests {
         );
     }
 
+    /// The two freestanding settings are separate answers and appear separately:
+    /// linkage never implies absolute addressing, and a statically linked PIE is
+    /// a real and ordinary thing to want.
+    #[test]
+    fn a_static_linkage_folds_the_libraries_in_without_touching_addressing() {
+        let target = linked("aarch64-linux-gnu", RelocationModel::Pic, Linkage::Static);
+        assert_eq!(
+            target.compile_arguments(),
+            ["--target=aarch64-unknown-linux-gnu"]
+        );
+        assert_eq!(
+            target.link_arguments(),
+            [
+                "--target=aarch64-unknown-linux-gnu",
+                "-fuse-ld=lld",
+                "-static"
+            ]
+        );
+    }
+
+    /// What a userland with no loader asks for: absolute addressing so the image
+    /// runs where it was linked, and a static link so there is nothing left to
+    /// resolve at startup.
+    #[test]
+    fn a_freestanding_target_asks_for_both() {
+        let target = linked(
+            "aarch64-linux-gnu",
+            RelocationModel::Static,
+            Linkage::Static,
+        );
+        assert_eq!(
+            target.link_arguments(),
+            [
+                "--target=aarch64-unknown-linux-gnu",
+                "-fno-pic",
+                "-fuse-ld=lld",
+                "-no-pie",
+                "-static"
+            ]
+        );
+    }
+
     #[test]
     fn an_explicit_sysroot_reaches_both_the_compile_and_the_link() {
         let target = NativeBuildTarget::new(
             NativeTarget::Cross(CrossTarget::new(
                 TargetTriple::parse("aarch64-linux-gnu").expect("a valid triple"),
                 RelocationModel::Pic,
+                Linkage::Dynamic,
             )),
             Some(PathBuf::from("/usr/aarch64-linux-gnu")),
         );

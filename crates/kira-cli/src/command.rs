@@ -117,7 +117,7 @@ impl Command {
                 " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--quit-after 5s] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Build => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--target arch-os-abi] [--sysroot <dir>] [--relocation-model pic|static] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--target arch-os-abi] [--sysroot <dir>] [--relocation-model pic|static] [--linkage dynamic|static] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Debug => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [--prepare] [-- <args...>]"

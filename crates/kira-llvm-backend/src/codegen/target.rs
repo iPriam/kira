@@ -517,6 +517,7 @@ mod tests {
         CrossTarget::new(
             TargetTriple::parse(text).expect("a valid triple"),
             relocation,
+            kira_backend_api::Linkage::Dynamic,
         )
     }
 

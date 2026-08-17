@@ -225,17 +225,23 @@ fn apply_manifest_defaults(
     }
 
     // The machine is settled now — from the command line or from the manifest —
-    // so this is where a relocation model can be attached to it, and where one
-    // that has nothing to attach to is refused. Refused rather than dropped: a
-    // freestanding userland asking for `static` and silently getting a
-    // position-independent image is a program that links and does not start.
+    // so this is where the relocation model and the linkage can be attached to
+    // it, and where one that has nothing to attach to is refused. Refused rather
+    // than dropped: a freestanding userland asking for `static` and silently
+    // getting a position-independent image is a program that links and does not
+    // start.
     options.device = options
         .device
-        .with_relocation(options.relocation)
+        .with_link_settings(options.relocation, options.linkage)
         .ok_or_else(|| {
             err!(
                 "kira {verb}: {}",
-                crate::options::OptionsError::RelocationModelWithoutTarget {
+                crate::options::OptionsError::LinkSettingWithoutTarget {
+                    setting: if options.relocation.is_some() {
+                        "--relocation-model"
+                    } else {
+                        "--linkage"
+                    },
                     device: options.device.to_string(),
                 }
             );
@@ -298,6 +304,7 @@ fn manifest_device(target: &str) -> Option<Device> {
                 Device::Cross(kira_backend_api::CrossTarget::new(
                     triple,
                     kira_backend_api::RelocationModel::default(),
+                    kira_backend_api::Linkage::default(),
                 ))
             }),
     }
@@ -488,7 +495,7 @@ mod tests {
     fn a_relocation_model_attaches_to_a_manifest_supplied_target() {
         let device = manifest_device("aarch64-linux-gnu").expect("a triple is a build target");
         let with_static = device
-            .with_relocation(Some(kira_backend_api::RelocationModel::Static))
+            .with_link_settings(Some(kira_backend_api::RelocationModel::Static), None)
             .expect("a cross device takes a relocation model");
         let Device::Cross(target) = &with_static else {
             panic!("a cross device stays one");
@@ -500,9 +507,53 @@ mod tests {
         assert_eq!(target.triple().to_string(), "aarch64-linux-gnu");
 
         assert_eq!(
-            Device::Host.with_relocation(Some(kira_backend_api::RelocationModel::Static)),
+            Device::Host.with_link_settings(Some(kira_backend_api::RelocationModel::Static), None),
             None
         );
-        assert_eq!(Device::Host.with_relocation(None), Some(Device::Host));
+        assert_eq!(
+            Device::Host.with_link_settings(None, None),
+            Some(Device::Host)
+        );
+    }
+
+    /// The linkage reaches a manifest-supplied target the same way, and setting
+    /// one leaves the other alone: a package that names `buildTarget` and a
+    /// command line that asks only for `--linkage static` must not silently lose
+    /// the relocation model, or gain one.
+    #[test]
+    fn a_linkage_attaches_without_disturbing_the_relocation_model() {
+        let device = manifest_device("aarch64-linux-gnu").expect("a triple is a build target");
+        let freestanding = device
+            .with_link_settings(
+                Some(kira_backend_api::RelocationModel::Static),
+                Some(kira_backend_api::Linkage::Static),
+            )
+            .expect("a cross device takes both");
+        let Device::Cross(target) = &freestanding else {
+            panic!("a cross device stays one");
+        };
+        assert_eq!(
+            target.relocation(),
+            kira_backend_api::RelocationModel::Static
+        );
+        assert_eq!(target.linkage(), kira_backend_api::Linkage::Static);
+
+        let only_linkage = freestanding
+            .with_link_settings(None, Some(kira_backend_api::Linkage::Dynamic))
+            .expect("a cross device takes a linkage alone");
+        let Device::Cross(target) = &only_linkage else {
+            panic!("a cross device stays one");
+        };
+        assert_eq!(
+            target.relocation(),
+            kira_backend_api::RelocationModel::Static,
+            "setting the linkage alone must not reset the relocation model"
+        );
+        assert_eq!(target.linkage(), kira_backend_api::Linkage::Dynamic);
+
+        assert_eq!(
+            Device::Host.with_link_settings(None, Some(kira_backend_api::Linkage::Static)),
+            None
+        );
     }
 }

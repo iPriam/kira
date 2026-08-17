@@ -28,6 +28,11 @@ use kira_runtime_abi::ForeignPointerWidth;
 /// its own is the case that differs: it may have no dynamic loader to apply
 /// relocations, and a program built PIC for it is one that starts and then
 /// jumps through addresses nobody filled in.
+///
+/// This decides how code *addresses* things and nothing else. Whether the
+/// finished program still needs a loader at all is [`Linkage`], and a
+/// freestanding userland needs both answers — absolute addressing alone
+/// produces a non-PIE that still names an interpreter it will not find.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum RelocationModel {
     /// Position-independent code, linked as a PIE. The default, and what every
@@ -66,24 +71,79 @@ impl fmt::Display for RelocationModel {
     }
 }
 
+/// Whether the finished program still needs a dynamic loader to start.
+///
+/// The other half of the freestanding question, and a separate one from
+/// [`RelocationModel`] because the two are decided by different parts of the
+/// build: the relocation model is what the code generator bakes into the
+/// objects, and this is what the linker makes of them. A program can be
+/// absolutely addressed and still name `/lib/ld-linux-aarch64.so.1` as its
+/// interpreter, which on a machine that has no such file is a program the
+/// kernel refuses to start — and it refuses before `main`, so nothing the
+/// program itself does can report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Linkage {
+    /// Linked against shared libraries, resolved by the target's loader at
+    /// startup. The default, and what an ordinary program on a running system
+    /// is.
+    #[default]
+    Dynamic,
+    /// Every library folded into the image, needing no loader and no shared
+    /// object present on the target. What PID 1 in an initramfs has to be.
+    Static,
+}
+
+impl Linkage {
+    /// This linkage's spelling on the command line.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dynamic => "dynamic",
+            Self::Static => "static",
+        }
+    }
+
+    /// Resolves a `--linkage` value, or `None` for an unknown one.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "dynamic" => Some(Self::Dynamic),
+            "static" => Some(Self::Static),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Linkage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 /// A machine that is not the one running the compiler.
 ///
-/// Carries the relocation model with the triple rather than beside it, because
-/// the two are one decision: `aarch64-linux-gnu` built PIC and the same triple
-/// built for a loaderless userland are different artifacts, and every step that
-/// takes one — the target machine, the linker driver, the C shim compiler — has
-/// to agree on which was asked for.
+/// Carries the relocation model and the linkage with the triple rather than
+/// beside it, because they are one decision: `aarch64-linux-gnu` built PIC
+/// against shared libraries and the same triple built for a loaderless userland
+/// are different artifacts, and every step that takes one — the target machine,
+/// the linker driver, the C shim compiler — has to agree on which was asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossTarget {
     triple: TargetTriple,
     relocation: RelocationModel,
+    linkage: Linkage,
 }
 
 impl CrossTarget {
-    /// Names a cross target by its `arch-os-abi` triple and relocation model.
+    /// Names a cross target by its `arch-os-abi` triple, relocation model, and
+    /// linkage.
     #[must_use]
-    pub fn new(triple: TargetTriple, relocation: RelocationModel) -> Self {
-        Self { triple, relocation }
+    pub fn new(triple: TargetTriple, relocation: RelocationModel, linkage: Linkage) -> Self {
+        Self {
+            triple,
+            relocation,
+            linkage,
+        }
     }
 
     /// The `arch-os-abi` triple, which is also what native-library rows are
@@ -97,6 +157,12 @@ impl CrossTarget {
     #[must_use]
     pub fn relocation(&self) -> RelocationModel {
         self.relocation
+    }
+
+    /// Whether this target's program needs a loader to start.
+    #[must_use]
+    pub fn linkage(&self) -> Linkage {
+        self.linkage
     }
 
     /// How wide a pointer is on this machine.
@@ -206,6 +272,7 @@ mod tests {
         CrossTarget::new(
             TargetTriple::parse(text).expect("a valid triple"),
             RelocationModel::Pic,
+            Linkage::Dynamic,
         )
     }
 
@@ -258,13 +325,35 @@ mod tests {
     #[test]
     fn the_relocation_model_distinguishes_two_targets_with_one_triple() {
         let triple = TargetTriple::parse("aarch64-linux-gnu").expect("a valid triple");
-        let position_independent = CrossTarget::new(triple.clone(), RelocationModel::Pic);
-        let absolute = CrossTarget::new(triple, RelocationModel::Static);
+        let position_independent =
+            CrossTarget::new(triple.clone(), RelocationModel::Pic, Linkage::Dynamic);
+        let absolute = CrossTarget::new(triple, RelocationModel::Static, Linkage::Dynamic);
         assert_ne!(position_independent, absolute);
         assert_eq!(
             position_independent.normalized_triple(),
             absolute.normalized_triple()
         );
+    }
+
+    /// So is the linkage, and for the same reason: one triple linked against
+    /// shared libraries and the same triple folded into one image are two
+    /// artifacts, and only one of them can be PID 1 on a machine with no loader.
+    #[test]
+    fn the_linkage_distinguishes_two_targets_with_one_triple() {
+        let triple = TargetTriple::parse("aarch64-linux-gnu").expect("a valid triple");
+        let hosted = CrossTarget::new(triple.clone(), RelocationModel::Static, Linkage::Dynamic);
+        let freestanding = CrossTarget::new(triple, RelocationModel::Static, Linkage::Static);
+        assert_ne!(hosted, freestanding);
+        assert_eq!(hosted.relocation(), freestanding.relocation());
+    }
+
+    #[test]
+    fn a_linkage_round_trips_through_its_command_line_spelling() {
+        for linkage in [Linkage::Dynamic, Linkage::Static] {
+            assert_eq!(Linkage::parse(linkage.label()), Some(linkage));
+        }
+        assert_eq!(Linkage::parse("shared"), None);
+        assert_eq!(Linkage::default(), Linkage::Dynamic);
     }
 
     #[test]
