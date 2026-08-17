@@ -1,0 +1,187 @@
+import Foundation
+import Linux
+
+// SkxSyscallTests.kira — `@FFI.Syscall` against a real kernel.
+// All top-level names use the `skx`/`Skx` prefix.
+//
+// Every test reduces a kernel answer to a scalar. Nothing here writes bytes
+// anybody sees: a successful `write` of an empty string is the success path,
+// because a test that printed would put its own output in the middle of the
+// driver's report.
+//
+// Every failing case is chosen so its `errno` is the same on every machine. A
+// bad file descriptor is `EBADF` whoever runs it; a path that does not exist is
+// `ENOENT` whether or not the process is privileged. `mount` of a real device is
+// deliberately absent — its answer depends on who is running the suite.
+
+// The `errno` of a failure, or 0 when the call succeeded. One shape for every
+// test below, so a test body stays one line and the arm order never varies.
+function skxErrno(answer: borrow Result<Int, LinuxError>) -> Int {
+    match answer {
+        Ok(value) -> { return 0 }
+        Error(failure) -> { return failure.errno }
+    }
+}
+
+// The value of a successful call, or -1 when it failed.
+function skxValue(answer: borrow Result<Int, LinuxError>) -> Int {
+    match answer {
+        Ok(value) -> { return value }
+        Error(failure) -> { return -1 }
+    }
+}
+
+// ─── The `-errno` decode ────────────────────────────────────────────────────
+
+Test SkxDecodeTreatsZeroAsSuccess {
+    test { return skxValue(linuxDecode(0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test SkxDecodeKeepsAPositiveCount {
+    test { return skxValue(linuxDecode(4096)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(4096); return e }
+}
+
+Test SkxDecodeReadsASmallNegativeAsErrno {
+    test { return skxErrno(linuxDecode(-2)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+Test SkxDecodeReadsTheLargestErrno {
+    test { return skxErrno(linuxDecode(-4095)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(4095); return e }
+}
+
+// One past the boundary is a value, not a failure. This is the case a plain
+// `answer < 0` test gets wrong, and it is why the decode has an upper bound.
+Test SkxDecodeKeepsALargeNegativeValue {
+    test { return skxValue(linuxDecode(-4096)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
+}
+
+Test SkxErrorNamesAreTheKernelsOwn {
+    test {
+        let failure = LinuxError { errno: 2 }
+        return linuxErrorName(failure)
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("ENOENT"); return e }
+}
+
+Test SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess {
+    test {
+        let failure = LinuxError { errno: 4094 }
+        return linuxErrorName(failure)
+    }
+    expect { let e: Result<String, TestFailure> = .Ok(""); return e }
+}
+
+// ─── Three arguments: `write` and `read` ────────────────────────────────────
+
+// The success path with nothing to show for it: `write` of no bytes takes no
+// bytes and says so, which is a real round trip through `svc`/`syscall` without
+// output landing in the driver's report.
+Test SkxWriteOfNoBytesTakesNone {
+    test { return skxValue(linuxWrite(linuxStdout(), "")) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test SkxWriteToABadDescriptorIsEbadf {
+    test { return skxErrno(linuxWrite(-1, "x")) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+Test SkxReadFromABadDescriptorIsEbadf {
+    test { return skxErrno(linuxRead(-1, RawPtr(0), 0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// The `errno` name of a real kernel failure, end to end: the register answered
+// -9, the decode made it 9, and the table made it `EBADF`.
+Test SkxARealFailureNamesItself {
+    test {
+        let answer = linuxWrite(-1, "x")
+        match answer {
+            Ok(value) -> { return "no failure" }
+            Error(failure) -> { return linuxErrorName(failure) }
+        }
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("EBADF"); return e }
+}
+
+// ─── No arguments: `sync` ───────────────────────────────────────────────────
+
+// The arity-0 entry sequence, which names only its output and the call number.
+Test SkxSyncTakesNoArgumentsAndSucceeds {
+    test { return skxValue(linuxSync()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+// ─── Two arguments: `umount2` ───────────────────────────────────────────────
+
+Test SkxUnmountingAPathThatIsNotThereIsEnoent {
+    test { return skxErrno(linuxUmount("/kira-syscall-harness-no-such-path", 0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ─── Three arguments through a pointer: `execve` ────────────────────────────
+
+// `execve` is the call whose success means this process is gone, so the only
+// answer a test can assert is its failure — and that failure is exactly what an
+// init has to be able to report.
+Test SkxExecvingAProgramThatIsNotThereIsEnoent {
+    test {
+        return skxErrno(linuxExecve("/kira-syscall-harness-no-such-program", RawPtr(0), RawPtr(0)))
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ─── Four arguments: `wait4` ────────────────────────────────────────────────
+
+// A process with no children answers `ECHILD`, whoever runs it.
+Test SkxWaitingWithNoChildrenIsEchild {
+    test { return skxErrno(linuxWait(-1, RawPtr(0), 0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+// ─── Five arguments: `mount` ────────────────────────────────────────────────
+
+// The widest call here, and the one that proves an argument reaches the fifth
+// register: a source that does not exist is `ENOENT` before any privilege check.
+Test SkxMountingASourceThatIsNotThereIsEnoent {
+    test {
+        return skxErrno(linuxMount(
+            "/kira-syscall-harness-no-such-device",
+            "/kira-syscall-harness-no-such-target",
+            "ext4",
+            0,
+            RawPtr(0),
+        ))
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ─── Widths ─────────────────────────────────────────────────────────────────
+
+// A declaration's written width is what reaches the register. `fd: I32` holding
+// -1 has to arrive as a sign-extended 64-bit -1, not as 4294967295 — which the
+// kernel would read as an enormous descriptor number and answer `EBADF` for
+// anyway, so the count is what tells the two apart.
+@FFI.Syscall { name: write; }
+function skxSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
+
+Test SkxANarrowDescriptorIsSignExtendedIntoItsRegister {
+    test { return -skxSysWriteNarrowFd(-1, "x", U64(1)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// The raw entry point answers the kernel's own encoding, with no decode in the
+// way: this is what every wrapper above is built on, and it is worth asserting
+// once that the negative number really is what the register held.
+@FFI.Syscall { name: write; }
+function skxSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+Test SkxTheRawEntryPointAnswersNegativeErrno {
+    test { return skxSysWrite(-1, "x", U64(1)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+}

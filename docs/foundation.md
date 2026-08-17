@@ -263,9 +263,9 @@ finds it.
 
 ## Test packages
 
-Foundation contains no test declarations or runner. `tests-kik/harness` and
-`tests-kik/ffi-harness` each own their programs' `Test.kira` and
-`TestRunner.kira` modules and result vocabulary. A case is a declaration backed
+Foundation contains no test declarations or runner. `tests-kik/harness`,
+`tests-kik/ffi-harness`, and `tests-kik/syscall-harness` each own their programs'
+`Test.kira` and `TestRunner.kira` modules and result vocabulary. A case is a declaration backed
 by `Test` providing the two members the family requires:
 
 ```kira

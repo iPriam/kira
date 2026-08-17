@@ -1,0 +1,9 @@
+Package KikSyscallHarness {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "KikSyscallHarness"
+    let defaults = Defaults { executionMode: Backend.Llvm, buildTarget: BuildTarget.Host }
+    let dependencies = [
+        Dependency { name: "Linux", path: "../../packages/linux" }
+    ]
+}

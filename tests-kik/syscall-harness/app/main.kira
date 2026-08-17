@@ -1,0 +1,17 @@
+// Raw Linux system-call harness: `@FFI.Syscall` exercised against a real kernel.
+//
+// Linux-only and LLVM-only, both by construction rather than by choice. A
+// `@FFI.Syscall` is refused at compile time on a target that cannot reach the
+// Linux kernel, and the interpreter has no instruction stream of its own to put
+// `svc`/`syscall` in — so this suite has one command:
+//
+//   kira test --backend llvm tests-kik/syscall-harness
+//
+// main is trivial; the driver synthesized in test mode is the real entry.
+
+import Foundation
+
+@Main
+function main() {
+    return
+}
