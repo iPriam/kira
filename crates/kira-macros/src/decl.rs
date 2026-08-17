@@ -237,33 +237,62 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         String::new()
     };
 
+    // Where the declaration ends: at its `{ … }` body, or at the `;` a bodyless
+    // one is written with.
+    //
+    // A `@FFI.Extern` and a `@FFI.Syscall` have no body at all. Scanning past
+    // their `;` looking for one ran to the end of the file and abandoned the
+    // whole scan — and the caller walking declarations stops at the first `None`,
+    // so *every* declaration below such a line silently stopped existing. A
+    // `Test` written under an extern in one file was collected by nothing,
+    // reported by no one, and counted in no tally.
     let mut index = head;
-    while index < file.len() && file.kind(index) != TokenKind::LBrace {
-        if file.kind(index) == TokenKind::Eof {
-            return None;
-        }
-        if file.kind(index) == TokenKind::LParen {
-            index = file.match_close(index)?;
+    let mut body = None;
+    let mut end = None;
+    while index < file.len() {
+        match file.kind(index) {
+            TokenKind::Eof => return None,
+            TokenKind::Semicolon => {
+                end = Some(index);
+                break;
+            }
+            TokenKind::LBrace => {
+                body = Some((index, file.match_close(index)?));
+                break;
+            }
+            TokenKind::LParen => index = file.match_close(index)?,
+            _ => {}
         }
         index += 1;
     }
-    let open = index;
-    let close = file.match_close(open)?;
-    let span = file.span_of(head, close);
-    let fields = match kind {
-        DeclarationKind::Enum => scan_variants(file, open, close),
-        _ => scan_fields(file, open, close),
+    let (last, next) = match (body, end) {
+        (Some((_, close)), _) => (close, close + 1),
+        (None, Some(semicolon)) => (semicolon, semicolon + 1),
+        // Neither a body nor a terminator before the file ran out.
+        (None, None) => return None,
+    };
+    let span = file.span_of(head, last);
+    // Everything below reads the *body*, so a bodyless declaration has none of
+    // it: no fields to enumerate, no members to inherit, no hooks to run. What it
+    // has is its name, its annotations, and its syntax, which is what a collector
+    // asks a foreign declaration for.
+    let fields = match (kind, body) {
+        (DeclarationKind::Enum, Some((open, close))) => scan_variants(file, open, close),
+        (_, Some((open, close))) => scan_fields(file, open, close),
+        (_, None) => Vec::new(),
     };
     // A backed declaration's members are the bodies it provides; a family's are
     // the defaults a declaration that says nothing inherits. Both are worth
     // running, which is why both are scanned. A struct's `function` is not: it
     // is a method with a receiver the evaluator has no value for.
-    let members = match kind {
-        DeclarationKind::Form | DeclarationKind::Construct => scan_members(file, open, close),
+    let members = match (kind, body) {
+        (DeclarationKind::Form | DeclarationKind::Construct, Some((open, close))) => {
+            scan_members(file, open, close)
+        }
         _ => Vec::new(),
     };
-    let hooks = match kind {
-        DeclarationKind::Construct => scan_hooks(file, open, close),
+    let hooks = match (kind, body) {
+        (DeclarationKind::Construct, Some((open, close))) => scan_hooks(file, open, close),
         _ => Vec::new(),
     };
 
@@ -283,7 +312,7 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
             file_lines: file.line_count(),
             annotations,
         },
-        close + 1,
+        next,
     ))
 }
 
@@ -750,6 +779,42 @@ mod tests {
     fn scan_text(text: &str) -> Declaration {
         let file = Lexed::new(SourceId::new(0), text);
         scan(&file, 0).expect("a declaration").0
+    }
+
+    /// A bodyless declaration ends at its `;`, and the scan goes on past it.
+    ///
+    /// This is what a collector's view of a file depends on: the walk stops at
+    /// the first declaration it cannot scan, so an `@FFI.Extern` that swallowed
+    /// the rest of the file took every `Test` written below it with it — with no
+    /// diagnostic, because nothing had gone wrong as far as anything could tell.
+    #[test]
+    fn a_bodyless_foreign_declaration_does_not_swallow_the_file_below_it() {
+        let text = "@FFI.Syscall { name: write; }
+             function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+             @FFI.Extern { library: l; symbol: s; abi: c; }
+             function add(a: I32) -> I32;
+             struct Point {
+    var x: Int
+}
+";
+        let file = Lexed::new(SourceId::new(0), text);
+        let found = crate::procedural::top_level(&file);
+        let names: Vec<&str> = found
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["sysWrite", "add", "Point"]);
+        // The bodyless ones have a name, their annotations, and their syntax, and
+        // no body to enumerate.
+        assert_eq!(found[0].kind, DeclarationKind::Function);
+        assert!(found[0].fields.is_empty());
+        assert_eq!(found[0].annotations.len(), 1);
+        assert_eq!(found[0].annotations[0].name, "FFI.Syscall");
+        assert!(found[0].syntax.starts_with("function sysWrite"));
+        assert_eq!(found[1].annotations[0].name, "FFI.Extern");
+        // The declaration *after* them is scanned whole, which is the part that
+        // was lost.
+        assert_eq!(found[2].fields.len(), 1);
     }
 
     #[test]
