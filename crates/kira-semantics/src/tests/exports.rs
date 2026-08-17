@@ -7,7 +7,7 @@
 //! evidence the rule fired for the right reason.
 
 use super::*;
-use crate::host_platform;
+use crate::BuildMachine;
 
 /// The exports a library records, as `(kira name, consumer name)` pairs.
 fn exports(text: &str) -> Vec<(String, String)> {
@@ -19,7 +19,7 @@ fn exports(text: &str) -> Vec<(String, String)> {
         Vec::new(),
         BuildKind::Library,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         // Not a lint run.
         false,
     );
@@ -62,7 +62,7 @@ fn an_export_indexes_the_function_it_names() {
         Vec::new(),
         BuildKind::Library,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         // Not a lint run.
         false,
     );
@@ -92,7 +92,7 @@ fn an_export_records_the_signature_a_consumer_is_generated_against() {
         Vec::new(),
         BuildKind::Library,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         // Not a lint run.
         false,
     );

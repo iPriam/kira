@@ -171,7 +171,7 @@ impl CheckSession {
                 modules.to_vec(),
                 build_kind,
                 kira_semantics::PrecompiledShaders::default(),
-                kira_semantics::host_platform(),
+                kira_semantics::BuildMachine::host(),
                 // Not a lint run: this path answers about code as it is written.
                 false,
             );
@@ -186,8 +186,8 @@ impl CheckSession {
             .set_shaders(&mut self.database)
             .to(kira_semantics::PrecompiledShaders::default());
         program
-            .set_platform(&mut self.database)
-            .to(kira_semantics::host_platform());
+            .set_machine(&mut self.database)
+            .to(kira_semantics::BuildMachine::host());
         program
     }
 

@@ -30,7 +30,7 @@ fn source(db: &salsa::DatabaseImpl, kind: BuildKind) -> SourceProgram {
         ],
         kind,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         false,
     )
 }
