@@ -105,11 +105,15 @@ rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
-# LLVM/native backend: the raw LLVM-C API. Pinned to the LLVM 22.1 series that
+# LLVM/native backend: the raw LLVM-C API. Pinned to the LLVM 23.1 series that
 # the managed toolchain ships (`llvm-sys` majors track the LLVM major.minor).
 # A hard dependency of the backend: every workspace build needs a managed LLVM
-# (LLVM_SYS_221_PREFIX names it; CI provisions the bundle before building).
-llvm-sys = "221.0.1"
+# (LLVM_SYS_231_PREFIX names it; CI provisions the bundle before building).
+# The pre-release requirement tracks `llvm-metadata.toml`, whose pin is
+# 23.1.0-rc3: 231.0.0-rc2 is the only published binding for that series, and
+# Cargo will not select a pre-release unless the requirement names one, so this
+# cannot be shortened to "231".
+llvm-sys = "231.0.0-rc2"
 # LSP-first frontend: salsa incremental queries; lsp-server/lsp-types for
 # the language server (rust-analyzer's stack).
 salsa = "0.28"
