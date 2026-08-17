@@ -10,7 +10,7 @@ use kira_runtime_abi::ForeignImport;
 
 mod target;
 
-pub use target::{CrossTarget, NativeTarget, RelocationModel};
+pub use target::{CrossTarget, Linkage, NativeTarget, RelocationModel};
 
 /// Which artifact family a backend emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

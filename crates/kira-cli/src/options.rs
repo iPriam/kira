@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kira_backend_api::BackendMode;
 use kira_backend_api::WasmDevice;
-use kira_backend_api::{CrossTarget, NativeTarget, RelocationModel};
+use kira_backend_api::{CrossTarget, Linkage, NativeTarget, RelocationModel};
 use kira_native_lib_definition::TargetTriple;
 
 /// What a program is being compiled to run on.
@@ -58,21 +58,30 @@ impl Device {
         }
     }
 
-    /// This device with `relocation` applied, or unchanged when nothing asked
-    /// for one.
+    /// This device with `relocation` and `linkage` applied, or unchanged when
+    /// nothing asked for either.
     ///
-    /// Returns `None` for a device that has no relocation model to set — this
-    /// machine and the Web both fix theirs — so a caller can refuse
-    /// `--relocation-model` where it would have done nothing rather than accept
-    /// an argument and drop it.
-    pub fn with_relocation(&self, relocation: Option<RelocationModel>) -> Option<Self> {
-        let Some(relocation) = relocation else {
+    /// Returns `None` for a device that has neither to set — this machine and
+    /// the Web both fix how they are addressed and how they are loaded — so a
+    /// caller can refuse the flag where it would have done nothing rather than
+    /// accept an argument and drop it.
+    ///
+    /// The two travel together because they are asked for together: a
+    /// freestanding userland names both, and applying one at a time would mean
+    /// rebuilding the target twice and deciding which rebuild wins.
+    pub fn with_link_settings(
+        &self,
+        relocation: Option<RelocationModel>,
+        linkage: Option<Linkage>,
+    ) -> Option<Self> {
+        if relocation.is_none() && linkage.is_none() {
             return Some(self.clone());
-        };
+        }
         match self {
             Self::Cross(target) => Some(Self::Cross(CrossTarget::new(
                 target.triple().clone(),
-                relocation,
+                relocation.unwrap_or_else(|| target.relocation()),
+                linkage.unwrap_or_else(|| target.linkage()),
             ))),
             Self::Host | Self::Web(_) => None,
         }
@@ -116,8 +125,13 @@ pub struct CompileOptions {
     /// the machine may not be settled yet: a package can name its own
     /// `buildTarget`, which is read out of the compiled program, and a build that
     /// gets its target that way still wants to choose how its image is
-    /// addressed. [`Device::with_relocation`] is where the two meet.
+    /// addressed. [`Device::with_link_settings`] is where the two meet.
     pub relocation: Option<RelocationModel>,
+    /// The linkage `--linkage` asked for, if any.
+    ///
+    /// Kept beside the device for the same reason the relocation model is, and
+    /// settled at the same point.
+    pub linkage: Option<Linkage>,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
     /// Whether to generate code at the aggressive optimization level.
@@ -198,19 +212,28 @@ pub enum OptionsError {
     /// `--relocation-model` was given an unknown value.
     #[error("unknown relocation model `{0}`; expected one of: pic, static")]
     UnknownRelocationModel(String),
-    /// `--relocation-model` was given for a build that has no such choice.
+    /// `--linkage` was given without a value.
+    #[error("`--linkage` expects one of: dynamic, static")]
+    LinkageMissingValue,
+    /// `--linkage` was given an unknown value.
+    #[error("unknown linkage `{0}`; expected one of: dynamic, static")]
+    UnknownLinkage(String),
+    /// A cross-only link setting was given for a build that has no such choice.
     ///
     /// Refused rather than silently ignored. A build for this machine links
-    /// position-independent everywhere Kira runs — required on macOS, the
-    /// default on modern Linux — and the Web has no relocations at all, so
+    /// position-independent against the libraries it was built with everywhere
+    /// Kira runs — position independence is required on macOS and the default on
+    /// modern Linux — and the Web has neither relocations nor a loader, so
     /// accepting `static` for either would take an argument and do nothing with
     /// it.
     #[error(
-        "`--relocation-model` applies to a build for another machine, and this \
-         one is for `{device}`; name one with `--target <arch-os-abi>`, or set \
-         the package's `buildTarget` to a triple"
+        "`{setting}` applies to a build for another machine, and this one is \
+         for `{device}`; name one with `--target <arch-os-abi>`, or set the \
+         package's `buildTarget` to a triple"
     )]
-    RelocationModelWithoutTarget {
+    LinkSettingWithoutTarget {
+        /// The flag that was given, spelled as it was written.
+        setting: &'static str,
         /// The device the build settled on instead.
         device: String,
     },
@@ -248,6 +271,7 @@ impl CompileOptions {
         let mut named_device: Option<Device> = None;
         let mut target: Option<TargetTriple> = None;
         let mut relocation: Option<RelocationModel> = None;
+        let mut linkage: Option<Linkage> = None;
         let mut sysroot: Option<PathBuf> = None;
         let mut emit_llvm_ir = false;
         let mut release = false;
@@ -305,6 +329,16 @@ impl CompileOptions {
                     );
                     index += 1;
                 }
+                "--linkage" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::LinkageMissingValue)?;
+                    linkage = Some(
+                        Linkage::parse(value)
+                            .ok_or_else(|| OptionsError::UnknownLinkage(value.clone()))?,
+                    );
+                    index += 1;
+                }
                 "--quit-after" => {
                     let value = args
                         .get(index + 1)
@@ -338,7 +372,7 @@ impl CompileOptions {
         // `--device host`, which is how a command line overrides a manifest's
         // `buildTarget`.
         let device_explicit = named_device.is_some() || target.is_some();
-        let device = resolve_device(named_device, target, relocation)?;
+        let device = resolve_device(named_device, target, relocation, linkage)?;
 
         let backend_explicit = backend.is_some();
         // `--device` is an override: a Web device has exactly one code
@@ -377,6 +411,7 @@ impl CompileOptions {
             device_explicit,
             sysroot,
             relocation,
+            linkage,
             emit_llvm_ir,
             release,
             timings,
@@ -410,16 +445,18 @@ pub fn parse_duration(value: &str) -> Result<Duration, OptionsError> {
 ///
 /// `--device` and `--target` are the same decision, so naming both is refused:
 /// a triple always names a specific machine, so there is no pairing of the two
-/// that says one thing. The relocation model belongs to whichever machine is
-/// finally settled on, which may still come from a package's `buildTarget`, so
-/// it is attached here only when `--target` gave one to attach it to.
+/// that says one thing. The relocation model and the linkage belong to whichever
+/// machine is finally settled on, which may still come from a package's
+/// `buildTarget`, so they are attached here only when `--target` gave one to
+/// attach them to.
 fn resolve_device(
     named_device: Option<Device>,
     target: Option<TargetTriple>,
     relocation: Option<RelocationModel>,
+    linkage: Option<Linkage>,
 ) -> Result<Device, OptionsError> {
     let Some(triple) = target else {
-        // Not refused here even with a relocation model in hand: a package's own
+        // Not refused here even with those settings in hand: a package's own
         // `buildTarget` can still name a machine, and that is read out of the
         // compiled program long after this. The refusal happens where the device
         // is finally settled.
@@ -434,6 +471,7 @@ fn resolve_device(
     Ok(Device::Cross(CrossTarget::new(
         triple,
         relocation.unwrap_or_default(),
+        linkage.unwrap_or_default(),
     )))
 }
 
@@ -569,10 +607,49 @@ mod tests {
         };
         assert_eq!(target.triple().to_string(), "aarch64-linux-gnu");
         assert_eq!(target.relocation(), RelocationModel::Pic);
+        assert_eq!(target.linkage(), Linkage::Dynamic);
         assert_eq!(
             options.device.native_target(),
             NativeTarget::Cross(target.clone())
         );
+    }
+
+    /// What Tessera's PID 1 asks for: an image addressed absolutely and linked
+    /// with nothing left to resolve, because the machine it boots on has no
+    /// dynamic loader to resolve it. The two are separate flags because they are
+    /// separate decisions, and a build may want either alone.
+    #[test]
+    fn a_freestanding_build_asks_for_both_addressing_and_linkage() {
+        let options = CompileOptions::parse(&args(&[
+            "--target",
+            "aarch64-linux-gnu",
+            "--relocation-model",
+            "static",
+            "--linkage",
+            "static",
+            "init.kira",
+        ]))
+        .expect("parses");
+        let Device::Cross(target) = &options.device else {
+            panic!("expected a cross device, got {:?}", options.device);
+        };
+        assert_eq!(target.relocation(), RelocationModel::Static);
+        assert_eq!(target.linkage(), Linkage::Static);
+
+        // A static link on its own is an ordinary thing to want, and says
+        // nothing about how the code addresses itself.
+        let options = CompileOptions::parse(&args(&[
+            "--target",
+            "x86_64-linux-gnu",
+            "--linkage",
+            "static",
+        ]))
+        .expect("parses");
+        let Device::Cross(target) = &options.device else {
+            panic!("expected a cross device, got {:?}", options.device);
+        };
+        assert_eq!(target.linkage(), Linkage::Static);
+        assert_eq!(target.relocation(), RelocationModel::Pic);
     }
 
     /// A freestanding userland with no dynamic loader asks for absolute
@@ -665,7 +742,12 @@ mod tests {
             .expect("parses");
         assert_eq!(carried.relocation, Some(RelocationModel::Static));
         assert_eq!(carried.device, Device::Host);
-        assert_eq!(carried.device.with_relocation(carried.relocation), None);
+        assert_eq!(
+            carried
+                .device
+                .with_link_settings(carried.relocation, carried.linkage),
+            None
+        );
         assert_eq!(
             CompileOptions::parse(&args(&[
                 "--target",
@@ -674,6 +756,15 @@ mod tests {
                 "pie"
             ])),
             Err(OptionsError::UnknownRelocationModel("pie".to_owned()))
+        );
+        assert_eq!(
+            CompileOptions::parse(&args(&[
+                "--target",
+                "aarch64-linux-gnu",
+                "--linkage",
+                "shared"
+            ])),
+            Err(OptionsError::UnknownLinkage("shared".to_owned()))
         );
         assert_eq!(
             CompileOptions::parse(&args(&["--sysroot"])),

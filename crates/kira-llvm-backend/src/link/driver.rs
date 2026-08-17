@@ -160,6 +160,13 @@ pub(super) fn platform_link_arguments(target: &NativeBuildTarget) -> Vec<String>
     let mut arguments: Vec<String> = list
         .libraries
         .iter()
+        // `gcc_s` is the *shared* unwinder, and a static link has no way to use
+        // one: the whole point of the link is that nothing is resolved at
+        // startup. clang supplies the static unwinder itself under `-static`,
+        // so naming this one asks the linker for a file that a freestanding
+        // target has no reason to ship — and the failure names the library
+        // rather than the linkage that made it unusable.
+        .filter(|library| !(**library == "gcc_s" && target.is_statically_linked()))
         .map(|library| format!("-l{library}"))
         .collect();
     for framework in list.frameworks {
@@ -358,7 +365,7 @@ fn same_file_contents(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kira_backend_api::{CrossTarget, NativeTarget, RelocationModel};
+    use kira_backend_api::{CrossTarget, Linkage, NativeTarget, RelocationModel};
     use kira_native_lib_definition::TargetTriple;
 
     fn cross(text: &str) -> NativeBuildTarget {
@@ -366,6 +373,7 @@ mod tests {
             NativeTarget::Cross(CrossTarget::new(
                 TargetTriple::parse(text).expect("a valid triple"),
                 RelocationModel::Pic,
+                Linkage::Dynamic,
             )),
             None,
         )
@@ -422,7 +430,30 @@ mod tests {
         let arguments = platform_link_arguments(&cross("aarch64-linux-gnu"));
         assert!(arguments.contains(&"-lpthread".to_owned()), "{arguments:?}");
         assert!(arguments.contains(&"-ldl".to_owned()), "{arguments:?}");
+        assert!(arguments.contains(&"-lgcc_s".to_owned()), "{arguments:?}");
         assert!(!arguments.iter().any(|argument| argument == "-lkernel32"));
+    }
+
+    /// A static link drops the shared unwinder and keeps everything else.
+    ///
+    /// `-lgcc_s` names a shared object, so asking for it in a link that resolves
+    /// nothing at startup fails on a missing file — and the message names
+    /// `libgcc_s`, not the linkage that made it impossible. clang adds the
+    /// static unwinder itself once `-static` is on the line.
+    #[test]
+    fn a_static_link_drops_the_shared_unwinder() {
+        let target = NativeBuildTarget::new(
+            NativeTarget::Cross(CrossTarget::new(
+                TargetTriple::parse("aarch64-linux-gnu").expect("a valid triple"),
+                RelocationModel::Static,
+                Linkage::Static,
+            )),
+            None,
+        );
+        let arguments = platform_link_arguments(&target);
+        assert!(!arguments.iter().any(|argument| argument == "-lgcc_s"));
+        assert!(arguments.contains(&"-lpthread".to_owned()), "{arguments:?}");
+        assert!(arguments.contains(&"-lutil".to_owned()), "{arguments:?}");
     }
 
     /// A Windows path survives the response file's own escaping.

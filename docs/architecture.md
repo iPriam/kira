@@ -84,7 +84,7 @@ session is always this machine's, since a runner reloads the app in its own
 process. Artifacts go under `.kira-build/<toolchain-triple>/`, so a host build
 and a cross build of one program never overwrite each other.
 
-Two settings go with it:
+Three settings go with it:
 
 - `--sysroot <dir>`, or the `KIRA_SYSROOT` environment variable, names the
   directory holding the target machine's headers and libraries — the one with
@@ -96,10 +96,20 @@ Two settings go with it:
   it likes. `rpm -ql <sysroot-package>` and `dpkg -L <cross-libc-package>` are
   how to find the one a given machine has.
 - `--relocation-model pic|static` chooses between an ordinary
-  position-independent executable and the absolutely-addressed, non-PIE image a
-  userland with no dynamic loader needs. It defaults to `pic` and applies only to
-  a `--target` build; host executables link position-independent everywhere Kira
-  runs.
+  position-independent executable and an absolutely-addressed, non-PIE image. It
+  defaults to `pic` and applies only to a `--target` build; host executables link
+  position-independent everywhere Kira runs.
+- `--linkage dynamic|static` chooses whether the program still needs a loader to
+  start. It defaults to `dynamic` and also applies only to a `--target` build.
+
+The last two are separate flags because they are separate decisions, made by
+different halves of the build: the relocation model is what the code generator
+bakes into the objects, and the linkage is what the linker makes of them. A
+program can be absolutely addressed and still name `/lib/ld-linux-aarch64.so.1`
+as its interpreter, which on a machine that has no such file the kernel refuses
+before `main` — so the program never runs to report it. A userland with no
+dynamic loader wants both `static` answers; a statically linked PIE is an
+ordinary thing to want and asks for only the second.
 
 Three things have to be in place before a cross build can link:
 

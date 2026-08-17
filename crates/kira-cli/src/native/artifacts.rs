@@ -218,6 +218,7 @@ mod tests {
             NativeTarget::Cross(CrossTarget::new(
                 TargetTriple::parse("aarch64-linux-gnu").expect("a valid triple"),
                 RelocationModel::Pic,
+                kira_backend_api::Linkage::Dynamic,
             )),
             None,
         );
