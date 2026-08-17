@@ -10,8 +10,14 @@ let dependencies = [
 
 Every function here reaches the kernel through `@FFI.Syscall`, which lowers to
 `svc #0` on AArch64 and `syscall` on x86-64 — no libc, no `dlopen`, no symbol to
-resolve at startup. That is what makes a Kira program able to be PID 1 in an
-initramfs: build it with
+resolve at startup. Every one of them carries `@Native`, because a system call is
+an instruction and only a native body has an instruction stream to put one in:
+on a whole-program `--backend llvm` build that changes nothing, and on hybrid it
+is what puts the call in the native half, which ordinary Kira code reaches across
+the bridge exactly as it reaches any other `@Native` function. The pure VM has
+nowhere to put the instruction and refuses such a program by name.
+
+That is what makes a Kira program able to be PID 1 in an initramfs: build it with
 
 ```sh
 kira build --target aarch64-linux-gnu --relocation-model static --linkage static <package>

@@ -592,13 +592,20 @@ Both are asked of the machine the build *targets*, not the one running the
 compiler, so `kira check --target aarch64-linux-gnu` from a Windows host answers
 about the aarch64 program rather than about Windows.
 
-The VM and hybrid engines refuse to start a program that calls the kernel, by
-name, before it runs. A system call is an instruction and the interpreter has
-none of its own to put one in — what a bytecode module carries has to load on
-every machine Kira runs on, including a `wasm32` one where there is no entry
-sequence at all — so reaching the kernel from it would mean the *host's* numbers
-on the *host's* architecture, which is a different call from the one the program
-named. `--backend llvm` is what emits it.
+A system call is an instruction, so the body that holds one has to be native.
+`--backend llvm` makes every body native and needs nothing said. On hybrid the
+distinction is real and the rule is the one `@Native` already states: the call
+site belongs in the native half, and ordinary Kira code reaches it across the
+bridge exactly as it reaches any other `@Native` function. That is why every
+function in `packages/linux` carries `@Native` — on a whole-program build the
+annotation changes nothing, and on hybrid it is what puts the instruction where
+an instruction can live.
+
+The pure VM is the one engine that refuses, and it refuses by name before the
+program starts, naming every call it makes and both engines that do work. It has
+no instruction stream of its own to put `svc` in: what a bytecode module carries
+has to load on every machine Kira runs on, including a `wasm32` one where there
+is no kernel entry sequence at all.
 
 ## Deferred to later milestones
 

@@ -4,23 +4,28 @@
 `app/SkxSyscallTests.kira`, all with the `skx`/`Skx` prefix, depending on
 `packages/linux` for the typed wrappers and on Foundation for `Result`.
 
-## One command
+## Two commands
 
 ```sh
-kira test --backend llvm tests-kik/syscall-harness
+kira test --backend llvm   tests-kik/syscall-harness
+kira test --backend hybrid tests-kik/syscall-harness
 ```
 
-Linux-only and LLVM-only, and neither is a choice this suite makes:
+Both, because they reach the kernel by different routes and only running both
+proves the second. On `llvm` the call site is machine code in the program. On
+`hybrid` the bodies holding the calls are the native half and a `Test` reaches
+them across the bridge — the same crossing the FFI harness exercises — so a
+change that broke the native half's lowering while leaving a whole-program build
+working would fail there and nowhere else.
 
-- A `@FFI.Syscall` is refused at compile time on a target that cannot reach the
-  Linux kernel. On macOS or Windows there is no program here to run, which is why
-  the cargo gate (`crates/kira-cli/tests/kik_harness.rs`) is
-  `#[cfg(target_os = "linux")]` rather than a skip inside the suite.
-- The VM and hybrid engines refuse a program that calls the kernel, by name,
-  before it starts. A system call is an instruction and the interpreter has none
-  of its own to put one in; reaching the kernel from it would mean the *host's*
-  numbers on the *host's* architecture, which is a different call from the one
-  the program named.
+Linux-only, and that is not a choice this suite makes: a `@FFI.Syscall` is
+refused at compile time on a target that cannot reach the Linux kernel, so on
+macOS or Windows there is no program here to run. That is why the cargo gate
+(`crates/kira-cli/tests/kik_harness.rs`) is `#[cfg(target_os = "linux")]` rather
+than a skip inside the suite.
+
+The pure VM refuses such a program by name before it starts, and that refusal is
+gated too: it has no instruction stream of its own to put `svc` in.
 
 ## What the cases assert, and why they are deterministic
 
