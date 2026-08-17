@@ -9,10 +9,13 @@ import Linux
 // because a test that printed would put its own output in the middle of the
 // driver's report.
 //
-// Every failing case is chosen so its `errno` is the same on every machine. A
-// bad file descriptor is `EBADF` whoever runs it; a path that does not exist is
-// `ENOENT` whether or not the process is privileged. `mount` of a real device is
-// deliberately absent — its answer depends on who is running the suite.
+// Every failing case asserts something that does not depend on who ran the suite.
+// A bad file descriptor is `EBADF` whoever asks, a program that is not there is
+// `ENOENT`, and a process with no children gets `ECHILD`. `mount` and `umount2`
+// need `CAP_SYS_ADMIN`, which the kernel checks before it looks at the path, so
+// their number is `EPERM` under CI and `ENOENT` under root — those cases assert
+// that the kernel refused the call, which is true either way. `mount` of a *real*
+// device is deliberately absent for the reverse reason: as root it would succeed.
 
 // The `errno` of a failure, or 0 when the call succeeded. One shape for every
 // test below, so a test body stays one line and the arm order never varies.
@@ -119,9 +122,16 @@ Test SkxSyncTakesNoArgumentsAndSucceeds {
 
 // ─── Two arguments: `umount2` ───────────────────────────────────────────────
 
-Test SkxUnmountingAPathThatIsNotThereIsEnoent {
-    test { return skxErrno(linuxUmount("/kira-syscall-harness-no-such-path", 0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+// `umount2` needs `CAP_SYS_ADMIN`, and the kernel checks that before it looks at
+// the path — so the *number* here depends on who ran the suite (`EPERM` without
+// the capability, `ENOENT` with it) while the failure does not. Asserting one of
+// the two would make this pass as root and fail in CI, or the reverse.
+Test SkxUnmountingAPathThatIsNotThereFails {
+    test {
+        let errno = skxErrno(linuxUmount("/kira-syscall-harness-no-such-path", 0))
+        return errno == 1 || errno == 2
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
 // ─── Three arguments through a pointer: `execve` ────────────────────────────
@@ -146,19 +156,22 @@ Test SkxWaitingWithNoChildrenIsEchild {
 
 // ─── Five arguments: `mount` ────────────────────────────────────────────────
 
-// The widest call here, and the one that proves an argument reaches the fifth
-// register: a source that does not exist is `ENOENT` before any privilege check.
-Test SkxMountingASourceThatIsNotThereIsEnoent {
+// The widest call here: five arguments, so the fifth register carries one. Its
+// errno depends on privilege for the same reason `umount2`'s does — `EPERM`
+// without `CAP_SYS_ADMIN`, `ENOENT` with it — and what is asserted is what does
+// not: the call reached the kernel and the kernel refused it.
+Test SkxMountingASourceThatIsNotThereFails {
     test {
-        return skxErrno(linuxMount(
+        let errno = skxErrno(linuxMount(
             "/kira-syscall-harness-no-such-device",
             "/kira-syscall-harness-no-such-target",
             "ext4",
             0,
             RawPtr(0),
         ))
+        return errno == 1 || errno == 2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
 // ─── Widths ─────────────────────────────────────────────────────────────────
