@@ -12,17 +12,25 @@
 # target key, and asset name are the contract.
 #
 # `[llvm].version` is also the version the LLVM backend's `llvm-sys` bindings are
-# built against. `llvm-sys` majors track LLVM `major.minor`, so LLVM 22.1.x pairs
-# with `llvm-sys` 221.x: moving this pin means republishing the bundles *and*
+# built against. `llvm-sys` majors track LLVM `major.minor`, so LLVM 23.1.x pairs
+# with `llvm-sys` 231.x: moving this pin means republishing the bundles *and*
 # moving the `llvm-sys` dependency in the workspace `Cargo.toml`. A unit test in
 # `kira-toolchain` fails if those two drift apart.
 
 schema_version = 1
 
 [llvm]
-version = "22.1.8"
-source_tag = "llvmorg-22.1.8"
-release_tag = "llvm-v22.1.8-kira.1"
+# A release candidate, deliberately. 23.1.0 has no final tag yet, and the
+# generators the build below names are what a cross build needs, so the choice
+# is between the newest series and waiting for it to be blessed. The version
+# string carries `-rc3` rather than reading as `23.1.0`, because it is the
+# install directory name, every asset name, and what a build reports when it says
+# which LLVM it found: a bundle labelled 23.1.0 that is not 23.1.0 is the one
+# thing this file exists to prevent. Moving to the final tag is these three lines
+# plus the asset names, and it republishes the bundles.
+version = "23.1.0-rc3"
+source_tag = "llvmorg-23.1.0-rc3"
+release_tag = "llvm-v23.1.0-rc3-kira.1"
 
 [build]
 build_type = "Release"
@@ -57,16 +65,16 @@ targets_to_build = "X86;AArch64;WebAssembly"
 runner = "windows-latest"
 platform = "windows"
 archive = "zip"
-asset = "llvm-22.1.8-x86_64-windows-msvc.zip"
+asset = "llvm-23.1.0-rc3-x86_64-windows-msvc.zip"
 
 [target.x86_64-linux-gnu]
 runner = "ubuntu-24.04"
 platform = "linux"
 archive = "tar.xz"
-asset = "llvm-22.1.8-x86_64-linux-gnu.tar.xz"
+asset = "llvm-23.1.0-rc3-x86_64-linux-gnu.tar.xz"
 
 [target.aarch64-macos]
 runner = "macos-14"
 platform = "macos"
 archive = "tar.xz"
-asset = "llvm-22.1.8-aarch64-macos.tar.xz"
+asset = "llvm-23.1.0-rc3-aarch64-macos.tar.xz"
