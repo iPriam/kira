@@ -88,7 +88,7 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
         Vec::new(),
         BuildKind::Library,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         // Not a lint run.
         false,
     );

@@ -63,7 +63,7 @@ impl AnalysisSession {
                 modules,
                 build_kind,
                 kira_semantics::PrecompiledShaders::default(),
-                kira_semantics::host_platform(),
+                kira_semantics::BuildMachine::host(),
                 // The language server never lints: it answers about code as written.
                 false,
             );
@@ -78,8 +78,8 @@ impl AnalysisSession {
             .set_shaders(&mut self.database)
             .to(kira_semantics::PrecompiledShaders::default());
         program
-            .set_platform(&mut self.database)
-            .to(kira_semantics::host_platform());
+            .set_machine(&mut self.database)
+            .to(kira_semantics::BuildMachine::host());
         program
     }
 }

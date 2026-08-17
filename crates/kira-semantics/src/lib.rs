@@ -46,6 +46,7 @@ mod aliases;
 mod analyze;
 mod arrays;
 mod build_kind;
+mod build_machine;
 mod cells;
 mod classes;
 mod closures;
@@ -127,27 +128,6 @@ pub struct ModuleSource {
     pub text: String,
 }
 
-/// The operating system this compiler is running on, as `Build.platform`
-/// spells it.
-///
-/// The default for a caller that names no target: building for the machine you
-/// are on is what every plain `kira build` does.
-#[must_use]
-pub fn host_platform() -> String {
-    if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "ios") {
-        "ios"
-    } else {
-        kira_macros::UNKNOWN_PLATFORM
-    }
-    .to_owned()
-}
-
 /// The one salsa input: the entry file plus the modules it imports.
 #[salsa::input]
 pub struct SourceProgram {
@@ -181,13 +161,15 @@ pub struct SourceProgram {
     /// for every caller that has no shaders.
     #[returns(clone)]
     pub shaders: PrecompiledShaders,
-    /// The operating system this build targets, behind `Build.platform`.
+    /// The machine this build targets: its operating system, behind
+    /// `Build.platform`, and its architecture.
     ///
     /// An input for the same reason the others are: a program built for macOS
-    /// and one built for Windows can expand to different code, so changing it
+    /// and one built for Windows can expand to different code, and one built for
+    /// aarch64 refuses declarations a build for x86_64 accepts, so changing it
     /// has to invalidate analysis.
     #[returns(clone)]
-    pub platform: String,
+    pub machine: BuildMachine,
     /// Whether this compilation was asked for by `kira lint`, behind
     /// `Build.linting`.
     ///
@@ -212,7 +194,7 @@ impl SourceProgram {
             Vec::new(),
             BuildKind::Application,
             PrecompiledShaders::default(),
-            host_platform(),
+            BuildMachine::host(),
             // A program built by these helpers was not asked for by `kira lint`.
             false,
         )
@@ -237,7 +219,7 @@ impl SourceProgram {
             modules,
             BuildKind::Application,
             PrecompiledShaders::default(),
-            host_platform(),
+            BuildMachine::host(),
             // A program built by these helpers was not asked for by `kira lint`.
             false,
         )
@@ -613,7 +595,7 @@ fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> Pr
         db,
         declaring,
         templates,
-        source.platform(db),
+        source.machine(db).platform().to_owned(),
         source.lint(db),
         source.shaders(db),
     );
@@ -760,6 +742,7 @@ pub fn analyzed(db: &dyn salsa::Database, source: SourceProgram) -> HirProgram {
         &parsed.interner,
         &known,
         *source.build_kind(db),
+        &source.machine(db),
     );
     for diagnostic in analysis.diagnostics {
         DiagnosticAccumulator(diagnostic).accumulate(db);

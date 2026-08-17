@@ -23,6 +23,7 @@ pub(crate) use signatures::FuncSig;
 
 use crate::aliases::AliasTable;
 use crate::build_kind::BuildKind;
+use crate::build_machine::BuildMachine;
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -123,13 +124,20 @@ impl FieldDefault {
 /// `build_kind` decides the entrypoint rule: an application must declare a
 /// `@Main` and a library must not. That check lives here, above the backend
 /// split, which is why the kind is a frontend input rather than a backend flag.
+///
+/// `machine` is which machine the program is being built for. A declaration can
+/// be unavailable on one — an `@FFI.Syscall` naming a Linux system call is not
+/// reachable from a macOS binary and has no lowering on a 32-bit processor — and
+/// refusing it here, by name, is what keeps a wrong number out of an emitted
+/// object.
 pub fn analyze(
     tree: &SyntaxTree,
     interner: &Names,
     modules: &[(String, SourceId)],
     build_kind: BuildKind,
+    machine: &BuildMachine,
 ) -> Analysis {
-    Analyzer::new(tree, interner, modules, build_kind).run()
+    Analyzer::new(tree, interner, modules, build_kind, machine).run()
 }
 
 pub(crate) struct Analyzer<'a> {
@@ -142,6 +150,12 @@ pub(crate) struct Analyzer<'a> {
     /// Whether this program is an application (needs `@Main`) or a library
     /// (must not have one).
     pub(crate) build_kind: BuildKind,
+    /// The machine this program is being built for.
+    ///
+    /// Owned rather than borrowed because it outlives no analysis and is read
+    /// once per foreign declaration: a clone of two short strings, against a
+    /// lifetime parameter on every path that reaches a declaration check.
+    pub(crate) machine: BuildMachine,
     /// Every file's imports, keyed by file.
     pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
@@ -404,12 +418,14 @@ impl<'a> Analyzer<'a> {
         interner: &'a Names,
         modules: &[(String, SourceId)],
         build_kind: BuildKind,
+        machine: &BuildMachine,
     ) -> Self {
         let entries = crate::imports::collect_imports(tree, interner);
         let imports = crate::imports::ImportTable::build(modules, &entries);
         let mut analyzer = Self {
             source: crate::FILE_SOURCE_ID,
             build_kind,
+            machine: machine.clone(),
             imports,
             tree,
             interner,

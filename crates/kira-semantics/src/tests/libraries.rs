@@ -4,7 +4,7 @@
 //! checked during analysis, above the backend split.
 
 use super::*;
-use crate::host_platform;
+use crate::BuildMachine;
 
 #[test]
 fn a_library_without_main_analyzes_clean() {
@@ -61,7 +61,7 @@ fn a_library_records_no_entrypoint() {
         Vec::new(),
         BuildKind::Library,
         PrecompiledShaders::default(),
-        host_platform(),
+        BuildMachine::host(),
         // Not a lint run.
         false,
     );

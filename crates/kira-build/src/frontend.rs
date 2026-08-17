@@ -283,6 +283,15 @@ fn compile_for_with_session(
     drop(shader_files);
 
     kira_diagnostics::progress!("indexing sources");
+    // The analyzer is told which machine this build is aimed at, not which one it
+    // is running on. Those are the same answer for a plain `kira build` and
+    // different ones for a cross build, and the difference is load-bearing twice
+    // over: `Build.platform` selects platform-specific code during expansion, and
+    // an `@FFI.Syscall` is refused by name on a target that cannot reach the
+    // Linux kernel. Feeding the host's answers here made a
+    // `--target aarch64-linux-gnu` build from Windows expand as a Windows
+    // program.
+    let machine = kira_semantics::BuildMachine::new(target.os(), target.arch());
     let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
     let source = match *previous {
         Some(source) => {
@@ -291,7 +300,7 @@ fn compile_for_with_session(
             source.set_modules(db).to(modules);
             source.set_build_kind(db).to(build_kind);
             source.set_shaders(db).to(shaders);
-            source.set_platform(db).to(kira_semantics::host_platform());
+            source.set_machine(db).to(machine.clone());
             source.set_lint(db).to(lint_requested());
             source
         }
@@ -303,7 +312,7 @@ fn compile_for_with_session(
                 modules,
                 build_kind,
                 shaders,
-                kira_semantics::host_platform(),
+                machine,
                 lint_requested(),
             );
             *previous = Some(source);
