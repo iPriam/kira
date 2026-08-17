@@ -38,22 +38,26 @@ pub(super) fn run_web(
     }
 }
 
-/// Refuses an engine that cannot enter the kernel on the program's behalf,
-/// naming the call, and answers whether it did.
+/// Refuses the pure interpreter a program that enters the kernel, naming the
+/// calls, and answers whether it did.
 ///
-/// A `@FFI.Syscall` is an instruction, and the interpreter has no instruction
-/// stream of its own to put one in: what a bytecode module carries is a portable
-/// artifact that has to load on every machine Kira runs on, including a
-/// `wasm32` one where there is no kernel entry sequence at all. Reaching the
-/// kernel from the interpreter would therefore mean the *host's* numbers on the
-/// *host's* architecture, which is a different call from the one the program
-/// named — and a wrong answer is worse than a refusal.
+/// The VM is the one engine with nowhere to put the instruction. A `@FFI.Syscall`
+/// *is* an instruction — `svc #0`, `syscall` — and a bytecode module carries no
+/// instruction stream of its own: what it carries has to load on every machine
+/// Kira runs on, including a `wasm32` one where there is no kernel entry sequence
+/// at all.
+///
+/// Hybrid is not refused, and the difference is real rather than a concession. Its
+/// native half is compiled through the same LLVM backend a `--backend llvm` build
+/// is, so a bodyless declaration's body is machine code there exactly as it is in
+/// an executable — which is already how hybrid calls an `@FFI.Extern`. The
+/// bytecode half reaches it the way it reaches any other native function.
 ///
 /// Refused here, before the program starts, for the same reason `run` refuses a
 /// cross target by name: the engine is chosen on the command line, so the fix is
 /// on the command line, and a program that has already begun writing output is
 /// past the point where that can be said.
-fn refuse_syscalls_on(engine: &str, ir: &IrProgram) -> bool {
+fn refuse_syscalls_on_the_vm(ir: &IrProgram) -> bool {
     let named: Vec<&str> = ir
         .foreign_imports
         .iter()
@@ -64,10 +68,10 @@ fn refuse_syscalls_on(engine: &str, ir: &IrProgram) -> bool {
         return false;
     }
     err!(
-        "kira: this program calls the Linux kernel directly ({}), which the {engine} engine \
-         cannot do: a system call is an instruction, and the interpreter has none of its own to \
-         put one in. Run it with `--backend llvm`, which emits the kernel entry sequence for the \
-         machine it is building for.",
+        "kira: this program calls the Linux kernel directly ({}), which the VM engine cannot do: a \
+         system call is an instruction, and the interpreter has no instruction stream of its own \
+         to put one in. Run it with `--backend llvm` or `--backend hybrid`, both of which emit the \
+         kernel entry sequence for the machine they are building for.",
         named.join(", ")
     );
     true
@@ -83,9 +87,6 @@ pub(super) fn run_hybrid(
     foreign_link: &NativeLinkInputs,
     program_arguments: &[String],
 ) -> i32 {
-    if refuse_syscalls_on("hybrid", ir) {
-        return EXIT_USAGE;
-    }
     match hybrid::run(
         ir,
         std::path::Path::new(&options.path),
@@ -112,7 +113,7 @@ pub(super) fn run_on_vm(
     foreign_link: &NativeLinkInputs,
     program_arguments: &[String],
 ) -> i32 {
-    if refuse_syscalls_on("VM", ir) {
+    if refuse_syscalls_on_the_vm(ir) {
         return EXIT_USAGE;
     }
     kira_diagnostics::progress!("compiling bytecode");

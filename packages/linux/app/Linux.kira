@@ -17,6 +17,18 @@
 
 import Foundation
 
+// ─── Why every function here is `@Native` ───────────────────────────────────
+//
+// A system call is an instruction, and only a native body has an instruction
+// stream to put one in. On the hybrid engine that distinction is real: the
+// bytecode half reaches the outside world by asking its host, and there is no
+// host call that means "enter the kernel" — nothing to load, no symbol to bind,
+// and any host that did it would be entering *its* kernel rather than the
+// program's. So the bodies that hold the calls live in the native half, and
+// ordinary Kira code reaches them across the bridge exactly as it reaches any
+// other `@Native` function. On a pure `--backend llvm` build every function is
+// native already and the annotation changes nothing.
+
 // ─── The `-errno` convention ────────────────────────────────────────────────
 
 // Why a kernel call did not do what was asked.
@@ -35,12 +47,14 @@ struct LinuxError {
 // number would otherwise be read as a failure. `lseek` can return an offset
 // past 2^63 - 4096 on a sparse file, and `read` answers a count that is never
 // negative — so the test is "small and negative", not "negative".
+@Native
 function linuxMaxErrno() -> Int { return 4095 }
 
 // Decodes one raw kernel answer.
 //
 // The single place the convention is read. Every wrapper below goes through it,
 // so there is one definition of what failure means rather than one per call.
+@Native
 function linuxDecode(answer: Int) -> Result<Int, LinuxError> {
     if answer < 0 && answer >= -linuxMaxErrno() {
         let failure: Result<Int, LinuxError> = .Error(LinuxError { errno: -answer })
@@ -58,6 +72,7 @@ function linuxDecode(answer: Int) -> Result<Int, LinuxError> {
 // the empty string rather than a guess at what the number meant — the number
 // itself is on the error, and a caller reporting an unnamed failure should print
 // `error.errno`.
+@Native
 function linuxErrorName(error: borrow LinuxError) -> String {
     if error.errno == 1 { return "EPERM" }
     if error.errno == 2 { return "ENOENT" }
@@ -127,8 +142,11 @@ function linuxSysExitGroup(status: Int);
 // bound at file scope is not a declaration the language admits, and a function
 // that answers a literal is what a caller writes `linuxStdout()` for. Every
 // number below is spelled the same way for the same reason.
+@Native
 function linuxStdin() -> Int { return 0 }
+@Native
 function linuxStdout() -> Int { return 1 }
+@Native
 function linuxStderr() -> Int { return 2 }
 
 // ─── Reading and writing ────────────────────────────────────────────────────
@@ -143,11 +161,13 @@ function linuxStderr() -> Int { return 2 }
 // `text.count` is the byte count, not a character count, which is what `write`
 // takes. A `String` whose bytes contain a NUL cannot become a C string and traps
 // rather than writing a silently truncated prefix.
+@Native
 function linuxWrite(fd: Int, text: borrow String) -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysWrite(fd, text, U64(text.count)))
 }
 
 // Writes `text` to standard output.
+@Native
 function linuxPrint(text: borrow String) -> Result<Int, LinuxError> {
     return linuxWrite(linuxStdout(), text)
 }
@@ -157,6 +177,7 @@ function linuxPrint(text: borrow String) -> Result<Int, LinuxError> {
 // Two calls rather than one, because building the joined string would allocate —
 // and this is the surface a program with no allocator to speak of reaches for
 // when it wants to say something before anything else works.
+@Native
 function linuxPrintLine(text: borrow String) -> Result<Int, LinuxError> {
     let written = linuxWrite(linuxStdout(), text)
     match written {
@@ -183,6 +204,7 @@ function linuxPrintLine(text: borrow String) -> Result<Int, LinuxError> {
 // Reads at most `count` bytes from `fd` into `buffer`, answering how many
 // arrived. Zero means end of file; `buffer` is storage the caller owns and this
 // never allocates.
+@Native
 function linuxRead(fd: Int, buffer: RawPtr, count: Int) -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysRead(fd, buffer, U64(count)))
 }
@@ -190,11 +212,17 @@ function linuxRead(fd: Int, buffer: RawPtr, count: Int) -> Result<Int, LinuxErro
 // ─── Mounting ───────────────────────────────────────────────────────────────
 
 // The mount flags a userland bringing up its own filesystems uses.
+@Native
 function linuxMountReadOnly() -> Int { return 1 }
+@Native
 function linuxMountNoSuid() -> Int { return 2 }
+@Native
 function linuxMountNoDev() -> Int { return 4 }
+@Native
 function linuxMountNoExec() -> Int { return 8 }
+@Native
 function linuxMountSynchronous() -> Int { return 16 }
+@Native
 function linuxMountRemount() -> Int { return 32 }
 
 // Mounts `filesystem` from `source` at `target`.
@@ -202,6 +230,7 @@ function linuxMountRemount() -> Int { return 32 }
 // `data` is the filesystem-specific option string, which most of them do not
 // need; `linuxMountVirtual` is the shape that covers `proc`, `sysfs`, and
 // `devtmpfs` without a caller having to write a null pointer.
+@Native
 function linuxMount(
     source: borrow String,
     target: borrow String,
@@ -218,6 +247,7 @@ function linuxMount(
 // These three are the first thing an init does and none of them has a device or
 // an option string, so the source is the filesystem's own name (which is what
 // `/proc/mounts` then shows) and the option pointer is null.
+@Native
 function linuxMountVirtual(
     filesystem: borrow String,
     target: borrow String,
@@ -227,6 +257,7 @@ function linuxMountVirtual(
 }
 
 // Unmounts `target`. `flags` is zero for an ordinary unmount.
+@Native
 function linuxUmount(target: borrow String, flags: Int) -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysUmount2(target, flags))
 }
@@ -244,6 +275,7 @@ function linuxUmount(target: borrow String, flags: Int) -> Result<Int, LinuxErro
 // `argv` and `envp` are NULL-terminated arrays of C string pointers, which Kira
 // has no way to build from a `[String]` yet. A caller passes storage it laid out
 // itself, or `RawPtr(0)` for a program that reads neither.
+@Native
 function linuxExecve(
     path: borrow String,
     argv: RawPtr,
@@ -258,6 +290,7 @@ function linuxExecve(
 // wait status, or `RawPtr(0)` when only the pid matters. An init calls this in
 // a loop for as long as it runs: it is what keeps a finished child from staying
 // a zombie in a process table nobody else will clean.
+@Native
 function linuxWait(pid: Int, status: RawPtr, options: Int) -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysWait4(pid, status, options, RawPtr(0)))
 }
@@ -269,6 +302,7 @@ function linuxWait(pid: Int, status: RawPtr, options: Int) -> Result<Int, LinuxE
 // nothing after it runs. `exit_group` rather than `exit` because `exit` ends one
 // thread — a process with more than one would carry on running without the
 // thread that asked to stop.
+@Native
 function linuxExit(status: Int) {
     linuxSysExitGroup(status)
     return
@@ -283,12 +317,17 @@ function linuxExit(status: Int) {
 // power a machine off because a register happened to hold the right small
 // integer. They are supplied here so a caller names only what they want to
 // happen.
+@Native
 function linuxRebootMagic1() -> Int { return 0xfee1dead }
+@Native
 function linuxRebootMagic2() -> Int { return 672274793 }
 
 // What `linuxReboot` should do.
+@Native
 function linuxRebootRestart() -> Int { return 0x1234567 }
+@Native
 function linuxRebootHalt() -> Int { return 0xcdef0123 }
+@Native
 function linuxRebootPowerOff() -> Int { return 0x4321fedc }
 
 // Restarts, halts, or powers off the machine.
@@ -297,6 +336,7 @@ function linuxRebootPowerOff() -> Int { return 0x4321fedc }
 // otherwise the machine is going down. Call `linuxSync` first: `reboot` does not
 // flush anything, so an unsynced filesystem is one that comes back needing a
 // check.
+@Native
 function linuxReboot(command: Int) -> Result<Int, LinuxError> {
     return linuxDecode(
         linuxSysReboot(linuxRebootMagic1(), linuxRebootMagic2(), command, RawPtr(0))
@@ -308,6 +348,7 @@ function linuxReboot(command: Int) -> Result<Int, LinuxError> {
 // The call the kernel offers no failure for in practice, and it is still decoded
 // rather than ignored, because the one thing worse than a `sync` that failed is a
 // `reboot` that followed one.
+@Native
 function linuxSync() -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysSync())
 }

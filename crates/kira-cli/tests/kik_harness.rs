@@ -76,48 +76,56 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
 
 /// The raw system-call harness package, relative to this crate.
 ///
-/// Linux-only and LLVM-only, and neither is a choice. A `@FFI.Syscall` is
-/// refused at compile time on a target that cannot reach the Linux kernel — that
-/// refusal is the feature — and the interpreter has no instruction stream of its
-/// own to put `svc`/`syscall` in, so the VM and hybrid engines refuse to start
-/// such a program by name.
+/// Linux-only, and that is not a choice: a `@FFI.Syscall` is refused at compile
+/// time on a target that cannot reach the Linux kernel — that refusal is the
+/// feature — so on another operating system there is no program here to run.
 #[cfg(target_os = "linux")]
 fn syscall_harness() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/syscall-harness")
 }
 
-/// Every case in the system-call harness passes against a real kernel.
+/// Every case in the system-call harness passes against a real kernel, on both
+/// engines that can reach one.
 ///
-/// Gated on the operating system rather than skipped inside the suite: on a
-/// machine that is not Linux there is no program to run, because the frontend
-/// refuses the declarations. The tally is asserted whole for the same reason the
-/// others are — a case that stops being collected fails this rather than quietly
-/// shrinking the run, which is exactly what a bodyless declaration in the same
-/// file used to cause.
+/// Both are asserted rather than one, because they reach the kernel by different
+/// routes and only running both proves the second. On `llvm` the call site is
+/// machine code in the program. On `hybrid` the bodies holding the calls are the
+/// native half and a `Test` reaches them across the bridge, which is the same
+/// crossing the FFI harness exercises — so a change that broke the native half's
+/// lowering while leaving a whole-program build working would fail here.
+///
+/// Gated on the operating system rather than skipped inside the suite, and the
+/// tally asserted whole for the same reason the others are: a case that stops
+/// being collected fails this rather than quietly shrinking the run, which is
+/// exactly what a bodyless declaration in the same file used to cause.
 #[test]
 #[cfg(target_os = "linux")]
 fn the_syscall_harness_passes_against_the_kernel() {
-    let path = syscall_harness();
-    let path = path.to_str().expect("a utf-8 path");
-    let output = kira(&["test", "--backend", "llvm", path]);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(
-        output.status.success(),
-        "the syscall harness did not run: {}\n{stdout}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let tally = stdout.lines().last().unwrap_or_default().to_owned();
-    assert_eq!(
-        tally, "18 passed, 0 failed, 0 skipped, 18 total",
-        "the syscall harness tally changed"
-    );
+    for backend in ["llvm", "hybrid"] {
+        let path = syscall_harness();
+        let path = path.to_str().expect("a utf-8 path");
+        let output = kira(&["test", "--backend", backend, path]);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "the syscall harness did not run on {backend}: {}\n{stdout}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tally = stdout.lines().last().unwrap_or_default().to_owned();
+        assert_eq!(
+            tally, "18 passed, 0 failed, 0 skipped, 18 total",
+            "the syscall harness tally changed on {backend}"
+        );
+    }
 }
 
 /// The VM refuses a program that calls the kernel, by name, before it starts.
 ///
-/// The refusal names every call the program makes and the flag that does work,
-/// because a message saying only "the VM cannot do this" leaves the reader to
-/// guess which of the two halves of their command line to change.
+/// The VM alone: it is the one engine with nowhere to put the instruction, and
+/// the test above proves hybrid is not in the same position. The refusal names
+/// every call the program makes and both flags that do work, because a message
+/// saying only "the VM cannot do this" leaves the reader to guess which of the
+/// two halves of their command line to change.
 #[test]
 #[cfg(target_os = "linux")]
 fn the_vm_refuses_a_program_that_calls_the_kernel() {
@@ -135,8 +143,8 @@ fn the_vm_refuses_a_program_that_calls_the_kernel() {
         "the calls are not named: {stderr}"
     );
     assert!(
-        stderr.contains("--backend llvm"),
-        "the working flag is not named: {stderr}"
+        stderr.contains("--backend llvm") && stderr.contains("--backend hybrid"),
+        "the engines that do work are not both named: {stderr}"
     );
 }
 

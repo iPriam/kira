@@ -183,8 +183,18 @@ Test SkxMountingASourceThatIsNotThereFails {
 @FFI.Syscall { name: write; }
 function skxSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
 
+// `@Native` because that is where an instruction can live. On hybrid the body
+// holding the kernel entry belongs to the native half, and a `Test` reaches it
+// across the bridge exactly as it reaches any other `@Native` function; on a pure
+// `--backend llvm` build every function is native and the annotation changes
+// nothing. The wrappers in `packages/linux` carry it for the same reason.
+@Native
+function skxNarrowDescriptorErrno() -> Int {
+    return -skxSysWriteNarrowFd(-1, "x", U64(1))
+}
+
 Test SkxANarrowDescriptorIsSignExtendedIntoItsRegister {
-    test { return -skxSysWriteNarrowFd(-1, "x", U64(1)) }
+    test { return skxNarrowDescriptorErrno() }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
@@ -194,7 +204,12 @@ Test SkxANarrowDescriptorIsSignExtendedIntoItsRegister {
 @FFI.Syscall { name: write; }
 function skxSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
 
+@Native
+function skxRawWriteAnswer() -> Int {
+    return skxSysWrite(-1, "x", U64(1))
+}
+
 Test SkxTheRawEntryPointAnswersNegativeErrno {
-    test { return skxSysWrite(-1, "x", U64(1)) }
+    test { return skxRawWriteAnswer() }
     expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
 }
