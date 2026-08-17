@@ -38,6 +38,41 @@ pub(super) fn run_web(
     }
 }
 
+/// Refuses an engine that cannot enter the kernel on the program's behalf,
+/// naming the call, and answers whether it did.
+///
+/// A `@FFI.Syscall` is an instruction, and the interpreter has no instruction
+/// stream of its own to put one in: what a bytecode module carries is a portable
+/// artifact that has to load on every machine Kira runs on, including a
+/// `wasm32` one where there is no kernel entry sequence at all. Reaching the
+/// kernel from the interpreter would therefore mean the *host's* numbers on the
+/// *host's* architecture, which is a different call from the one the program
+/// named — and a wrong answer is worse than a refusal.
+///
+/// Refused here, before the program starts, for the same reason `run` refuses a
+/// cross target by name: the engine is chosen on the command line, so the fix is
+/// on the command line, and a program that has already begun writing output is
+/// past the point where that can be said.
+fn refuse_syscalls_on(engine: &str, ir: &IrProgram) -> bool {
+    let named: Vec<&str> = ir
+        .foreign_imports
+        .iter()
+        .filter(|entry| entry.import.as_syscall().is_some())
+        .map(|entry| entry.import.symbol())
+        .collect();
+    if named.is_empty() {
+        return false;
+    }
+    err!(
+        "kira: this program calls the Linux kernel directly ({}), which the {engine} engine \
+         cannot do: a system call is an instruction, and the interpreter has none of its own to \
+         put one in. Run it with `--backend llvm`, which emits the kernel entry sequence for the \
+         machine it is building for.",
+        named.join(", ")
+    );
+    true
+}
+
 /// Builds a hybrid bundle and runs it in the hybrid host.
 ///
 /// The host runs in this process rather than as a child: the native half is a
@@ -48,6 +83,9 @@ pub(super) fn run_hybrid(
     foreign_link: &NativeLinkInputs,
     program_arguments: &[String],
 ) -> i32 {
+    if refuse_syscalls_on("hybrid", ir) {
+        return EXIT_USAGE;
+    }
     match hybrid::run(
         ir,
         std::path::Path::new(&options.path),
@@ -74,6 +112,9 @@ pub(super) fn run_on_vm(
     foreign_link: &NativeLinkInputs,
     program_arguments: &[String],
 ) -> i32 {
+    if refuse_syscalls_on("VM", ir) {
+        return EXIT_USAGE;
+    }
     kira_diagnostics::progress!("compiling bytecode");
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,

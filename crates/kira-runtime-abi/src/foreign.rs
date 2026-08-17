@@ -3,12 +3,24 @@
 use crate::aggregate::{ForeignAggregateError, ForeignAggregateId};
 use crate::{BridgeValue, BridgeValueTag};
 
-/// The ABI a foreign declaration uses.
+/// The ABI a foreign declaration uses, which is also what says how the call is
+/// reached.
+///
+/// The two are one question because they have one answer: a C ABI import is
+/// reached by binding a symbol in a native library, and a Linux system call is
+/// reached by putting a number in a register and executing one instruction.
+/// There is no combination of the two, so a second field naming the mechanism
+/// would be a second place for the same fact and a way for the two to disagree.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForeignAbi {
-    /// The platform C ABI.
+    /// The platform C ABI. The import names a library and a symbol in it.
     C = 0,
+    /// The Linux system-call ABI. The import names no library: its
+    /// [`ForeignImport::symbol`] is the kernel's own name for the call, and the
+    /// number that name resolves to is the emitting backend's to supply, because
+    /// it differs per architecture — see [`crate::syscall`].
+    LinuxSyscall = 1,
 }
 
 impl ForeignAbi {
@@ -21,8 +33,18 @@ impl ForeignAbi {
     pub const fn from_tag(tag: u8) -> Option<Self> {
         match tag {
             0 => Some(Self::C),
+            1 => Some(Self::LinuxSyscall),
             _ => None,
         }
+    }
+
+    /// Whether an import with this ABI is reached by binding a library symbol.
+    ///
+    /// Every step that loads a library, looks a name up in it, or reports one
+    /// missing asks this rather than naming the C ABI, so adding a second
+    /// mechanism did not require each of them to learn what the new one is.
+    pub const fn binds_a_library_symbol(self) -> bool {
+        matches!(self, Self::C)
     }
 }
 
@@ -255,6 +277,36 @@ impl ForeignImport {
             symbol: symbol.into(),
             abi,
             signature,
+        }
+    }
+
+    /// Creates an import that enters the kernel rather than a library.
+    ///
+    /// The library name is empty because there is no library — the call is an
+    /// instruction, not a symbol somebody has to find. Nothing reads it: every
+    /// step that would have is guarded by
+    /// [`ForeignAbi::binds_a_library_symbol`].
+    pub fn syscall(syscall: crate::syscall::LinuxSyscall, signature: ForeignSignature) -> Self {
+        Self {
+            library: String::new(),
+            symbol: syscall.label().to_owned(),
+            abi: ForeignAbi::LinuxSyscall,
+            signature,
+        }
+    }
+
+    /// Returns the system call this import enters, or `None` when it binds a
+    /// library symbol instead.
+    ///
+    /// Resolved from the name rather than carried as a number, and that is the
+    /// point: a number is per-architecture, so one baked into an import table
+    /// would be whichever machine's the table was written on. The name survives
+    /// the trip and the emitting backend supplies the number for the machine it
+    /// is emitting for.
+    pub fn as_syscall(&self) -> Option<crate::syscall::LinuxSyscall> {
+        match self.abi {
+            ForeignAbi::LinuxSyscall => crate::syscall::LinuxSyscall::parse(&self.symbol),
+            ForeignAbi::C => None,
         }
     }
 
@@ -607,8 +659,41 @@ mod tests {
     #[test]
     fn foreign_abi_tag_is_pinned() {
         assert_eq!(ForeignAbi::C.tag(), 0);
+        assert_eq!(ForeignAbi::LinuxSyscall.tag(), 1);
         assert_eq!(ForeignAbi::from_tag(0), Some(ForeignAbi::C));
-        assert_eq!(ForeignAbi::from_tag(1), None);
+        assert_eq!(ForeignAbi::from_tag(1), Some(ForeignAbi::LinuxSyscall));
+        assert_eq!(ForeignAbi::from_tag(2), None);
+    }
+
+    /// A syscall import names no library, and the one question every
+    /// library-binding step asks answers `false` for it — which is what keeps a
+    /// loader from being told to find `write` in a library called `""`.
+    #[test]
+    fn a_syscall_import_names_the_kernel_and_no_library() {
+        let import = ForeignImport::syscall(
+            crate::syscall::LinuxSyscall::Write,
+            ForeignSignature::scalars(
+                [ForeignType::I64, ForeignType::RawPtr, ForeignType::U64],
+                ForeignType::I64,
+            ),
+        );
+        assert_eq!(import.library(), "");
+        assert_eq!(import.symbol(), "write");
+        assert_eq!(import.abi(), ForeignAbi::LinuxSyscall);
+        assert!(!import.abi().binds_a_library_symbol());
+        assert_eq!(
+            import.as_syscall(),
+            Some(crate::syscall::LinuxSyscall::Write)
+        );
+
+        let c = ForeignImport::new(
+            "ffimath",
+            "ffi_add",
+            ForeignAbi::C,
+            ForeignSignature::scalars([ForeignType::I32], ForeignType::I32),
+        );
+        assert!(c.abi().binds_a_library_symbol());
+        assert_eq!(c.as_syscall(), None);
     }
 
     #[test]

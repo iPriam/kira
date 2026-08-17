@@ -15,8 +15,8 @@ pub mod token;
 
 pub use ast::{
     BinaryOp, Block, Expr, ExprId, FfiTypeKind, FfiTypeMark, FileNodes, FilePart, ForIterable,
-    ForeignField, ForeignMark, Function, Item, NodeBase, Param, Stmt, StmtId, SyntaxTree, TypeRef,
-    TypeRefId, UnaryOp, UnsupportedItem,
+    ForeignField, ForeignKind, ForeignMark, Function, Item, NodeBase, Param, Stmt, StmtId,
+    SyntaxTree, TypeRef, TypeRefId, UnaryOp, UnsupportedItem,
 };
 pub use ownership::{OwnershipMode, OwnershipOp};
 pub use token::{Token, TokenKind};

@@ -30,6 +30,7 @@ pub mod math_op;
 pub mod native_state;
 pub mod ownership;
 pub mod string_op;
+pub mod syscall;
 pub mod tasks;
 
 pub use aggregate::{
@@ -78,6 +79,7 @@ pub use native_state::{
 };
 pub use ownership::Ownership;
 pub use string_op::StringOp;
+pub use syscall::{LINUX_SYSCALLS, LinuxSyscall, MAX_SYSCALL_ARGUMENTS, SYSCALL_OS, SyscallArch};
 pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.

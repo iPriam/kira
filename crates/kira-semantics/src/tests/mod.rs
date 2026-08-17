@@ -33,12 +33,13 @@ mod operators;
 mod overloads;
 mod reuse;
 mod strings;
+mod syscall;
 mod tasks;
 mod widening;
 mod widths;
 
 use super::*;
-use crate::host_platform;
+use crate::BuildMachine;
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirProgram, HirStmt};
 

@@ -1,5 +1,5 @@
-//! The `@FFI.Extern` seam: turning a bodyless foreign declaration into a
-//! validated [`HirForeign`] row, and type-checking a call to one.
+//! The bodyless-declaration seam: turning an `@FFI.Extern` or `@FFI.Syscall`
+//! into a validated [`HirForeign`] row, and type-checking a call to one.
 //!
 //! # Why the checks live here
 //!
@@ -10,17 +10,22 @@
 //! [`crate::exports`], is what keeps three engines from each growing their own
 //! opinion of what a foreign call is.
 //!
-//! A refused extern is never recorded: [`HirProgram::foreign`] only ever holds
-//! signatures the frontend accepted, so a backend binds against a contract it
-//! can trust. A call resolves to [`Callee::Foreign`] by name, exactly as a user
-//! call resolves to [`Callee::User`], and the argument coercion `String ->
+//! A refused declaration is never recorded: [`HirProgram::foreign`] only ever
+//! holds signatures the frontend accepted, so a backend binds against a contract
+//! it can trust. A call resolves to [`Callee::Foreign`] by name, exactly as a
+//! user call resolves to [`Callee::User`], and the argument coercion `String ->
 //! CString` is the one implicit conversion the seam allows.
+//!
+//! This file owns the C-symbol form and everything the two forms share. What a
+//! system call additionally requires — a name the compiler has a number for, a
+//! target that can reach the Linux kernel, an argument list that fits in
+//! registers — is [`crate::syscall`]'s.
 
 use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::hir::{Callee, ForeignId, HirExpr, HirExprId, HirForeign};
 use kira_semantics_model::{FloatSpelling, IntSpelling, StructId, Type};
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::{ForeignMark, Function, Item, Param, TypeRef};
+use kira_syntax_model::ast::{ForeignKind, ForeignMark, Function, Item, Param, TypeRef};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::ffi_types::FfiStructKind;
@@ -77,12 +82,16 @@ impl<'a> Analyzer<'a> {
             // A foreign name shares the call namespace with user functions, so a
             // clash would make one call name resolve to two callees. Both
             // clashes are refused here rather than recorded.
+            let annotation = function
+                .foreign
+                .as_ref()
+                .map_or("@FFI.Extern", |mark| mark.kind.annotation());
             if self.sig_index.contains_key(&name) {
                 self.emit(
                     function.name_span,
                     "KSEM184",
                     format!(
-                        "`{name}` is already defined as a function: an `@FFI.Extern` \
+                        "`{name}` is already defined as a function: an `{annotation}` \
                          name shares the call namespace, so it cannot repeat one"
                     ),
                 );
@@ -92,7 +101,7 @@ impl<'a> Analyzer<'a> {
                 self.emit(
                     function.name_span,
                     "KSEM185",
-                    format!("`@FFI.Extern` function `{name}` is already declared"),
+                    format!("`{annotation}` function `{name}` is already declared"),
                 );
                 continue;
             }
@@ -102,14 +111,21 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Validates one `@FFI.Extern` declaration, returning its row when every
+    /// Validates one bodyless foreign declaration, returning its row when every
     /// check passes and `None` — with diagnostics emitted — when any fails.
     ///
-    /// The three checks run unconditionally so an author sees every mistake at
-    /// once, not one per rebuild.
+    /// The checks run unconditionally so an author sees every mistake at once,
+    /// not one per rebuild. The annotation check is shared because it is the same
+    /// contradiction either way — a foreign symbol and a system call are both
+    /// called rather than run as an entrypoint, and neither is a Kira export —
+    /// and what a `@FFI.Syscall` block and signature must satisfy after that is
+    /// [`crate::syscall`]'s.
     fn validate_foreign(&mut self, function: &Function, name: &str) -> Option<HirForeign> {
         let mark = function.foreign.as_ref()?;
         let annotations_ok = self.check_foreign_annotations(function, mark);
+        if mark.kind == ForeignKind::Syscall {
+            return self.validate_syscall(function, name, mark, annotations_ok);
+        }
         let fields = self.parse_foreign_fields(mark);
         let signature = self.map_foreign_signature(function);
         match (annotations_ok, fields, signature) {
@@ -129,30 +145,39 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Refuses an `@FFI.Extern` that also carries an execution or export
-    /// annotation, returning whether it was clean.
+    /// Refuses a bodyless foreign declaration that also carries an execution or
+    /// export annotation, returning whether it was clean.
     ///
-    /// A foreign symbol is neither a Kira entrypoint nor a Kira export, and it
-    /// runs on the host rather than on a chosen engine, so every one of these is
-    /// a contradiction rather than a refinement.
+    /// Neither form is a Kira entrypoint or a Kira export, and neither runs on a
+    /// chosen engine — a foreign symbol runs on the host and a system call runs
+    /// in the kernel — so every one of these is a contradiction rather than a
+    /// refinement. The message names whichever form was written, because a reader
+    /// told about `@FFI.Extern` looks for a declaration they never wrote.
     fn check_foreign_annotations(&mut self, function: &Function, mark: &ForeignMark) -> bool {
+        let annotation = mark.kind.annotation();
+        let outside = match mark.kind {
+            ForeignKind::Extern => "a foreign symbol",
+            ForeignKind::Syscall => "a system call",
+        };
         let mut ok = true;
         if function.is_main {
             self.emit(
                 mark.span,
                 "KSEM177",
-                "an `@FFI.Extern` function cannot also be `@Main`: a foreign symbol \
-                 is called, not run as the program's entrypoint",
+                format!(
+                    "an `{annotation}` function cannot also be `@Main`: {outside} is called, not \
+                     run as the program's entrypoint"
+                ),
             );
             ok = false;
         }
-        if let Some(annotation) = function.execution.annotation() {
+        if let Some(engine) = function.execution.annotation() {
             self.emit(
                 mark.span,
                 "KSEM177",
                 format!(
-                    "an `@FFI.Extern` function cannot also be `@{annotation}`: a foreign \
-                     symbol runs on the host, not on a Kira execution engine"
+                    "an `{annotation}` function cannot also be `@{engine}`: {outside} does not run \
+                     on a Kira execution engine"
                 ),
             );
             ok = false;
@@ -161,8 +186,10 @@ impl<'a> Analyzer<'a> {
             self.emit(
                 export.span,
                 "KSEM177",
-                "an `@FFI.Extern` function cannot also be `@Export`: a foreign symbol \
-                 is imported into Kira, not exported from it",
+                format!(
+                    "an `{annotation}` function cannot also be `@Export`: {outside} is imported \
+                     into Kira, not exported from it"
+                ),
             );
             ok = false;
         }
@@ -427,7 +454,10 @@ impl<'a> Analyzer<'a> {
     /// Resolves a type inside a foreign signature, where `CString` is permitted
     /// to resolve without the seam-only refusal that guards every other
     /// position.
-    fn resolve_foreign_type(&mut self, type_ref: kira_syntax_model::ast::TypeRefId) -> Type {
+    pub(crate) fn resolve_foreign_type(
+        &mut self,
+        type_ref: kira_syntax_model::ast::TypeRefId,
+    ) -> Type {
         self.in_foreign_signature = true;
         let ty = self.resolve_type_ref(type_ref);
         self.in_foreign_signature = false;

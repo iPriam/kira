@@ -129,17 +129,37 @@ impl Codegen<'_> {
         // then never has a by-value struct in its own IR — the C compiler that
         // built the shim owns that ABI decision entirely.
         let via_shim = signature.has_aggregate();
+        // A system call is entered by an instruction, so there is no symbol to
+        // declare and the arguments are register words rather than C-typed
+        // values.
+        //
+        // The adapter is emitted for every import whether anything calls it
+        // through one or not, so this arm is what keeps a `write` adapter from
+        // *declaring* the C symbol `write`. In an ordinary program that would be
+        // harmless — libc defines it. In the program this capability exists for
+        // it is fatal: a `-static -nostdlib` image has no libc, and the link
+        // fails on an undefined reference to the very call the program was
+        // supposed to make without one.
+        let syscall = import.as_syscall();
         let adapter = self.foreign_adapters[index];
-        let callee = if via_shim {
-            self.declare_shim_function(index, &specs, result_spec)
-        } else {
-            let params: Vec<ForeignType> = specs
-                .iter()
-                .copied()
-                .map(scalar_of)
-                .collect::<Result<_, _>>()?;
-            self.declare_c_function(import.symbol(), &params, scalar_of(result_spec)?)
+        let callee = match syscall {
+            Some(_) => {
+                let arch = self.syscall_arch().ok_or(LlvmError::internal(
+                    "a syscall adapter on a target with no kernel entry sequence",
+                ))?;
+                self.syscall_callee(arch, specs.len())
+            }
+            None if via_shim => self.declare_shim_function(index, &specs, result_spec),
+            None => {
+                let params: Vec<ForeignType> = specs
+                    .iter()
+                    .copied()
+                    .map(scalar_of)
+                    .collect::<Result<_, _>>()?;
+                self.declare_c_function(import.symbol(), &params, scalar_of(result_spec)?)
+            }
         };
+        let syscall_arch = syscall.and_then(|_| self.syscall_arch());
         // The result the adapter itself stores. An aggregate result is written
         // through the caller's buffer by the shim, so there is nothing to store
         // and the out slot keeps the tag and pointer the caller put there.
@@ -241,6 +261,11 @@ impl Codegen<'_> {
             // Convert every argument, calling the C symbol once all are ready.
             LLVMPositionBuilderAtEnd(builder, convert);
             let mut c_args = Vec::with_capacity(specs.len() + 1);
+            // The call number is the kernel entry's first operand, in the order
+            // the constraint string names.
+            if let (Some(syscall), Some(arch)) = (syscall, syscall_arch) {
+                c_args.push(LLVMConstInt(types.i64, syscall.number(arch) as u64, 1));
+            }
             // An aggregate result's buffer pointer is the shim's first argument.
             // The caller wrote it into the out slot before the call, and the tag
             // check above has not covered it, so it is validated here.
@@ -308,7 +333,21 @@ impl Codegen<'_> {
                         LLVMAppendBasicBlockInContext(context, adapter.value, c"cstr.ok".as_ptr());
                     LLVMBuildCondBr(builder, is_null, interior_nul, ok);
                     LLVMPositionBuilderAtEnd(builder, ok);
-                    c_args.push(c_ptr);
+                    c_args.push(match syscall {
+                        // A register takes an integer, not a pointer value: the
+                        // asm callee's parameters are all `i64`.
+                        Some(_) => {
+                            LLVMBuildPtrToInt(builder, c_ptr, types.i64, c"cstr.word".as_ptr())
+                        }
+                        None => c_ptr,
+                    });
+                } else if syscall.is_some() {
+                    // The full register word, narrowed to the declared width and
+                    // widened back by the declared signedness — the same content
+                    // the register would hold had this been an `@FFI.Extern`.
+                    let scalar = scalar_of(*spec)?;
+                    let narrowed = self.foreign_arg_to_c(payload, scalar)?;
+                    c_args.push(self.c_value_to_kira(narrowed, scalar)?);
                 } else {
                     c_args.push(self.foreign_arg_to_c(payload, scalar_of(*spec)?)?);
                 }
@@ -327,7 +366,15 @@ impl Codegen<'_> {
             // Nothing to store for an aggregate: the shim wrote the bytes into
             // the caller's buffer, and the out slot already names it.
             if let Some(result) = stored_result {
-                self.store_foreign_result(out, rc, result)?;
+                // The kernel answers in a full register, so the value has to be
+                // narrowed to the declared width before the shared store — which
+                // expects the result's own C type, exactly as a C call produced.
+                let produced = match (syscall, result) {
+                    (Some(_), ForeignType::Void) => rc,
+                    (Some(_), _) => self.foreign_arg_to_c(rc, result)?,
+                    (None, _) => rc,
+                };
+                self.store_foreign_result(out, produced, result)?;
             }
             LLVMBuildStore(
                 builder,

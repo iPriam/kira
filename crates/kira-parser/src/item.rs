@@ -6,9 +6,9 @@
 //! malformed declaration never derails the rest of the file.
 //!
 //! Two grammars that surround an item live in submodules of this one, so this
-//! file stays about items: [`foreign`] parses the `@FFI.Extern { ... }` block,
-//! and [`type_refs`] parses written types and the signature pieces every
-//! declaration shares.
+//! file stays about items: [`foreign`] parses the `@FFI.*` blocks, and
+//! [`type_refs`] parses written types and the signature pieces every declaration
+//! shares.
 
 mod foreign;
 mod type_refs;
@@ -19,7 +19,8 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ExportMark, FfiTypeMark, ForeignMark, Function, ImportDecl, Item, UnsupportedItem,
+    Block, ExportMark, FfiTypeMark, ForeignKind, ForeignMark, Function, ImportDecl, Item,
+    UnsupportedItem,
 };
 
 use crate::Parser;
@@ -33,7 +34,8 @@ pub(crate) struct Annotations {
     pub(crate) execution: Execution,
     /// The `@Export` marker, when one was written.
     pub(crate) export: Option<ExportMark>,
-    /// The `@FFI.Extern { ... }` marker, when one was written.
+    /// The `@FFI.Extern { ... }` or `@FFI.Syscall { ... }` marker, when one was
+    /// written.
     pub(crate) foreign: Option<ForeignMark>,
     /// The `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback` marker, when one
     /// was written. These ride a struct declaration, not a function.
@@ -64,7 +66,7 @@ impl Parser<'_> {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
+                if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
                     self.items.push(Item::Function(function));
                 }
             }
@@ -72,8 +74,7 @@ impl Parser<'_> {
             // identifier until the very next token is `function`.
             TokenKind::Identifier if self.at_async_function() => {
                 self.bump(); // `async`
-                if let Some(mut function) = self.parse_function(false, Execution::Inherited, false)
-                {
+                if let Some(mut function) = self.parse_function(false, Execution::Inherited, None) {
                     function.is_async = true;
                     self.items.push(Item::Function(function));
                 }
@@ -204,15 +205,18 @@ impl Parser<'_> {
                      handle. Declare this a `class` to export it.",
                 );
             }
-            // `@FFI.Extern` rides a function, never a struct: a struct declares
-            // a type, not a foreign callable. The mark is dropped and refused so
+            // A bodyless `@FFI.*` form rides a function, never a struct: a struct
+            // declares a type, not a callable. The mark is dropped and refused so
             // the struct still parses as an ordinary type.
             if let Some(foreign) = &annotations.foreign {
                 self.error(
                     foreign.span,
                     "KPAR056",
-                    "`@FFI.Extern` annotates a foreign *function*, not a struct; a \
-                     C-layout type is `@FFI.Struct`",
+                    format!(
+                        "`{}` annotates a foreign *function*, not a struct; a C-layout type is \
+                         `@FFI.Struct`",
+                        foreign.kind.annotation()
+                    ),
                 );
             }
             if let Some(mut declaration) = self.parse_struct() {
@@ -346,7 +350,7 @@ impl Parser<'_> {
         let mut function = self.parse_function(
             annotations.is_main,
             annotations.execution,
-            annotations.foreign.is_some(),
+            annotations.foreign.as_ref().map(|mark| mark.kind),
         )?;
         function.export = annotations.export;
         function.foreign = annotations.foreign.clone();
@@ -355,16 +359,17 @@ impl Parser<'_> {
 
     /// Parses a function declaration.
     ///
-    /// `is_foreign` says whether an `@FFI.Extern` marker preceded it: a foreign
+    /// `foreign` says which bodyless marker preceded it, if any: a foreign
     /// function is **bodyless** (it ends with `;` and its stored body is an
     /// empty block spanned at that `;`), and an ordinary function requires a
-    /// `{ ... }` body. Threading the flag here is what keeps the two apart at
-    /// the one place a body would be read.
+    /// `{ ... }` body. Threading the kind here is what keeps the two apart at
+    /// the one place a body would be read, and what lets the refusal name the
+    /// form that was written rather than whichever one came first.
     pub(crate) fn parse_function(
         &mut self,
         is_main: bool,
         execution: Execution,
-        is_foreign: bool,
+        foreign: Option<ForeignKind>,
     ) -> Option<Function> {
         let start = self.current().span;
         self.expect(TokenKind::Function);
@@ -381,7 +386,7 @@ impl Parser<'_> {
         self.refuse_type_params("function");
         let params = self.parse_params();
         let return_type = self.parse_return_type();
-        let body = self.parse_function_body(is_foreign);
+        let body = self.parse_function_body(foreign);
         let span = Span::from_bounds(start.start, self.previous_end());
         Some(Function {
             name,
@@ -402,18 +407,22 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses the body of a function, or the `;` of a bodyless extern.
+    /// Parses the body of a function, or the `;` of a bodyless foreign
+    /// declaration.
     ///
     /// A foreign function has no body: it ends with `;`, so a `{` there is a
     /// mistake, and the stored body is an empty block spanned at the `;`. An
     /// ordinary function requires a body, so a `;` there is the mistake.
-    fn parse_function_body(&mut self, is_foreign: bool) -> Block {
-        if is_foreign {
+    fn parse_function_body(&mut self, foreign: Option<ForeignKind>) -> Block {
+        if let Some(kind) = foreign {
             if self.at(TokenKind::LBrace) {
                 self.error(
                     self.current().span,
                     "KPAR054",
-                    "an `@FFI.Extern` function has no body; end its declaration with `;`",
+                    format!(
+                        "an `{}` function has no body; end its declaration with `;`",
+                        kind.annotation()
+                    ),
                 );
                 return self.parse_block();
             }
@@ -429,7 +438,8 @@ impl Parser<'_> {
             self.error(
                 semi,
                 "KPAR055",
-                "expected a function body; only an `@FFI.Extern` function is bodyless",
+                "expected a function body; only an `@FFI.Extern` or `@FFI.Syscall` function is \
+                 bodyless",
             );
             self.bump();
             return Block {

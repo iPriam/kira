@@ -99,8 +99,7 @@ impl Parser<'_> {
             }
             match self.current_kind() {
                 TokenKind::Function => {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
-                    {
+                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
                         methods.push(function);
                     }
                 }
@@ -329,7 +328,7 @@ impl Parser<'_> {
                 self.parse_construct_let(body, true);
             }
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
+                if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
                     body.methods.push(ConstructMethod {
                         computed: false,
                         lifecycle: false,
