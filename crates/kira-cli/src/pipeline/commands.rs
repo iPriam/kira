@@ -17,19 +17,28 @@ use super::execute::{
     build_native, run_hybrid, run_native, run_on_vm, run_vm_module_file, run_web,
 };
 use super::{
-    EXIT_FAILURE, EXIT_OK, EXIT_USAGE, apply_manifest_defaults, compile, compile_target,
-    emit_diagnostics, foreign_link, options_target, parse_options, resolve_foreign, resolve_path,
-    runnable_ir, verified, verified_as,
+    EXIT_FAILURE, EXIT_OK, EXIT_USAGE, apply_manifest_defaults, compile, emit_diagnostics,
+    foreign_link, options_target, parse_options, resolve_foreign, resolve_path, runnable_ir,
+    verified, verified_as,
 };
 use crate::debugger;
 use crate::hybrid;
 use crate::options::{CompileOptions, Device};
 use crate::progress::{err, out};
 
-/// Runs `kira check [file|dir]`: report diagnostics, never execute.
+/// Runs `kira check [file|dir] [--device ...] [--target ...]`: report
+/// diagnostics, never execute.
 ///
 /// With no path, checks the package you are standing in — the same default
 /// `run` and `build` take.
+///
+/// The machine matters here even though nothing is emitted. Autobind generates
+/// per target inside the frontend and native-library rows are selected per
+/// target, so a program that checks clean for this machine can fail for another
+/// one on a library it declares no row for — which is exactly the answer
+/// `kira check --target aarch64-linux-gnu` is being asked for. This read the
+/// manifest's own target and ignored the command line, so the two devices it
+/// already accepted said nothing.
 pub fn check(args: &[String]) -> i32 {
     let surface = crate::progress::Surface::install("Checking");
     let _guard = crate::progress::Finish(surface);
@@ -43,7 +52,7 @@ pub fn check(args: &[String]) -> i32 {
     crate::diagnostics::show_notes(options.show_notes);
     let _timings = crate::timings::Timings::install(options.timings);
     let path = options.path.as_str();
-    match compile(path, &compile_target(path, None)) {
+    match compile(path, &options_target(&options)) {
         Ok(compiled) => {
             emit_diagnostics(&compiled.diagnostics, &compiled.sources);
             if compiled.has_errors() {
@@ -87,13 +96,13 @@ pub fn run(args: &[String]) -> i32 {
         Err(code) => return code,
     };
 
-    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
+    let foreign = match resolve_foreign(&options.path, &ir, &options.device) {
         Ok(foreign) => foreign,
         Err(code) => return code,
     };
     let link = foreign_link(&foreign);
 
-    if let Device::Web(device) = options.device {
+    if let Some(device) = options.device.wasm() {
         return run_web(&ir, &options, device, link);
     }
 
@@ -202,7 +211,7 @@ pub fn debug(args: &[String]) -> i32 {
         Some(source),
     )
     .optimized(debug_options.compile.release);
-    let foreign = match resolve_foreign(&debug_options.compile.path, &ir, Device::Host) {
+    let foreign = match resolve_foreign(&debug_options.compile.path, &ir, &Device::Host) {
         Ok(foreign) => foreign,
         Err(code) => return code,
     };
@@ -284,7 +293,7 @@ pub fn test(args: &[String]) -> i32 {
         }
     }
 
-    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
+    let foreign = match resolve_foreign(&options.path, &ir, &options.device) {
         Ok(foreign) => foreign,
         Err(code) => return code,
     };
@@ -303,8 +312,17 @@ pub fn test(args: &[String]) -> i32 {
         };
     }
 
-    if matches!(options.device, Device::Web(_)) {
-        err!("kira test: test driving is unavailable on a Web device");
+    // Driving a test suite means starting the program and reading what it
+    // prints, which needs a machine that can start it. A Web device has no
+    // process to start, and a cross target's binary is one this machine will not
+    // load — both are refused here rather than at whatever the operating system
+    // says about a file it declined to execute.
+    if !matches!(options.device, Device::Host) {
+        err!(
+            "kira test: test driving needs a program this machine can start, and \
+             `{}` is not this machine",
+            options.device
+        );
         return EXIT_FAILURE;
     }
 
@@ -674,7 +692,7 @@ pub fn live(args: &[String]) -> i32 {
     let mut rebuild = || -> Result<Option<crate::supervisor::LiveBuild>, crate::live::LiveError> {
         let Ok(compiled) = crate::pipeline::runnable_path_compiled_with_frontend(
             &entry,
-            &crate::foreign_libs::target_for_device(Device::Host),
+            &crate::foreign_libs::target_for_device(&Device::Host),
             &mut frontend,
         ) else {
             return Ok(None);
@@ -688,7 +706,7 @@ pub fn live(args: &[String]) -> i32 {
         // a save can add an import that needs one. A resolution failure is a
         // failed build like any other: the session keeps the app it is running
         // and the diagnostic is already on stderr.
-        let Ok(foreign) = resolve_foreign(&entry, &ir, Device::Host) else {
+        let Ok(foreign) = resolve_foreign(&entry, &ir, &Device::Host) else {
             return Ok(None);
         };
         let bundle = crate::live::build_bundle(

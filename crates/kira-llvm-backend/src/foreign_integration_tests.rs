@@ -322,6 +322,9 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             foreign_link: link_inputs(&archive),
             optimize: false,
             unavailable_imports: Vec::new(),
+            // The test runs the program it builds, so it builds for this
+            // machine.
+            target: crate::NativeBuildTarget::host(),
         },
     )
     .expect("the FFI program links");

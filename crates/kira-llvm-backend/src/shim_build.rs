@@ -12,6 +12,13 @@
 //! it carries extra weight: the whole design delegates the by-value ABI decision
 //! to this compiler, so which compiler it is has to be a fact rather than an
 //! accident of the machine.
+//!
+//! And which *machine* it compiles for has to be a fact too. The shim exists to
+//! let a C compiler decide how a struct is passed, and that decision is the
+//! target's ABI: aarch64's is not x86-64's, and a shim compiled for the host and
+//! linked into a cross binary would classify every by-value aggregate by the
+//! rules of the wrong machine — producing a program that links clean and reads
+//! its arguments out of the wrong registers.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +27,7 @@ use kira_runtime_abi::{ForeignAggregates, ForeignCallback, ForeignImport};
 use kira_toolchain::LlvmInstallation;
 
 use crate::LlvmError;
+use crate::link::NativeBuildTarget;
 use crate::shim;
 
 /// The compiled shim object a build links, when the program needs one.
@@ -44,6 +52,10 @@ pub struct ShimObject {
 ///
 /// Takes the seam rows rather than the whole program: what a shim needs is
 /// exactly the seam, and a narrower argument is one a test can build.
+///
+/// `target` aims the compile at the machine the program is being built for; a
+/// host build passes [`NativeBuildTarget::host`] and the command line is exactly
+/// what it always was.
 pub fn build(
     imports: &[ForeignImport],
     callbacks: &[ForeignCallback],
@@ -51,6 +63,7 @@ pub fn build(
     unavailable: &[usize],
     object_path: &Path,
     llvm: &LlvmInstallation,
+    target: &NativeBuildTarget,
 ) -> Result<Option<ShimObject>, LlvmError> {
     let Some(text) = shim::generate(imports, callbacks, table, unavailable) else {
         return Ok(None);
@@ -81,7 +94,17 @@ pub fn build(
             path: driver,
         }));
     }
+    if let Some(sysroot) = target.sysroot()
+        && !sysroot.is_dir()
+    {
+        return Err(LlvmError::Link(crate::LinkError::SysrootMissing {
+            path: sysroot,
+            target: target.target().to_string(),
+            source_of_setting: target.sysroot_setting(),
+        }));
+    }
     let output = Command::new(&driver)
+        .args(target.compile_arguments())
         .arg("-c")
         .arg(&source)
         .arg("-o")
@@ -129,6 +152,7 @@ mod tests {
                 &[],
                 Path::new("/tmp/kira-shim-none.o"),
                 &llvm,
+                &NativeBuildTarget::host(),
             )
             .expect("no aggregate is not an error");
             assert_eq!(built, None, "no clang subprocess and no file written");

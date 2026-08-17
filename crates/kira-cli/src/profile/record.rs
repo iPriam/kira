@@ -87,7 +87,7 @@ pub(super) fn run(args: &[String]) -> i32 {
     .optimized(options.release);
     let symbols = KiraSymbols::from_debug(&info);
 
-    let foreign = match crate::pipeline::foreign_inputs(&options.path, &ir, options.device) {
+    let foreign = match crate::pipeline::foreign_inputs(&options.path, &ir, &options.device) {
         Ok(foreign) => foreign,
         Err(code) => return code,
     };

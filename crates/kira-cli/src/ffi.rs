@@ -9,7 +9,11 @@ use crate::options::CompileOptions;
 use crate::pipeline::{EXIT_FAILURE, EXIT_OK, EXIT_USAGE};
 use crate::progress::{err, out};
 
-/// Runs `kira ffi [file|dir] [--device host|wasm32|wasm64]`.
+/// Runs `kira ffi [file|dir] [--device host|wasm32|wasm64] [--target <arch-os-abi>]`.
+///
+/// `--target` answers the question this command exists for, before a cross build
+/// is attempted: which rows a package's `nativeLibraries` would select for that
+/// machine, and which of them it declares nothing for.
 pub fn ffi(args: &[String]) -> i32 {
     let options = match CompileOptions::parse(args) {
         Ok(options) => options,

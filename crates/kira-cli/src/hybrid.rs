@@ -146,6 +146,10 @@ fn build_inner(
             optimize: debug.is_some_and(|debug| debug.optimized),
             unavailable_imports: foreign_link.unavailable_imports().to_vec(),
             foreign_link: foreign_link.clone(),
+            // The interpreter running in this process opens this half, so it is
+            // this machine's; a hybrid program has no second machine to be
+            // split across.
+            target: kira_llvm_backend::NativeBuildTarget::host(),
         };
         let native = match debug {
             Some(debug) => kira_llvm_backend::build_hybrid_library_debug(program, &options, debug)?,

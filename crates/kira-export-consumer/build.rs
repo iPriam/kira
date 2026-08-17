@@ -190,6 +190,9 @@ fn native(
             toolchain_root: kira_build::toolchain_root(),
             runtime_archive,
             emit_llvm_ir: false,
+            // This crate is a Rust consumer being compiled for the machine
+            // running the build, so the library it links must be too.
+            target: kira_build::NativeBuildTarget::host(),
         },
     )?;
 
