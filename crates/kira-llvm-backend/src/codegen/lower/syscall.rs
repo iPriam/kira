@@ -101,9 +101,14 @@ impl FunctionLowering<'_, '_> {
             call_args.push(word);
         }
 
-        let callee = self.codegen.syscall_callee(arch, args.len());
-        // SAFETY: `callee` was built for exactly this arity, so its type and the
-        // argument list agree, and the builder is positioned in this function.
+        // Built for the arity of what is actually being passed rather than for the
+        // arity of the call site: the two differ only in a program that already
+        // failed its argument-count check, and a callee whose type disagreed with
+        // its argument list would be an invalid module rather than a diagnostic.
+        let callee = self.codegen.syscall_callee(arch, call_args.len() - 1);
+        // SAFETY: `callee` was built for exactly this argument list's arity, so
+        // its type and the list agree, and the builder is positioned in this
+        // function.
         let raw = unsafe {
             LLVMBuildCall2(
                 self.codegen.builder,
@@ -135,10 +140,7 @@ impl FunctionLowering<'_, '_> {
         match result_spec {
             // A declaration that named no result discards the register. The
             // placeholder is the same one the C seam's void result produces.
-            ForeignTypeSpec::Scalar(ForeignType::Void) => {
-                // SAFETY: the type belongs to this live module context.
-                Ok(unsafe { LLVMConstInt(self.codegen.types.i1, 0, 0) })
-            }
+            ForeignTypeSpec::Scalar(ForeignType::Void) => Ok(self.void_placeholder()),
             ForeignTypeSpec::Scalar(scalar) => {
                 let narrowed = self.codegen.foreign_arg_to_c(raw, scalar)?;
                 self.codegen.c_value_to_kira(narrowed, scalar)
@@ -161,15 +163,30 @@ impl FunctionLowering<'_, '_> {
     fn end_control_after_syscall(&mut self, result_ty: Type) -> Result<LLVMValueRef, LlvmError> {
         let function = self.current_function();
         let unreached = self.append_block(function, c"syscall.noreturn");
-        // SAFETY: control does not come back from the instruction just emitted;
-        // `unreached` belongs to this function, and the undef value stands in for
-        // a result nothing can observe.
-        let undef = unsafe {
-            LLVMBuildUnreachable(self.codegen.builder);
-            LLVMGetUndef(self.codegen.llvm_type(result_ty)?)
+        // SAFETY: control does not come back from the instruction just emitted,
+        // and `unreached` belongs to this function.
+        unsafe { LLVMBuildUnreachable(self.codegen.builder) };
+        // A stand-in for a result nothing can observe. `undef` of the declared
+        // type for every type that has one — and `Void` has none: LLVM's `void`
+        // admits no `undef` value at all, so a declaration that named no result
+        // gets the same placeholder every void position in this backend carries.
+        let value = match result_ty {
+            Type::Void => self.void_placeholder(),
+            // SAFETY: the type belongs to this live module's context.
+            _ => unsafe { LLVMGetUndef(self.codegen.llvm_type(result_ty)?) },
         };
         self.position_at(unreached);
-        Ok(undef)
+        Ok(value)
+    }
+
+    /// The value a position with no value carries.
+    ///
+    /// Every void result in this backend is one of these rather than nothing at
+    /// all, because the lowering is expression-shaped: a statement's value is
+    /// produced and dropped, and there has to be something to drop.
+    fn void_placeholder(&self) -> LLVMValueRef {
+        // SAFETY: the type belongs to this live module context.
+        unsafe { LLVMConstInt(self.codegen.types.i1, 0, 0) }
     }
 
     /// The full register word a scalar argument occupies.

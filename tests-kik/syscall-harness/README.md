@@ -28,11 +28,14 @@ Nothing here writes bytes anybody sees: the success path is a `write` of an empt
 string, which is a real round trip through the entry sequence with no output to
 land in the middle of the driver's report.
 
-Every failing case is chosen so its `errno` is the same on every machine — a bad
-file descriptor is `EBADF` whoever runs it, a path that does not exist is
-`ENOENT` whether or not the process is privileged, and a process with no children
-gets `ECHILD`. `mount` of a real device is deliberately absent: its answer depends
-on who is running the suite.
+Every failing case asserts something that does not depend on who ran the suite. A
+bad file descriptor is `EBADF` whoever asks, a program that is not there is
+`ENOENT`, and a process with no children gets `ECHILD` — those assert the number.
+`mount` and `umount2` need `CAP_SYS_ADMIN` and the kernel checks that before it
+looks at the path, so their number is `EPERM` in CI and `ENOENT` as root; those
+assert that the kernel refused the call, which is true either way. `mount` of a
+*real* device is deliberately absent for the same reason in the other direction:
+as root it would succeed.
 
 Coverage is by arity, because the arity is what the emitted constraint string
 differs by: `sync` takes none, `umount2` two, `write`/`read`/`execve` three,
