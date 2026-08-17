@@ -388,6 +388,10 @@ pub fn build_hybrid_library(
             foreign_link: kira_llvm_backend::NativeLinkInputs::EMPTY,
             optimize: false,
             unavailable_imports: Vec::new(),
+            // A hybrid half is opened by the interpreter running in this
+            // process, so it is this machine's by construction: there is no
+            // second machine for the bytecode half to be running on.
+            target: kira_llvm_backend::NativeBuildTarget::host(),
         },
     )?;
 

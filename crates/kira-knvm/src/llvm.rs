@@ -243,7 +243,7 @@ pub fn code_generator_shortfall(missing: &[String], release_tag: &str) -> Vec<St
             let consequence = if name == kira_toolchain::WEB_CODE_GENERATOR {
                 "a kira built against it refuses `--device wasm32`"
             } else {
-                "a kira built against it cannot emit for that architecture"
+                "a kira built against it refuses `--target` triples for that architecture"
             };
             format!(
                 "the bundle published under `{release_tag}` carries no {name} code \

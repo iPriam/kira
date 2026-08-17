@@ -34,6 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
+use kira_backend_api::NativeTarget;
 use kira_debug::DebugInfo;
 use kira_ir::IrProgram;
 use kira_runtime_abi::ForeignSignature;
@@ -54,12 +55,38 @@ mod link;
 mod platform;
 mod reachability;
 pub mod shim;
+// Public because a shim object is an input to a link line rather than an
+// internal step: whoever assembles that line — this crate for a native program,
+// the CLI for the emscripten link — needs to name the object it produced. It
+// was neither declared nor compiled until the target-aware link went in, which
+// is also why its own test had never run.
+pub mod shim_build;
 #[cfg(test)]
 mod shim_tests;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
-pub use link::{LinkError, link_ffi_carrier};
+pub use link::{LinkError, NativeBuildTarget, SYSROOT_VARIABLE, link_ffi_carrier};
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
+
+/// Reports whether this compiler can emit machine code for `target`.
+///
+/// What a compiler can emit for is fixed when it is linked: the managed LLVM
+/// bundle carries a set of code generators, and one it was not built with is a
+/// set of symbols that are simply not in the binary. That is knowable before a
+/// program is read, which is why this exists separately from the build — a
+/// caller asks it first, and a machine that cannot serve the request says so
+/// before the user goes and arranges a sysroot and a runtime archive for a build
+/// that could never have finished.
+///
+/// [`NativeTarget::Host`] is always supported: a bundle without this host's own
+/// code generator is refused by the backend's build script, since it could emit
+/// for nothing at all.
+pub fn supports_target(target: &NativeTarget) -> Result<(), LlvmError> {
+    match target.cross() {
+        None => Ok(()),
+        Some(cross) => codegen::check_supported(cross),
+    }
+}
 
 /// The exported symbol of the generated adapter for foreign import `index`.
 ///
@@ -151,6 +178,53 @@ pub enum LlvmError {
          and rebuild the compiler against it"
     )]
     WasmTargetMissing,
+    /// This compiler was built against a managed LLVM carrying no code
+    /// generator for the requested target's architecture.
+    ///
+    /// The counterpart of [`LlvmError::WasmTargetMissing`], and reported the
+    /// same way and for the same reason: what a bundle can emit for is decided
+    /// when the bundle is built, so a cross target it was not built with has to
+    /// be refused by name at the point it is asked for. Every bundle published
+    /// before `llvm-metadata.toml` named X86 and AArch64 outright carries only
+    /// the generator of the machine that built it, and this is what those
+    /// bundles say when asked for anything else.
+    #[error(
+        "this compiler was built against a managed LLVM without the {generator} \
+         code generator, so it cannot emit code for `{target}`; install a bundle \
+         built with the targets `llvm-metadata.toml` pins \
+         (`knvm install-llvm --force`) and rebuild the compiler against it"
+    )]
+    TargetCodeGeneratorMissing {
+        /// The target that was asked for, in Kira's `arch-os-abi` spelling.
+        target: String,
+        /// LLVM's name for the code generator that architecture needs.
+        generator: &'static str,
+    },
+    /// The requested target names an architecture Kira has no code generator
+    /// for, whatever the linked bundle carries.
+    #[error(
+        "`{target}` names architecture `{arch}`, which Kira has no LLVM code \
+         generator for; the architectures it can emit for are `x86_64`, `x86`, \
+         and `aarch64`"
+    )]
+    TargetArchitectureUnknown {
+        /// The target that was asked for, in Kira's `arch-os-abi` spelling.
+        target: String,
+        /// Its architecture component.
+        arch: String,
+    },
+    /// LLVM refused the normalized triple for a target whose code generator is
+    /// linked and registered.
+    #[error(
+        "LLVM does not recognize `{triple}`, the toolchain spelling of target \
+         `{target}`"
+    )]
+    TargetTripleUnknown {
+        /// The target that was asked for, in Kira's `arch-os-abi` spelling.
+        target: String,
+        /// The `arch-vendor-os-abi` triple LLVM was asked to resolve.
+        triple: String,
+    },
     /// The managed clang refused the generated C shim — always a backend bug,
     /// since Kira wrote every line of it.
     ///
@@ -238,6 +312,16 @@ pub struct NativeBuildOptions {
     /// without naming the C symbol, so a Direct3D binding compiled on macOS
     /// contributes no undefined reference to the link.
     pub unavailable_imports: Vec<usize>,
+    /// Which machine this build emits and links for, and where that machine's
+    /// system libraries live.
+    ///
+    /// [`NativeBuildTarget::host`] is the default and what every build that
+    /// produces something *this* process loads must use. It decides three
+    /// things at once, and they have to be one value rather than three because
+    /// disagreeing is silent: the data layout the lowering computes offsets
+    /// against, the code generator the object comes out of, and the machine the
+    /// link line is aimed at.
+    pub target: NativeBuildTarget,
 }
 
 /// The artifacts a native build produced.
@@ -332,28 +416,41 @@ fn build_codegen_module(
     unit: codegen::CodegenUnit,
     debug: Option<&DebugInfo>,
     kind: NativeModuleKind,
+    target: &NativeBuildTarget,
 ) -> Result<codegen::Module, LlvmError> {
+    let native = target.target();
+    let width = pointer_width_for(native);
     match kind {
         NativeModuleKind::Executable => match debug {
             Some(debug) => codegen::Module::build_debug(
                 program,
                 module_name,
-                kira_runtime_abi::ForeignPointerWidth::HOST,
+                width,
                 unavailable,
                 unit,
+                native,
                 debug,
             ),
-            None => codegen::Module::build(
-                program,
-                module_name,
-                kira_runtime_abi::ForeignPointerWidth::HOST,
-                unavailable,
-                unit,
-            ),
+            None => codegen::Module::build(program, module_name, width, unavailable, unit, native),
         },
+        // A live library is loaded into this process, so it is the host's by
+        // construction and takes no target of its own.
         NativeModuleKind::LiveLibrary => {
             codegen::Module::build_native_live(program, module_name, unavailable, unit)
         }
+    }
+}
+
+/// The pointer width `target`'s C-layout aggregates are laid out at.
+///
+/// Every offset the lowering computes is baked in at this width, so a build for
+/// a machine whose pointers are a different size from this one's has to say so
+/// before the first field offset is worked out — not after the module has
+/// already been laid out.
+fn pointer_width_for(target: &NativeTarget) -> kira_runtime_abi::ForeignPointerWidth {
+    match target.cross() {
+        None => kira_runtime_abi::ForeignPointerWidth::HOST,
+        Some(cross) => cross.pointer_width(),
     }
 }
 
@@ -402,6 +499,7 @@ fn emit_codegen_units(
             codegen::CodegenUnit::WHOLE,
             debug,
             kind,
+            &options.target,
         )?;
         if let Some(path) = &options.ir_path {
             module.write_ir(path)?;
@@ -430,6 +528,7 @@ fn emit_codegen_units(
                         codegen::CodegenUnit::new(index, count),
                         debug,
                         kind,
+                        &options.target,
                     )?;
                     module.emit_object(path, options.optimize)
                 })
@@ -488,6 +587,7 @@ fn build_native_inner(
                     &foreign_link,
                     path,
                     &debug_symbols(program, debug, true),
+                    &options.target,
                 )?,
                 None => link::link_executable(
                     &llvm,
@@ -495,6 +595,7 @@ fn build_native_inner(
                     &options.runtime_archive,
                     &foreign_link,
                     path,
+                    &options.target,
                 )?,
             }
             Some(path.clone())
@@ -621,7 +722,13 @@ pub fn build_native_library(
     if options.archive_path.is_none() && options.shared_library_path.is_none() {
         return Err(LlvmError::MissingLibraryOutput);
     }
-    let module = codegen::Module::build_library(program, &options.module_name, &options.exports)?;
+    let module = codegen::Module::build_library(
+        program,
+        &options.module_name,
+        &options.exports,
+        pointer_width_for(options.target.target()),
+        options.target.target(),
+    )?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
@@ -642,6 +749,7 @@ pub fn build_native_library(
             &options.object_path,
             &options.runtime_archive,
             library,
+            &options.target,
         )?;
     }
 

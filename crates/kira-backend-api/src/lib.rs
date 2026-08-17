@@ -8,6 +8,10 @@
 use kira_native_lib_definition::{ImportResolveError, ResolvedNativeLibraries, TargetTriple};
 use kira_runtime_abi::ForeignImport;
 
+mod target;
+
+pub use target::{CrossTarget, NativeTarget, RelocationModel};
+
 /// Which artifact family a backend emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendMode {

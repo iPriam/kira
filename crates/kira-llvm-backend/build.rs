@@ -60,6 +60,20 @@ fn main() {
     declare_code_generators(&installation.home, &llvm_config);
 }
 
+/// Every code generator this crate knows how to register, paired with the cfg
+/// that says the linked bundle actually defines it.
+///
+/// One row per generator rather than a special case per generator: the
+/// registration in `codegen/target.rs` names exactly these cfgs, and a row
+/// added here without a matching `#[cfg]` there is a generator that is present
+/// and never registered — which reads at run time as "LLVM knows no such
+/// triple" on a bundle that has the code.
+const CODE_GENERATORS: &[(&str, &str)] = &[
+    ("X86", "kira_llvm_x86"),
+    ("AArch64", "kira_llvm_aarch64"),
+    (kira_toolchain::WEB_CODE_GENERATOR, "kira_llvm_webassembly"),
+];
+
 /// Tells the crate which code generators the bundle it is linking defines.
 ///
 /// The per-target initializers are real LLVM symbols living in that target's
@@ -67,11 +81,20 @@ fn main() {
 /// four unresolved `LLVMInitializeWebAssembly*` symbols, at the end of a full
 /// workspace build, naming nothing that could be acted on. What the bundle
 /// carries is knowable before a single symbol is emitted: its own
-/// `llvm-config` reports it, and `kira_llvm_webassembly` carries the answer
-/// into the source. A bundle without the host's own generator is refused
-/// outright — it can emit for nothing at all.
+/// `llvm-config` reports it, and one cfg per generator carries the answer into
+/// the source. A bundle without the host's own generator is refused outright —
+/// it can emit for nothing at all.
+///
+/// The generators that are not this host's are what `kira build --target` emits
+/// through, and a bundle published before `llvm-metadata.toml` named them
+/// outright carries only the one belonging to the runner that built it. That is
+/// a warning rather than a failure: such a bundle still builds a perfectly good
+/// compiler for its own host, and the missing generator is reported again, by
+/// name, if a build actually asks for that target.
 fn declare_code_generators(home: &Path, llvm_config: &Path) {
-    println!("cargo::rustc-check-cfg=cfg(kira_llvm_webassembly)");
+    for (_, cfg) in CODE_GENERATORS {
+        println!("cargo::rustc-check-cfg=cfg({cfg})");
+    }
 
     let built = match kira_toolchain::llvm_code_generators::built(llvm_config) {
         Ok(built) => built,
@@ -92,20 +115,29 @@ fn declare_code_generators(home: &Path, llvm_config: &Path) {
         ));
     }
 
-    if built
-        .iter()
-        .any(|name| name == kira_toolchain::WEB_CODE_GENERATOR)
-    {
-        println!("cargo:rustc-cfg=kira_llvm_webassembly");
-    } else {
-        println!(
-            "cargo:warning=the managed LLVM at {} was built without the {} code \
-             generator, so this compiler will refuse `--device wasm32`; the bundle \
-             predates the targets `llvm-metadata.toml` pins",
-            home.display(),
-            kira_toolchain::WEB_CODE_GENERATOR,
-        );
+    for (generator, cfg) in CODE_GENERATORS {
+        if built.iter().any(|name| name == generator) {
+            println!("cargo:rustc-cfg={cfg}");
+        } else {
+            println!(
+                "cargo:warning=the managed LLVM at {} was built without the \
+                 {generator} code generator, so this compiler will refuse {}; the \
+                 bundle predates the targets `llvm-metadata.toml` pins, and \
+                 `knvm install-llvm --force` replaces it once they are published",
+                home.display(),
+                refusal(generator),
+            );
+        }
     }
+}
+
+/// What a compiler linked against a bundle missing `generator` cannot serve,
+/// spelled as the command line that would ask for it.
+fn refusal(generator: &str) -> String {
+    if generator == kira_toolchain::WEB_CODE_GENERATOR {
+        return "`--device wasm32`".to_owned();
+    }
+    format!("`--target` triples whose architecture needs {generator}")
 }
 
 /// The workspace root, two levels above this crate's manifest.

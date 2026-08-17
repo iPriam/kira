@@ -27,9 +27,23 @@ release_tag = "llvm-v22.1.8-kira.1"
 [build]
 build_type = "Release"
 cmake_generator = "Ninja"
-# `host` is the bundle's own machine; WebAssembly is the Web device's code
-# generator, emitted in-process by the same backend (never via textual IR).
-targets_to_build = "host;WebAssembly"
+# Every published host's code generator, named outright rather than through
+# CMake's `host`. A bundle built with `host` can emit only for the machine that
+# built it, which makes cross compilation a property of *which runner produced
+# your download* — an x86_64 Linux bundle could never emit an aarch64 binary,
+# and the same `kira build --target aarch64-linux-gnu` would work or not
+# depending on where the archive came from. Naming X86 and AArch64 makes every
+# bundle able to emit for every machine Kira publishes for, so a target is a
+# property of the compiler rather than of the download. WebAssembly is the Web
+# device's code generator, emitted in-process by the same backend (never via
+# textual IR).
+#
+# The cost is bundle size and LLVM build time, both of which are paid once per
+# release by CI. `kira-toolchain`'s `llvm_code_generators` still expands a
+# `host` entry, because a bundle installed before this pin changed carries
+# fewer generators than the pin now names and has to be reported rather than
+# assumed.
+targets_to_build = "X86;AArch64;WebAssembly"
 
 [target.x86_64-windows-msvc]
 # Floating, because nothing about this image is a decision. MSVC guarantees

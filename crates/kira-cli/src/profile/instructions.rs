@@ -154,7 +154,7 @@ impl SiteText for Disassembly {
 /// recording whose source has since changed or moved should still annotate the
 /// offsets it recorded rather than refuse.
 pub(super) fn disassemble(source: &Path) -> Option<Disassembly> {
-    let target = crate::foreign_libs::target_for_device(crate::options::Device::Host);
+    let target = crate::foreign_libs::target_for_device(&crate::options::Device::Host);
     let compiled = kira_build::compile_for(source, None, &target).ok()?;
     if compiled.has_errors() {
         return None;

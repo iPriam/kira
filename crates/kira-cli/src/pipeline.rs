@@ -13,7 +13,10 @@
 //! `--device` is an override. On the host, `--backend` picks the engine; a
 //! Web device has exactly one code generator, so naming the device decides
 //! the backend, and a differing `--backend` beside it is overridden aloud —
-//! never served, never silently swapped.
+//! never served, never silently swapped. `--target <arch-os-abi>` is the third
+//! way of naming a machine and behaves the same way: it is the LLVM backend or
+//! nothing, because the interpreter runs bytecode here and not on an aarch64
+//! box somewhere else.
 //!
 //! The backends:
 //!
@@ -37,7 +40,7 @@ use kira_backend_api::{BackendMode, WasmDevice};
 use kira_build::{Compiled, FrontendError};
 use kira_diagnostics::Diagnostic;
 use kira_ir::IrProgram;
-use kira_llvm_backend::NativeLinkInputs;
+use kira_llvm_backend::{NativeBuildTarget, NativeLinkInputs};
 use kira_source::SourceMap;
 
 use crate::options::{CompileOptions, Device};
@@ -66,13 +69,22 @@ pub const EXIT_USAGE: i32 = 2;
 fn resolve_foreign(
     source: &str,
     ir: &IrProgram,
-    device: Device,
+    device: &Device,
 ) -> Result<Option<NativeLinkInputs>, i32> {
     let target = crate::foreign_libs::target_for_device(device);
     crate::foreign_libs::resolve(std::path::Path::new(source), ir, target).map_err(|error| {
         err!("kira: {error}");
         EXIT_FAILURE
     })
+}
+
+/// What a native build for `options` emits and links for.
+///
+/// The one place the command line's `--target`, `--sysroot`, and
+/// `--relocation-model` become the value the backend reads, so codegen and the
+/// link cannot be aimed at two different machines by two different callers.
+pub(crate) fn native_build_target(options: &CompileOptions) -> NativeBuildTarget {
+    NativeBuildTarget::new(options.device.native_target(), options.sysroot.clone())
 }
 
 /// The link inputs a backend uses, empty when there are no foreign imports.
@@ -110,7 +122,7 @@ pub(crate) fn entrypoint_ir(verb: &str, compiled: Compiled) -> Result<IrProgram,
 pub(crate) fn foreign_inputs(
     source: &str,
     ir: &IrProgram,
-    device: Device,
+    device: &Device,
 ) -> Result<Option<NativeLinkInputs>, i32> {
     resolve_foreign(source, ir, device)
 }
@@ -166,7 +178,7 @@ pub(crate) fn resolve_source_path(path: &str) -> Result<String, i32> {
 /// otherwise this host.
 fn compile_target(
     path: &str,
-    explicit: Option<Device>,
+    explicit: Option<&Device>,
 ) -> kira_native_lib_definition::TargetTriple {
     if let Some(device) = explicit {
         return crate::foreign_libs::target_for_device(device);
@@ -176,14 +188,14 @@ fn compile_target(
         .flatten()
         .map(|found| found.manifest.build_target)
         .and_then(|target| manifest_device(&target));
-    crate::foreign_libs::target_for_device(declared.unwrap_or(Device::Host))
+    crate::foreign_libs::target_for_device(&declared.unwrap_or(Device::Host))
 }
 
 /// [`compile_target`] for a verb that has already parsed its options.
 fn options_target(options: &CompileOptions) -> kira_native_lib_definition::TargetTriple {
     compile_target(
         &options.path,
-        options.device_explicit.then_some(options.device),
+        options.device_explicit.then_some(&options.device),
     )
 }
 
@@ -212,6 +224,24 @@ fn apply_manifest_defaults(
         })?;
     }
 
+    // The machine is settled now — from the command line or from the manifest —
+    // so this is where a relocation model can be attached to it, and where one
+    // that has nothing to attach to is refused. Refused rather than dropped: a
+    // freestanding userland asking for `static` and silently getting a
+    // position-independent image is a program that links and does not start.
+    options.device = options
+        .device
+        .with_relocation(options.relocation)
+        .ok_or_else(|| {
+            err!(
+                "kira {verb}: {}",
+                crate::options::OptionsError::RelocationModelWithoutTarget {
+                    device: options.device.to_string(),
+                }
+            );
+            EXIT_USAGE
+        })?;
+
     if matches!(options.device, Device::Host) {
         if !options.backend_explicit
             && let Some(mode) = compiled.default_execution_mode.as_deref()
@@ -224,8 +254,9 @@ fn apply_manifest_defaults(
     } else {
         if options.backend_explicit && options.backend != BackendMode::LlvmNative {
             err!(
-                "kira: `--device {}` overrides `--backend {}`: the Web device has one code generator",
-                options.device.label(),
+                "kira: compiling for `{}` overrides `--backend {}`: a build that is \
+                 not for this machine's interpreter has one code generator",
+                options.device,
                 options.backend.label(),
             );
         }
@@ -245,12 +276,30 @@ fn manifest_backend(mode: &str) -> Option<BackendMode> {
 }
 
 /// Maps a manifest build target to the CLI device model.
+///
+/// The three device names, and then any `arch-os-abi` triple, so a package that
+/// exists to be built for one machine — an operating system's userland, say —
+/// says so once in its manifest instead of on every command line. It is the same
+/// spelling `--target` takes and the same one a `NativeLibrary` row is keyed by,
+/// which is what keeps `buildTarget = "aarch64-linux-gnu"` and
+/// `[target.aarch64-linux-gnu]` meaning one thing.
+///
+/// A manifest cannot ask for a relocation model: that is a property of the image
+/// a particular build wants, not of the package, and `--relocation-model` is
+/// where it is asked for.
 fn manifest_device(target: &str) -> Option<Device> {
     match target {
         "host" => Some(Device::Host),
         "wasm32" => Some(Device::Web(WasmDevice::Wasm32)),
         "wasm64" => Some(Device::Web(WasmDevice::Wasm64)),
-        _ => None,
+        triple => kira_native_lib_definition::TargetTriple::parse(triple)
+            .ok()
+            .map(|triple| {
+                Device::Cross(kira_backend_api::CrossTarget::new(
+                    triple,
+                    kira_backend_api::RelocationModel::default(),
+                ))
+            }),
     }
 }
 
@@ -401,13 +450,59 @@ mod tests {
     fn an_explicit_device_decides_the_target_bindings_are_generated_for() {
         let path = "/nonexistent/kira/x.kira";
         assert_eq!(
-            compile_target(path, Some(Device::Web(WasmDevice::Wasm32))).to_string(),
+            compile_target(path, Some(&Device::Web(WasmDevice::Wasm32))).to_string(),
             "wasm32-emscripten-unknown"
         );
         // No manifest above it and no explicit device: this machine.
         assert_eq!(
             compile_target(path, None),
-            crate::foreign_libs::target_for_device(Device::Host)
+            crate::foreign_libs::target_for_device(&Device::Host)
         );
+    }
+
+    /// A cross target selects native-library rows by the triple that was asked
+    /// for, which is what makes a package's `[target.aarch64-linux-gnu]` row the
+    /// one an aarch64 build links.
+    #[test]
+    fn a_cross_target_selects_that_machines_native_library_rows() {
+        let path = "/nonexistent/kira/x.kira";
+        let device = manifest_device("aarch64-linux-gnu").expect("a triple is a build target");
+        assert_eq!(
+            compile_target(path, Some(&device)).to_string(),
+            "aarch64-linux-gnu"
+        );
+        // The three device names keep meaning what they meant.
+        assert_eq!(manifest_device("host"), Some(Device::Host));
+        assert_eq!(
+            manifest_device("wasm32"),
+            Some(Device::Web(WasmDevice::Wasm32))
+        );
+        assert_eq!(manifest_device("aarch64-linux"), None);
+    }
+
+    /// A package whose manifest names the machine still gets to choose how its
+    /// image is addressed, which is what a userland with no dynamic loader
+    /// needs — and a build for this machine is refused rather than quietly
+    /// handed a position-independent image it did not ask for.
+    #[test]
+    fn a_relocation_model_attaches_to_a_manifest_supplied_target() {
+        let device = manifest_device("aarch64-linux-gnu").expect("a triple is a build target");
+        let with_static = device
+            .with_relocation(Some(kira_backend_api::RelocationModel::Static))
+            .expect("a cross device takes a relocation model");
+        let Device::Cross(target) = &with_static else {
+            panic!("a cross device stays one");
+        };
+        assert_eq!(
+            target.relocation(),
+            kira_backend_api::RelocationModel::Static
+        );
+        assert_eq!(target.triple().to_string(), "aarch64-linux-gnu");
+
+        assert_eq!(
+            Device::Host.with_relocation(Some(kira_backend_api::RelocationModel::Static)),
+            None
+        );
+        assert_eq!(Device::Host.with_relocation(None), Some(Device::Host));
     }
 }

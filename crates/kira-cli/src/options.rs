@@ -3,31 +3,88 @@
 //! Hand-rolled like the rest of the CLI. Backend and device selection are both
 //! structured enums, resolved once here, so no handler branches on a string.
 
+use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use kira_backend_api::BackendMode;
 use kira_backend_api::WasmDevice;
+use kira_backend_api::{CrossTarget, NativeTarget, RelocationModel};
+use kira_native_lib_definition::TargetTriple;
 
 /// What a program is being compiled to run on.
 ///
 /// `--device` is an override. On the host, `--backend` picks among the three
 /// engines; a Web device has exactly one code generator, so naming the device
 /// decides the backend, and a differing `--backend` beside it is overridden
-/// aloud — never served, never silently swapped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// aloud — never served, never silently swapped. A cross target is the same
+/// shape of decision: there is one engine that can emit for another machine.
+///
+/// `--target` and `--device` are the same choice spelled two ways, which is why
+/// they are one value here rather than two fields that could disagree. A build
+/// emits for exactly one machine, and "wasm32, but also aarch64 Linux" is not a
+/// thing to resolve later — it is an invocation to refuse when it is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Device {
     /// This machine.
     Host,
+    /// Another real machine, named by `--target`.
+    Cross(CrossTarget),
     /// The Web: a WebAssembly module, and the page that runs it.
     Web(WasmDevice),
 }
 
 impl Device {
-    /// The name this device is spelled by on the command line.
-    pub fn label(self) -> &'static str {
+    /// The Web device this build targets, or `None` for a real machine.
+    ///
+    /// The one question the artifact verbs branch on before anything else: the
+    /// Web has its own backend, its own linker, and its own artifact layout, so
+    /// it leaves the native path entirely rather than being a target within it.
+    pub fn wasm(&self) -> Option<WasmDevice> {
         match self {
-            Self::Host => "host",
-            Self::Web(device) => device.label(),
+            Self::Web(device) => Some(*device),
+            Self::Host | Self::Cross(_) => None,
+        }
+    }
+
+    /// Which machine a native build for this device emits for.
+    ///
+    /// The Web is not one: a wasm module is emitted through its own target
+    /// machine, and the caller that asks this has already branched away.
+    pub fn native_target(&self) -> NativeTarget {
+        match self {
+            Self::Cross(target) => NativeTarget::Cross(target.clone()),
+            Self::Host | Self::Web(_) => NativeTarget::Host,
+        }
+    }
+
+    /// This device with `relocation` applied, or unchanged when nothing asked
+    /// for one.
+    ///
+    /// Returns `None` for a device that has no relocation model to set — this
+    /// machine and the Web both fix theirs — so a caller can refuse
+    /// `--relocation-model` where it would have done nothing rather than accept
+    /// an argument and drop it.
+    pub fn with_relocation(&self, relocation: Option<RelocationModel>) -> Option<Self> {
+        let Some(relocation) = relocation else {
+            return Some(self.clone());
+        };
+        match self {
+            Self::Cross(target) => Some(Self::Cross(CrossTarget::new(
+                target.triple().clone(),
+                relocation,
+            ))),
+            Self::Host | Self::Web(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Device {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host => formatter.write_str("host"),
+            Self::Cross(target) => write!(formatter, "{target}"),
+            Self::Web(device) => formatter.write_str(device.label()),
         }
     }
 }
@@ -43,8 +100,24 @@ pub struct CompileOptions {
     pub backend_explicit: bool,
     /// What the program is being compiled to run on.
     pub device: Device,
-    /// Whether the user explicitly supplied `--device`.
+    /// Whether the user explicitly supplied `--device` or `--target`.
     pub device_explicit: bool,
+    /// The sysroot a cross build's system headers and libraries come from, when
+    /// the invocation named one with `--sysroot`.
+    ///
+    /// `None` leaves the answer to the `KIRA_SYSROOT` environment variable, and
+    /// then to the driver's own defaults. Nothing here is consulted for a host
+    /// build: this machine's libraries are where the managed clang already
+    /// looks.
+    pub sysroot: Option<PathBuf>,
+    /// The relocation model `--relocation-model` asked for, if any.
+    ///
+    /// Kept beside the device rather than folded into it at parse time, because
+    /// the machine may not be settled yet: a package can name its own
+    /// `buildTarget`, which is read out of the compiled program, and a build that
+    /// gets its target that way still wants to choose how its image is
+    /// addressed. [`Device::with_relocation`] is where the two meet.
+    pub relocation: Option<RelocationModel>,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
     /// Whether to generate code at the aggressive optimization level.
@@ -95,6 +168,52 @@ pub enum OptionsError {
     /// `--device` was given an unknown value.
     #[error("unknown device `{0}`; expected one of: host, wasm32, wasm64")]
     UnknownDevice(String),
+    /// `--target` was given without a value.
+    #[error("`--target` expects a target triple such as `aarch64-linux-gnu`")]
+    TargetMissingValue,
+    /// `--target` was given something that is not an `arch-os-abi` triple.
+    #[error("{0}")]
+    BadTarget(kira_native_lib_definition::TripleError),
+    /// `--target` and `--device` named two different machines.
+    ///
+    /// Refused rather than resolved, because there is no resolution: one build
+    /// emits for one machine, and quietly picking whichever flag came last is
+    /// how a Web build silently becomes an aarch64 one.
+    #[error(
+        "`--target {target}` and `--device {device}` name different machines; a \
+         build emits for one of them"
+    )]
+    TargetContradictsDevice {
+        /// The target that was asked for.
+        target: String,
+        /// The device that was asked for beside it.
+        device: String,
+    },
+    /// `--sysroot` was given without a value.
+    #[error("`--sysroot` expects a directory holding the target's headers and libraries")]
+    SysrootMissingValue,
+    /// `--relocation-model` was given without a value.
+    #[error("`--relocation-model` expects one of: pic, static")]
+    RelocationModelMissingValue,
+    /// `--relocation-model` was given an unknown value.
+    #[error("unknown relocation model `{0}`; expected one of: pic, static")]
+    UnknownRelocationModel(String),
+    /// `--relocation-model` was given for a build that has no such choice.
+    ///
+    /// Refused rather than silently ignored. A build for this machine links
+    /// position-independent everywhere Kira runs — required on macOS, the
+    /// default on modern Linux — and the Web has no relocations at all, so
+    /// accepting `static` for either would take an argument and do nothing with
+    /// it.
+    #[error(
+        "`--relocation-model` applies to a build for another machine, and this \
+         one is for `{device}`; name one with `--target <arch-os-abi>`, or set \
+         the package's `buildTarget` to a triple"
+    )]
+    RelocationModelWithoutTarget {
+        /// The device the build settled on instead.
+        device: String,
+    },
     /// `--quit-after` was given without a value.
     #[error("`--quit-after` expects a duration such as 500ms, 5s, or 2m")]
     QuitAfterMissingValue,
@@ -123,8 +242,13 @@ impl CompileOptions {
         // default" — which is what lets the device pick a default without ever
         // overriding a choice.
         let mut backend: Option<BackendMode> = None;
-        let mut device = Device::Host;
-        let mut device_explicit = false;
+        // Collected rather than resolved as they are seen: `--target` and
+        // `--relocation-model` combine into one value, and the two flags may
+        // arrive in either order.
+        let mut named_device: Option<Device> = None;
+        let mut target: Option<TargetTriple> = None;
+        let mut relocation: Option<RelocationModel> = None;
+        let mut sysroot: Option<PathBuf> = None;
         let mut emit_llvm_ir = false;
         let mut release = false;
         let mut timings = false;
@@ -154,8 +278,31 @@ impl CompileOptions {
                     let value = args
                         .get(index + 1)
                         .ok_or(OptionsError::DeviceMissingValue)?;
-                    device = parse_device(value)?;
-                    device_explicit = true;
+                    named_device = Some(parse_device(value)?);
+                    index += 1;
+                }
+                "--target" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::TargetMissingValue)?;
+                    target = Some(TargetTriple::parse(value).map_err(OptionsError::BadTarget)?);
+                    index += 1;
+                }
+                "--sysroot" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::SysrootMissingValue)?;
+                    sysroot = Some(PathBuf::from(value));
+                    index += 1;
+                }
+                "--relocation-model" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::RelocationModelMissingValue)?;
+                    relocation = Some(
+                        RelocationModel::parse(value)
+                            .ok_or_else(|| OptionsError::UnknownRelocationModel(value.clone()))?,
+                    );
                     index += 1;
                 }
                 "--quit-after" => {
@@ -187,21 +334,29 @@ impl CompileOptions {
             index += 1;
         }
 
+        // Explicit means "the invocation named a machine", including
+        // `--device host`, which is how a command line overrides a manifest's
+        // `buildTarget`.
+        let device_explicit = named_device.is_some() || target.is_some();
+        let device = resolve_device(named_device, target, relocation)?;
+
         let backend_explicit = backend.is_some();
         // `--device` is an override: a Web device has exactly one code
         // generator, so naming the device decides the backend, and a
         // `--backend` beside it is noted aloud rather than served or refused.
-        // On the host, `--backend` picks among the three engines as ever.
-        let backend = match device {
+        // A cross target is the same: the interpreter runs bytecode on *this*
+        // machine, so there is one engine that can produce a binary for another
+        // one. On the host, `--backend` picks among the three engines as ever.
+        let backend = match &device {
             Device::Host => backend.unwrap_or(BackendMode::VmBytecode),
-            Device::Web(_) => {
+            Device::Cross(_) | Device::Web(_) => {
                 if let Some(named) = backend
                     && named != BackendMode::LlvmNative
                 {
                     eprintln!(
-                        "kira: `--device {}` overrides `--backend {}`: the Web \
-                         device has one code generator",
-                        device.label(),
+                        "kira: compiling for `{device}` overrides `--backend {}`: \
+                         a build that is not for this machine's interpreter has \
+                         one code generator",
                         named.label(),
                     );
                 }
@@ -220,6 +375,8 @@ impl CompileOptions {
             backend_explicit,
             device,
             device_explicit,
+            sysroot,
+            relocation,
             emit_llvm_ir,
             release,
             timings,
@@ -247,6 +404,37 @@ pub fn parse_duration(value: &str) -> Result<Duration, OptionsError> {
     let amount: u64 = number.parse().map_err(|_| bad())?;
     let millis = amount.checked_mul(scale).ok_or_else(bad)?;
     Ok(Duration::from_millis(millis))
+}
+
+/// Combines what the invocation said about which machine to build for.
+///
+/// `--device` and `--target` are the same decision, so naming both is refused:
+/// a triple always names a specific machine, so there is no pairing of the two
+/// that says one thing. The relocation model belongs to whichever machine is
+/// finally settled on, which may still come from a package's `buildTarget`, so
+/// it is attached here only when `--target` gave one to attach it to.
+fn resolve_device(
+    named_device: Option<Device>,
+    target: Option<TargetTriple>,
+    relocation: Option<RelocationModel>,
+) -> Result<Device, OptionsError> {
+    let Some(triple) = target else {
+        // Not refused here even with a relocation model in hand: a package's own
+        // `buildTarget` can still name a machine, and that is read out of the
+        // compiled program long after this. The refusal happens where the device
+        // is finally settled.
+        return Ok(named_device.unwrap_or(Device::Host));
+    };
+    if let Some(device) = named_device {
+        return Err(OptionsError::TargetContradictsDevice {
+            target: triple.to_string(),
+            device: device.to_string(),
+        });
+    }
+    Ok(Device::Cross(CrossTarget::new(
+        triple,
+        relocation.unwrap_or_default(),
+    )))
 }
 
 /// Resolves a `--device` value.
@@ -365,6 +553,132 @@ mod tests {
 
         let web = CompileOptions::parse(&args(&["--device", "wasm32", "m.kira"])).expect("parses");
         assert_eq!(web.backend, BackendMode::LlvmNative);
+    }
+
+    /// The flag Tessera builds with. `--target` picks the machine, the LLVM
+    /// backend follows from it, and the relocation model defaults to the one
+    /// every ordinary program uses.
+    #[test]
+    fn a_target_triple_selects_a_cross_build_on_the_native_backend() {
+        let options = CompileOptions::parse(&args(&["--target", "aarch64-linux-gnu", "app.kira"]))
+            .expect("parses");
+        assert_eq!(options.backend, BackendMode::LlvmNative);
+        assert!(options.device_explicit);
+        let Device::Cross(target) = &options.device else {
+            panic!("expected a cross device, got {:?}", options.device);
+        };
+        assert_eq!(target.triple().to_string(), "aarch64-linux-gnu");
+        assert_eq!(target.relocation(), RelocationModel::Pic);
+        assert_eq!(
+            options.device.native_target(),
+            NativeTarget::Cross(target.clone())
+        );
+    }
+
+    /// A freestanding userland with no dynamic loader asks for absolute
+    /// addresses, and the flags may be written in either order.
+    #[test]
+    fn a_relocation_model_attaches_to_the_target_in_either_order() {
+        for order in [
+            [
+                "--target",
+                "aarch64-linux-gnu",
+                "--relocation-model",
+                "static",
+            ],
+            [
+                "--relocation-model",
+                "static",
+                "--target",
+                "aarch64-linux-gnu",
+            ],
+        ] {
+            let options = CompileOptions::parse(&args(&order)).expect("parses");
+            let Device::Cross(target) = &options.device else {
+                panic!("expected a cross device, got {:?}", options.device);
+            };
+            assert_eq!(target.relocation(), RelocationModel::Static);
+        }
+    }
+
+    #[test]
+    fn a_sysroot_is_carried_through_to_the_build() {
+        let options = CompileOptions::parse(&args(&[
+            "--target",
+            "aarch64-linux-gnu",
+            "--sysroot",
+            "/usr/aarch64-linux-gnu",
+        ]))
+        .expect("parses");
+        assert_eq!(
+            options.sysroot,
+            Some(PathBuf::from("/usr/aarch64-linux-gnu"))
+        );
+        // A build that named no target keeps `None`, so nothing redirects an
+        // ordinary host link at somebody else's C library.
+        assert_eq!(
+            CompileOptions::parse(&args(&["app.kira"]))
+                .expect("parses")
+                .sysroot,
+            None
+        );
+    }
+
+    /// Two machines named in one invocation is refused rather than resolved:
+    /// quietly taking whichever flag came last is how a Web build becomes an
+    /// aarch64 one without anybody asking.
+    #[test]
+    fn naming_a_target_and_a_device_together_is_refused() {
+        for device in ["host", "wasm32"] {
+            let error = CompileOptions::parse(&args(&[
+                "--target",
+                "aarch64-linux-gnu",
+                "--device",
+                device,
+            ]))
+            .expect_err("two machines in one invocation");
+            assert_eq!(
+                error,
+                OptionsError::TargetContradictsDevice {
+                    target: "aarch64-linux-gnu".to_owned(),
+                    device: device.to_owned(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_bad_target_and_a_stray_relocation_model() {
+        assert_eq!(
+            CompileOptions::parse(&args(&["--target"])),
+            Err(OptionsError::TargetMissingValue)
+        );
+        assert!(matches!(
+            CompileOptions::parse(&args(&["--target", "aarch64-linux"])),
+            Err(OptionsError::BadTarget(_))
+        ));
+        // `--relocation-model` with no `--target` is not a parse failure: the
+        // package's own `buildTarget` can still name a machine, and that is read
+        // out of the compiled program. It is carried and refused later if the
+        // build turns out to be for this machine after all.
+        let carried = CompileOptions::parse(&args(&["--relocation-model", "static", "app.kira"]))
+            .expect("parses");
+        assert_eq!(carried.relocation, Some(RelocationModel::Static));
+        assert_eq!(carried.device, Device::Host);
+        assert_eq!(carried.device.with_relocation(carried.relocation), None);
+        assert_eq!(
+            CompileOptions::parse(&args(&[
+                "--target",
+                "aarch64-linux-gnu",
+                "--relocation-model",
+                "pie"
+            ])),
+            Err(OptionsError::UnknownRelocationModel("pie".to_owned()))
+        );
+        assert_eq!(
+            CompileOptions::parse(&args(&["--sysroot"])),
+            Err(OptionsError::SysrootMissingValue)
+        );
     }
 
     #[test]

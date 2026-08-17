@@ -57,6 +57,10 @@ pub use hybrid::{
 // generated wrapper without running the generated `build.rs` still has to name
 // the same platform libraries, and there is one list.
 pub use kira_llvm_backend::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
+// Re-exported for the same reason: it is the type of a public option field, so
+// a caller building a `NativeLibraryOptions` must be able to name the machine it
+// is building for without taking a dependency of its own on the LLVM backend.
+pub use kira_llvm_backend::NativeBuildTarget;
 pub use library::{
     LibraryArtifacts, LibraryBuildError, LibraryBuildOptions, build_library, toolchain_root,
 };

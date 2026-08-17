@@ -12,7 +12,7 @@ use kira_llvm_backend::NativeLinkInputs;
 use kira_main::StdoutHost;
 use kira_runtime_abi::{NativeStateHost, env};
 
-use super::{EXIT_FAILURE, EXIT_OK};
+use super::{EXIT_FAILURE, EXIT_OK, EXIT_USAGE};
 use crate::options::CompileOptions;
 use crate::progress::err;
 use crate::{hybrid, native, wasm};
@@ -258,11 +258,23 @@ fn vm_result_code(result: kira_vm_runtime::Value) -> i32 {
 }
 
 /// Builds a native executable and runs it, forwarding its exit code.
+///
+/// Only for a build of this machine. A program emitted for another one is a
+/// file this host cannot start, and `run` says so rather than handing the
+/// operating system a binary it will refuse with an error naming nothing.
 pub(super) fn run_native(
     ir: &IrProgram,
     options: &CompileOptions,
     foreign_link: &NativeLinkInputs,
 ) -> i32 {
+    if let crate::options::Device::Cross(target) = &options.device {
+        err!(
+            "kira run: `{target}` is not this machine, so the program it builds \
+             cannot be run here; use `kira build --target {target}` and run the \
+             result on that machine"
+        );
+        return EXIT_USAGE;
+    }
     let Some(artifacts) = build_native(ir, options, foreign_link) else {
         return EXIT_FAILURE;
     };
@@ -292,6 +304,7 @@ pub(super) fn build_native(
         options.emit_llvm_ir,
         options.release,
         foreign_link,
+        &super::native_build_target(options),
     ) {
         Ok(artifacts) => Some(artifacts),
         Err(error) => {

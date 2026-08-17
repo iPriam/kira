@@ -374,7 +374,10 @@ mod tests {
     fn a_named_argument_labelled_after_the_property_is_a_label() {
         let text = "struct S {\n    var a: Int\n    function f() -> Int {\n        return g(count = count, other = 1)\n    }\n}\n";
         let rewritten = rewrite_property(text, "count", "get()", "set").expect("a rewrite");
-        assert!(rewritten.contains("g(count = get(), other = 1)"), "{rewritten}");
+        assert!(
+            rewritten.contains("g(count = get(), other = 1)"),
+            "{rewritten}"
+        );
     }
 
     #[test]

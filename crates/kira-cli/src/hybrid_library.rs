@@ -52,7 +52,10 @@ pub fn build(
         version,
         build_directory: directory,
         toolchain_root: kira_build::toolchain_root(),
-        runtime_archive: crate::native::runtime_archive(&compiled.ir)?,
+        runtime_archive: crate::native::runtime_archive(
+            &compiled.ir,
+            &kira_backend_api::NativeTarget::Host,
+        )?,
         emit_llvm_ir,
     };
     Ok(kira_build::build_hybrid_library(&compiled.ir, &options)?)

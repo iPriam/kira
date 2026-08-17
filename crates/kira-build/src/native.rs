@@ -35,6 +35,14 @@ pub struct NativeLibraryOptions {
     pub runtime_archive: PathBuf,
     /// Whether to write the textual LLVM IR beside the object, for debugging.
     pub emit_llvm_ir: bool,
+    /// Which machine the library's code is emitted for.
+    ///
+    /// The archive and the generated wrapper crate are one artifact for one
+    /// machine: the wrapper's `build.rs` points cargo at this archive, and a
+    /// consumer building for another machine would be linking objects it cannot
+    /// use. So the target is recorded on the build rather than assumed, and the
+    /// caller decides which one a `kira build` asked for.
+    pub target: kira_llvm_backend::NativeBuildTarget,
 }
 
 /// What a native library build produced.
@@ -173,6 +181,7 @@ pub fn build_native_library(
             foreign_link: kira_llvm_backend::NativeLinkInputs::EMPTY,
             optimize: false,
             unavailable_imports: Vec::new(),
+            target: options.target.clone(),
         },
     )?;
 

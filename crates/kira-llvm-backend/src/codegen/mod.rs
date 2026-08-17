@@ -12,7 +12,7 @@
 //! - [`entry`] — how the module is entered: a C `main`, or host trampolines,
 //! - [`bridge`] — packing and unpacking values that cross between engines,
 //! - [`symbols`] — the native symbol each function is emitted under,
-//! - [`target`] — the host target machine and object emission,
+//! - [`target`] — the target machine, host or cross, and object emission,
 //! - [`ffi`] — glue for the LLVM C API's strings.
 //!
 //! Every LLVM object here is a raw pointer from the C API, so the whole module
@@ -45,6 +45,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 
+use kira_backend_api::NativeTarget;
 use kira_debug::DebugInfo;
 use kira_ir::{IrFunction, IrProgram};
 use kira_runtime_abi::{Execution, ForeignPointerWidth};
@@ -69,6 +70,7 @@ use self::plan::{CodegenTarget, ModuleKind, Plan};
 
 pub(crate) use self::plan::CodegenUnit;
 pub(crate) use self::symbols::trampoline_name;
+pub(crate) use self::target::check_supported;
 pub(crate) use self::types::Callable;
 
 /// The direct LLVM selector is substantially faster for a large executable
@@ -78,6 +80,14 @@ pub(crate) use self::types::Callable;
 const FAST_CODEGEN_REACHABLE_FUNCTIONS: usize = 1_000;
 
 fn needs_fast_codegen(program: &IrProgram, plan: &Plan<'_>) -> bool {
+    // Never for a cross build. This is a build-time escape hatch, bought by
+    // emitting worse code, and it is worth that on the machine a developer is
+    // waiting at. A binary being produced for another machine is one nobody is
+    // waiting to run here, and the frames the direct selector leaves behind are
+    // the ones that overflowed an 8 MB stack.
+    if !matches!(plan.target, CodegenTarget::Native(NativeTarget::Host)) {
+        return false;
+    }
     if !cfg!(target_os = "windows") || plan.kind != ModuleKind::Executable {
         return false;
     }
@@ -102,6 +112,14 @@ pub(crate) struct Module {
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
     fast_codegen: bool,
+    /// The machine this module was lowered against, kept so the emission uses
+    /// the same one.
+    ///
+    /// Carried rather than passed in again at emission time: the data layout the
+    /// offsets were computed with and the target machine the object comes out of
+    /// have to be the same target, and a second argument is a second chance for
+    /// them not to be.
+    target: CodegenTarget,
 }
 
 impl Module {
@@ -114,13 +132,15 @@ impl Module {
     /// any program.
     ///
     /// `unit` selects which function bodies land here; [`CodegenUnit::WHOLE`]
-    /// is every one of them.
+    /// is every one of them. `target` is the machine it is lowered and emitted
+    /// for, which is [`NativeTarget::Host`] unless the build named another.
     pub(crate) fn build(
         program: &IrProgram,
         module_name: &str,
         pointer_width: ForeignPointerWidth,
         unavailable: &[usize],
         unit: CodegenUnit,
+        target: &NativeTarget,
     ) -> Result<Self, LlvmError> {
         Self::build_executable_for_target(
             program,
@@ -128,7 +148,7 @@ impl Module {
             pointer_width,
             unavailable,
             unit,
-            CodegenTarget::Host,
+            CodegenTarget::Native(target.clone()),
         )
     }
 
@@ -153,7 +173,7 @@ impl Module {
                 reachable: crate::reachability::native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
-                target: CodegenTarget::Host,
+                target: CodegenTarget::host(),
                 unavailable,
                 unit,
             },
@@ -214,6 +234,7 @@ impl Module {
         pointer_width: ForeignPointerWidth,
         unavailable: &[usize],
         unit: CodegenUnit,
+        target: &NativeTarget,
         debug: &DebugInfo,
     ) -> Result<Self, LlvmError> {
         Self::lower(
@@ -225,7 +246,7 @@ impl Module {
                 reachable: crate::reachability::native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width,
-                target: CodegenTarget::Host,
+                target: CodegenTarget::Native(target.clone()),
                 unavailable,
                 unit,
             },
@@ -242,13 +263,15 @@ impl Module {
         program: &IrProgram,
         module_name: &str,
         exports: &NativeExportSurface,
+        pointer_width: ForeignPointerWidth,
+        target: &NativeTarget,
     ) -> Result<Self, LlvmError> {
         Self::build_library_for_target(
             program,
             module_name,
             exports,
-            ForeignPointerWidth::HOST,
-            CodegenTarget::Host,
+            pointer_width,
+            CodegenTarget::Native(target.clone()),
         )
     }
 
@@ -316,7 +339,7 @@ impl Module {
                 reachable: crate::reachability::hybrid_native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
-                target: CodegenTarget::Host,
+                target: CodegenTarget::host(),
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
@@ -344,7 +367,7 @@ impl Module {
                 reachable: crate::reachability::hybrid_native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
-                target: CodegenTarget::Host,
+                target: CodegenTarget::host(),
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
@@ -360,6 +383,7 @@ impl Module {
         debug_info: Option<&DebugInfo>,
     ) -> Result<Self, LlvmError> {
         let fast_codegen = needs_fast_codegen(program, &plan);
+        let target = plan.target.clone();
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
         // owned by the returned `Module`, which disposes of them on drop; each
@@ -373,6 +397,7 @@ impl Module {
                 module,
                 builder,
                 fast_codegen,
+                target,
             }
         };
 
@@ -423,14 +448,15 @@ impl Module {
         Ok(())
     }
 
-    /// Emits a native object file for the host into `path`.
+    /// Emits a native object file into `path`, for the machine this module was
+    /// lowered against.
     pub(crate) fn emit_object(&self, path: &Path, optimize: bool) -> Result<(), LlvmError> {
         let unit = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("object");
         kira_diagnostics::progress!("creating LLVM target machine for {unit}");
-        let machine = TargetMachine::host(optimize, self.fast_codegen)?;
+        let machine = self.target_machine(optimize)?;
         if optimize {
             kira_diagnostics::progress!("inlining value glue for {unit}");
             machine.always_inline(self.module)?;
@@ -454,6 +480,21 @@ impl Module {
     ) -> Result<(), LlvmError> {
         let machine = TargetMachine::wasm(device)?;
         machine.emit_object(self.module, path)
+    }
+
+    /// The target machine for the machine this module was lowered against.
+    ///
+    /// The Web arm is here for completeness rather than for use: a wasm module
+    /// is emitted through [`Module::emit_wasm_object`], which fixes the
+    /// code-generation level the Web path has always run at instead of taking a
+    /// build's `--release` and fast-codegen decisions.
+    fn target_machine(&self, optimize: bool) -> Result<TargetMachine, LlvmError> {
+        match &self.target {
+            CodegenTarget::Native(target) => {
+                TargetMachine::for_target(target, optimize, self.fast_codegen)
+            }
+            CodegenTarget::Wasm(device) => TargetMachine::wasm(*device),
+        }
     }
 }
 
@@ -576,9 +617,9 @@ impl<'a> Codegen<'a> {
 
         // The module needs its target layout in place before any element is
         // sized, and object emission sets the same layout again harmlessly.
-        let target_machine = match target {
-            CodegenTarget::Host => TargetMachine::host(false, false)?,
-            CodegenTarget::Wasm(device) => TargetMachine::wasm(device)?,
+        let target_machine = match &target {
+            CodegenTarget::Native(native) => TargetMachine::for_target(native, false, false)?,
+            CodegenTarget::Wasm(device) => TargetMachine::wasm(*device)?,
         };
         target_machine.set_module_layout(owned.module);
         // SAFETY: the layout was just set, so the module has one; the returned
