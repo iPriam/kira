@@ -13,13 +13,27 @@ use super::{
     EXIT_FAILURE, EXIT_OK, apply_manifest_defaults, command_inputs, foreign_link, options_target,
     parse_options, resolve_foreign, resolve_path, verified,
 };
-use crate::options::Device;
 use crate::progress::{err, out};
 use crate::{hybrid, hybrid_library, library, native, native_library, wasm};
 
 /// Runs `kira build [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-/// <file|dir>`: compile to artifacts under `.kira-build/`, without executing
-/// anything.
+/// [--target <arch-os-abi>] <file|dir>`: compile to artifacts under
+/// `.kira-build/`, without executing anything.
+///
+/// `--target` is the verb's cross-compilation flag, and `build` is the verb that
+/// produces something with it: a program emitted for another machine is one this
+/// one cannot run or debug, so the artifact is the whole of what can be done
+/// here. (`check` takes the same flag and analyses against that machine's
+/// native-library rows, which needs no artifact at all.) The artifacts go under
+/// `.kira-build/<toolchain-triple>/` rather than beside the host's, so both
+/// builds of a program can exist at once.
+///
+/// Two more flags travel with it, and both are about the machine rather than the
+/// program: `--sysroot <dir>` names where that machine's C library and headers
+/// are (falling back to the `KIRA_SYSROOT` environment variable), and
+/// `--relocation-model pic|static` chooses between an ordinary
+/// position-independent executable and the absolutely-addressed, non-PIE image a
+/// userland with no dynamic loader needs.
 pub fn build(args: &[String]) -> i32 {
     let surface = crate::progress::Surface::install("Building");
     let _guard = crate::progress::Finish(surface);
@@ -48,7 +62,7 @@ pub fn build(args: &[String]) -> i32 {
 
     // Resolve foreign imports once, then thread the selected target's inputs into
     // whichever artifact path owns the build.
-    let foreign = match resolve_foreign(&options.path, ir, options.device) {
+    let foreign = match resolve_foreign(&options.path, ir, &options.device) {
         Ok(foreign) => foreign,
         Err(_) => {
             out!("Failed to build");
@@ -57,7 +71,7 @@ pub fn build(args: &[String]) -> i32 {
     };
     let link = foreign_link(&foreign);
 
-    if let Device::Web(device) = options.device {
+    if let Some(device) = options.device.wasm() {
         let source = std::path::Path::new(&options.path);
         let result = if is_library {
             wasm::build_library(ir, source, device, link, compiled.package_name.as_deref())
@@ -149,6 +163,7 @@ pub fn build(args: &[String]) -> i32 {
                 &compiled,
                 std::path::Path::new(&options.path),
                 options.emit_llvm_ir,
+                &super::native_build_target(&options),
             ) {
                 Ok(artifacts) => {
                     native_library::report(&artifacts);

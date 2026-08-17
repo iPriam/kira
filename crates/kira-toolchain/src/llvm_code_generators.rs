@@ -5,6 +5,9 @@
 //! disagree on a machine: a release owns its assets for good, so a pin that
 //! grows a code generator after a release was cut leaves installs whose LLVM
 //! is a perfectly good LLVM carrying fewer generators than the pin now names.
+//! That is exactly the state every bundle published before the pin named X86
+//! and AArch64 outright is in, and it is why a cross build reports a missing
+//! code generator by name instead of failing somewhere inside LLVM.
 //!
 //! Nothing may assume the answer. The backend's build script links the
 //! initializers the bundle actually defines — the alternative is a linker
@@ -212,5 +215,27 @@ mod tests {
             assert!(code_generator_for_arch(arch).is_some());
         }
         assert!(code_generator_for_arch("mips64").is_none());
+    }
+
+    /// The pin names every published host's code generator, not just the one
+    /// belonging to whichever runner built a given bundle.
+    ///
+    /// This is what makes `kira build --target <triple>` a property of the
+    /// compiler rather than of the download it links: with a bare `host` entry,
+    /// the x86_64 Linux bundle carried X86 alone and could never emit an
+    /// aarch64 binary, so the same command succeeded or failed depending on
+    /// which archive the machine happened to install.
+    #[test]
+    fn the_pin_requires_every_published_hosts_code_generator() {
+        let required = pinned_code_generators().expect("the pin parses");
+        for arch in ["x86_64", "aarch64"] {
+            let generator =
+                code_generator_for_arch(arch).expect("a published host has a code generator");
+            assert!(
+                required.contains(&generator),
+                "the pin must name {generator}, the code generator for {arch} hosts, \
+                 got {required:?}",
+            );
+        }
     }
 }

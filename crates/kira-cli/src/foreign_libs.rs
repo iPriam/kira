@@ -67,13 +67,18 @@ pub enum ForeignResolveError {
     },
 }
 
-/// The structured target triple a `--device` selects.
+/// The structured target triple a `--device` or `--target` selects.
 ///
 /// Host builds resolve against this machine's `arch-os-abi`; a Web device
-/// resolves against the emscripten wasm triple a package's wasm rows name.
-pub fn target_for_device(device: Device) -> TargetTriple {
+/// resolves against the emscripten wasm triple a package's wasm rows name; and
+/// a cross target *is* a triple already, which is the whole reason `--target`
+/// takes the manifest's own spelling. A package declaring
+/// `[target.aarch64-linux-gnu]` therefore has its archives selected by a cross
+/// build without anything here knowing that cross builds exist.
+pub fn target_for_device(device: &Device) -> TargetTriple {
     match device {
         Device::Host => host_triple(),
+        Device::Cross(target) => target.triple().clone(),
         Device::Web(kira_backend_api::WasmDevice::Wasm32) => {
             TargetTriple::new("wasm32", "emscripten", "unknown")
         }

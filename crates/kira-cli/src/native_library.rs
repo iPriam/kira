@@ -26,6 +26,7 @@ pub fn build(
     compiled: &Compiled,
     source: &Path,
     emit_llvm_ir: bool,
+    target: &kira_llvm_backend::NativeBuildTarget,
 ) -> Result<NativeLibraryArtifacts, NativeLibraryBuildError> {
     let Some(name) = compiled.package_name.clone() else {
         return Err(NativeLibraryBuildError::Package(LibraryError::Unnamed {
@@ -46,8 +47,9 @@ pub fn build(
         version,
         build_directory: kira_project::build_directory(source),
         toolchain_root: kira_build::toolchain_root(),
-        runtime_archive: crate::native::runtime_archive(&compiled.ir)?,
+        runtime_archive: crate::native::runtime_archive(&compiled.ir, target.target())?,
         emit_llvm_ir,
+        target: target.clone(),
     };
     Ok(kira_build::build_native_library(&compiled.ir, &options)?)
 }

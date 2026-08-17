@@ -6,7 +6,7 @@
 //! same functions. These are the values that say which of those is happening;
 //! nothing here emits anything.
 
-use kira_backend_api::WasmDevice;
+use kira_backend_api::{NativeTarget, WasmDevice};
 use kira_runtime_abi::{Execution, ForeignPointerWidth};
 
 use crate::exports::NativeExportSurface;
@@ -38,12 +38,26 @@ pub(crate) enum ModuleKind {
 }
 
 /// The target whose data layout the module must carry while it is lowered.
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// Not merely a label: the lowering asks LLVM for a type's ABI size to compute
+/// an array's stride and a struct field's offset, and the answer comes from the
+/// module's data layout. A module lowered against this machine's layout and then
+/// emitted for another one is a program whose offsets were computed twice, by
+/// two different machines, and agree only by luck.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum CodegenTarget {
-    /// The machine running the compiler.
-    Host,
+    /// A real machine: this one, or another named by `--target`.
+    Native(NativeTarget),
     /// A WebAssembly target selected by the command line.
     Wasm(WasmDevice),
+}
+
+impl CodegenTarget {
+    /// The compiling host, which is what every module that is not explicitly
+    /// aimed elsewhere is lowered for.
+    pub(crate) fn host() -> Self {
+        Self::Native(NativeTarget::Host)
+    }
 }
 
 /// Which of a program's function bodies one module carries.

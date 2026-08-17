@@ -1,8 +1,9 @@
-//! Target machines — the host's and the Web's — and emitting objects with them.
+//! Target machines — the host's, a named cross target's, and the Web's — and
+//! emitting objects with them.
 
 use std::path::{Path, PathBuf};
 
-use kira_backend_api::WasmDevice;
+use kira_backend_api::{CrossTarget, NativeTarget, RelocationModel, WasmDevice};
 use llvm_sys::core::{LLVMCreateMessage, LLVMDisposeMessage, LLVMSetTarget};
 use llvm_sys::prelude::*;
 use llvm_sys::target::{LLVMDisposeTargetData, LLVMSetModuleDataLayout};
@@ -17,17 +18,22 @@ pub(super) struct TargetMachine {
     triple: *mut std::os::raw::c_char,
 }
 
-/// Registers the code generators this backend emits with: the compiling
-/// host's, and WebAssembly's when the managed LLVM carries it.
+/// Registers every code generator the managed LLVM carries.
 ///
 /// Explicit per-target calls rather than `LLVM_InitializeAll*`: those are C
 /// wrapper functions `llvm-sys` only compiles when it owns the LLVM linking,
 /// which this backend does itself (see `build.rs`). The explicit initializers
 /// are real LLVM symbols living in their target's archive, so the set named
 /// here is the set the linked bundle defines — `build.rs` reads it from that
-/// bundle's own `llvm-config` and sets `kira_llvm_webassembly`. A bundle
-/// published before the pin grew `WebAssembly` therefore links, and says so on
-/// the Web path instead of failing four symbols into a link.
+/// bundle's own `llvm-config` and sets one cfg per generator. A bundle
+/// published before the pin named a generator therefore links, and says so on
+/// the path that needs it instead of failing four symbols into a link.
+///
+/// Nothing here is gated on `target_arch`. It was, and that made the set of
+/// machines a compiler could emit for equal to the one machine it was built on,
+/// which is the definition of a compiler that cannot cross-compile. What
+/// decides now is what the *bundle* carries, so an x86_64 host linking a bundle
+/// with AArch64 in it registers AArch64 and can emit for it.
 ///
 /// Registration runs once per process. The initializers are idempotent when
 /// called in sequence, but they write LLVM's global target registry, and a
@@ -88,7 +94,7 @@ extern "C" fn report_llvm_fatal_error(reason: *const std::os::raw::c_char) {
 unsafe fn register_targets() {
     // SAFETY: per the function contract — one registration per process.
     unsafe {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(kira_llvm_aarch64)]
         {
             use llvm_sys::target::{
                 LLVMInitializeAArch64AsmPrinter, LLVMInitializeAArch64Target,
@@ -99,7 +105,7 @@ unsafe fn register_targets() {
             LLVMInitializeAArch64TargetMC();
             LLVMInitializeAArch64AsmPrinter();
         }
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(kira_llvm_x86)]
         {
             use llvm_sys::target::{
                 LLVMInitializeX86AsmPrinter, LLVMInitializeX86Target, LLVMInitializeX86TargetInfo,
@@ -161,19 +167,12 @@ impl TargetMachine {
 
             let cpu = LLVMGetHostCPUName();
             let features = LLVMGetHostCPUFeatures();
-            let codegen_level = if fast_codegen && !optimize {
-                LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
-            } else if optimize {
-                LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
-            } else {
-                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
-            };
             let machine = LLVMCreateTargetMachine(
                 target,
                 triple,
                 cpu,
                 features,
-                codegen_level,
+                codegen_level(optimize, fast_codegen),
                 // Host executables link position-independent everywhere Kira
                 // targets; PIC is required on macOS and the default on modern
                 // Linux distributions.
@@ -189,6 +188,98 @@ impl TargetMachine {
                 ));
             }
             Ok(TargetMachine { machine, triple })
+        }
+    }
+
+    /// Builds a target machine for the machine `target` names, which is not
+    /// this one.
+    ///
+    /// Three things differ from the host path, and each of them is the reason
+    /// the two are separate functions rather than one with a flag:
+    ///
+    /// - the triple is the one the caller asked for, in the `arch-vendor-os-abi`
+    ///   spelling LLVM takes, rather than `LLVMGetDefaultTargetTriple`;
+    /// - the CPU is the architecture's generic one and the feature string is
+    ///   empty, because `LLVMGetHostCPUName` answers about the processor running
+    ///   the compiler and emitting *its* feature set for another machine
+    ///   produces a binary that faults on an instruction the target has never
+    ///   heard of;
+    /// - the relocation model comes from the target instead of being fixed at
+    ///   PIC, because a userland with no dynamic loader has nothing to apply the
+    ///   relocations a position-independent image is full of.
+    ///
+    /// The generator is checked before LLVM is asked anything. A bundle built
+    /// without the target's architecture reports
+    /// [`LlvmError::TargetCodeGeneratorMissing`] by name, the same way the Web
+    /// path reports its own missing generator — the alternative is
+    /// `LLVMGetTargetFromTriple` answering "no available targets are compatible
+    /// with triple", which names neither the bundle nor what to do about it.
+    pub(super) fn cross(
+        target: &CrossTarget,
+        optimize: bool,
+        fast_codegen: bool,
+    ) -> Result<Self, LlvmError> {
+        let requested = target.normalized_triple();
+        check_supported(target)?;
+
+        // SAFETY: the target initializers are idempotent; the triple is an
+        // owned message this struct's drop disposes, and every failure path
+        // disposes what it allocated before returning.
+        unsafe {
+            initialize_targets();
+
+            let spelled = c_string(&requested);
+            let triple = LLVMCreateMessage(spelled.as_ptr());
+            let mut resolved: LLVMTargetRef = std::ptr::null_mut();
+            let mut message: *mut std::os::raw::c_char = std::ptr::null_mut();
+            if LLVMGetTargetFromTriple(triple, &mut resolved, &mut message) != 0 {
+                LLVMDisposeMessage(message);
+                LLVMDisposeMessage(triple);
+                // The generator is linked and registered, so a refusal here is
+                // about the triple itself rather than about the bundle: an
+                // architecture Kira names and LLVM spells differently, or an
+                // operating system this LLVM has no notion of.
+                return Err(LlvmError::TargetTripleUnknown {
+                    target: target.to_string(),
+                    triple: requested,
+                });
+            }
+
+            let cpu = c_string("generic");
+            let features = c_string("");
+            let machine = LLVMCreateTargetMachine(
+                resolved,
+                triple,
+                cpu.as_ptr(),
+                features.as_ptr(),
+                codegen_level(optimize, fast_codegen),
+                relocation_mode(target.relocation()),
+                LLVMCodeModel::LLVMCodeModelDefault,
+            );
+            if machine.is_null() {
+                LLVMDisposeMessage(triple);
+                return Err(LlvmError::Emit(format!(
+                    "LLVM could not create a target machine for `{requested}`"
+                )));
+            }
+            Ok(TargetMachine { machine, triple })
+        }
+    }
+
+    /// Builds the target machine a native build's selection asks for.
+    ///
+    /// The one place the host and cross paths are chosen between, so every
+    /// caller that has a [`NativeTarget`] — the lowering that needs the module's
+    /// data layout, and the emission that needs the code generator — makes the
+    /// same choice from the same value.
+    pub(super) fn for_target(
+        target: &NativeTarget,
+        optimize: bool,
+        fast_codegen: bool,
+    ) -> Result<Self, LlvmError> {
+        match target {
+            NativeTarget::Host => Self::host(optimize, fast_codegen),
+            NativeTarget::Cross(cross) => Self::cross(cross, optimize, fast_codegen),
         }
     }
 
@@ -325,6 +416,75 @@ impl TargetMachine {
     }
 }
 
+/// Reports whether this compiler carries a code generator for `target`, without
+/// building anything or touching LLVM.
+///
+/// Asked before a build starts as well as inside [`TargetMachine::cross`]. A
+/// cross build has several things that must be in place — the code generator,
+/// the runtime archive for that machine, the sysroot — and this is the one that
+/// no amount of arranging the machine can fix: the others are files to fetch or
+/// paths to set, while a missing generator means a different compiler binary.
+/// Reporting it first is what keeps a user from installing an aarch64 runtime
+/// archive to satisfy a build that was never going to emit aarch64 code.
+pub(crate) fn check_supported(target: &CrossTarget) -> Result<(), LlvmError> {
+    let Some(generator) =
+        kira_toolchain::llvm_code_generators::code_generator_for_arch(target.triple().arch())
+    else {
+        return Err(LlvmError::TargetArchitectureUnknown {
+            target: target.to_string(),
+            arch: target.triple().arch().to_owned(),
+        });
+    };
+    if !code_generator_linked(generator) {
+        return Err(LlvmError::TargetCodeGeneratorMissing {
+            target: target.to_string(),
+            generator,
+        });
+    }
+    Ok(())
+}
+
+/// Whether the managed LLVM this compiler links defines `generator`'s
+/// initializers.
+///
+/// The cfgs are the build script's reading of the bundle's own
+/// `llvm-config --targets-built`, so this answers about the archives that are
+/// actually linked in rather than about what the pin asks for. Anything Kira
+/// has no registration for at all answers `false`, which is the honest answer:
+/// an unregistered generator is one LLVM will not resolve a triple against even
+/// if the code is present.
+fn code_generator_linked(generator: &str) -> bool {
+    match generator {
+        "X86" => cfg!(kira_llvm_x86),
+        "AArch64" => cfg!(kira_llvm_aarch64),
+        _ => false,
+    }
+}
+
+/// The code-generation level a build asks for.
+///
+/// Shared by the host and cross paths so the `--release` and fast-codegen
+/// decisions cannot come out differently depending on which machine is being
+/// emitted for. See [`TargetMachine::host`] for why there is no unoptimized
+/// level to choose.
+fn codegen_level(optimize: bool, fast_codegen: bool) -> LLVMCodeGenOptLevel {
+    if fast_codegen && !optimize {
+        LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+    } else if optimize {
+        LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
+    } else {
+        LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
+    }
+}
+
+/// LLVM's spelling of a target's relocation model.
+fn relocation_mode(relocation: RelocationModel) -> LLVMRelocMode {
+    match relocation {
+        RelocationModel::Pic => LLVMRelocMode::LLVMRelocPIC,
+        RelocationModel::Static => LLVMRelocMode::LLVMRelocStatic,
+    }
+}
+
 /// Where an object is written before it is complete.
 ///
 /// Beside the object it becomes, so the rename that finishes it stays within one
@@ -339,10 +499,88 @@ fn pending_path(path: &Path) -> PathBuf {
 
 impl Drop for TargetMachine {
     fn drop(&mut self) {
-        // SAFETY: both were created once in `host` and are released once here.
+        // SAFETY: both were created once by one of the constructors above and
+        // are released once here.
         unsafe {
             LLVMDisposeTargetMachine(self.machine);
             LLVMDisposeMessage(self.triple);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kira_native_lib_definition::TargetTriple;
+
+    fn cross_target(text: &str, relocation: RelocationModel) -> CrossTarget {
+        CrossTarget::new(
+            TargetTriple::parse(text).expect("a valid triple"),
+            relocation,
+        )
+    }
+
+    /// An architecture Kira has no code generator name for is refused by name,
+    /// before LLVM is asked anything, so the diagnostic says which target and
+    /// which architecture rather than reporting an unresolvable triple.
+    #[test]
+    fn a_target_kira_has_no_code_generator_for_is_named() {
+        // Matched rather than unwrapped: a `TargetMachine` owns LLVM handles
+        // and has no `Debug`, so there is nothing for `expect_err` to print.
+        let Err(error) = TargetMachine::cross(
+            &cross_target("mips64-linux-gnu", RelocationModel::Pic),
+            false,
+            false,
+        ) else {
+            panic!("Kira publishes no mips64 code generator");
+        };
+        let text = error.to_string();
+        assert!(text.contains("mips64-linux-gnu"), "{text}");
+        assert!(text.contains("mips64"), "{text}");
+    }
+
+    /// The host's own generator is always linked: `build.rs` refuses a bundle
+    /// without it outright, since such a bundle can emit for nothing at all.
+    #[test]
+    fn this_hosts_code_generator_is_always_linked() {
+        let host = kira_toolchain::llvm_code_generators::host_code_generator()
+            .expect("Kira publishes a bundle for this host");
+        assert!(
+            code_generator_linked(host),
+            "the {host} code generator must be linked into a compiler built for this host",
+        );
+    }
+
+    /// The relocation model reaches LLVM as the model that was asked for. A
+    /// silent PIC would produce a program that starts on a machine with a
+    /// dynamic loader and faults on one without.
+    #[test]
+    fn each_relocation_model_maps_to_its_own_llvm_mode() {
+        assert_eq!(
+            relocation_mode(RelocationModel::Pic),
+            LLVMRelocMode::LLVMRelocPIC
+        );
+        assert_eq!(
+            relocation_mode(RelocationModel::Static),
+            LLVMRelocMode::LLVMRelocStatic
+        );
+    }
+
+    /// Optimization decides the level; fast codegen only lowers it for a build
+    /// that did not ask to be optimized.
+    #[test]
+    fn the_codegen_level_follows_optimization_before_fast_codegen() {
+        assert_eq!(
+            codegen_level(true, true),
+            LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
+        );
+        assert_eq!(
+            codegen_level(false, true),
+            LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+        );
+        assert_eq!(
+            codegen_level(false, false),
+            LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
+        );
     }
 }

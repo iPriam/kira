@@ -117,15 +117,17 @@ impl Command {
                 " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--quit-after 5s] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Build => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--target arch-os-abi] [--sysroot <dir>] [--relocation-model pic|static] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Debug => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [--prepare] [-- <args...>]"
             }
-            Self::Check => " [file|dir] [--timings] [--show-notes]",
+            Self::Check => {
+                " [file|dir] [--device host|wasm32|wasm64] [--target arch-os-abi] [--timings] [--show-notes]"
+            }
             Self::Shader => " build [--target <name>] [--emit <name>]",
             Self::Lint | Self::Sync | Self::Update => " [file|dir]",
-            Self::Ffi => " [file|dir] [--device host|wasm32|wasm64]",
+            Self::Ffi => " [file|dir] [--device host|wasm32|wasm64] [--target arch-os-abi]",
             Self::Profile => " record|report|annotate|script|stat|diff [...]",
             Self::Package | Self::Export => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]"
