@@ -553,7 +553,7 @@ mod tests {
         assert!(lines[0].contains("AArch64"), "{lines:?}");
         assert!(!lines[0].contains("wasm32"), "{lines:?}");
         assert!(
-            lines[0].contains("cannot emit for that architecture"),
+            lines[0].contains("refuses `--target` triples for that architecture"),
             "{lines:?}"
         );
     }
