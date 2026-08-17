@@ -5,7 +5,9 @@ its native libraries, declares bodyless `@FFI.Extern` functions, and calls them
 like any other Kira function. The same package runs identically on the VM, on
 LLVM/native, and on both halves of hybrid, and links for wasm.
 
-A worked example lives in [`examples/ffi`](../examples/ffi).
+A worked example lives in [`examples/ffi`](../examples/ffi). The `@FFI.Extern`
+form's sibling, `@FFI.Syscall`, calls the Linux kernel with no library at all —
+see [Calling the kernel](#calling-the-kernel-ffisyscall).
 
 ## Declaring an extern
 
@@ -527,6 +529,76 @@ mechanism.
 A generated binding needs none of this: autobind resolves each typedef through
 clang and writes the scalar the target actually uses, so `VkFlags` arrives as
 `U32` at every use with nothing to declare.
+
+## Calling the kernel: `@FFI.Syscall`
+
+`@FFI.Extern`'s sibling, and the one member of the family that names no library:
+
+```kira
+@FFI.Syscall { name: write; }
+function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+@FFI.Syscall { name: exit_group; }
+function sysExit(status: Int);
+```
+
+It lowers to one instruction — `svc #0` on AArch64, `syscall` on x86-64 — with
+the call number and the arguments in the registers the kernel reads them out of.
+Nothing is bound, nothing is looked up, and no libc is involved, which is the
+whole point: the program this exists for is PID 1 in an initramfs with no dynamic
+loader, and a `write` that resolves through a shared object is a program that
+never starts. `packages/linux` is the typed surface over it, and
+`tests-kik/syscall-harness` is the suite.
+
+**The program names the call and the compiler owns the number.** That is not a
+convenience. `write` is 64 on AArch64 and 1 on x86-64, and Kira has no
+conditional compilation and no way for a program to ask what machine it is being
+built for — so a number written in Kira source would have to be wrong on one of
+them. Naming the call keeps the source arch-neutral and lets an unsupported call
+or an unsupported machine be refused *by name*, at compile time, instead of
+entering the kernel with a number that means something else there.
+
+The block carries one field, `name`, written the way `man 2` writes it —
+`exit_group`, not `exitGroup` — so a declaration is something a reader can look
+up. `library`, `symbol`, and `abi` are refused rather than ignored: an author who
+wrote `library: libc` believes the call goes through libc, and it does not. The
+calls the compiler has numbers for are `read`, `write`, `mount`, `umount2`,
+`reboot`, `execve`, `wait4`, `exit_group`, and `sync`; any other name is
+`KSEM279`, which lists them.
+
+The signature is register words, because that is what the kernel entry carries:
+at most six arguments (`KSEM282` for a seventh — there is no register for it), and
+each of them an integer of any width, a `RawPtr`, or — as an argument only — a
+`CString`, whose transient NUL-terminated copy is what the pointer register
+receives. A `Float` has no register in the sequence and an aggregate has no single
+word, so both are `KSEM283`. A declaration's written width is what reaches the
+register: `fd: I32` arrives sign-extended exactly as it would through an
+`@FFI.Extern`, so one annotation never disagrees with the other about the same
+signature.
+
+`exit_group` does not return, and the compiler knows: a declaration that names a
+result for it is `KSEM284`, because that is a value nothing can ever produce, and
+the code generator marks the point after the call unreachable so a caller writes
+no statement it could not reach.
+
+Two refusals are about the machine, and they are separate because they have
+separate fixes. `KSEM280` is a target that is not Linux — macOS is deliberately
+excluded even on the same processors, because its numbers are not a stable
+interface: Apple supports libSystem and the numbers move between releases, so
+Kira has none it would stand behind. `KSEM281` is Linux on a processor Kira emits
+no entry sequence for; it emits for `aarch64` and `x86_64`.
+
+Both are asked of the machine the build *targets*, not the one running the
+compiler, so `kira check --target aarch64-linux-gnu` from a Windows host answers
+about the aarch64 program rather than about Windows.
+
+The VM and hybrid engines refuse to start a program that calls the kernel, by
+name, before it runs. A system call is an instruction and the interpreter has
+none of its own to put one in — what a bytecode module carries has to load on
+every machine Kira runs on, including a `wasm32` one where there is no entry
+sequence at all — so reaching the kernel from it would mean the *host's* numbers
+on the *host's* architecture, which is a different call from the one the program
+named. `--backend llvm` is what emits it.
 
 ## Deferred to later milestones
 

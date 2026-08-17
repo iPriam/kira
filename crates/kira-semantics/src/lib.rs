@@ -71,12 +71,14 @@ mod ownership;
 mod place;
 pub(crate) mod stmt;
 mod strings;
+mod syscall;
 mod tasks;
 mod typeck;
 mod types;
 
 pub use analyze::{Analysis, analyze};
 pub use build_kind::BuildKind;
+pub use build_machine::{BuildMachine, host_architecture, host_platform};
 pub use definitions::DefinitionLink;
 pub use exports::exported_name;
 pub use imports::{FileImports, ImportTable};

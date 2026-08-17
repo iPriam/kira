@@ -91,30 +91,42 @@ extern "C" fn report_llvm_fatal_error(reason: *const std::os::raw::c_char) {
 /// # Safety
 ///
 /// Must be called exactly once per process.
+///
+/// The asm *parser* is registered beside the asm printer, and it is not optional
+/// decoration. Emitting an object containing inline assembly means assembling
+/// that assembly, which LLVM does with the target's own parser; without it the
+/// object emitter answers "Inline asm not supported by this streamer because we
+/// don't have an asm parser for this target" and calls `exit`. That is the whole
+/// of what a `@FFI.Syscall` lowers to, so a bundle whose generator is registered
+/// but whose parser is not can emit for a machine right up until a program asks
+/// the kernel for something.
 unsafe fn register_targets() {
     // SAFETY: per the function contract — one registration per process.
     unsafe {
         #[cfg(kira_llvm_aarch64)]
         {
             use llvm_sys::target::{
-                LLVMInitializeAArch64AsmPrinter, LLVMInitializeAArch64Target,
-                LLVMInitializeAArch64TargetInfo, LLVMInitializeAArch64TargetMC,
+                LLVMInitializeAArch64AsmParser, LLVMInitializeAArch64AsmPrinter,
+                LLVMInitializeAArch64Target, LLVMInitializeAArch64TargetInfo,
+                LLVMInitializeAArch64TargetMC,
             };
             LLVMInitializeAArch64TargetInfo();
             LLVMInitializeAArch64Target();
             LLVMInitializeAArch64TargetMC();
             LLVMInitializeAArch64AsmPrinter();
+            LLVMInitializeAArch64AsmParser();
         }
         #[cfg(kira_llvm_x86)]
         {
             use llvm_sys::target::{
-                LLVMInitializeX86AsmPrinter, LLVMInitializeX86Target, LLVMInitializeX86TargetInfo,
-                LLVMInitializeX86TargetMC,
+                LLVMInitializeX86AsmParser, LLVMInitializeX86AsmPrinter, LLVMInitializeX86Target,
+                LLVMInitializeX86TargetInfo, LLVMInitializeX86TargetMC,
             };
             LLVMInitializeX86TargetInfo();
             LLVMInitializeX86Target();
             LLVMInitializeX86TargetMC();
             LLVMInitializeX86AsmPrinter();
+            LLVMInitializeX86AsmParser();
         }
         #[cfg(kira_llvm_webassembly)]
         {
@@ -454,11 +466,8 @@ pub(crate) fn check_supported(target: &CrossTarget) -> Result<(), LlvmError> {
 /// an unregistered generator is one LLVM will not resolve a triple against even
 /// if the code is present.
 fn code_generator_linked(generator: &str) -> bool {
-    match generator {
-        "X86" => cfg!(kira_llvm_x86),
-        "AArch64" => cfg!(kira_llvm_aarch64),
-        _ => false,
-    }
+    matches!(generator, "X86" if cfg!(kira_llvm_x86))
+        || matches!(generator, "AArch64" if cfg!(kira_llvm_aarch64))
 }
 
 /// The code-generation level a build asks for.

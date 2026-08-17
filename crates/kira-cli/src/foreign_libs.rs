@@ -125,6 +125,13 @@ pub fn resolve(
 
     let mut inputs = NativeLinkInputs::default();
     for (index, entry) in program.foreign_imports.iter().enumerate() {
+        // A system call names the kernel, which no package declares and no link
+        // line mentions. Resolving it would ask the catalog for a library called
+        // `""` and report it undeclared, sending the author to write a
+        // `nativeLibraries` row that cannot exist.
+        if !entry.import.abi().binds_a_library_symbol() {
+            continue;
+        }
         let library = entry.import.library();
         let symbol = catalog.intern_library(library).map_err(|_| {
             ForeignResolveError::NameSpaceExhausted {

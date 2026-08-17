@@ -461,11 +461,20 @@ fn ffi_link_inputs(
     foreign_link: &NativeLinkInputs,
     unavailable: &[usize],
 ) -> Result<NativeLinkInputs, LlvmError> {
+    // A system call needs none of this. It is an instruction, so there is no
+    // address for libffi to call through and no shared object for the bundled
+    // one to be found in — and dragging libffi onto the link line for a program
+    // whose only foreign calls are system calls is exactly the failure this
+    // capability exists to avoid: the freestanding image would carry a
+    // dependency on `libffi.so.8` and be refused by a kernel that has no loader
+    // to find it.
     let has_callable_foreign = program
         .foreign_imports
         .iter()
         .enumerate()
-        .any(|(index, _)| !unavailable.contains(&index));
+        .any(|(index, entry)| {
+            entry.import.abi().binds_a_library_symbol() && !unavailable.contains(&index)
+        });
     if !has_callable_foreign && program.foreign_callbacks.is_empty() {
         return Ok(foreign_link.clone());
     }

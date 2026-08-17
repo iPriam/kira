@@ -3,10 +3,13 @@
 //! Two grammars share this file because they share a head — `@FFI.<Member>`
 //! followed by a `{ key: value; ... }` block:
 //!
-//! * `@FFI.Extern` rides a bodyless *function* and names a foreign C symbol.
-//!   Its block is `identifier : identifier ;` throughout, recorded verbatim as
-//!   [`ForeignField`]s; meaning (required, duplicate, the `abi` value) is the
-//!   analyzer's.
+//! * `@FFI.Extern` and `@FFI.Syscall` ride a bodyless *function*: one names a
+//!   foreign C symbol, the other a Linux system call. Their blocks are
+//!   `identifier : identifier ;` throughout, recorded verbatim as
+//!   [`ForeignField`]s; meaning (which keys are required, duplicates, the `abi`
+//!   value, whether a syscall name exists) is the analyzer's. Which form was
+//!   written rides along as a [`ForeignKind`], because the two differ in what a
+//!   diagnostic has to call them and in nothing the parser decides.
 //! * `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback` ride a *struct* and each
 //!   declares a C type. Their blocks carry richer values — a type, a bracketed
 //!   type list, an integer — so they parse into a typed [`FfiTypeKind`] rather
@@ -15,7 +18,9 @@
 
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{FfiTypeKind, FfiTypeMark, ForeignField, ForeignMark, TypeRefId};
+use kira_syntax_model::ast::{
+    FfiTypeKind, FfiTypeMark, ForeignField, ForeignKind, ForeignMark, TypeRefId,
+};
 
 use super::Annotations;
 use crate::Parser;
@@ -88,8 +93,8 @@ impl FfiBlockFields {
 
 impl Parser<'_> {
     /// Parses a qualified annotation — the cursor is on its first identifier and
-    /// a `. identifier` follows. `@FFI.Extern` and the five struct-attached
-    /// `@FFI.*` forms are known; anything else is [`KPAR053`].
+    /// a `. identifier` follows. `@FFI.Extern`, `@FFI.Syscall`, and the five
+    /// struct-attached `@FFI.*` forms are known; anything else is [`KPAR053`].
     pub(crate) fn parse_qualified_annotation(&mut self, annotations: &mut Annotations) {
         let root_span = self.current().span;
         let root = self.text_of(root_span).to_owned();
@@ -100,10 +105,16 @@ impl Parser<'_> {
         self.bump(); // `.`
         self.bump(); // member identifier
 
-        if root == "FFI" && member == "Extern" {
+        let bodyless = match (root.as_str(), member.as_str()) {
+            ("FFI", "Extern") => Some(ForeignKind::Extern),
+            ("FFI", "Syscall") => Some(ForeignKind::Syscall),
+            _ => None,
+        };
+        if let Some(kind) = bodyless {
             let (fields, block_span) =
-                self.parse_ffi_block_span(name_span, |parser| parser.parse_foreign_block());
+                self.parse_ffi_block_span(name_span, |parser| parser.parse_foreign_block(kind));
             annotations.foreign = Some(ForeignMark {
+                kind,
                 span: name_span,
                 block_span,
                 fields,
@@ -129,7 +140,7 @@ impl Parser<'_> {
             "KPAR053",
             format!(
                 "unknown qualified annotation `@{root}.{member}`; the `@FFI.*` family is \
-                 `Extern`, `Struct`, `Pointer`, `Alias`, `Array`, and `Callback`"
+                 `Extern`, `Syscall`, `Struct`, `Pointer`, `Alias`, `Array`, and `Callback`"
             ),
         );
         // Skip a `{ ... }` payload so recovery lands on the declaration.
@@ -159,28 +170,35 @@ impl Parser<'_> {
         (value, block_span)
     }
 
-    /// Parses the `{ key: value; ... }` block of an `@FFI.Extern` annotation.
+    /// Parses the `{ key: value; ... }` block of an `@FFI.Extern` or
+    /// `@FFI.Syscall` annotation.
     ///
     /// Each field is `identifier : identifier ;`. Every structural mistake — a
     /// missing brace, a non-identifier key, a missing colon, a non-identifier
     /// value, a missing terminator — is reported with its own code, and recovery
     /// advances to the next field so one bad field does not swallow the rest.
-    /// Field *meaning* (required, duplicate, unknown, the `abi` value) is the
-    /// analyzer's, not the parser's.
-    fn parse_foreign_block(&mut self) -> Vec<ForeignField> {
+    /// Field *meaning* (required, duplicate, unknown, the `abi` value, whether a
+    /// syscall name exists) is the analyzer's, not the parser's.
+    ///
+    /// `kind` reaches here only so a message names the form the author actually
+    /// wrote: told "expected `{` to open the `@FFI.Extern` block" about an
+    /// `@FFI.Syscall`, a reader looks for a mistake in a declaration they never
+    /// wrote.
+    fn parse_foreign_block(&mut self, kind: ForeignKind) -> Vec<ForeignField> {
+        let annotation = kind.annotation();
         let mut fields = Vec::new();
         if !self.at(TokenKind::LBrace) {
             self.error(
                 self.current().span,
                 "KPAR048",
-                "expected `{` to open the `@FFI.Extern` block",
+                format!("expected `{{` to open the `{annotation}` block"),
             );
             return fields;
         }
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            if let Some(field) = self.parse_foreign_field() {
+            if let Some(field) = self.parse_foreign_field(annotation) {
                 fields.push(field);
             }
             // Force progress: a field that consumed nothing would spin.
@@ -194,12 +212,12 @@ impl Parser<'_> {
 
     /// Parses one `identifier : identifier ;` field, or reports why it could
     /// not and returns `None`.
-    fn parse_foreign_field(&mut self) -> Option<ForeignField> {
+    fn parse_foreign_field(&mut self, annotation: &str) -> Option<ForeignField> {
         if !self.at(TokenKind::Identifier) {
             self.error(
                 self.current().span,
                 "KPAR049",
-                "expected a field name in the `@FFI.Extern` block",
+                format!("expected a field name in the `{annotation}` block"),
             );
             return None;
         }
@@ -210,7 +228,7 @@ impl Parser<'_> {
             self.error(
                 self.current().span,
                 "KPAR050",
-                "expected `:` after an `@FFI.Extern` field name",
+                format!("expected `:` after an `{annotation}` field name"),
             );
             return None;
         }
@@ -219,7 +237,7 @@ impl Parser<'_> {
             self.error(
                 self.current().span,
                 "KPAR051",
-                "expected a field value in the `@FFI.Extern` block",
+                format!("expected a field value in the `{annotation}` block"),
             );
             return None;
         }
@@ -230,7 +248,7 @@ impl Parser<'_> {
             self.error(
                 self.current().span,
                 "KPAR052",
-                "expected `;` after an `@FFI.Extern` field",
+                format!("expected `;` after an `{annotation}` field"),
             );
             return Some(ForeignField {
                 key,

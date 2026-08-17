@@ -23,6 +23,13 @@ impl FunctionLowering<'_, '_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         let idx = index as usize;
         let import = self.codegen.program.foreign_imports[idx].import.clone();
+        // A system call is reached by an instruction rather than by a symbol, so
+        // none of the marshalling below applies to it: nothing is bound, nothing
+        // is looked up, and its arguments are register words rather than C
+        // storage libffi is handed the address of.
+        if !import.abi().binds_a_library_symbol() {
+            return self.lower_syscall_call(index, args, result_ty);
+        }
         let signature = import.signature();
         let params = signature.parameters().to_vec();
         let result_spec = signature.result();

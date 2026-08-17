@@ -24,6 +24,15 @@ line is the source of truth. A test-only upward reference belongs in
 `kira-lsp` is the language-server surface over the salsa frontend, consuming the
 same frontend the compiler does.
 
+Kira source ships in three places, and the difference is who loads it.
+`foundation/` is the standard library: `import Foundation` finds it beside the
+compiler and loads every file under it, on every platform. `packages/` holds Kira
+libraries a program depends on *by path*, which is where anything platform-bound
+belongs — `packages/linux` reaches the Linux kernel through `@FFI.Syscall`, and a
+declaration like that is refused at compile time on a target that cannot reach it,
+so inside Foundation it would refuse every Windows and macOS build of every
+program. `tests-kik/` holds the harness packages.
+
 `kira-mcp` and `kira-lldb-mcp` are the two agent-facing servers, sharing their
 JSON-RPC framing through `kira-mcp-protocol`. They are split by lifetime rather
 than by subject: `kira-mcp` answers one compiler question per call, while a

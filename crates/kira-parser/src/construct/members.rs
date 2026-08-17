@@ -71,8 +71,7 @@ impl Parser<'_> {
             }
             "Consuming" => {
                 if self.at(TokenKind::Function) {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
-                    {
+                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
                         body.methods.push(ConstructMethod {
                             computed: false,
                             lifecycle: false,
@@ -115,7 +114,7 @@ impl Parser<'_> {
                 self.parse_construct_let(&mut discard, self.at(TokenKind::Var));
             }
             TokenKind::Function => {
-                self.parse_function(false, Execution::Inherited, false);
+                self.parse_function(false, Execution::Inherited, None);
             }
             _ => {
                 // Nothing recognizable follows; step over one token so the loop

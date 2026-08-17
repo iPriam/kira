@@ -1,4 +1,5 @@
-//! Parsing the `@FFI.Extern` marker and the bodyless extern it rides on.
+//! Parsing the `@FFI.Extern` and `@FFI.Syscall` markers and the bodyless
+//! declarations they ride on.
 //!
 //! The parser's whole job here is to record what was written — the qualified
 //! annotation name, the `key: value;` block, and the terminating `;` in place
@@ -9,14 +10,14 @@
 use kira_diagnostics::Diagnostic;
 
 use super::*;
-use kira_syntax_model::ast::{FfiTypeKind, ForeignMark};
+use kira_syntax_model::ast::{FfiTypeKind, ForeignKind, ForeignMark};
 
 /// The foreign marker of the one function in `text`.
 fn only_foreign(result: &ParseResult) -> &ForeignMark {
     only_function(result)
         .foreign
         .as_ref()
-        .expect("the function carries an `@FFI.Extern` marker")
+        .expect("the function carries an `@FFI.Extern` or `@FFI.Syscall` marker")
 }
 
 /// The diagnostic codes `text` produced, in order.
@@ -74,6 +75,14 @@ fn a_bodyless_ordinary_function_is_rejected() {
     assert_eq!(codes(&result), vec!["KPAR055"]);
     // The parser still yields a usable function: it never bails.
     assert!(matches!(result.tree.items(), [Item::Function(_)]));
+    // Both forms that may be bodyless are named, so the message says what to add
+    // rather than only what is wrong.
+    let named = result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("only an `@FFI.Extern` or `@FFI.Syscall` function is bodyless")
+    });
+    assert!(named, "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -121,8 +130,116 @@ fn a_missing_field_semicolon_is_rejected() {
 fn an_unknown_qualified_annotation_is_rejected() {
     let result = parse_text("@FFI.Import { library: l; }\nfunction add() -> I32;");
     assert!(codes(&result).contains(&"KPAR053"), "{:?}", codes(&result));
-    // A dotted name other than `FFI.Extern` records no foreign marker.
+    // A dotted name that is neither bodyless form records no foreign marker.
     assert!(only_function(&result).foreign.is_none());
+    // The message lists the family, so an author who guessed wrong can read the
+    // right member out of the refusal.
+    let listed = result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("`Extern`, `Syscall`"));
+    assert!(listed, "{:?}", result.diagnostics);
+}
+
+/// `@FFI.Syscall` shares the bodyless-function grammar with `@FFI.Extern` and
+/// differs only in the kind it records, which is what a diagnostic reads to name
+/// the form the author wrote.
+#[test]
+fn a_bodyless_syscall_parses_with_its_block() {
+    let result = parse_text(
+        "@FFI.Syscall { name: write; }\n\
+         function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let function = only_function(&result);
+    assert!(function.body.stmts.is_empty());
+    assert_eq!(function.params.len(), 3);
+    let mark = only_foreign(&result);
+    assert_eq!(mark.kind, ForeignKind::Syscall);
+    assert_eq!(mark.kind.annotation(), "@FFI.Syscall");
+    let fields: Vec<(String, String)> = mark
+        .fields
+        .iter()
+        .map(|field| {
+            (
+                result.interner.resolve(field.key).to_owned(),
+                result.interner.resolve(field.value).to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(fields, vec![("name".to_owned(), "write".to_owned())]);
+}
+
+/// The kernel's own spelling of a call carries an underscore, so it has to lex as
+/// one identifier: `exit_group` read as `exit` would resolve to a call that does
+/// not exist and refuse a declaration that is correct.
+#[test]
+fn a_kernel_name_with_an_underscore_is_one_field_value() {
+    let result = parse_text("@FFI.Syscall { name: exit_group; }\nfunction sysExit(status: Int);");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let mark = only_foreign(&result);
+    let [field] = mark.fields.as_slice() else {
+        panic!("one field, found {:?}", mark.fields);
+    };
+    assert_eq!(result.interner.resolve(field.value), "exit_group");
+}
+
+/// The `@FFI.Extern` marker records `ForeignKind::Extern`, so the two forms are
+/// told apart by what the parser recorded rather than by re-reading the source.
+#[test]
+fn an_extern_records_the_other_kind() {
+    let result =
+        parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nfunction add(a: I32) -> I32;");
+    assert_eq!(only_foreign(&result).kind, ForeignKind::Extern);
+}
+
+/// A `@FFI.Syscall` function is bodyless for the same reason an extern is, and
+/// the refusal names the form that was written — told about `@FFI.Extern`, a
+/// reader looks for a declaration they never wrote.
+#[test]
+fn a_syscall_with_a_body_is_rejected_by_its_own_name() {
+    let result = parse_text("@FFI.Syscall { name: sync; }\nfunction sysSync() { return }");
+    assert_eq!(codes(&result), vec!["KPAR054"]);
+    let named = result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("an `@FFI.Syscall` function has no body")
+    });
+    assert!(named, "{:?}", result.diagnostics);
+}
+
+/// Every structural mistake in the block reports the same code it does for an
+/// extern, with the written form's name in the message.
+#[test]
+fn a_malformed_syscall_block_reports_by_the_form_it_names() {
+    let result = parse_text("@FFI.Syscall function sysSync();");
+    assert_eq!(codes(&result), vec!["KPAR048"]);
+    let named = result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("open the `@FFI.Syscall` block"));
+    assert!(named, "{:?}", result.diagnostics);
+
+    let missing_value = parse_text("@FFI.Syscall { name: 42; }\nfunction sysSync();");
+    assert!(
+        codes(&missing_value).contains(&"KPAR051"),
+        "{:?}",
+        codes(&missing_value)
+    );
+}
+
+/// `@FFI.Syscall` declares a function, so on a struct it is refused by the same
+/// rule `@FFI.Extern` is — and by its own name.
+#[test]
+fn a_syscall_on_a_struct_is_rejected_by_its_own_name() {
+    let result = parse_text("@FFI.Syscall { name: sync; }\nstruct S {\n    var a: Int\n}");
+    assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
+    let named = result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("`@FFI.Syscall` annotates a foreign")
+    });
+    assert!(named, "{:?}", result.diagnostics);
 }
 
 /// The `@FFI.*` type mark of the one struct in `text`.

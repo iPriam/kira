@@ -36,6 +36,7 @@ mod native_state_enums;
 mod native_state_values;
 mod plan;
 mod symbols;
+mod syscall;
 mod target;
 mod types;
 mod values;

@@ -29,6 +29,7 @@ mod foreign_field;
 mod math;
 mod operators;
 mod stmt;
+mod syscall;
 
 use kira_ir::{IrExprId, IrFunction};
 use kira_semantics_model::Type;

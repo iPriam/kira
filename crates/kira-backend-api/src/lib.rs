@@ -145,12 +145,21 @@ pub enum ForeignLinkError {
 /// becomes the interned `Symbol` the catalog is keyed by — no separate interner
 /// is passed, and none can drift out of sync, because the catalog owns the only
 /// one involved.
+///
+/// An import that binds no library symbol is skipped rather than resolved. A
+/// `@FFI.Syscall` names the kernel, which is not a native library and has no
+/// manifest row to declare: asked to resolve one, the catalog would report an
+/// undeclared library called `""` and send the author looking for a
+/// `nativeLibraries` entry that cannot exist.
 pub fn validate_foreign_imports(
     imports: &[ForeignImport],
     catalog: &mut ResolvedNativeLibraries,
     target: &TargetTriple,
 ) -> Result<(), ForeignLinkError> {
     for import in imports {
+        if !import.abi().binds_a_library_symbol() {
+            continue;
+        }
         let symbol = catalog.intern_library(import.library()).map_err(|_| {
             ForeignLinkError::NameSpaceExhausted {
                 library: import.library().to_owned(),
