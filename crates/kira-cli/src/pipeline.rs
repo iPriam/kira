@@ -53,6 +53,10 @@ mod lint;
 
 pub use artifacts::{build, export, package};
 pub use commands::{check, debug, live, run, test};
+/// The interpreter's system-call gate, for the commands that start a VM outside
+/// this module. `debug` builds its own VM target, so it has to ask the same
+/// question `run` and `test` ask — and say the same thing about the answer.
+pub(crate) use execute::{syscall_refusal, unservable_syscalls};
 pub use lint::lint;
 
 /// Process exit code for a clean run.

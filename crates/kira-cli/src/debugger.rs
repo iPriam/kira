@@ -169,6 +169,15 @@ pub fn run_vm(
     options: &DebugOptions,
     info: &DebugInfo,
 ) -> i32 {
+    // The same gate `run` and `test` apply, asked before anything is compiled: a
+    // debugger session on a program the interpreter cannot serve would stop at
+    // the call with the session already open, which is the worst place to learn
+    // that the engine was the wrong one.
+    let refused = crate::pipeline::unservable_syscalls(ir);
+    if !refused.is_empty() {
+        err!("kira debug: {}", crate::pipeline::syscall_refusal(&refused));
+        return EXIT_FAILURE;
+    }
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,
         Err(error) => {

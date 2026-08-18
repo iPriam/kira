@@ -10,7 +10,7 @@ use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_main::StdoutHost;
-use kira_runtime_abi::{NativeStateHost, env};
+use kira_runtime_abi::{LinuxSyscall, NativeStateHost, env};
 
 use super::{EXIT_FAILURE, EXIT_OK, EXIT_USAGE};
 use crate::options::CompileOptions;
@@ -38,42 +38,76 @@ pub(super) fn run_web(
     }
 }
 
-/// Refuses the pure interpreter a program that enters the kernel, naming the
-/// calls, and answers whether it did.
+/// The system calls `ir` names that no interpreter can serve, each once.
 ///
-/// The VM is the one engine with nowhere to put the instruction. A `@FFI.Syscall`
-/// *is* an instruction — `svc #0`, `syscall` — and a bytecode module carries no
-/// instruction stream of its own: what it carries has to load on every machine
-/// Kira runs on, including a `wasm32` one where there is no kernel entry sequence
-/// at all.
+/// The interpreter emits no instruction: it asks its host, through the same
+/// `HostCapabilities` seam it reaches a file or a native function by, and the
+/// host makes the call in the process it is standing in. That is enough for a
+/// call that acts on a file descriptor and says what it did — a `--backend vm`
+/// run of such a program can be compared byte for byte against a native one,
+/// which is the oracle these programs otherwise have none of.
 ///
-/// Hybrid is not refused, and the difference is real rather than a concession. Its
-/// native half is compiled through the same LLVM backend a `--backend llvm` build
-/// is, so a bodyless declaration's body is machine code there exactly as it is in
-/// an executable — which is already how hybrid calls an `@FFI.Extern`. The
-/// bytecode half reaches it the way it reaches any other native function.
+/// It is not enough for the rest, and
+/// [`LinuxSyscall::servable_by_an_interpreter`] carries the reason each is
+/// refused: under the interpreter the process is the interpreter, not the
+/// program, so `execve` replaces the VM's own image, `exit_group` ends it
+/// mid-program, `wait4` reaps its children, and `mount` and `reboot` act on the
+/// machine the developer is sitting at.
 ///
-/// Refused here, before the program starts, for the same reason `run` refuses a
-/// cross target by name: the engine is chosen on the command line, so the fix is
-/// on the command line, and a program that has already begun writing output is
-/// past the point where that can be said.
-fn refuse_syscalls_on_the_vm(ir: &IrProgram) -> bool {
-    let named: Vec<&str> = ir
+/// Decided from what the program *names* rather than from what it reaches: an
+/// import table has no call graph in it, and a package like `packages/linux`
+/// that declares the whole kernel surface is refused whether or not this
+/// program calls the six.
+pub(crate) fn unservable_syscalls(ir: &IrProgram) -> Vec<LinuxSyscall> {
+    let mut refused: Vec<LinuxSyscall> = Vec::new();
+    for call in ir
         .foreign_imports
         .iter()
-        .filter(|entry| entry.import.as_syscall().is_some())
-        .map(|entry| entry.import.symbol())
-        .collect();
-    if named.is_empty() {
+        .filter_map(|entry| entry.import.as_syscall())
+    {
+        // Once per call rather than once per declaration: two wrappers around
+        // the same kernel entry are one thing to say about this program.
+        if !call.servable_by_an_interpreter() && !refused.contains(&call) {
+            refused.push(call);
+        }
+    }
+    refused
+}
+
+/// What to tell an author who pointed the interpreter at `refused`.
+///
+/// One sentence, built here rather than at each command that reports it, so
+/// `run`, `test` and `debug` cannot come to say different things about the same
+/// program. Each call is named with what it would have done, because "the VM
+/// cannot do this" leaves the reader to guess whether the fix is the program or
+/// the command line — and both engines that do work are named for the same
+/// reason.
+pub(crate) fn syscall_refusal(refused: &[LinuxSyscall]) -> String {
+    let named = refused
+        .iter()
+        .map(|call| format!("`{}` {}", call.label(), call.interpreter_refusal()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "this program calls the Linux kernel directly, and the VM engine cannot serve every call \
+         it names: under the interpreter the process is the interpreter rather than the program, \
+         so {named}. Run it with `--backend llvm` or `--backend hybrid`, both of which emit the \
+         kernel entry sequence into the program's own image."
+    )
+}
+
+/// Refuses the pure interpreter such a program and answers whether it did.
+///
+/// Refused before the program starts, for the same reason `run` refuses a cross
+/// target by name: the engine is chosen on the command line, so the fix is on
+/// the command line, and a program that has already begun writing output is past
+/// the point where that can be said.
+pub(super) fn refuse_syscalls_on_the_vm(ir: &IrProgram) -> bool {
+    let refused = unservable_syscalls(ir);
+    if refused.is_empty() {
         return false;
     }
-    err!(
-        "kira: this program calls the Linux kernel directly ({}), which the VM engine cannot do: a \
-         system call is an instruction, and the interpreter has no instruction stream of its own \
-         to put one in. Run it with `--backend llvm` or `--backend hybrid`, both of which emit the \
-         kernel entry sequence for the machine they are building for.",
-        named.join(", ")
-    );
+    err!("kira: {}", syscall_refusal(&refused));
     true
 }
 
@@ -200,6 +234,13 @@ fn bindings_from_paths(
         .iter()
         .zip(paths)
         .map(|(entry, path)| {
+            // The module is what says a row is a system call, not the manifest:
+            // the ABI travelled into the `.kbc` with the import table, so it is
+            // already here and a second token in the manifest would be a second
+            // place for it to be wrong.
+            if let Some(call) = entry.as_syscall() {
+                return kira_main::ForeignBinding::syscall(call, entry.signature().clone());
+            }
             path.map_or_else(
                 || kira_main::ForeignBinding::unavailable(entry.signature().clone()),
                 |path| {
@@ -352,6 +393,49 @@ pub(super) fn build_native(
         Err(error) => {
             err!("kira: {error}");
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The refusal names each call with what it would have done, and offers the
+    /// two engines that do work.
+    ///
+    /// A message that said only "the VM cannot make system calls" would now be
+    /// wrong as well as unhelpful — four of them it can — so what a reader has
+    /// to be given is the effect that makes *this* call the interpreter's
+    /// business rather than the program's.
+    #[test]
+    fn the_refusal_names_every_call_with_the_effect_that_refuses_it() {
+        let message = syscall_refusal(&[LinuxSyscall::Mount, LinuxSyscall::ExitGroup]);
+        assert!(
+            message.contains("`mount` would mount a filesystem"),
+            "{message}"
+        );
+        assert!(
+            message.contains("`exit_group` would end the interpreter itself"),
+            "{message}"
+        );
+        assert!(
+            message.contains("the process is the interpreter rather than the program"),
+            "{message}"
+        );
+        assert!(
+            message.contains("--backend llvm") && message.contains("--backend hybrid"),
+            "{message}"
+        );
+    }
+
+    /// A served call never appears in a refusal, whatever else does. Naming one
+    /// would send an author to change a call that works on this engine.
+    #[test]
+    fn a_refusal_never_names_a_call_the_interpreter_serves() {
+        let message = syscall_refusal(&[LinuxSyscall::Execve, LinuxSyscall::Wait4]);
+        for served in ["`read`", "`write`", "`sync`", "`ppoll`"] {
+            assert!(!message.contains(served), "{served} in: {message}");
         }
     }
 }
