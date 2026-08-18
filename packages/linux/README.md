@@ -18,16 +18,22 @@ ordinary Kira code reaches across the bridge exactly as it reaches any other
 
 The pure VM refuses a program that depends on this package, and the reason is
 worth being exact about, because it is not that an interpreter cannot enter the
-kernel — it asks its host, and `read`, `write`, `sync` and `ppoll` are served
-that way. It is that this package declares the whole surface, including `mount`,
-`umount2`, `reboot`, `execve`, `wait4` and `exit_group`, and under the
-interpreter the process is the interpreter rather than the program: those six
-would act on the VM's own process or on the developer's machine. The refusal
-names each of them with what it would have done, and it is decided from what a
-program *names* rather than what it calls — so importing this package for
-`linuxPrint` alone is still refused on the VM. A program that wants both wrappers
-and the interpreter declares the calls it makes itself, as
-`tests-kik/syscall-parity-harness` does.
+kernel — it asks its host, and `read`, `write` and `ppoll` are served that way.
+It is that this package declares the whole surface, including `mount`, `umount2`,
+`reboot`, `execve`, `wait4`, `exit_group` and `sync`, and under the interpreter
+the process is the interpreter rather than the program: those seven would act on
+the VM's own process or on the developer's machine. The refusal names each of
+them with what it would have done, and it is decided from what a program *names*
+rather than what it calls — so importing this package for `linuxPrint` alone is
+still refused on the VM. A program that wants both wrappers and the interpreter
+declares the calls it makes itself, as `tests-kik/syscall-parity-harness` does.
+
+`sync` is in that list and is the one that surprises. It is filesystem work, so
+it reads as descriptor work, but it takes no descriptor: it writes back every
+filesystem mounted on the machine rather than the program's own files, which is
+the `mount`/`reboot` case and not the `read`/`write` one. A flush that took a
+descriptor — `fsync` — is the shape that would be servable, and this package
+does not declare one.
 
 That is what makes a Kira program able to be PID 1 in an initramfs: build it with
 

@@ -3,19 +3,24 @@ import Foundation
 // SkpSyscallTests.kira — the system calls all three engines make.
 // All top-level names use the `skp`/`Skp` prefix.
 //
-// The four calls declared here are the ones an interpreter can serve: they act
-// on file descriptors and answer what they did, so the host making one on the
-// program's behalf is indistinguishable from the program having made it. That
-// is what lets the same source run on `vm`, `llvm` and `hybrid` and be compared.
+// The three calls declared here are the ones an interpreter can serve: each
+// takes a descriptor the program already holds and answers what it did, so the
+// host making one on the program's behalf is indistinguishable from the program
+// having made it. That is what lets the same source run on `vm`, `llvm` and
+// `hybrid` and be compared.
 //
-// Nothing here declares `mount`, `execve`, `wait4`, `exit_group`, `umount2` or
-// `reboot`, and that absence is the point rather than an omission: the VM
-// refuses a program that *names* one, before it starts. Those six live in
+// Nothing here declares `mount`, `execve`, `wait4`, `exit_group`, `umount2`,
+// `reboot` or `sync`, and that absence is the point rather than an omission: the
+// VM refuses a program that *names* one, before it starts. Those seven live in
 // `tests-kik/syscall-harness`, which is why there are two packages.
 //
+// `sync` is the one worth naming, because it was declared here first. It takes
+// no descriptor — it flushes every filesystem on the machine — so a host serving
+// it acts on the developer's box rather than on the program's files.
+//
 // Every assertion is one that does not depend on who ran the suite: a bad file
-// descriptor is `EBADF` for everyone, an unreadable descriptor array is
-// `EFAULT`, and `sync` succeeds unprivileged.
+// descriptor is `EBADF` for everyone, and an unreadable descriptor array is
+// `EFAULT`.
 
 // ─── The `-errno` convention ────────────────────────────────────────────────
 
@@ -71,9 +76,6 @@ function skpSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
 @FFI.Syscall { name: read; }
 function skpSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int;
 
-@FFI.Syscall { name: sync; }
-function skpSysSync() -> Int;
-
 @FFI.Syscall { name: ppoll; }
 function skpSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int;
 
@@ -93,10 +95,6 @@ function skpWrite(fd: Int, text: borrow String) -> Result<Int, SkpError> {
 
 function skpRead(fd: Int, buffer: RawPtr, count: Int) -> Result<Int, SkpError> {
     return skpDecode(skpSysRead(fd, buffer, U64(count)))
-}
-
-function skpSync() -> Result<Int, SkpError> {
-    return skpDecode(skpSysSync())
 }
 
 // `ppoll` over a descriptor array the kernel cannot read. The wait itself
@@ -172,13 +170,12 @@ Test SkpReadOfNoBytesStillChecksTheDescriptor {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-// ─── No arguments: `sync` ───────────────────────────────────────────────────
+// ─── No arguments: not here ───────────────────────────────────────────────
 
-// The arity-0 entry sequence, which names only its output and the call number.
-Test SkpSyncTakesNoArgumentsAndSucceeds {
-    test { return skpValue(skpSync()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
-}
+// The arity-0 entry sequence has no case in this package and cannot have one:
+// every call an interpreter may serve takes a descriptor, so none of them takes
+// zero arguments. `SkxSyncTakesNoArgumentsAndSucceeds` in
+// `tests-kik/syscall-harness` covers that sequence, on the engines that emit it.
 
 // ─── Four arguments: `ppoll` ────────────────────────────────────────────────
 

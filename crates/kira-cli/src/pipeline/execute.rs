@@ -51,13 +51,17 @@ pub(super) fn run_web(
 /// [`LinuxSyscall::servable_by_an_interpreter`] carries the reason each is
 /// refused: under the interpreter the process is the interpreter, not the
 /// program, so `execve` replaces the VM's own image, `exit_group` ends it
-/// mid-program, `wait4` reaps its children, and `mount` and `reboot` act on the
-/// machine the developer is sitting at.
+/// mid-program, `wait4` reaps its children, and `mount`, `reboot` and `sync` act
+/// on the machine the developer is sitting at.
+///
+/// `sync` is the one that has to be argued rather than seen. It is filesystem
+/// work, so it reads as descriptor work — but it takes no descriptor and writes
+/// back every mount on the box, which is the `mount`/`reboot` case exactly.
 ///
 /// Decided from what the program *names* rather than from what it reaches: an
 /// import table has no call graph in it, and a package like `packages/linux`
 /// that declares the whole kernel surface is refused whether or not this
-/// program calls the six.
+/// program calls the seven.
 pub(crate) fn unservable_syscalls(ir: &IrProgram) -> Vec<LinuxSyscall> {
     let mut refused: Vec<LinuxSyscall> = Vec::new();
     for call in ir
@@ -405,7 +409,7 @@ mod tests {
     /// two engines that do work.
     ///
     /// A message that said only "the VM cannot make system calls" would now be
-    /// wrong as well as unhelpful — four of them it can — so what a reader has
+    /// wrong as well as unhelpful — three of them it can — so what a reader has
     /// to be given is the effect that makes *this* call the interpreter's
     /// business rather than the program's.
     #[test]
@@ -434,7 +438,7 @@ mod tests {
     #[test]
     fn a_refusal_never_names_a_call_the_interpreter_serves() {
         let message = syscall_refusal(&[LinuxSyscall::Execve, LinuxSyscall::Wait4]);
-        for served in ["`read`", "`write`", "`sync`", "`ppoll`"] {
+        for served in ["`read`", "`write`", "`ppoll`"] {
             assert!(!message.contains(served), "{served} in: {message}");
         }
     }

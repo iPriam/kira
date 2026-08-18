@@ -217,11 +217,16 @@ impl LinuxSyscall {
     /// of them — **under the interpreter the process is the interpreter, not
     /// the program.**
     ///
-    /// The four that answer yes act only on file descriptors and say what they
-    /// did. Serving one is indistinguishable from the program having made it,
-    /// so a `--backend vm` run of a program that only reads, writes, waits on
-    /// descriptors, or flushes can be compared byte for byte against a native
-    /// run — which is the oracle a `@FFI.Syscall` otherwise has none of.
+    /// The three that answer yes take a descriptor and say what they did.
+    /// Serving one is indistinguishable from the program having made it, so a
+    /// `--backend vm` run of a program that only reads, writes, or waits on
+    /// descriptors can be compared byte for byte against a native run — which is
+    /// the oracle a `@FFI.Syscall` otherwise has none of.
+    ///
+    /// Taking a descriptor is the whole of the test, and it is a narrower test
+    /// than "acts on files". A call the program hands one of its own open
+    /// descriptors to cannot reach past what the program already had; a call
+    /// that takes none is bounded by nothing smaller than the machine.
     ///
     /// The rest act on the process itself or on the machine, and there the
     /// difference between the interpreter and the program is the whole failure:
@@ -236,14 +241,22 @@ impl LinuxSyscall {
     /// - `mount`, `umount2` and `reboot` act on the developer's real machine.
     ///   `kira run --backend vm` on an init would mount over their filesystem
     ///   and power the machine off.
+    /// - `sync` is that same argument, and sat on the wrong side of it until it
+    ///   flushed a real machine. It takes no descriptor: it writes back every
+    ///   filesystem mounted on the box, so what it acts on is the developer's
+    ///   machine rather than the program's open files. `fsync(fd)` is the call
+    ///   that would belong here. Overreach is not the worst of it — over a 9p
+    ///   `/mnt/c` the flush parks in the kernel uninterruptibly, so a run that
+    ///   reaches it cannot be killed and `timeout` does not end it.
     ///
     /// None of that applies to the code generator's lowering, where the process
     /// really is the program — so this narrows one engine and changes nothing
     /// about `--backend llvm` or the native half of `--backend hybrid`.
     pub const fn servable_by_an_interpreter(self) -> bool {
         match self {
-            Self::Read | Self::Write | Self::Sync | Self::Ppoll => true,
-            Self::Mount
+            Self::Read | Self::Write | Self::Ppoll => true,
+            Self::Sync
+            | Self::Mount
             | Self::Umount2
             | Self::Reboot
             | Self::Execve
@@ -260,7 +273,11 @@ impl LinuxSyscall {
     /// caller has a reason to ask about.
     pub const fn interpreter_refusal(self) -> &'static str {
         match self {
-            Self::Read | Self::Write | Self::Sync | Self::Ppoll => "",
+            Self::Read | Self::Write | Self::Ppoll => "",
+            Self::Sync => {
+                "would flush every filesystem mounted on the machine running the interpreter, \
+                 taking no descriptor that could bound it to the program's own files"
+            }
             Self::Mount => "would mount a filesystem on the machine running the interpreter",
             Self::Umount2 => "would unmount a filesystem of the machine running the interpreter",
             Self::Reboot => "would restart, halt, or power off the machine running the interpreter",
@@ -541,21 +558,22 @@ mod tests {
         }
     }
 
-    /// The split, pinned. Four calls act only on file descriptors and are
-    /// therefore the same call whoever's process makes them; the other six act
-    /// on the process or the machine, which under the interpreter is not the
-    /// program's.
+    /// The split, pinned. Three calls take a descriptor the program already
+    /// holds and are therefore the same call whoever's process makes them; the
+    /// other seven act on the process or the machine, which under the
+    /// interpreter is not the program's.
+    ///
+    /// `sync` is among the seven deliberately. It is the one that reads as
+    /// file-shaped and is not: no descriptor bounds it, so it reaches every
+    /// mount on the machine. Pinning it here is what keeps a later reading of
+    /// "acts on files" from putting it back.
     #[test]
     fn an_interpreter_serves_the_calls_that_act_only_on_descriptors() {
-        for syscall in [
-            LinuxSyscall::Read,
-            LinuxSyscall::Write,
-            LinuxSyscall::Sync,
-            LinuxSyscall::Ppoll,
-        ] {
+        for syscall in [LinuxSyscall::Read, LinuxSyscall::Write, LinuxSyscall::Ppoll] {
             assert!(syscall.servable_by_an_interpreter(), "{}", syscall.label());
         }
         for syscall in [
+            LinuxSyscall::Sync,
             LinuxSyscall::Mount,
             LinuxSyscall::Umount2,
             LinuxSyscall::Reboot,
