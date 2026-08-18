@@ -306,10 +306,24 @@ impl HttpClient {
     {
         use hyper::client::conn::{http1, http2};
 
-        let (method, uri, headers, _) = request.into_parts();
+        let (method, uri, headers, buffered) = request.into_parts();
+        // This path connects with a plain `TcpStream` and speaks cleartext. An
+        // `https` URI would otherwise fall through the `unwrap_or(80)` below and
+        // be sent unencrypted: the caller asked for TLS and would get none, with
+        // nothing in the result to say so.
+        if uri.scheme_str() != Some("http") {
+            return Err(NetworkError::Unsupported);
+        }
+        // A request built with `with_body` and then sent through the streaming
+        // path had its buffered bytes silently dropped. Carrying two bodies is a
+        // configuration mistake rather than a question of which one wins.
+        if !buffered.is_empty() {
+            return Err(NetworkError::InvalidConfig);
+        }
         let authority = uri.authority().ok_or(NetworkError::InvalidUri)?;
         let host = authority.host();
         let port = authority.port_u16().unwrap_or(80);
+        let authority_text = authority.as_str().to_owned();
         let stream = TcpStream::connect((host, port))
             .await
             .map_err(|_| NetworkError::Connect)?;
@@ -319,8 +333,27 @@ impl HttpClient {
         let body = StreamBody::new(body_stream);
         let mut message = http::Request::new(body);
         *message.method_mut() = method;
-        *message.uri_mut() = uri;
         *message.headers_mut() = headers;
+        // `hyper::client::conn` is the low-level API: unlike the pooled client
+        // it adds no `Host` header and does not rewrite the target. HTTP/1.1
+        // requires both — a `Host` header and an origin-form request target —
+        // and a compliant server answers 400 to a request missing them.
+        // HTTP/2 carries the authority in `:authority` and wants the URI whole,
+        // so it keeps what the caller wrote.
+        if matches!(self.config.version, HttpVersion::Http1) {
+            if !message.headers().contains_key(http::header::HOST) {
+                let value =
+                    HeaderValue::from_str(&authority_text).map_err(|_| NetworkError::Header)?;
+                message.headers_mut().insert(http::header::HOST, value);
+            }
+            let target = uri
+                .path_and_query()
+                .map(|part| part.as_str())
+                .unwrap_or("/");
+            *message.uri_mut() = target.parse().map_err(|_| NetworkError::InvalidUri)?;
+        } else {
+            *message.uri_mut() = uri;
+        }
         let response = match self.config.version {
             HttpVersion::Http1 => {
                 let (mut sender, connection) = http1::handshake(TokioIo::new(stream))

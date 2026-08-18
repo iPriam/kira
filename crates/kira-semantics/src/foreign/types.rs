@@ -93,15 +93,22 @@ impl<'a> Analyzer<'a> {
         // A result written as an `@FFI.Pointer` to a C-layout struct is a
         // pointer word at the wire, and the call hands back a pointer that still
         // knows its target so members can be read through it.
+        // The target's own row, which a read needs to find member offsets. A
+        // target that cannot be described has no readable members, so the
+        // pointer stays a plain word — the third condition here rather than a
+        // `?` inside the body, because propagating that `None` failed the whole
+        // result mapping: `map_foreign_signature` then returned `None`, the
+        // declaration never reached `HirProgram::foreign` or `foreign_index`,
+        // and calls to it stopped resolving to `Callee::Foreign` entirely. An
+        // opaque pointer result is a supported shape, not a refused one, and the
+        // parameter side already treats it that way.
         if let Type::ForeignPtr(pointer) = ty
             && let Some(struct_id) = self.program.types.foreign_ptr_target(pointer)
+            && let Some(aggregate) = self.aggregate_seam_of(struct_id, span)
         {
             seam.pointee = Some(kira_semantics_model::hir::ForeignPointee {
                 struct_id,
-                // The target's own row, which the read needs to find member
-                // offsets. A target that cannot be described has no readable
-                // members, and the pointer stays a plain word.
-                aggregate: self.aggregate_seam_of(struct_id, span)?,
+                aggregate,
             });
         }
         Some(seam)

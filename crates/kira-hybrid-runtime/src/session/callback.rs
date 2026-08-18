@@ -92,8 +92,21 @@ pub(super) unsafe extern "C" fn ffi_callback_entry(
         .map(|(index, (spec, pointer))| callback_argument(spec, pointer, &strings[index]))
         .collect();
     let mut host = Host { session };
-    let (program, _, _) = session.current_program();
-    match program.call(&mut host, context.function_id, &native_arguments) {
+    let (program, _, callback_ids) = session.current_program();
+    // The id in the context is the one the module had when this closure was
+    // prepared, and a VM reload renumbers functions. `replace_vm_program`
+    // publishes `callback_ids` for exactly this remapping, keyed by the original
+    // id — so a closure prepared before a reload must be resolved through it,
+    // the same way `invoke_runtime` resolves the calls that arrive by symbol.
+    // Calling `context.function_id` directly would run whatever function now
+    // holds that slot, which after a reload is a different one.
+    let Some(&current_function_id) = callback_ids.get(context.function_id as usize) else {
+        fatal(&format!(
+            "a C callback named runtime function {}, but the live module has no identity for it",
+            context.function_id
+        ));
+    };
+    match program.call(&mut host, current_function_id, &native_arguments) {
         Ok(value) => write_callback_result(context.signature.result(), value, result),
         Err(trap) => fatal(&format!("runtime trap in C callback: {trap}")),
     }

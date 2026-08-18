@@ -65,16 +65,22 @@ impl Heap {
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name an array with that element.
     pub fn set_element(&mut self, id: ArrayId, index: usize, value: Value) -> bool {
-        let value = self.own(value);
-        // Bounds first, so an index that is about to trap copies nothing; then
-        // the copy, and only then the read of what is being replaced. In that
-        // order the value dropped below is this array's own — read before the
-        // copy it would be the one every sharer still holds.
+        // Bounds first, so an index that is about to trap copies nothing and
+        // takes no ownership; then the copy, and only then the read of what is
+        // being replaced. In that order the value dropped below is this array's
+        // own — read before the copy it would be the one every sharer still
+        // holds. `own` has to come after the bounds check for the same reason
+        // it does in `set_field`: it allocates and consumes the caller's
+        // snapshot slot, so a refusal after it leaks both.
         if !matches!(self.array_len(id), Some(len) if index < len) {
             return false;
         }
+        let value = self.own(value);
         self.make_array_unique(id);
         let Some(previous) = self.element(id, index) else {
+            // Unreachable given the bounds check, but the owned value would be
+            // ours to release if unsharing ever left the element unreadable.
+            self.drop_value(value);
             return false;
         };
         self.drop_value(previous);
@@ -98,6 +104,13 @@ impl Heap {
     /// is that the *caller's* array changes, which is why `append` resolves a
     /// place rather than taking a value.
     pub fn push_element(&mut self, id: ArrayId, value: Value) -> bool {
+        // That the handle names an array is checked before ownership is taken:
+        // the match below can still answer `false`, and reaching that after
+        // `own` would leak the objects it allocated and leave the caller with a
+        // consumed snapshot slot it thinks is still live.
+        if self.array_len(id).is_none() {
+            return false;
+        }
         let value = self.own(value);
         // An append is a write like any other, so it lengthens this array's own
         // elements rather than the ones it was sharing.

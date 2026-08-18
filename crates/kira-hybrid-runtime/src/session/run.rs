@@ -11,6 +11,13 @@
 use super::callback::ffi_callback_entry;
 use super::*;
 
+/// The deepest native-state aggregate the seam will walk.
+///
+/// Chosen far above any shape a real program returns and far below what would
+/// exhaust a thread stack, so it only ever fires on a value that was never going
+/// to be readable.
+const MAX_NATIVE_STATE_DEPTH: usize = 128;
+
 impl Session {
     /// Runs the program's entrypoint to completion.
     ///
@@ -122,6 +129,28 @@ impl Session {
     }
 
     pub(super) fn rewrite_vm_cell_proxies(&self, value: &mut NativeStateValue) {
+        self.rewrite_vm_cell_proxies_to_depth(value, 0);
+    }
+
+    /// The walk itself, carrying how deep it already is.
+    ///
+    /// `NativeStateValue` nests without bound and this walk is recursive, so a
+    /// native half that hands back a deeply nested aggregate — or builds a
+    /// cyclic one through `Arc` — would run the session thread out of stack
+    /// rather than report anything. Neither `ForeignAggregates` nor the
+    /// descriptor limits bound tree *depth*, so the bound lives here.
+    ///
+    /// Exceeding it is fatal rather than a silent stop: leaving the remainder
+    /// unrewritten would hand the VM a native cell proxy it cannot resolve,
+    /// which fails later and somewhere else.
+    fn rewrite_vm_cell_proxies_to_depth(&self, value: &mut NativeStateValue, depth: usize) {
+        if depth >= MAX_NATIVE_STATE_DEPTH {
+            fatal(&format!(
+                "native code returned a value nested deeper than {MAX_NATIVE_STATE_DEPTH} levels; \
+                 the hybrid seam cannot walk it without exhausting the stack"
+            ));
+        }
+        let depth = depth + 1;
         match value {
             NativeStateValue::Cell(cell) => {
                 let handle = cell.handle();
@@ -131,16 +160,16 @@ impl Session {
             }
             NativeStateValue::Struct(fields) | NativeStateValue::Array(fields) => {
                 for field in Arc::make_mut(fields) {
-                    self.rewrite_vm_cell_proxies(field);
+                    self.rewrite_vm_cell_proxies_to_depth(field, depth);
                 }
             }
             NativeStateValue::Enum { payload, .. } => {
                 if let Some(payload) = payload {
-                    self.rewrite_vm_cell_proxies(Arc::make_mut(payload));
+                    self.rewrite_vm_cell_proxies_to_depth(Arc::make_mut(payload), depth);
                 }
             }
             NativeStateValue::Any { payload, .. } => {
-                self.rewrite_vm_cell_proxies(Arc::make_mut(payload));
+                self.rewrite_vm_cell_proxies_to_depth(Arc::make_mut(payload), depth);
             }
             NativeStateValue::Int(_)
             | NativeStateValue::Float(_)
@@ -206,14 +235,19 @@ impl Session {
     /// Returns the executable address of a lazily prepared Libffi callback.
     pub(super) fn callback_address(&self, callback_id: u32) -> Result<u64, ForeignCallError> {
         let index = callback_id as usize;
-        let signature = self
-            .current_program()
-            .0
+        // One read of the module, not two. Each `current_program` takes the lock
+        // afresh, so reading the signature and the function id separately can
+        // straddle a VM reload and pair a signature from one module with an id
+        // from the next — a callback prepared to marshal one shape and dispatch
+        // to a function expecting another.
+        let (program, _, _) = self.current_program();
+        let callback = program
             .module()
             .foreign_callbacks
             .get(index)
-            .map(|callback| callback.signature().clone())
             .ok_or(ForeignCallError::NoForeignHost)?;
+        let signature = callback.signature().clone();
+        let function_id = callback.function();
         let mut registry = self
             .callback_registry
             .lock()
@@ -227,14 +261,6 @@ impl Session {
         let runtime = self
             .libffi
             .as_ref()
-            .ok_or(ForeignCallError::NoForeignHost)?;
-        let function_id = self
-            .current_program()
-            .0
-            .module()
-            .foreign_callbacks
-            .get(index)
-            .map(|callback| callback.function())
             .ok_or(ForeignCallError::NoForeignHost)?;
         let context = Box::pin(CallbackContext {
             function_id,
