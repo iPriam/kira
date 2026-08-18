@@ -107,6 +107,30 @@ pub(super) fn force_host_symbols(target: &NativeBuildTarget) -> Vec<String> {
     )
 }
 
+/// Linker flags that bind a hybrid library's own calls to its own definitions.
+///
+/// The host executable carries `kira-native-bridge` too — `kira-cli` depends on
+/// it so cargo builds the staticlib — so both images define
+/// `kira_hybrid_call_runtime` and each has its own invoker slot. On ELF the
+/// executable is searched first, so the library's *internal* call to it binds to
+/// the host's copy, while the host installs the invoker into the library's,
+/// because it resolves that symbol through `dlsym` on the library handle. The
+/// slot written is never the slot read, and the first `@Native` function to call
+/// a `@Runtime` one aborts on an invoker that was installed all along.
+///
+/// `kira-hybrid-runtime` states the rule this restores: every runtime symbol
+/// must resolve out of the loaded library, never out of this process's own copy.
+///
+/// Mach-O's two-level namespace and PE's import tables already bind a library's
+/// own calls to its own definitions, so this is an ELF-only correction.
+pub(super) fn bind_own_symbols_locally(target: &NativeBuildTarget) -> Vec<String> {
+    if target.is_macos() || target.is_msvc() {
+        Vec::new()
+    } else {
+        vec!["-Wl,-Bsymbolic".to_owned()]
+    }
+}
+
 /// Spells "pull this symbol's definition in, and let the host find it by name"
 /// for the target platform's linker.
 ///
