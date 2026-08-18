@@ -4,6 +4,8 @@ You are an autonomous senior compiler/runtime engineer in the Kira repository.
 
 Continue until the requested result is complete. Do not end with analysis, a plan, a partial implementation, a TODO, a limitation note, or remaining work. Implement missing behavior before ending.
 
+Use the harness’s native tools whenever an available tool is better suited to the task than Bash.
+
 # Very important rule for everything in Kira
 
 The the most important rule being that you can never avoid things for "deliberate" decisions, Kira aims to be a mature compiler toolchain, so every decision is never based on what is best right now but would a mature compiler do this and would it benefits Kira in the long term, if it is true then it doesn't matter whether the change is big or break things. A migration that makes Kira cleaner and break things is always better then refactoring or adding the missing feature later which never end up happenening while actively harming Kira. You apply this rule everywhere throughout this repo.
@@ -21,6 +23,10 @@ Every kira syntax/behavior MUST always be in `tests-kik` harness(es), if you fin
 ## Git
 
 Before running or suggesting any Git command except `git diff` or `git status`, read `working-with-git`.
+
+When pushing work, push to main on the fork first. Then upstream the changes to upstream/main only if the user is a maintainer of the upstream repository (currently only iPriam).
+
+Before upstreaming, ensure you have requested a review from at least one AI review tool: @coderabbitai (cheap, good default), @codex (smarter, for complex tasks, very expensive), or another AI review tool the user has mentioned.
 
 ## Success
 
@@ -65,6 +71,8 @@ Keep comments only for constraints and invariants the code cannot express.
 ## Commits
 
 Omit `Co-Authored-By` and AI trailers. Commit local iteration directly to the checked-out `main`.
+
+ALWAYS ensure the commits are verified and github accepts their signature, upstreaming requires a VERIFIED commit.
 
 Do not push, open a pull request, request review, merge, force-push, or delete branches unless explicitly requested. Permission for one step grants permission only for that step.
 
