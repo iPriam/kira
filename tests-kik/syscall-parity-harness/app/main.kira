@@ -42,18 +42,12 @@ function skpWaitSection() -> Int {
     return skpErrno(skpPpollFault()) * 100 + skpErrno(skpRead(-1, RawPtr(0), 8))
 }
 
-// `sync`: the call that takes no arguments and succeeds for anyone.
-function skpSyncSection() -> Int {
-    return skpValue(skpSync())
-}
-
 @Main
 function main() {
     skpBanner()
     print(skpWriteSection())
     print(skpWidthSection())
     print(skpWaitSection())
-    print(skpSyncSection())
     print("kik-syscall-parity-end")
     return
 }

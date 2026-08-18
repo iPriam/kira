@@ -159,7 +159,7 @@ fn the_servable_syscall_harness_passes_on_every_engine() {
         );
         let tally = stdout.lines().last().unwrap_or_default().to_owned();
         assert_eq!(
-            tally, "10 passed, 0 failed, 0 skipped, 10 total",
+            tally, "9 passed, 0 failed, 0 skipped, 9 total",
             "the servable syscall harness tally changed on {backend}"
         );
     }
@@ -208,13 +208,18 @@ fn the_servable_syscall_harness_prints_the_same_bytes_on_every_engine() {
 /// The VM refuses a program naming a call no interpreter can serve, by name and
 /// with the reason, before it starts.
 ///
-/// Two halves, and both matter. It refuses, because `syscall-harness` names six
-/// calls that act on the interpreter's process or on the machine — and it names
-/// each of them with what it would have done, because "the VM cannot do this"
-/// leaves the reader to guess whether the fix is the program or the command
-/// line. It does *not* name `write`, `read`, `sync` or `ppoll`: those are served
+/// Two halves, and both matter. It refuses, because `syscall-harness` names
+/// seven calls that act on the interpreter's process or on the machine — and it
+/// names each of them with what it would have done, because "the VM cannot do
+/// this" leaves the reader to guess whether the fix is the program or the
+/// command line. It does *not* name `write`, `read` or `ppoll`: those are served
 /// now, and a refusal listing them would send an author to change a call that
 /// works.
+///
+/// `sync` is asserted on the refused side rather than the served one, which is
+/// the assertion this test exists to have. It takes no descriptor — it flushes
+/// every filesystem on the machine — so serving it under the interpreter acts on
+/// the developer's box, and on a 9p mount it does so uninterruptibly.
 #[test]
 #[cfg(target_os = "linux")]
 fn the_vm_refuses_only_the_calls_no_interpreter_can_serve() {
@@ -232,6 +237,7 @@ fn the_vm_refuses_only_the_calls_no_interpreter_can_serve() {
         "the refusal does not say why: {stderr}"
     );
     for call in [
+        "sync",
         "mount",
         "umount2",
         "reboot",
@@ -244,7 +250,7 @@ fn the_vm_refuses_only_the_calls_no_interpreter_can_serve() {
             "`{call}` is not named: {stderr}"
         );
     }
-    for served in ["`write`", "`read`", "`sync`", "`ppoll`"] {
+    for served in ["`write`", "`read`", "`ppoll`"] {
         assert!(
             !stderr.contains(served),
             "{served} is served on the VM and must not be refused: {stderr}"

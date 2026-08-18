@@ -611,21 +611,29 @@ number the program would read as a count.
 
 Whether a host may serve a call at all is a property of the call, not of the
 host, because **under the interpreter the process is the interpreter rather than
-the program**. `read`, `write`, `sync` and `ppoll` act on file descriptors and
-say what they did, so a host making one on the program's behalf is
+the program**. `read`, `write` and `ppoll` take a descriptor the program already
+holds and say what they did, so a host making one on the program's behalf is
 indistinguishable from the program having made it — which is what lets a
 `--backend vm` run of such a program be compared byte for byte against a native
-one. The other six are refused by name before the program starts, each with what
-it would have done: `execve` replaces the interpreter's own image so the VM
+one. The other seven are refused by name before the program starts, each with
+what it would have done: `execve` replaces the interpreter's own image so the VM
 ceases to exist mid-program, `exit_group` ends it in the middle of the program it
 is running, `wait4` reaps the interpreter's children rather than the program's,
-and `mount`, `umount2` and `reboot` act on the machine of whoever ran the
+and `mount`, `umount2`, `reboot` and `sync` act on the machine of whoever ran the
 command. The refusal is decided from the calls a program *names*, so a package
-declaring one of the six is refused whether or not it calls it.
+declaring one of the seven is refused whether or not it calls it.
+
+Taking a descriptor is the test, and it is narrower than "acts on files". `sync`
+is the call that shows the difference: it is filesystem work with no descriptor
+to bound it, so it writes back every mount on the machine rather than the
+program's own files — the `mount`/`reboot` case wearing a file-shaped name.
+`fsync(fd)` is what would be servable. The distinction is not academic: served
+under the interpreter on a 9p `/mnt/c`, `sync` parks in the kernel
+uninterruptibly, and the run cannot be killed.
 
 `tests-kik/syscall-parity-harness` is the suite that runs on all three engines
 for exactly this reason, and `tests-kik/syscall-harness` is the one that keeps
-the six and runs on the two that emit the instruction.
+the seven and runs on the two that emit the instruction.
 
 ## Deferred to later milestones
 
