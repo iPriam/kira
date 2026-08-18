@@ -40,9 +40,9 @@ use kira_libffi::{FfiClosure, LibffiRuntime, RawFfiCif};
 use kira_runtime_abi::{
     BridgeValue, Execution, FileRequest, FileResponse, FileSystemError, ForeignArg,
     ForeignCallError, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
-    HostCapabilities, NativeArg, NativeCallError, NativeResult, NativeReturn, NativeStateError,
-    NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue,
-    file_system, native_state_walk, native_state_walk_mut,
+    HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeResult, NativeReturn,
+    NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, SyscallError, file_system, native_state_walk, native_state_walk_mut, syscall,
 };
 use kira_vm_runtime::{Program, debug::VmDebugObserver};
 
@@ -432,6 +432,23 @@ impl Session {
         }
     }
 
+    /// The system call and signature of import `foreign_id`, when it names one.
+    ///
+    /// Read off the manifest's own ABI byte, which has always travelled with the
+    /// import: the row carries no library path for a system call, so without
+    /// this the bytecode half found no binding and reported a missing library
+    /// for a call that names none.
+    fn syscall_binding(&self, foreign_id: u32) -> Option<(LinuxSyscall, ForeignSignature)> {
+        let import = self.manifest.foreign.get(foreign_id as usize)?;
+        if import.abi.binds_a_library_symbol() {
+            return None;
+        }
+        Some((
+            LinuxSyscall::parse(&import.symbol)?,
+            import.signature.clone(),
+        ))
+    }
+
     /// Calls one foreign symbol through the bundled Libffi runtime.
     fn call_foreign(
         &self,
@@ -743,11 +760,36 @@ impl HostCapabilities for Host<'_> {
         self.session.call_native(function_id, args)
     }
 
+    /// Enters this process's kernel, exactly as [`Self::file_system`] reaches
+    /// this process's files.
+    ///
+    /// The two halves of a hybrid program run in one process, so the descriptor
+    /// a `@Runtime` function writes to is the one the native half writes to —
+    /// and the native half reaches it by an instruction the backend emitted,
+    /// which is the same kernel this enters.
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        // SAFETY: the words came from a `@FFI.Syscall` call site the frontend
+        // validated to register-width scalars, and a pointer among them is one
+        // this program produced — the obligation this session already carries
+        // for every pointer its bytecode half hands a C library through libffi.
+        unsafe { syscall::perform(call, args) }
+    }
+
     fn call_foreign(
         &mut self,
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        // The bytecode half reaches a `@FFI.Syscall` only when a `@Runtime`
+        // function called one directly; `packages/linux` marks its wrappers
+        // `@Native`, so the usual route is the emitted instruction. Served here
+        // rather than on the session because entering the kernel is the host's
+        // capability, and refused for the calls no interpreted half can serve —
+        // under `kira test` this process is the runner, and an `exit_group` from
+        // the bytecode half would end the suite mid-report.
+        if let Some((call, signature)) = self.session.syscall_binding(foreign_id) {
+            return syscall::call(self, call, &signature, args);
+        }
         self.session.call_foreign(foreign_id, args)
     }
 

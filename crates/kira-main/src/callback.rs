@@ -35,9 +35,9 @@ use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
 use kira_libffi::{FfiClosure, LibffiRuntime, RawFfiCif};
 use kira_runtime_abi::{
     FileRequest, FileResponse, FileSystemError, ForeignAggregates, ForeignArg, ForeignCallError,
-    ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec, HostCapabilities, NativeArg,
-    NativeResult, NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken,
-    NativeStateTypeId, NativeStateValue, file_system,
+    ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec, HostCapabilities, LinuxSyscall,
+    NativeArg, NativeResult, NativeStateError, NativeStatePathStep, NativeStateStore,
+    NativeStateToken, NativeStateTypeId, NativeStateValue, SyscallError, file_system, syscall,
 };
 use kira_vm_runtime::{Program, RunOutcome, VmError, debug::VmDebugObserver};
 
@@ -61,7 +61,15 @@ static FFI_DEBUG_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub struct ForeignSession {
     program: Program,
     libraries: Vec<ForeignLibrary>,
-    libffi: LibffiRuntime,
+    /// The marshalling engine, loaded only for a program that needs one.
+    ///
+    /// A `@FFI.Syscall` reaches the kernel by instruction: there is no address
+    /// for libffi to call through and no shared object for the bundled one to
+    /// be found in. Loading it anyway made a program whose only foreign calls
+    /// are system calls refuse to start on a machine with no `libffi.so.8` —
+    /// which is the same dependency the native backend already declines to put
+    /// on such a program's link line.
+    libffi: Option<LibffiRuntime>,
     imports: Vec<ForeignBinding>,
     callback_signatures: Vec<ForeignSignature>,
     callback_registry: Mutex<CallbackRegistry>,
@@ -142,13 +150,28 @@ impl ForeignSession {
                     }?;
                     libraries.push(library);
                 }
-                ForeignBindingTarget::Unavailable => {}
+                // Neither of these opens anything: one has no artifact to open
+                // and the other is an instruction, not a library.
+                ForeignBindingTarget::Unavailable | ForeignBindingTarget::Syscall { .. } => {}
             }
         }
-        let libffi = match runtime_path.as_deref() {
-            Some(runtime_path) => LibffiRuntime::load_from(runtime_path),
-            None => LibffiRuntime::load(),
-        }?;
+        // Asked rather than assumed: a library or process binding is called
+        // through libffi and a callback is a libffi closure, but a program whose
+        // whole foreign surface is system calls needs neither, and demanding the
+        // engine anyway would refuse to start on the machines this capability
+        // exists for.
+        let needs_libffi = !callbacks.is_empty()
+            || imports.iter().any(|binding| {
+                matches!(
+                    binding.target,
+                    ForeignBindingTarget::Library { .. } | ForeignBindingTarget::Process { .. }
+                )
+            });
+        let libffi = match (needs_libffi, runtime_path.as_deref()) {
+            (false, _) => None,
+            (true, Some(runtime_path)) => Some(LibffiRuntime::load_from(runtime_path)?),
+            (true, None) => Some(LibffiRuntime::load()?),
+        };
         let callback_closures = (0..callbacks.len()).map(|_| None).collect();
         Ok(ForeignSession {
             program,
@@ -188,6 +211,16 @@ impl ForeignSession {
             Some(observer) => self.program.run_with_debug(&mut host, observer),
             None => self.program.run(&mut host),
         }
+    }
+
+    /// The system call and signature of import `foreign_id`, when it names one.
+    ///
+    /// The session answers what it *is* and the host does it, because a kernel
+    /// entry belongs to the host's process rather than to the libraries and
+    /// closures this session owns.
+    fn syscall_binding(&self, foreign_id: u32) -> Option<(LinuxSyscall, ForeignSignature)> {
+        let binding = self.imports.get(foreign_id as usize)?;
+        Some((binding.syscall_target()?, binding.signature.clone()))
     }
 
     /// Calls one foreign import through libffi or a legacy adapter.
@@ -250,6 +283,17 @@ impl ForeignSession {
                 foreign_id,
                 "the declaring library resolved to no artifact for this target",
             )),
+            // The host answered this before reaching the session; see
+            // `syscall_binding`. Reaching it means a host called this directly
+            // rather than through `HostCapabilities::call_foreign`, and it has
+            // no kernel entry of its own to serve the call with.
+            ForeignBindingTarget::Syscall { call } => Err(refused(
+                foreign_id,
+                &format!(
+                    "`{}` is a system call, which this session does not enter — its host does",
+                    call.label()
+                ),
+            )),
         }
     }
 
@@ -271,7 +315,12 @@ impl ForeignSession {
         if registry.closures.get(index).is_none() {
             return Err(ForeignCallError::NoForeignHost);
         }
-        let runtime = &self.libffi;
+        // A program with a callback row loaded the engine above, so a missing
+        // one here is a session built from a table that disagrees with itself.
+        let runtime = self
+            .libffi
+            .as_ref()
+            .ok_or(ForeignCallError::NoForeignHost)?;
         let context = Box::pin(CallbackContext {
             function_id: self
                 .program
@@ -341,11 +390,33 @@ impl HostCapabilities for SessionHost<'_> {
         Ok(file_system::perform(request))
     }
 
+    /// Enters this process's kernel, exactly as [`crate::StdoutHost`] reaches
+    /// this process's filesystem.
+    ///
+    /// The same grant, on the same reasoning: this host stands in the process a
+    /// `--backend vm` run happens in, so the descriptors the program writes to
+    /// are this process's. Which calls it may serve is not this host's decision
+    /// — [`syscall::call`] applies the policy the call itself carries, and the
+    /// CLI refuses a non-servable one by name before the program starts.
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        // SAFETY: the words came from a `@FFI.Syscall` call site the frontend
+        // validated to register-width scalars, and a pointer among them is one
+        // this program produced — the obligation this session already carries
+        // for every pointer it hands a C library through libffi.
+        unsafe { syscall::perform(call, args) }
+    }
+
     fn call_foreign(
         &mut self,
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        // Served here rather than on the session, because entering the kernel is
+        // the *host's* capability: the session owns libraries and closures, and
+        // a system call needs neither.
+        if let Some((call, signature)) = self.session.syscall_binding(foreign_id) {
+            return syscall::call(self, call, &signature, args);
+        }
         self.session.call_foreign(foreign_id, args)
     }
 
