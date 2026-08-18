@@ -65,6 +65,13 @@ fn vm(
     options: &DebugOptions,
     info: &DebugInfo,
 ) -> Result<PreparedTarget, String> {
+    // The same gate the VM run applies, before an artifact is written: a target
+    // prepared for a program the interpreter cannot serve is one the session
+    // that consumes it would trap in.
+    let refused = crate::pipeline::unservable_syscalls(ir);
+    if !refused.is_empty() {
+        return Err(crate::pipeline::syscall_refusal(&refused));
+    }
     let module = kira_bytecode::compile(ir)
         .map_err(|error| format!("bytecode compilation failed: {error}"))?;
     let module_path = vm_lldb::temporary_module_path(source);

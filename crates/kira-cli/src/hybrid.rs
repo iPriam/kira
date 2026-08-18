@@ -180,7 +180,11 @@ fn build_inner(
             kira_main::ForeignBindingTarget::Process { .. } => {
                 Some(kira_dynamic_ffi::PROCESS_BINDING_MARKER.to_owned())
             }
-            kira_main::ForeignBindingTarget::Unavailable => None,
+            // No path, and none is missing: the manifest beside this list
+            // carries each import's ABI, so the session knows a system call
+            // from a library that resolved to nothing.
+            kira_main::ForeignBindingTarget::Unavailable
+            | kira_main::ForeignBindingTarget::Syscall { .. } => None,
         })
         .collect();
 

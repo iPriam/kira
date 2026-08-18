@@ -147,6 +147,13 @@ pub fn direct_foreign_bindings(
         .iter()
         .map(|entry| {
             let signature = entry.import.signature().clone();
+            // Asked first, because every question below is about libraries and a
+            // system call answers none of them: it has no library name, so the
+            // lookup would miss and record the import as excluded on this target
+            // — a call the host can serve, reported as one nothing can.
+            if let Some(call) = entry.import.as_syscall() {
+                return kira_main::ForeignBinding::syscall(call, signature);
+            }
             let path = foreign_link
                 .library_paths()
                 .iter()
@@ -194,6 +201,12 @@ pub fn hybrid_foreign_bindings(
         .iter()
         .map(|entry| {
             let signature = entry.import.signature().clone();
+            // As in `direct_foreign_bindings`: a system call is not a library
+            // lookup, and recording it as a failed one names an artifact that
+            // was never meant to exist.
+            if let Some(call) = entry.import.as_syscall() {
+                return kira_main::ForeignBinding::syscall(call, signature);
+            }
             let library = entry.import.library();
             if library == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
                 return kira_main::ForeignBinding::process(entry.import.symbol(), signature);
@@ -334,7 +347,12 @@ fn write_binding_manifest(
             ForeignBindingTarget::Process { .. } => {
                 text.push_str(kira_dynamic_ffi::PROCESS_BINDING_MARKER);
             }
-            ForeignBindingTarget::Unavailable => {}
+            // Neither writes a path, and neither needs a token of its own. A
+            // process binding does because nothing else records it; a system
+            // call does not, because the `.kbc` beside this manifest carries the
+            // import's ABI and the reader rebuilds the binding from that. One
+            // fact, in the one file that already had to carry it.
+            ForeignBindingTarget::Unavailable | ForeignBindingTarget::Syscall { .. } => {}
         }
         text.push('\n');
     }

@@ -19,15 +19,18 @@ import Foundation
 
 // ─── Why every function here is `@Native` ───────────────────────────────────
 //
-// A system call is an instruction, and only a native body has an instruction
-// stream to put one in. On the hybrid engine that distinction is real: the
-// bytecode half reaches the outside world by asking its host, and there is no
-// host call that means "enter the kernel" — nothing to load, no symbol to bind,
-// and any host that did it would be entering *its* kernel rather than the
-// program's. So the bodies that hold the calls live in the native half, and
-// ordinary Kira code reaches them across the bridge exactly as it reaches any
-// other `@Native` function. On a pure `--backend llvm` build every function is
-// native already and the annotation changes nothing.
+// A system call is an instruction, and a native body is where one can live. On
+// the hybrid engine that distinction is real: it puts the whole call in the
+// native half, and ordinary Kira code reaches it across the bridge exactly as it
+// reaches any other `@Native` function. On a pure `--backend llvm` build every
+// function is native already and the annotation changes nothing.
+//
+// A bytecode half can reach the kernel too — it asks its host, which makes the
+// call in the process it is standing in — but only for the calls that act on
+// file descriptors. This package declares `mount`, `reboot` and `execve` as
+// well, so a program depending on it is refused on the interpreter whatever
+// these annotations say. `@Native` is therefore about where the instruction
+// goes, not about which engines can run this.
 
 // ─── The `-errno` convention ────────────────────────────────────────────────
 

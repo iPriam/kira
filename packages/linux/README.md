@@ -10,12 +10,24 @@ let dependencies = [
 
 Every function here reaches the kernel through `@FFI.Syscall`, which lowers to
 `svc #0` on AArch64 and `syscall` on x86-64 — no libc, no `dlopen`, no symbol to
-resolve at startup. Every one of them carries `@Native`, because a system call is
-an instruction and only a native body has an instruction stream to put one in:
-on a whole-program `--backend llvm` build that changes nothing, and on hybrid it
-is what puts the call in the native half, which ordinary Kira code reaches across
-the bridge exactly as it reaches any other `@Native` function. The pure VM has
-nowhere to put the instruction and refuses such a program by name.
+resolve at startup. Every one of them carries `@Native`, because that is where an
+instruction can live: on a whole-program `--backend llvm` build the annotation
+changes nothing, and on hybrid it is what puts the call in the native half, which
+ordinary Kira code reaches across the bridge exactly as it reaches any other
+`@Native` function.
+
+The pure VM refuses a program that depends on this package, and the reason is
+worth being exact about, because it is not that an interpreter cannot enter the
+kernel — it asks its host, and `read`, `write`, `sync` and `ppoll` are served
+that way. It is that this package declares the whole surface, including `mount`,
+`umount2`, `reboot`, `execve`, `wait4` and `exit_group`, and under the
+interpreter the process is the interpreter rather than the program: those six
+would act on the VM's own process or on the developer's machine. The refusal
+names each of them with what it would have done, and it is decided from what a
+program *names* rather than what it calls — so importing this package for
+`linuxPrint` alone is still refused on the VM. A program that wants both wrappers
+and the interpreter declares the calls it makes itself, as
+`tests-kik/syscall-parity-harness` does.
 
 That is what makes a Kira program able to be PID 1 in an initramfs: build it with
 

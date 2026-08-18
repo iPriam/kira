@@ -14,7 +14,8 @@ use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 
 use super::execute::{
-    build_native, run_hybrid, run_native, run_on_vm, run_vm_module_file, run_web,
+    build_native, refuse_syscalls_on_the_vm, run_hybrid, run_native, run_on_vm, run_vm_module_file,
+    run_web,
 };
 use super::{
     EXIT_FAILURE, EXIT_OK, EXIT_USAGE, apply_manifest_defaults, compile, emit_diagnostics,
@@ -368,6 +369,12 @@ fn build_test_artifact(
 ) -> Result<TestArtifact, i32> {
     match options.backend {
         BackendMode::VmBytecode => {
+            // The same gate `run` applies, and for the same reason: a suite that
+            // names a call the interpreter will not serve has to hear so before
+            // any case runs, not as a trap in the middle of the report.
+            if refuse_syscalls_on_the_vm(ir) {
+                return Err(EXIT_USAGE);
+            }
             let module = match kira_bytecode::compile(ir) {
                 Ok(module) => module,
                 Err(error) => {
