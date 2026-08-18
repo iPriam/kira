@@ -1,11 +1,17 @@
-// Raw Linux system-call harness: `@FFI.Syscall` exercised against a real kernel.
+// Raw Linux system-call harness: the calls only an emitted instruction can make.
 //
-// Linux-only and LLVM-only, both by construction rather than by choice. A
-// `@FFI.Syscall` is refused at compile time on a target that cannot reach the
-// Linux kernel, and the interpreter has no instruction stream of its own to put
-// `svc`/`syscall` in — so this suite has one command:
+// Linux-only by construction: a `@FFI.Syscall` is refused at compile time on a
+// target that cannot reach the Linux kernel. The engines are the two that put
+// the instruction in the program's own image:
 //
-//   kira test --backend llvm tests-kik/syscall-harness
+//   kira test --backend llvm   tests-kik/syscall-harness
+//   kira test --backend hybrid tests-kik/syscall-harness
+//
+// The VM refuses this package before it starts, and not for want of a way into
+// the kernel — it asks its host, and tests-kik/syscall-parity-harness is the
+// package that does. It refuses because `mount`, `umount2`, `reboot`, `execve`,
+// `wait4` and `exit_group` act on the interpreter's own process or on the
+// machine running it. See README.md.
 //
 // main is trivial; the driver synthesized in test mode is the real entry.
 

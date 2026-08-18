@@ -1,0 +1,188 @@
+import Foundation
+
+// SkpSyscallTests.kira — the system calls all three engines make.
+// All top-level names use the `skp`/`Skp` prefix.
+//
+// The four calls declared here are the ones an interpreter can serve: they act
+// on file descriptors and answer what they did, so the host making one on the
+// program's behalf is indistinguishable from the program having made it. That
+// is what lets the same source run on `vm`, `llvm` and `hybrid` and be compared.
+//
+// Nothing here declares `mount`, `execve`, `wait4`, `exit_group`, `umount2` or
+// `reboot`, and that absence is the point rather than an omission: the VM
+// refuses a program that *names* one, before it starts. Those six live in
+// `tests-kik/syscall-harness`, which is why there are two packages.
+//
+// Every assertion is one that does not depend on who ran the suite: a bad file
+// descriptor is `EBADF` for everyone, an unreadable descriptor array is
+// `EFAULT`, and `sync` succeeds unprivileged.
+
+// ─── The `-errno` convention ────────────────────────────────────────────────
+
+// Why a kernel call did not do what was asked, as the positive number `man
+// errno` lists.
+struct SkpError {
+    var errno: Int
+}
+
+// The largest `errno` the kernel returns.
+//
+// The boundary, not a sign test: `read` never answers a negative count, but a
+// call that legitimately answers a large negative number would be read as a
+// failure by a plain `answer < 0`.
+function skpMaxErrno() -> Int { return 4095 }
+
+// Decodes one raw kernel answer, which is the one place the convention is read.
+function skpDecode(answer: Int) -> Result<Int, SkpError> {
+    if answer < 0 && answer >= -skpMaxErrno() {
+        let failure: Result<Int, SkpError> = .Error(SkpError { errno: -answer })
+        return failure
+    }
+    let ok: Result<Int, SkpError> = .Ok(answer)
+    return ok
+}
+
+// The `errno` of a failure, or 0 when the call succeeded.
+function skpErrno(answer: borrow Result<Int, SkpError>) -> Int {
+    match answer {
+        Ok(value) -> { return 0 }
+        Error(failure) -> { return failure.errno }
+    }
+}
+
+// The value of a successful call, or -1 when it failed.
+function skpValue(answer: borrow Result<Int, SkpError>) -> Int {
+    match answer {
+        Ok(value) -> { return value }
+        Error(failure) -> { return -1 }
+    }
+}
+
+// ─── Raw entry points ───────────────────────────────────────────────────────
+
+@FFI.Syscall { name: write; }
+function skpSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+// The same call declared with a 32-bit descriptor, which is what pins the width
+// rule: `-1` in an `I32` has to reach the register sign-extended.
+@FFI.Syscall { name: write; }
+function skpSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
+
+@FFI.Syscall { name: read; }
+function skpSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int;
+
+@FFI.Syscall { name: sync; }
+function skpSysSync() -> Int;
+
+@FFI.Syscall { name: ppoll; }
+function skpSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int;
+
+// ─── Wrappers ───────────────────────────────────────────────────────────────
+//
+// Deliberately *not* `@Native`. On `--backend hybrid` that puts the call in the
+// bytecode half, which reaches the kernel by asking its host — the path this
+// package exists to cover. `packages/linux` marks its wrappers `@Native` and so
+// exercises the emitted instruction on the same engine; between the two, both
+// routes into the kernel are run on hybrid.
+
+function skpStdout() -> Int { return 1 }
+
+function skpWrite(fd: Int, text: borrow String) -> Result<Int, SkpError> {
+    return skpDecode(skpSysWrite(fd, text, U64(text.count)))
+}
+
+function skpRead(fd: Int, buffer: RawPtr, count: Int) -> Result<Int, SkpError> {
+    return skpDecode(skpSysRead(fd, buffer, U64(count)))
+}
+
+function skpSync() -> Result<Int, SkpError> {
+    return skpDecode(skpSysSync())
+}
+
+// `ppoll` over a descriptor array the kernel cannot read. The wait itself
+// cannot be tested by construction: a `ppoll` on no descriptors with no timeout
+// never comes back, which is exactly what an idle PID 1 wants of it.
+function skpPpollFault() -> Result<Int, SkpError> {
+    return skpDecode(skpSysPpoll(RawPtr(1), U64(1), RawPtr(0), RawPtr(0)))
+}
+
+// ─── The decode ─────────────────────────────────────────────────────────────
+
+Test SkpDecodeReadsASmallNegativeAsErrno {
+    test { return skpErrno(skpDecode(-2)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// One past the boundary is a value, not a failure — the case a plain
+// `answer < 0` test gets wrong.
+Test SkpDecodeKeepsALargeNegativeValue {
+    test { return skpValue(skpDecode(-4096)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
+}
+
+// ─── Three arguments: `write` ───────────────────────────────────────────────
+
+// The success path with nothing to show for it: a `write` of no bytes takes
+// none and says so, which is a real round trip into the kernel without output
+// landing in the middle of the driver's report.
+Test SkpWriteOfNoBytesTakesNone {
+    test { return skpValue(skpWrite(skpStdout(), "")) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test SkpWriteToABadDescriptorIsEbadf {
+    test { return skpErrno(skpWrite(-1, "x")) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// The raw entry point answers the kernel's own encoding with no decode in the
+// way. Worth asserting once on every engine: a host that decoded the answer
+// itself would make the interpreted call disagree with the emitted one here and
+// nowhere else.
+Test SkpTheRawEntryPointAnswersNegativeErrno {
+    test { return skpSysWrite(-1, "x", U64(1)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+}
+
+// A declaration's written width is what reaches the register. `fd: I32` holding
+// -1 must arrive as a sign-extended 64-bit -1, not as 4294967295 — which the
+// kernel reads as an enormous descriptor and answers `EBADF` for anyway, so the
+// number that tells the two apart is the count, and the count is why this
+// asserts the whole answer.
+Test SkpANarrowDescriptorIsSignExtendedIntoItsRegister {
+    test { return skpSysWriteNarrowFd(-1, "x", U64(1)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+}
+
+// ─── Three arguments through a pointer: `read` ──────────────────────────────
+
+// A real count and a null buffer, which the kernel never gets as far as
+// reading: the descriptor is checked first, so the answer is `EBADF` and not
+// the `EFAULT` a valid descriptor would have produced.
+Test SkpReadFromABadDescriptorIsEbadf {
+    test { return skpErrno(skpRead(-1, RawPtr(0), 8)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// A zero count still reaches the kernel rather than being answered here: a
+// wrapper that shortcut it would report success for a descriptor that is not
+// open, which is the one answer a caller must not get.
+Test SkpReadOfNoBytesStillChecksTheDescriptor {
+    test { return skpErrno(skpRead(-1, RawPtr(0), 0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// ─── No arguments: `sync` ───────────────────────────────────────────────────
+
+// The arity-0 entry sequence, which names only its output and the call number.
+Test SkpSyncTakesNoArgumentsAndSucceeds {
+    test { return skpValue(skpSync()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+// ─── Four arguments: `ppoll` ────────────────────────────────────────────────
+
+Test SkpPpollOverAnUnreadableArrayIsEfault {
+    test { return skpErrno(skpPpollFault()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}

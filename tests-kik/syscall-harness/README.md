@@ -1,8 +1,13 @@
 # Raw system-call harness
 
-`@FFI.Syscall` exercised against a real Linux kernel. 18 tests in
-`app/SkxSyscallTests.kira`, all with the `skx`/`Skx` prefix, depending on
-`packages/linux` for the typed wrappers and on Foundation for `Result`.
+`@FFI.Syscall` exercised against a real Linux kernel, for the calls only an
+emitted instruction can make. 19 tests in `app/SkxSyscallTests.kira`, all with
+the `skx`/`Skx` prefix, depending on `packages/linux` for the typed wrappers and
+on Foundation for `Result`.
+
+`tests-kik/syscall-parity-harness` is the other half: the four calls a host can
+make on an interpreted program's behalf, run on all three engines. Read its
+README for what each package covers and why they cannot be one.
 
 ## Two commands
 
@@ -24,8 +29,15 @@ macOS or Windows there is no program here to run. That is why the cargo gate
 (`crates/kira-cli/tests/kik_harness.rs`) is `#[cfg(target_os = "linux")]` rather
 than a skip inside the suite.
 
-The pure VM refuses such a program by name before it starts, and that refusal is
-gated too: it has no instruction stream of its own to put `svc` in.
+The pure VM refuses this package by name before it starts, and that refusal is
+gated too. Not because an interpreter cannot enter the kernel — it asks its
+host, and `tests-kik/syscall-parity-harness` is the package that does — but
+because *these* calls act on the interpreter's own process or on the machine it
+is running on. `execve` would replace the VM's image, `exit_group` would end it
+mid-suite, `wait4` would reap its children, and `mount` and `umount2` would act
+on the filesystem of whoever ran `kira run`. The six of them are why this package
+and that one are two packages: the refusal is decided from the calls a program
+*names*, before a single case is collected.
 
 ## What the cases assert, and why they are deterministic
 
