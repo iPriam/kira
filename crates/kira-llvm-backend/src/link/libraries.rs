@@ -10,7 +10,7 @@ use kira_native_lib_definition::NativeLinkInputs;
 use kira_toolchain::LlvmInstallation;
 
 use super::driver::{
-    export_debug_symbols, force_callback_symbols, force_host_symbols,
+    bind_own_symbols_locally, export_debug_symbols, force_callback_symbols, force_host_symbols,
     native_live_runtime_arguments, shared_library_flag, tool_diagnostic,
 };
 use super::target::NativeBuildTarget;
@@ -144,6 +144,7 @@ fn link_hybrid_library_inner(
     let target = NativeBuildTarget::host();
     let mut arguments = vec![shared_library_flag(&target).to_owned()];
     arguments.extend(force_host_symbols(&target));
+    arguments.extend(bind_own_symbols_locally(&target));
     if !options.retained_symbols.is_empty() {
         arguments.extend(force_callback_symbols(&target, options.retained_symbols));
     }
