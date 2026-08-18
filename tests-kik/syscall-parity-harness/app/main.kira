@@ -1,0 +1,59 @@
+// The system calls every engine can make, printed as a checksum.
+//
+//   kira run  --backend vm     tests-kik/syscall-parity-harness
+//   kira run  --backend llvm   tests-kik/syscall-parity-harness
+//   kira run  --backend hybrid tests-kik/syscall-parity-harness
+//
+// All three must print the same bytes. That is the half a passing suite cannot
+// prove: a case only checks what it thought to check, while a checksum derived
+// from every kernel answer changes when any of them does — including on one
+// engine only, which is the failure a single-engine syscall suite cannot see at
+// all.
+//
+// Linux-only by construction rather than by choice: a `@FFI.Syscall` is refused
+// at compile time on a target that cannot reach the Linux kernel, so on macOS
+// or Windows there is no program here to run.
+
+import Foundation
+
+// The one line this program writes through the kernel rather than through
+// `print`, and it is written *first* on purpose. A raw `write` lands on
+// descriptor 1 immediately while `print` goes through each engine's own buffered
+// writer, so raw output after a print could interleave differently on two
+// engines and fail this comparison for a reason that is not a parity bug.
+function skpBanner() {
+    let _ = skpWrite(skpStdout(), "kik-syscall-parity-begin\n")
+    return
+}
+
+// `write`: the bad descriptor's errno, and the empty write's count.
+function skpWriteSection() -> Int {
+    return skpErrno(skpWrite(-1, "x")) * 100 + skpValue(skpWrite(skpStdout(), ""))
+}
+
+// The widths: the raw negative answer, and the same call through a 32-bit
+// descriptor that has to reach its register sign-extended.
+function skpWidthSection() -> Int {
+    return -skpSysWrite(-1, "x", U64(1)) * 100 + -skpSysWriteNarrowFd(-1, "x", U64(1))
+}
+
+// `read` and `ppoll`: a bad descriptor and an unreadable descriptor array.
+function skpWaitSection() -> Int {
+    return skpErrno(skpPpollFault()) * 100 + skpErrno(skpRead(-1, RawPtr(0), 8))
+}
+
+// `sync`: the call that takes no arguments and succeeds for anyone.
+function skpSyncSection() -> Int {
+    return skpValue(skpSync())
+}
+
+@Main
+function main() {
+    skpBanner()
+    print(skpWriteSection())
+    print(skpWidthSection())
+    print(skpWaitSection())
+    print(skpSyncSection())
+    print("kik-syscall-parity-end")
+    return
+}

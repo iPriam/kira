@@ -1,0 +1,6 @@
+Package KikSyscallParityHarness {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "KikSyscallParityHarness"
+    let defaults = Defaults { executionMode: Backend.Vm, buildTarget: BuildTarget.Host }
+}

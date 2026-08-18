@@ -79,13 +79,17 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
 /// Linux-only, and that is not a choice: a `@FFI.Syscall` is refused at compile
 /// time on a target that cannot reach the Linux kernel — that refusal is the
 /// feature — so on another operating system there is no program here to run.
+///
+/// This package holds the calls that only an emitted instruction can make;
+/// [`syscall_parity_harness`] holds the ones a host can make for an interpreted
+/// program. The split is what the VM's refusal forces, and both READMEs say so.
 #[cfg(target_os = "linux")]
 fn syscall_harness() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/syscall-harness")
 }
 
 /// Every case in the system-call harness passes against a real kernel, on both
-/// engines that can reach one.
+/// engines that emit the instruction.
 ///
 /// Both are asserted rather than one, because they reach the kernel by different
 /// routes and only running both proves the second. On `llvm` the call site is
@@ -119,16 +123,101 @@ fn the_syscall_harness_passes_against_the_kernel() {
     }
 }
 
-/// The VM refuses a program that calls the kernel, by name, before it starts.
+/// The servable-system-call package, relative to this crate.
 ///
-/// The VM alone: it is the one engine with nowhere to put the instruction, and
-/// the test above proves hybrid is not in the same position. The refusal names
-/// every call the program makes and both flags that do work, because a message
-/// saying only "the VM cannot do this" leaves the reader to guess which of the
-/// two halves of their command line to change.
+/// The other half of the suite above, and Linux-only for the same reason. It
+/// declares only the four calls an interpreter can serve, which is what lets one
+/// source run on all three engines.
+#[cfg(target_os = "linux")]
+fn syscall_parity_harness() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/syscall-parity-harness")
+}
+
+/// Every case in the servable-system-call package passes on all three engines.
+///
+/// The leg the suite above cannot have. `syscall-harness` names `mount`,
+/// `execve`, `wait4` and `umount2`, and the VM refuses a program that names one
+/// before it starts — so it can never run there, and its lowering had no
+/// interpreter to be checked against. This package makes only the calls a host
+/// can make on a program's behalf, so the interpreter and the emitted
+/// instruction can be asked the same question.
+///
+/// The tally is asserted whole, as every harness here does: a case that stops
+/// being collected fails this rather than quietly shrinking the run.
 #[test]
 #[cfg(target_os = "linux")]
-fn the_vm_refuses_a_program_that_calls_the_kernel() {
+fn the_servable_syscall_harness_passes_on_every_engine() {
+    for backend in ["vm", "llvm", "hybrid"] {
+        let path = syscall_parity_harness();
+        let path = path.to_str().expect("a utf-8 path");
+        let output = kira(&["test", "--backend", backend, path]);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "the servable syscall harness did not run on {backend}: {}\n{stdout}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tally = stdout.lines().last().unwrap_or_default().to_owned();
+        assert_eq!(
+            tally, "10 passed, 0 failed, 0 skipped, 10 total",
+            "the servable syscall harness tally changed on {backend}"
+        );
+    }
+}
+
+/// The same kernel answers print the same bytes on all three engines.
+///
+/// The half a passing suite cannot prove, for the one feature that had no such
+/// check at all. Each printed number is derived from a real `-errno` the kernel
+/// put in a register, so a host that decoded an answer the emitted call leaves
+/// raw — or sign-extended a narrow descriptor differently — changes a line here
+/// even when every case still passes.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_servable_syscall_harness_prints_the_same_bytes_on_every_engine() {
+    let path = syscall_parity_harness();
+    let path = path.to_str().expect("a utf-8 path");
+    let runs: Vec<(&str, String)> = ["vm", "llvm", "hybrid"]
+        .into_iter()
+        .map(|backend| {
+            let output = kira(&["run", "--backend", backend, path]);
+            assert!(
+                output.status.success(),
+                "the servable syscall run failed on {backend}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (
+                backend,
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        runs[0].1.contains("kik-syscall-parity-end"),
+        "the run did not finish: {}",
+        runs[0].1
+    );
+    for (backend, stdout) in &runs[1..] {
+        assert_eq!(
+            &runs[0].1, stdout,
+            "the vm and {backend} backends disagree on the kernel's answers"
+        );
+    }
+}
+
+/// The VM refuses a program naming a call no interpreter can serve, by name and
+/// with the reason, before it starts.
+///
+/// Two halves, and both matter. It refuses, because `syscall-harness` names six
+/// calls that act on the interpreter's process or on the machine — and it names
+/// each of them with what it would have done, because "the VM cannot do this"
+/// leaves the reader to guess whether the fix is the program or the command
+/// line. It does *not* name `write`, `read`, `sync` or `ppoll`: those are served
+/// now, and a refusal listing them would send an author to change a call that
+/// works.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_vm_refuses_only_the_calls_no_interpreter_can_serve() {
     let path = syscall_harness();
     let path = path.to_str().expect("a utf-8 path");
     let output = kira(&["run", "--backend", "vm", path]);
@@ -139,9 +228,28 @@ fn the_vm_refuses_a_program_that_calls_the_kernel() {
         "unexpected refusal: {stderr}"
     );
     assert!(
-        stderr.contains("write"),
-        "the calls are not named: {stderr}"
+        stderr.contains("the process is the interpreter rather than the program"),
+        "the refusal does not say why: {stderr}"
     );
+    for call in [
+        "mount",
+        "umount2",
+        "reboot",
+        "execve",
+        "wait4",
+        "exit_group",
+    ] {
+        assert!(
+            stderr.contains(&format!("`{call}`")),
+            "`{call}` is not named: {stderr}"
+        );
+    }
+    for served in ["`write`", "`read`", "`sync`", "`ppoll`"] {
+        assert!(
+            !stderr.contains(served),
+            "{served} is served on the VM and must not be refused: {stderr}"
+        );
+    }
     assert!(
         stderr.contains("--backend llvm") && stderr.contains("--backend hybrid"),
         "the engines that do work are not both named: {stderr}"
