@@ -26,6 +26,17 @@
 //! Nothing here is LLVM's vocabulary: the registers are named the way the
 //! architecture manuals name them, and assembling them into a particular
 //! backend's inline-assembly notation belongs to that backend.
+//!
+//! [`host`] is the one thing beside the table, and it is here for the same
+//! reason both halves of the contract are: a host serving a program it is
+//! *interpreting* enters the kernel with the numbers and the registers this
+//! file already owns, so it reads them here rather than carrying a second copy.
+
+pub mod host;
+
+use thiserror::Error;
+
+pub use host::{call, perform};
 
 /// A Linux system call a `@FFI.Syscall` declaration may name.
 ///
@@ -197,6 +208,117 @@ impl LinuxSyscall {
     pub const fn returns(self) -> bool {
         !matches!(self, Self::ExitGroup)
     }
+
+    /// Whether an interpreter can serve this call on the program's behalf.
+    ///
+    /// A property of what the call *does*, which is why it lives on the call
+    /// rather than on the host that serves it: no host is in a position to
+    /// answer it differently, because the fact underneath is the same for all
+    /// of them — **under the interpreter the process is the interpreter, not
+    /// the program.**
+    ///
+    /// The four that answer yes act only on file descriptors and say what they
+    /// did. Serving one is indistinguishable from the program having made it,
+    /// so a `--backend vm` run of a program that only reads, writes, waits on
+    /// descriptors, or flushes can be compared byte for byte against a native
+    /// run — which is the oracle a `@FFI.Syscall` otherwise has none of.
+    ///
+    /// The rest act on the process itself or on the machine, and there the
+    /// difference between the interpreter and the program is the whole failure:
+    ///
+    /// - `wait4` reaps the *interpreter's* children, so a program waiting for
+    ///   one it started sees a process it never spawned, or blocks forever.
+    /// - `exit_group` ends the interpreter in the middle of the program it is
+    ///   running — under `kira test` that is the runner, and the rest of the
+    ///   suite never reports.
+    /// - `execve` replaces the interpreter's image, so the VM ceases to exist
+    ///   and there is nothing left to hand the program's result back to.
+    /// - `mount`, `umount2` and `reboot` act on the developer's real machine.
+    ///   `kira run --backend vm` on an init would mount over their filesystem
+    ///   and power the machine off.
+    ///
+    /// None of that applies to the code generator's lowering, where the process
+    /// really is the program — so this narrows one engine and changes nothing
+    /// about `--backend llvm` or the native half of `--backend hybrid`.
+    pub const fn servable_by_an_interpreter(self) -> bool {
+        match self {
+            Self::Read | Self::Write | Self::Sync | Self::Ppoll => true,
+            Self::Mount
+            | Self::Umount2
+            | Self::Reboot
+            | Self::Execve
+            | Self::Wait4
+            | Self::ExitGroup => false,
+        }
+    }
+
+    /// Why an interpreter refuses this call, as one clause naming the effect.
+    ///
+    /// Written once here rather than at each place that reports a refusal, so
+    /// the compile-time message and the runtime one cannot come to say different
+    /// things about the same call. Empty for a call that is served, which no
+    /// caller has a reason to ask about.
+    pub const fn interpreter_refusal(self) -> &'static str {
+        match self {
+            Self::Read | Self::Write | Self::Sync | Self::Ppoll => "",
+            Self::Mount => "would mount a filesystem on the machine running the interpreter",
+            Self::Umount2 => "would unmount a filesystem of the machine running the interpreter",
+            Self::Reboot => "would restart, halt, or power off the machine running the interpreter",
+            Self::Execve => {
+                "would replace the interpreter's own image, so the VM would cease to exist \
+                 mid-program"
+            }
+            Self::Wait4 => "would reap the interpreter's children rather than the program's",
+            Self::ExitGroup => {
+                "would end the interpreter itself, in the middle of the program it is running"
+            }
+        }
+    }
+}
+
+/// Why a system call a Kira program made did not reach the kernel.
+///
+/// Reserved for the call never happening. A call the kernel *refused* is not an
+/// error here: it answers `-errno` in its result register exactly as it does in
+/// a native build, and decoding that is the program's own job — which is what
+/// makes the two engines comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SyscallError {
+    /// This host does not enter a kernel at all.
+    ///
+    /// The default answer, and the only one on `wasm32`, on a non-Linux host,
+    /// and on a machine Kira has no register sequence for.
+    #[error(
+        "this host does not enter a kernel, so it cannot make the system call this program asked \
+         for"
+    )]
+    NoKernelHost,
+    /// The host enters a kernel, but not for this call.
+    ///
+    /// See [`LinuxSyscall::servable_by_an_interpreter`] for what separates the
+    /// two sets, and why it is not a property of the host.
+    #[error(
+        "`{}` cannot be served by an interpreter: it {}",
+        call.label(),
+        call.interpreter_refusal()
+    )]
+    Unservable {
+        /// The call the interpreter will not make.
+        call: LinuxSyscall,
+    },
+    /// More argument words than the kernel entry has registers for.
+    ///
+    /// The frontend refuses a seventh parameter, so this is a table and a
+    /// compiler that disagree rather than something an author can write.
+    #[error("a system call takes at most {MAX_SYSCALL_ARGUMENTS} arguments, and {0} were supplied")]
+    TooManyArguments(usize),
+    /// A declared position is not something a register can carry.
+    ///
+    /// Also unreachable from source: `syscall_word_of` in the frontend refuses a
+    /// float, an aggregate, and a `CString` result. Reaching it means an import
+    /// table was built by something that did not apply those rules.
+    #[error("a `@FFI.Syscall` position that no register can carry reached the kernel seam")]
+    NotARegisterWord,
 }
 
 /// An architecture Kira emits system calls for.
@@ -417,5 +539,54 @@ mod tests {
         for syscall in LINUX_SYSCALLS {
             assert_eq!(syscall.returns(), syscall != LinuxSyscall::ExitGroup);
         }
+    }
+
+    /// The split, pinned. Four calls act only on file descriptors and are
+    /// therefore the same call whoever's process makes them; the other six act
+    /// on the process or the machine, which under the interpreter is not the
+    /// program's.
+    #[test]
+    fn an_interpreter_serves_the_calls_that_act_only_on_descriptors() {
+        for syscall in [
+            LinuxSyscall::Read,
+            LinuxSyscall::Write,
+            LinuxSyscall::Sync,
+            LinuxSyscall::Ppoll,
+        ] {
+            assert!(syscall.servable_by_an_interpreter(), "{}", syscall.label());
+        }
+        for syscall in [
+            LinuxSyscall::Mount,
+            LinuxSyscall::Umount2,
+            LinuxSyscall::Reboot,
+            LinuxSyscall::Execve,
+            LinuxSyscall::Wait4,
+            LinuxSyscall::ExitGroup,
+        ] {
+            assert!(!syscall.servable_by_an_interpreter(), "{}", syscall.label());
+        }
+    }
+
+    /// Every refused call says what it would do, and no served one carries a
+    /// reason it will never be asked for. A refusal naming nothing is what sends
+    /// a reader looking for a flag to pass instead of an engine to change.
+    #[test]
+    fn every_refused_call_carries_the_effect_that_refuses_it() {
+        for syscall in LINUX_SYSCALLS {
+            assert_eq!(
+                syscall.interpreter_refusal().is_empty(),
+                syscall.servable_by_an_interpreter(),
+                "{}",
+                syscall.label()
+            );
+        }
+        assert_eq!(
+            SyscallError::Unservable {
+                call: LinuxSyscall::Reboot
+            }
+            .to_string(),
+            "`reboot` cannot be served by an interpreter: it would restart, halt, or power off \
+             the machine running the interpreter"
+        );
     }
 }

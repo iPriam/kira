@@ -10,8 +10,9 @@ use std::io::{Read, Seek, SeekFrom};
 
 use super::{FileRequest, FileResponse, FileSystemError};
 use crate::{
-    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError,
-    NativeReturn, NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, LinuxSyscall, NativeArg,
+    NativeCallError, NativeReturn, NativeStateError, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, SyscallError,
 };
 
 /// Runs one request against the process's real filesystem.
@@ -191,6 +192,10 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
         self.inner.call_foreign(foreign_id, args)
+    }
+
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        self.inner.syscall(call, args)
     }
 
     fn foreign_callback(&mut self, callback_id: u32) -> Result<u64, ForeignCallError> {

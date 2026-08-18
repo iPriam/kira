@@ -79,7 +79,9 @@ pub use native_state::{
 };
 pub use ownership::Ownership;
 pub use string_op::StringOp;
-pub use syscall::{LINUX_SYSCALLS, LinuxSyscall, MAX_SYSCALL_ARGUMENTS, SYSCALL_OS, SyscallArch};
+pub use syscall::{
+    LINUX_SYSCALLS, LinuxSyscall, MAX_SYSCALL_ARGUMENTS, SYSCALL_OS, SyscallArch, SyscallError,
+};
 pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.
@@ -405,6 +407,30 @@ pub trait HostCapabilities {
         Err(ForeignCallError::NoForeignHost)
     }
 
+    /// Makes one Linux system call on the running program's behalf, answering
+    /// the word the kernel's result register holds.
+    ///
+    /// The answer is the kernel's own encoding — a value, or a small negative
+    /// `-errno` — undecoded, because the Kira program decodes it. A host that
+    /// decoded it here would make the interpreted call answer something the
+    /// call the backend emitted does not, and the two engines printing the same
+    /// bytes is the whole reason a host serves this at all.
+    ///
+    /// The default refuses, exactly as [`Self::call_native`] refuses for want of
+    /// a native half: most hosts stand nowhere near a Linux kernel — a browser
+    /// tab, a test, a `wasm32` embedder — and a program that reaches this on one
+    /// of them must hear so rather than receive a number it will read as a
+    /// count. A host that does stand in a Linux process grants the capability by
+    /// answering with [`syscall::perform`], which is where the registers are.
+    ///
+    /// Which calls a host may serve at all is not the host's question:
+    /// [`LinuxSyscall::servable_by_an_interpreter`] answers it, because it turns
+    /// on what the call does rather than on who is asked.
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        let _ = (call, args);
+        Err(SyscallError::NoKernelHost)
+    }
+
     /// Boxes a backend-neutral Kira value in stable callback-state storage.
     fn native_state_create(
         &mut self,
@@ -611,5 +637,22 @@ mod tests {
             host.call_foreign(0, &[ForeignArg::I32(7)]),
             Err(ForeignCallError::NoForeignHost)
         );
+    }
+
+    /// A host that was never given a kernel says so, for every call including
+    /// the ones an interpreter is allowed to serve. Answering a number instead
+    /// would be worse than refusing: a Kira program reads a non-negative answer
+    /// as a byte count.
+    #[test]
+    fn host_capabilities_refuses_system_calls_by_default() {
+        let mut host = CapturingHost::new();
+        for call in LINUX_SYSCALLS {
+            assert_eq!(
+                host.syscall(call, &[1, 0, 0]),
+                Err(SyscallError::NoKernelHost),
+                "{}",
+                call.label()
+            );
+        }
     }
 }

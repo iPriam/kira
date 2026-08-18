@@ -540,6 +540,17 @@ pub enum ForeignCallError {
     /// This host has no generated foreign-adapter library.
     #[error("this host has no foreign-call adapter loaded")]
     NoForeignHost,
+    /// A `@FFI.Syscall` import never reached the kernel.
+    ///
+    /// A variant here rather than a separate error out of the seam, because a
+    /// system call arrives at a host as a foreign call like any other — the VM
+    /// pushes `CallForeign(id)` whichever ABI the import declares — and the two
+    /// mechanisms have to fail into one type for the call site to have one
+    /// answer. See [`crate::syscall::SyscallError`] for what the kernel not
+    /// being reached does and does not cover: a call the kernel *refused* is a
+    /// `-errno` in the result register, not this.
+    #[error(transparent)]
+    Syscall(#[from] crate::syscall::SyscallError),
     /// The caller supplied the wrong number of arguments.
     #[error("foreign call expected {expected} arguments but received {actual}")]
     ArgumentCount {

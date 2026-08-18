@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     FileRequest, FileResponse, FileSystemError, ForeignArg, ForeignCallError, ForeignResult,
-    HostCapabilities, NativeArg, NativeCallError, NativeReturn,
+    HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeReturn, SyscallError,
 };
 
 /// The program-stable identity of a type stored in native callback state.
@@ -646,6 +646,10 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
         self.inner.call_foreign(foreign_id, args)
+    }
+
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        self.inner.syscall(call, args)
     }
 
     fn foreign_callback(&mut self, callback_id: u32) -> Result<u64, ForeignCallError> {
