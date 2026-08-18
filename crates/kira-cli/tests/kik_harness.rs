@@ -113,7 +113,7 @@ fn the_syscall_harness_passes_against_the_kernel() {
         );
         let tally = stdout.lines().last().unwrap_or_default().to_owned();
         assert_eq!(
-            tally, "18 passed, 0 failed, 0 skipped, 18 total",
+            tally, "19 passed, 0 failed, 0 skipped, 19 total",
             "the syscall harness tally changed on {backend}"
         );
     }

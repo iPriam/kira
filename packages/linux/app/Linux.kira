@@ -127,6 +127,9 @@ function linuxSysWait4(pid: Int, status: RawPtr, options: Int, usage: RawPtr) ->
 @FFI.Syscall { name: sync; }
 function linuxSysSync() -> Int;
 
+@FFI.Syscall { name: ppoll; }
+function linuxSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int;
+
 // The one call control does not come back from, so it names no result: there is
 // no value for the kernel to answer with and no next instruction to answer it
 // to. The compiler knows this and tells the optimizer, which is why a caller need
@@ -351,4 +354,21 @@ function linuxReboot(command: Int) -> Result<Int, LinuxError> {
 @Native
 function linuxSync() -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysSync())
+}
+
+// ─── Waiting ────────────────────────────────────────────────────────────────
+
+// Blocks until a signal arrives, waiting on no file descriptor at all.
+//
+// What a program does when it has nothing left to do and must not exit. PID 1
+// is the case that needs it: returning from PID 1 is a kernel panic rather than
+// an exit, so an init that has started everything it is going to start still has
+// to be somewhere, and spinning on `wait4` to be that somewhere would burn a
+// processor for the life of the machine.
+//
+// It answers `EINTR` every time a signal is delivered, which is not a failure —
+// it is the only thing that ends the wait. A caller loops.
+@Native
+function linuxWaitForever() -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysPpoll(RawPtr(0), U64(0), RawPtr(0), RawPtr(0)))
 }

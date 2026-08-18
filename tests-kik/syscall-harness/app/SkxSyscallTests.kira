@@ -213,3 +213,17 @@ Test SkxTheRawEntryPointAnswersNegativeErrno {
     test { return skxRawWriteAnswer() }
     expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
 }
+
+// `ppoll` is what PID 1 idles on, so the case that can be tested is the one that
+// comes back: waiting on a descriptor array the kernel cannot read is `EFAULT`.
+// Testing the wait itself is not possible by construction — a successful
+// `linuxWaitForever` never returns, which is the whole point of it.
+@Native
+function skxPpollFaultAnswer() -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysPpoll(RawPtr(1), U64(1), RawPtr(0), RawPtr(0)))
+}
+
+Test SkxPpollOverAnUnreadableArrayIsEfault {
+    test { return skxErrno(skxPpollFaultAnswer()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}

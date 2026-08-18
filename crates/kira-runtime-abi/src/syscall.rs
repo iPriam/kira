@@ -57,6 +57,16 @@ pub enum LinuxSyscall {
     ExitGroup = 7,
     /// `sync()` — flush the filesystem caches.
     Sync = 8,
+    /// `ppoll(fds, nfds, timeout, sigmask)` — wait for file descriptors.
+    ///
+    /// This is how a program waits for nothing in particular. AArch64 has no
+    /// `pause` at all — the generic system-call table every architecture added
+    /// since 2012 carries only the newer forms — so `ppoll` is the one call
+    /// that blocks on both machines Kira lowers on. Given four null arguments
+    /// it waits on no descriptor, without a timeout, which is what PID 1 does
+    /// once it has nothing left to start; unlike a `wait4` loop it costs no
+    /// processor time while doing it.
+    Ppoll = 9,
 }
 
 /// Every system call this table knows, in tag order.
@@ -64,7 +74,7 @@ pub enum LinuxSyscall {
 /// A total list rather than a search: the frontend prints it when it refuses an
 /// unknown name, and a name that is in the enum but missing from here would be
 /// a call the author cannot discover.
-pub const LINUX_SYSCALLS: [LinuxSyscall; 9] = [
+pub const LINUX_SYSCALLS: [LinuxSyscall; 10] = [
     LinuxSyscall::Read,
     LinuxSyscall::Write,
     LinuxSyscall::Mount,
@@ -74,6 +84,7 @@ pub const LINUX_SYSCALLS: [LinuxSyscall; 9] = [
     LinuxSyscall::Wait4,
     LinuxSyscall::ExitGroup,
     LinuxSyscall::Sync,
+    LinuxSyscall::Ppoll,
 ];
 
 /// How many arguments a Linux system call can take.
@@ -102,6 +113,7 @@ impl LinuxSyscall {
             6 => Some(Self::Wait4),
             7 => Some(Self::ExitGroup),
             8 => Some(Self::Sync),
+            9 => Some(Self::Ppoll),
             _ => None,
         }
     }
@@ -123,6 +135,7 @@ impl LinuxSyscall {
             Self::Wait4 => "wait4",
             Self::ExitGroup => "exit_group",
             Self::Sync => "sync",
+            Self::Ppoll => "ppoll",
         }
     }
 
@@ -155,6 +168,7 @@ impl LinuxSyscall {
                 Self::Wait4 => 260,
                 Self::ExitGroup => 94,
                 Self::Sync => 81,
+                Self::Ppoll => 73,
             },
             SyscallArch::X86_64 => match self {
                 Self::Read => 0,
@@ -166,6 +180,7 @@ impl LinuxSyscall {
                 Self::Wait4 => 61,
                 Self::ExitGroup => 231,
                 Self::Sync => 162,
+                Self::Ppoll => 271,
             },
         }
     }
@@ -305,6 +320,7 @@ mod tests {
         assert_eq!(LinuxSyscall::Wait4.tag(), 6);
         assert_eq!(LinuxSyscall::ExitGroup.tag(), 7);
         assert_eq!(LinuxSyscall::Sync.tag(), 8);
+        assert_eq!(LinuxSyscall::Ppoll.tag(), 9);
     }
 
     #[test]
@@ -313,7 +329,7 @@ mod tests {
             assert_eq!(LinuxSyscall::from_tag(syscall.tag()), Some(syscall));
             assert_eq!(LinuxSyscall::parse(syscall.label()), Some(syscall));
         }
-        assert_eq!(LinuxSyscall::from_tag(9), None);
+        assert_eq!(LinuxSyscall::from_tag(10), None);
     }
 
     /// A name this table does not carry resolves to nothing at all. The near
