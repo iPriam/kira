@@ -207,8 +207,7 @@ Test FenStateChain2 {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-// 3 steps: R+P+D = 1+2+3 = 6  (note: same as chain4 sum minus final Idle)
-// Actually: step1=R(1)+step2=P(2)+step3=D(3) = 6
+// 3 steps: step1=R(1) + step2=P(2) + step3=D(3) = 6
 Test FenStateChain3 {
     test { return fenNativeStateChain(3) }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }

@@ -285,11 +285,29 @@ impl Session {
     }
 
     /// Records that a callback ran through `generation`.
+    ///
+    /// The store happens under `observed_lock` because that is the lock
+    /// [`Self::wait_for_vm_reload`] holds while it evaluates its predicate.
+    /// Publishing outside it leaves a window where the store and the notify both
+    /// land after a waiter has read the predicate as false and before it has
+    /// enqueued on the condvar: the wakeup reaches nobody, and a reload that did
+    /// happen is reported as never observed once the full timeout expires.
+    ///
+    /// `fetch_max` rather than load-compare-store, because two callbacks can
+    /// observe different generations at once and the read-then-write pair lets
+    /// the lower one land second, moving the watermark backwards.
     fn observe_generation(&self, generation: u64) {
-        let observed = self.observed_generation.load(Ordering::Acquire);
-        if observed < generation {
-            self.observed_generation
-                .store(generation, Ordering::Release);
+        let guard = self
+            .observed_lock
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        let previous = self
+            .observed_generation
+            .fetch_max(generation, Ordering::AcqRel);
+        // Released before notifying so a woken waiter does not immediately block
+        // on a mutex this thread still holds.
+        drop(guard);
+        if previous < generation {
             self.observed_wait.notify_all();
         }
     }

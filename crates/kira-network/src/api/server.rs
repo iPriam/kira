@@ -254,6 +254,36 @@ impl HttpRouter {
     }
 }
 
+/// Whether an `accept` error says something about the *connection* rather than
+/// about the listener.
+///
+/// `accept` reports conditions that leave the listener perfectly good: a peer
+/// that disconnects during the TCP handshake is `ECONNABORTED`, a signal
+/// arriving mid-call is `EINTR`, and a process or system that has momentarily
+/// run out of descriptors is `EMFILE`/`ENFILE`. Returning on any of those ends
+/// the whole server because one client mistimed a connection or the descriptor
+/// table briefly filled, which is the difference between a dropped request and
+/// an outage.
+///
+/// Anything else means the listener itself has stopped working, and the caller
+/// should hear about it.
+fn is_transient_accept(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    if matches!(
+        error.kind(),
+        ErrorKind::ConnectionAborted | ErrorKind::Interrupted
+    ) {
+        return true;
+    }
+    // EMFILE and ENFILE have no stable `ErrorKind` across platforms, so they are
+    // recognised by number where there is one.
+    #[cfg(unix)]
+    if matches!(error.raw_os_error(), Some(libc_emfile) if libc_emfile == 24 || libc_emfile == 23) {
+        return true;
+    }
+    false
+}
+
 /// A concurrent HTTP/1.1 or HTTP/2 router server.
 pub struct HttpServer {
     listener: TcpListener,
@@ -316,7 +346,19 @@ impl HttpServer {
             tokio::select! {
                 _ = token.cancelled() => return Ok(()),
                 accepted = listener.accept() => {
-                    let (stream, _) = accepted?;
+                    let (stream, _) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(error) if is_transient_accept(&error) => {
+                            // Descriptor exhaustion resolves only when something
+                            // else closes one, and retrying immediately would
+                            // spin at full speed until it does. A short pause
+                            // costs an aborted connection nothing and keeps a
+                            // full table from becoming a busy loop.
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     let router = Arc::clone(&router);
                     let token = token.clone();
                     tokio::spawn(async move {

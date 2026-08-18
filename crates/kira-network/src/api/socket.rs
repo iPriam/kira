@@ -164,7 +164,16 @@ fn into_tungstenite(message: WebSocketMessage) -> Message {
 
 type WebSocketTransport = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// A reconnecting WebSocket client session.
+/// A WebSocket client session that retries while *connecting*.
+///
+/// The retry budget in [`WebSocketConfig`] applies to the initial dial only.
+/// Once a socket is live it is not redialled: a transport failure surfaces as
+/// `Io` from `send` and as `Canceled` from `next`, and recovering from it is the
+/// caller's to do by building a new client.
+///
+/// Named for what it does rather than what it sounds like, because "reconnecting
+/// client" reads as transparent recovery — and a caller who believed that would
+/// omit the retry it actually needs and lose messages at the first blip.
 pub struct WebSocketClient {
     url: String,
     config: WebSocketConfig,

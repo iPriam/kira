@@ -57,10 +57,15 @@ impl Heap {
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name a struct with that field.
     pub fn set_field(&mut self, id: StructId, index: u64, value: Value) -> bool {
-        let value = self.own(value);
+        // Validated before ownership is taken. `own` allocates heap objects and
+        // consumes the caller's `NativeSnapshot` slot, so returning `false`
+        // after it would leak what it allocated *and* hand the caller back a
+        // handle it believes it still owns — the doc above promises this call
+        // "changed nothing and dropped nothing" when it refuses.
         if self.field(id, index).is_none() {
             return false;
         }
+        let value = self.own(value);
         // Fields of this struct's own before anything lands in them: a write
         // through one handle must not be visible through another that copied it.
         self.make_struct_unique(id);
@@ -68,6 +73,10 @@ impl Heap {
         // every holder of it; dropping that one would free the storage the other
         // holders are still reading.
         let Some(previous) = self.field(id, index) else {
+            // Unreachable given the check above, but if unsharing ever left the
+            // field unreadable the owned value would be ours to release: it is
+            // no longer the caller's and nothing else will free it.
+            self.drop_value(value);
             return false;
         };
         self.drop_value(previous);

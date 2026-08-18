@@ -73,11 +73,26 @@ impl CancellationToken {
     }
 
     /// Waits until cancellation is requested.
+    ///
+    /// The waiter is enrolled *before* the flag is read, and that order is the
+    /// whole correctness of this function. `notify_waiters` wakes the waiters
+    /// enrolled at the moment it runs and keeps no permit for a later one — so
+    /// reading the flag first and enrolling second leaves a window where
+    /// `cancel` happens in between, wakes nobody, and this future then waits for
+    /// a notification that has already been sent. Every cancellation-aware
+    /// operation built on this token would hang.
+    ///
+    /// `enable` is what makes the order possible: it registers the future with
+    /// the `Notify` without awaiting it, so the flag can still be checked
+    /// afterwards and the fast path taken.
     pub async fn cancelled(&self) {
+        let notified = self.state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         if self.is_cancelled() {
             return;
         }
-        self.state.notify.notified().await;
+        notified.await;
     }
 }
 
