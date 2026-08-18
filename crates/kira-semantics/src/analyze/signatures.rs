@@ -158,7 +158,7 @@ impl<'a> Analyzer<'a> {
     /// A name declared once keeps its plain symbol. That is what leaves every
     /// program that overloads nothing byte-identical to what it compiled to
     /// before overloading existed.
-    fn name_overloads(&mut self) {
+    pub(super) fn name_overloads(&mut self) {
         let overloaded: Vec<FuncId> = self
             .sig_index
             .values()
