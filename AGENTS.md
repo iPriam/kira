@@ -16,9 +16,9 @@ Stop only when the request is complete or a concrete external blocker leaves no 
 
 All the work that you do, the commits, prs... will be public and seen therefore stay professional. All the work that is uncommited is yours in other sessions, treat it as yours because it is.
 
-Every issue that was pre existing is yours to fix, do not try to avoid it because it is pre existing or to separate new issues from pre exising ones (scopping pre existing to new issue is forbidden too)
+Every pre-existing issue is yours to fix. Do not avoid one because it is pre-existing, do not separate new issues from pre-existing ones, and do not narrow a pre-existing issue to the part the current change touched.
 
-Every kira syntax/behavior MUST always be in `tests-kik` harness(es), if you find pre existing syntax or behavior that isn't in there, you MUST add it immediatly and not deffer it as we have not assured completeness of the harness.
+Every kira syntax/behavior MUST always be in `tests-kik` harness(es), if you find pre-existing syntax or behavior that isn't in there, you MUST add it immediately and not defer it as we have not assured completeness of the harness.
 
 ## Git
 
@@ -26,7 +26,7 @@ Before running or suggesting any Git command except `git diff` or `git status`, 
 
 When pushing work, push to main on the fork first. Then upstream the changes to upstream/main only if the user is a maintainer of the upstream repository (currently only iPriam).
 
-Before upstreaming, ensure you have requested a review from at least one AI review tool: @coderabbitai (cheap, good default), @codex (smarter, for complex tasks, very expensive), or another AI review tool the user has mentioned.
+Before upstreaming, obtain a *completed* review from at least one AI review tool: @coderabbitai (cheap, good default), @codex (smarter, for complex tasks, very expensive), or another AI review tool the user has mentioned. A requested review is not a completed one. Wait for its findings, then record for each finding whether it was fixed or why it was not, and upstream only after that.
 
 ## Success
 
