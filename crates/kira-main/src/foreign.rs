@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
-    HostCapabilities, NativeArg, NativeCallError, NativeReturn, NativeStateError, NativeStateToken,
-    NativeStateTypeId, NativeStateValue,
+    HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeReturn, NativeStateError,
+    NativeStateToken, NativeStateTypeId, NativeStateValue, SyscallError, syscall,
 };
 
 /// The native target of one direct foreign import.
@@ -29,6 +29,16 @@ pub enum ForeignBindingTarget {
     Process { symbol: String },
     /// A symbol supplied by a separately loaded native library.
     Library { path: PathBuf, symbol: String },
+    /// The Linux kernel, entered by instruction rather than by symbol.
+    ///
+    /// A kind of its own because a `@FFI.Syscall` has no library to open and no
+    /// name to look up — the number is the compiler's and the entry is one
+    /// instruction. Recording it as [`Self::Unavailable`] instead, which is
+    /// what a library lookup for the empty string produced, made a call the
+    /// host can serve perfectly well report that "the declaring library
+    /// resolved to no artifact", sending a reader to look for a
+    /// `nativeLibraries` row that cannot exist.
+    Syscall { call: LinuxSyscall },
 }
 
 /// One foreign import's binding and the exact-width signature to marshal
@@ -79,11 +89,32 @@ impl ForeignBinding {
         }
     }
 
+    /// Creates a binding that enters the kernel instead of a library.
+    pub fn syscall(call: LinuxSyscall, signature: ForeignSignature) -> ForeignBinding {
+        ForeignBinding {
+            target: ForeignBindingTarget::Syscall { call },
+            signature,
+        }
+    }
+
+    /// Returns the system call this binding enters, or `None` when it binds a
+    /// symbol.
+    pub fn syscall_target(&self) -> Option<LinuxSyscall> {
+        match &self.target {
+            ForeignBindingTarget::Syscall { call } => Some(*call),
+            ForeignBindingTarget::Unavailable
+            | ForeignBindingTarget::Process { .. }
+            | ForeignBindingTarget::Library { .. } => None,
+        }
+    }
+
     /// Returns the path of a separately loaded library target.
     pub fn library_path(&self) -> Option<&Path> {
         match &self.target {
             ForeignBindingTarget::Library { path, .. } => Some(path),
-            ForeignBindingTarget::Unavailable | ForeignBindingTarget::Process { .. } => None,
+            ForeignBindingTarget::Unavailable
+            | ForeignBindingTarget::Process { .. }
+            | ForeignBindingTarget::Syscall { .. } => None,
         }
     }
 
@@ -92,7 +123,7 @@ impl ForeignBinding {
         match &self.target {
             ForeignBindingTarget::Process { symbol }
             | ForeignBindingTarget::Library { symbol, .. } => Some(symbol),
-            ForeignBindingTarget::Unavailable => None,
+            ForeignBindingTarget::Unavailable | ForeignBindingTarget::Syscall { .. } => None,
         }
     }
 }
@@ -178,7 +209,9 @@ impl<H: HostCapabilities> ForeignHost<H> {
                     }?;
                     libraries.push(library);
                 }
-                ForeignBindingTarget::Unavailable => {}
+                // Neither of these opens anything: one has no artifact to open
+                // and the other is an instruction, not a library.
+                ForeignBindingTarget::Unavailable | ForeignBindingTarget::Syscall { .. } => {}
             }
         }
         Ok(ForeignHost {
@@ -252,6 +285,21 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.native_state_free(token)
     }
 
+    /// Enters this process's kernel, which is the same one the emitted call
+    /// would have entered.
+    ///
+    /// The grant `write_line` already makes, in the direction the kernel reads:
+    /// a host standing in this process is a host whose descriptors the program
+    /// is writing to. Which calls it may serve is not this host's decision —
+    /// [`syscall::call`] applies the policy that belongs to the call itself.
+    fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
+        // SAFETY: the words came from a `@FFI.Syscall` call site the frontend
+        // validated to register-width scalars, and a pointer among them is one
+        // this program produced — the obligation the `@FFI.Extern` seam beside
+        // it already carries for every pointer it hands a C library.
+        unsafe { syscall::perform(call, args) }
+    }
+
     fn call_foreign(
         &mut self,
         foreign_id: u32,
@@ -306,6 +354,13 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
             ForeignBindingTarget::Unavailable => {
                 self.detail = Some("the foreign binding is unavailable on this target".to_owned());
                 return Err(ForeignCallError::NoForeignHost);
+            }
+            // Nothing is opened, looked up, or marshalled into C storage: the
+            // arguments are register words and the entry is one instruction.
+            ForeignBindingTarget::Syscall { call } => {
+                let call = *call;
+                let signature = binding.signature.clone();
+                return syscall::call(self, call, &signature, args);
             }
         };
         match result {
