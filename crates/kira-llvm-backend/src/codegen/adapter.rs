@@ -103,6 +103,40 @@ impl Codegen<'_> {
         }
     }
 
+    /// Emits an adapter that answers a data symbol's address.
+    ///
+    /// One block, one store, one return: the symbol is declared as the object it
+    /// is, its address is written into the caller's result slot as a `RawPtr`,
+    /// and no call is emitted. The argument count is not checked because an
+    /// `@FFI.Address` declaration takes none, which the frontend refused
+    /// anything else for.
+    fn emit_address_adapter(&mut self, index: usize) {
+        let entry = self.program.foreign_imports[index].import.clone();
+        let adapter = self.foreign_adapters[index];
+        let symbol = self.declare_foreign_data(entry.symbol());
+        let types = self.types;
+        // SAFETY: `adapter.value` is a freshly declared function of this live
+        // module and the block below is its only one; `symbol` is a global of
+        // the same module and outlives the store that names it.
+        unsafe {
+            let block =
+                LLVMAppendBasicBlockInContext(self.context, adapter.value, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, block);
+            let out = LLVMGetParam(adapter.value, 2);
+            let address = LLVMBuildPtrToInt(
+                self.builder,
+                symbol,
+                types.i64,
+                c"address.word".as_ptr(),
+            );
+            self.store_bridge(out, BridgeValueTag::RAW_PTR.0, address);
+            LLVMBuildRet(
+                self.builder,
+                LLVMConstInt(types.i32, u64::from(ForeignAdapterStatus::SUCCESS.0), 0),
+            );
+        }
+    }
+
     /// Emits the body of every declared foreign adapter.
     pub(super) fn emit_foreign_adapters(&mut self) -> Result<(), LlvmError> {
         for index in 0..self.program.foreign_imports.len() {
@@ -118,6 +152,17 @@ impl Codegen<'_> {
         // satisfy, for code that only ever runs on another platform.
         if self.unavailable.contains(&index) {
             self.emit_unavailable_adapter(index);
+            return Ok(());
+        }
+        // A data symbol is bound and then nothing is invoked. The adapter below
+        // marshals arguments and calls; doing either here would call an object's
+        // first bytes, so an address import gets an adapter of its own.
+        if self.program.foreign_imports[index]
+            .import
+            .abi()
+            .answers_an_address()
+        {
+            self.emit_address_adapter(index);
             return Ok(());
         }
         let import = self.program.foreign_imports[index].import.clone();

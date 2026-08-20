@@ -283,7 +283,11 @@ fn run_with_bindings(
         .iter()
         .zip(paths)
         .map(|(entry, path)| {
-            path.map_or_else(
+            // An address import binds its symbol exactly as a call does; what
+            // differs is that nothing is invoked after the lookup. The manifest
+            // carries that in the ABI, and it has to survive being rebuilt here
+            // or the session calls an object's first bytes.
+            let binding = path.map_or_else(
                 || kira_main::ForeignBinding::unavailable(entry.signature().clone()),
                 |path| {
                     if native::is_process_binding_path(&path) {
@@ -299,7 +303,12 @@ fn run_with_bindings(
                         )
                     }
                 },
-            )
+            );
+            if entry.abi().answers_an_address() {
+                binding.answering_address()
+            } else {
+                binding
+            }
         })
         .collect();
     let callbacks = module

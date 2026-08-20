@@ -525,7 +525,11 @@ fn link_vm(
         .iter()
         .zip(paths)
         .map(|(entry, path)| {
-            path.map_or_else(
+            // An address import binds its symbol exactly as a call does; what
+            // differs is that nothing is invoked after the lookup. The manifest
+            // carries that in the ABI, and it has to survive being rebuilt here
+            // or the session calls an object's first bytes.
+            let binding = path.map_or_else(
                 || ForeignBinding::unavailable(entry.signature().clone()),
                 |path| {
                     if path == Path::new(kira_dynamic_ffi::PROCESS_BINDING_MARKER) {
@@ -534,7 +538,12 @@ fn link_vm(
                         ForeignBinding::dynamic(path, entry.symbol(), entry.signature().clone())
                     }
                 },
-            )
+            );
+            if entry.abi().answers_an_address() {
+                binding.answering_address()
+            } else {
+                binding
+            }
         })
         .collect();
     let callbacks = program

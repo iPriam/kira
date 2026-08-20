@@ -222,6 +222,16 @@ impl Session {
             .iter()
             .find(|library| library.path() == path)
             .ok_or(ForeignCallError::NoForeignHost)?;
+        // A data symbol is bound and then nothing is invoked: the answer is
+        // where the object is. The lookup below is the one a call would do, and
+        // what is skipped is the call -- invoking a data symbol executes the
+        // object's first bytes, which is a fault on a page that is not code.
+        if import.abi.answers_an_address() {
+            return library
+                .symbol_address(&import.symbol)
+                .map(|address| ForeignResult::RawPtr(address as u64))
+                .map_err(|_| ForeignCallError::NoForeignHost);
+        }
         // SAFETY: the binding and aggregate table came from the validated
         // manifest, and the library owns the exported symbol address.
         unsafe { library.call(&import.symbol, &import.signature, args) }.map_err(
