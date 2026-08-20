@@ -140,19 +140,33 @@ impl Harvest {
         }
     }
 
-    /// An enum crosses as the integer type its target represents it with.
+    /// An enum crosses as a signed integer of the width its target gives it.
     ///
     /// It gets no name of its own: an enum is an integer at the boundary, and a
     /// Kira alias for it would suggest the seam checks that a value is one of
     /// the enumerators, which C does not and neither does this.
+    ///
+    /// The SIGN is this seam's, not the target's. A C enum whose enumerators are
+    /// all non-negative is `unsigned int` under the Itanium ABI and `int` under
+    /// MSVC, so reading the target's choice makes one header bind two ways and a
+    /// generated binding that is checked in stop matching the moment it is
+    /// regenerated on another host. The width is what the ABI actually fixes;
+    /// the sign is not observable for an enumerator that fits, so this pins it
+    /// and a binding stays the same file on every target.
     fn map_enum(&mut self, canonical: &CType<'_>) -> Result<KiraType, String> {
         let declaration = canonical.declaration();
         if declaration.kind() != CursorKind::ENUM_DECL {
             return Err("an enum with no declaration to read a width from".to_owned());
         }
         let integer = declaration.enum_integer_type();
-        scalar_for(integer.kind(), &integer)
-            .ok_or_else(|| "an enum with a width this seam cannot carry".to_owned())
+        let width = integer.size();
+        match width {
+            Some(1) => Ok(KiraType::Int("I8")),
+            Some(2) => Ok(KiraType::Int("I16")),
+            Some(4) => Ok(KiraType::Int("I32")),
+            Some(8) => Ok(KiraType::Int("Int")),
+            _ => Err("an enum with a width this seam cannot carry".to_owned()),
+        }
     }
 
     /// A pointer is `RawPtr`, `CString`, a callback, or a named pointer alias.
