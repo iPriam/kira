@@ -238,6 +238,27 @@ impl ForeignSession {
         {
             eprintln!("ffi call {foreign_id}: {:?}", binding.target);
         }
+        // A data symbol is bound and then nothing is invoked, in a callback
+        // session exactly as on the main one.
+        if binding.answers_address {
+            let symbol = match &binding.target {
+                ForeignBindingTarget::Library { symbol, .. }
+                | ForeignBindingTarget::Process { symbol } => symbol.clone(),
+                _ => return Err(ForeignCallError::NoForeignHost),
+            };
+            let wanted_process = matches!(binding.target, ForeignBindingTarget::Process { .. });
+            let Some(library) = self
+                .libraries
+                .iter()
+                .find(|library| library.is_process() == wanted_process)
+            else {
+                return Err(ForeignCallError::NoForeignHost);
+            };
+            return library
+                .symbol_address(&symbol)
+                .map(|address| ForeignResult::RawPtr(address as u64))
+                .map_err(|_| ForeignCallError::NoForeignHost);
+        }
         match &binding.target {
             ForeignBindingTarget::Library { path, symbol } => {
                 let Some(library) = self

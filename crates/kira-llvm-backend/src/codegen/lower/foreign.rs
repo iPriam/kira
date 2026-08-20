@@ -35,7 +35,20 @@ impl FunctionLowering<'_, '_> {
         // marshals arguments into C storage and builds a CIF, and doing any of
         // it here would call the object's first bytes.
         if import.abi().answers_an_address() {
-            return Ok(self.codegen.declare_foreign_data(import.symbol()));
+            let symbol = self.codegen.declare_foreign_data(import.symbol());
+            // A Kira `RawPtr` is an integer at this layer, so the symbol's
+            // address crosses as one. Handing back the global itself types the
+            // call site as `ptr` and the module is rejected.
+            // SAFETY: `symbol` is a global of this live module and the builder
+            // is positioned in the current block.
+            return Ok(unsafe {
+                LLVMBuildPtrToInt(
+                    self.codegen.builder,
+                    symbol,
+                    self.codegen.types.i64,
+                    c"foreign.address".as_ptr(),
+                )
+            });
         }
         let signature = import.signature();
         let params = signature.parameters().to_vec();

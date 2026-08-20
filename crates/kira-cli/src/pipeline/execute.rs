@@ -245,7 +245,11 @@ fn bindings_from_paths(
             if let Some(call) = entry.as_syscall() {
                 return kira_main::ForeignBinding::syscall(call, entry.signature().clone());
             }
-            path.map_or_else(
+            // An address import binds its symbol exactly as a call does; what
+            // differs is that nothing is invoked after the lookup. The manifest
+            // carries that in the ABI, and it has to survive being rebuilt here
+            // or the session calls an object's first bytes.
+            let binding = path.map_or_else(
                 || kira_main::ForeignBinding::unavailable(entry.signature().clone()),
                 |path| {
                     if native::is_process_binding_path(&path) {
@@ -261,7 +265,12 @@ fn bindings_from_paths(
                         )
                     }
                 },
-            )
+            );
+            if entry.abi().answers_an_address() {
+                binding.answering_address()
+            } else {
+                binding
+            }
         })
         .collect())
 }
