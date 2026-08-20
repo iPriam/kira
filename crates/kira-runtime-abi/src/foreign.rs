@@ -21,6 +21,16 @@ pub enum ForeignAbi {
     /// number that name resolves to is the emitting backend's to supply, because
     /// it differs per architecture — see [`crate::syscall`].
     LinuxSyscall = 1,
+    /// The platform C ABI, naming DATA rather than a function: the import binds
+    /// a library symbol exactly as [`Self::C`] does, and the answer is the
+    /// symbol's ADDRESS instead of the result of calling it.
+    ///
+    /// It is an ABI rather than a flag beside one because it is the same fact
+    /// the other two carry -- how the thing named is reached -- and a second
+    /// field naming the mechanism would be a second place for it and a way for
+    /// the two to disagree. A data symbol is reached by binding it and stopping
+    /// there; calling it would jump into the object's first bytes.
+    CAddress = 2,
 }
 
 impl ForeignAbi {
@@ -34,6 +44,7 @@ impl ForeignAbi {
         match tag {
             0 => Some(Self::C),
             1 => Some(Self::LinuxSyscall),
+            2 => Some(Self::CAddress),
             _ => None,
         }
     }
@@ -44,7 +55,16 @@ impl ForeignAbi {
     /// missing asks this rather than naming the C ABI, so adding a second
     /// mechanism did not require each of them to learn what the new one is.
     pub const fn binds_a_library_symbol(self) -> bool {
-        matches!(self, Self::C)
+        matches!(self, Self::C | Self::CAddress)
+    }
+
+    /// Whether the answer is the symbol's ADDRESS rather than the result of
+    /// calling it.
+    ///
+    /// Asked by every step that would otherwise build a call: the symbol is
+    /// still bound and still looked up, and then nothing is invoked.
+    pub const fn answers_an_address(self) -> bool {
+        matches!(self, Self::CAddress)
     }
 }
 
@@ -306,7 +326,7 @@ impl ForeignImport {
     pub fn as_syscall(&self) -> Option<crate::syscall::LinuxSyscall> {
         match self.abi {
             ForeignAbi::LinuxSyscall => crate::syscall::LinuxSyscall::parse(&self.symbol),
-            ForeignAbi::C => None,
+            ForeignAbi::C | ForeignAbi::CAddress => None,
         }
     }
 

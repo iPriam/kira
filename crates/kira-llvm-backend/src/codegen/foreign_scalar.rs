@@ -24,6 +24,26 @@ impl Codegen<'_> {
     /// platform aggregate classification is encoded in the module. The
     /// bundled libffi runtime receives the address and the shared descriptor
     /// graph supplies the real C signature.
+    /// Declares a DATA symbol and answers its address.
+    ///
+    /// Sibling of [`Self::declare_foreign_address`], which declares a function
+    /// to take the address of. A linker resolves either by name, but an object
+    /// declared as a function is a lie in the emitted IR -- and the one thing a
+    /// reader of it must not conclude is that this symbol may be called.
+    pub(super) fn declare_foreign_data(&self, symbol: &str) -> LLVMValueRef {
+        let name = super::ffi::c_string(symbol);
+        // SAFETY: the type is a placeholder for an object of unknown shape; only
+        // the symbol's address is ever taken, never a load through this type.
+        unsafe {
+            let existing = LLVMGetNamedGlobal(self.module, name.as_ptr());
+            if existing.is_null() {
+                LLVMAddGlobal(self.module, self.types.i8, name.as_ptr())
+            } else {
+                existing
+            }
+        }
+    }
+
     pub(super) fn declare_foreign_address(&self, symbol: &str) -> LLVMValueRef {
         let name = super::ffi::c_string(symbol);
         // SAFETY: the function type belongs to this context and is used only

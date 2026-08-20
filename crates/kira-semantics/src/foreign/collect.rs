@@ -83,13 +83,19 @@ impl<'a> Analyzer<'a> {
             return self.validate_syscall(function, name, mark, annotations_ok);
         }
         let fields = self.parse_foreign_fields(mark);
+        if mark.kind == ForeignKind::Address && !self.check_address_signature(function) {
+            return None;
+        }
         let signature = self.map_foreign_signature(function);
         match (annotations_ok, fields, signature) {
             (true, Some((library, symbol)), Some(mapped)) => Some(HirForeign {
                 kira_name: name.to_owned(),
                 library,
                 symbol,
-                abi: ForeignAbi::C,
+                abi: match mark.kind {
+                    ForeignKind::Address => ForeignAbi::CAddress,
+                    _ => ForeignAbi::C,
+                },
                 signature: mapped.signature,
                 param_wrappers: mapped.param_wrappers,
                 param_pointees: mapped.param_pointees,
@@ -117,6 +123,7 @@ impl<'a> Analyzer<'a> {
         let annotation = mark.kind.annotation();
         let outside = match mark.kind {
             ForeignKind::Extern => "a foreign symbol",
+            ForeignKind::Address => "the address of a foreign symbol",
             ForeignKind::Syscall => "a system call",
         };
         let mut ok = true;
@@ -218,6 +225,10 @@ impl<'a> Analyzer<'a> {
                 );
                 ok = false;
             }
+            // A data symbol is not called, so it has no calling convention to
+            // name. `@FFI.Address` therefore carries no `abi`, and demanding one
+            // would be demanding an answer to a question the form does not ask.
+            None if mark.kind == ForeignKind::Address => {}
             None => {
                 self.emit(
                     mark.block_span,
@@ -232,6 +243,37 @@ impl<'a> Analyzer<'a> {
             (true, Some(library), Some(symbol)) => Some((library, symbol)),
             _ => None,
         }
+    }
+
+    /// An `@FFI.Address` function answers the address and takes nothing.
+    ///
+    /// A parameter would be an argument to a symbol that is never called, and a
+    /// result other than `RawPtr` would be a claim about what is AT the address
+    /// rather than what the address is -- which is the `@FFI.Pointer` family's
+    /// question, asked through the pointer this hands back.
+    pub(super) fn check_address_signature(&mut self, function: &Function) -> bool {
+        let mut ok = true;
+        if let Some(param) = function.params.first() {
+            self.emit(
+                param.name_span,
+                "KSEM186",
+                "an `@FFI.Address` function takes no parameters: it answers the address of a \
+                 data symbol, which is never called",
+            );
+            ok = false;
+        }
+        match function.return_type {
+            Some(_) => {}
+            None => {
+                self.emit(
+                    function.name_span,
+                    "KSEM187",
+                    "an `@FFI.Address` function returns `RawPtr`: the address of the symbol",
+                );
+                ok = false;
+            }
+        }
+        ok
     }
 
     /// Reports a missing required string field and clears the ok flag, or

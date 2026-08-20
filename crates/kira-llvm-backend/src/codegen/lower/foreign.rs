@@ -30,6 +30,13 @@ impl FunctionLowering<'_, '_> {
         if !import.abi().binds_a_library_symbol() {
             return self.lower_syscall_call(index, args, result_ty);
         }
+        // A data symbol is bound and then nothing is invoked: the answer is
+        // where the object is, which is a link-time constant. Everything below
+        // marshals arguments into C storage and builds a CIF, and doing any of
+        // it here would call the object's first bytes.
+        if import.abi().answers_an_address() {
+            return Ok(self.codegen.declare_foreign_data(import.symbol()));
+        }
         let signature = import.signature();
         let params = signature.parameters().to_vec();
         let result_spec = signature.result();

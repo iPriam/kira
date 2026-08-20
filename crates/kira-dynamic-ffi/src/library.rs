@@ -181,6 +181,24 @@ impl ForeignLibrary {
     /// A symbol lookup is a loader call and a CIF is a graph and an
     /// `ffi_prep_cif`; a frame of a graphics program makes thousands of foreign
     /// calls, and neither answer changes between them.
+    /// Resolves a DATA symbol and answers its address, preparing no call.
+    ///
+    /// The same lookup [`Self::call_site`] performs, stopping where it would
+    /// build a CIF: an `@FFI.Address` import names an object, and there is no
+    /// signature to prepare because nothing is invoked.
+    pub fn symbol_address(&self, symbol: &str) -> Result<*mut c_void, ForeignLibraryError> {
+        // SAFETY: the address is handed back as an opaque pointer and never
+        // called or dereferenced by this crate.
+        let address = unsafe { self.library.lookup::<*mut c_void>(symbol) }.map_err(|source| {
+            ForeignLibraryError::Symbol {
+                path: self.path.clone(),
+                symbol: symbol.to_owned(),
+                source,
+            }
+        })?;
+        Ok(*address)
+    }
+
     fn call_site(
         &self,
         symbol: &str,

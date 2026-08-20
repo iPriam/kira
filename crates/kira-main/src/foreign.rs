@@ -53,6 +53,11 @@ pub struct ForeignBinding {
     pub target: ForeignBindingTarget,
     /// The import's exact-width parameter and result types.
     pub signature: ForeignSignature,
+    /// True when the import names DATA and the answer is the symbol's address.
+    ///
+    /// The symbol is still bound and still looked up; nothing is invoked. A
+    /// binding that lost this would call an object's first bytes.
+    pub answers_address: bool,
 }
 
 impl ForeignBinding {
@@ -68,6 +73,7 @@ impl ForeignBinding {
                 symbol: symbol.into(),
             },
             signature,
+            answers_address: false,
         }
     }
 
@@ -78,6 +84,7 @@ impl ForeignBinding {
                 symbol: symbol.into(),
             },
             signature,
+            answers_address: false,
         }
     }
 
@@ -86,6 +93,7 @@ impl ForeignBinding {
         ForeignBinding {
             target: ForeignBindingTarget::Unavailable,
             signature,
+            answers_address: false,
         }
     }
 
@@ -94,7 +102,15 @@ impl ForeignBinding {
         ForeignBinding {
             target: ForeignBindingTarget::Syscall { call },
             signature,
+            answers_address: false,
         }
+    }
+
+    /// Marks this binding as naming a data symbol whose address is the answer.
+    #[must_use]
+    pub fn answering_address(mut self) -> ForeignBinding {
+        self.answers_address = true;
+        self
     }
 
     /// Returns the system call this binding enters, or `None` when it binds a
@@ -314,6 +330,35 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
             ));
             return Err(ForeignCallError::NoForeignHost);
         };
+        // A data symbol is bound and then nothing is invoked. Resolving it is
+        // the same lookup a call would do; what is skipped is the call.
+        if binding.answers_address {
+            let symbol = match &binding.target {
+                ForeignBindingTarget::Library { symbol, .. }
+                | ForeignBindingTarget::Process { symbol } => symbol.clone(),
+                ForeignBindingTarget::Unavailable | ForeignBindingTarget::Syscall { .. } => {
+                    self.detail =
+                        Some("an address import resolves no symbol on this target".to_owned());
+                    return Err(ForeignCallError::NoForeignHost);
+                }
+            };
+            let wanted_process = matches!(binding.target, ForeignBindingTarget::Process { .. });
+            let Some(library) = self
+                .libraries
+                .iter()
+                .find(|library| library.is_process() == wanted_process)
+            else {
+                self.detail = Some(format!("no loaded image to resolve `{symbol}` in"));
+                return Err(ForeignCallError::NoForeignHost);
+            };
+            return match library.symbol_address(&symbol) {
+                Ok(address) => Ok(ForeignResult::RawPtr(address as u64)),
+                Err(error) => {
+                    self.detail = Some(format!("`{symbol}` did not resolve: {error}"));
+                    Err(ForeignCallError::NoForeignHost)
+                }
+            };
+        }
         let result = match &binding.target {
             ForeignBindingTarget::Library { path, symbol } => {
                 let Some(library) = self
