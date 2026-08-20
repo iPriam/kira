@@ -159,7 +159,7 @@ pub fn direct_foreign_bindings(
                 .iter()
                 .find(|(name, _)| name == entry.import.library())
                 .map(|(_, path)| loadable_foreign_library_path(path, foreign_link));
-            if entry.import.library() == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
+            let binding = if entry.import.library() == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
                 kira_main::ForeignBinding::process(entry.import.symbol(), signature)
             } else if static_names.contains(&entry.import.library()) {
                 match carrier.as_ref() {
@@ -180,6 +180,14 @@ pub fn direct_foreign_bindings(
                 kira_main::ForeignBinding::dynamic(path, entry.import.symbol(), signature)
             } else {
                 kira_main::ForeignBinding::unavailable(signature)
+            };
+            // An address import binds its symbol exactly as a call does -- the
+            // branches above chose where -- and differs only in what happens
+            // after the lookup, so it is marked here rather than in each of them.
+            if entry.import.abi().answers_an_address() {
+                binding.answering_address()
+            } else {
+                binding
             }
         })
         .collect())
@@ -200,6 +208,29 @@ pub fn hybrid_foreign_bindings(
         .foreign_imports
         .iter()
         .map(|entry| {
+            // The lookup below picks WHERE the symbol is bound, in several
+            // early returns. An address import binds it the same way and differs
+            // only in what happens after, so the choice is made once here rather
+            // than repeated at each return.
+            let binding = hybrid_binding_target(entry, foreign_link, &static_names, native_half);
+            if entry.import.abi().answers_an_address() {
+                binding.answering_address()
+            } else {
+                binding
+            }
+        })
+        .collect()
+}
+
+/// Where one hybrid import's symbol is bound.
+fn hybrid_binding_target(
+    entry: &kira_ir::IrForeignImport,
+    foreign_link: &NativeLinkInputs,
+    static_names: &HashSet<&str>,
+    native_half: &std::path::Path,
+) -> kira_main::ForeignBinding {
+    {
+        {
             let signature = entry.import.signature().clone();
             // As in `direct_foreign_bindings`: a system call is not a library
             // lookup, and recording it as a failed one names an artifact that
@@ -230,8 +261,8 @@ pub fn hybrid_foreign_bindings(
                     )
                 })
                 .unwrap_or_else(|| kira_main::ForeignBinding::unavailable(signature))
-        })
-        .collect()
+        }
+    }
 }
 
 /// Returns explicit foreign library files that a native live bundle must carry.

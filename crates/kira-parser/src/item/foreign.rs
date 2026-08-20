@@ -107,6 +107,7 @@ impl Parser<'_> {
 
         let bodyless = match (root.as_str(), member.as_str()) {
             ("FFI", "Extern") => Some(ForeignKind::Extern),
+            ("FFI", "Address") => Some(ForeignKind::Address),
             ("FFI", "Syscall") => Some(ForeignKind::Syscall),
             _ => None,
         };

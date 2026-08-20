@@ -510,6 +510,25 @@ pub struct ForeignField {
 pub enum ForeignKind {
     /// `@FFI.Extern` — a C symbol in a named native library.
     Extern,
+    /// `@FFI.Address` — the ADDRESS of a data symbol a native library exports,
+    /// answered by a nullary function.
+    ///
+    /// C libraries export data as well as functions: interface tables, sentinel
+    /// objects, version constants, `stdin`. A bodyless *function* cannot reach
+    /// one, and a shim written to hand it back is glue that exists only because
+    /// the boundary could not say it.
+    ///
+    /// It is a function rather than a binding because Kira has no globals, and
+    /// inventing them for this would be a language-shaped hole opened by one C
+    /// convention. A nullary call reads the same and costs the same: the address
+    /// is a link-time constant either way.
+    ///
+    /// The answer is the symbol's ADDRESS, never its value. Address-of is the
+    /// one reading that works for every symbol alike -- an opaque struct has no
+    /// value this side can hold, a mutable global read once would be a stale
+    /// copy, and a width read from the declaration would have to agree with C's.
+    /// Reading through the address is what `@FFI.Pointer` is already for.
+    Address,
     /// `@FFI.Syscall` — a Linux system call, named the way `man 2` names it.
     ///
     /// It carries no `library`, `symbol`, or `abi`, because the kernel is not a
@@ -526,6 +545,7 @@ impl ForeignKind {
     pub const fn annotation(self) -> &'static str {
         match self {
             Self::Extern => "@FFI.Extern",
+            Self::Address => "@FFI.Address",
             Self::Syscall => "@FFI.Syscall",
         }
     }
