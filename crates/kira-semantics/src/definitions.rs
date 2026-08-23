@@ -108,6 +108,15 @@ impl DeclSpans {
                         );
                     }
                 }
+                // A trait joins the same index as the types: it shares their
+                // namespace, and a conformance list names one the way a field
+                // names a struct.
+                Item::Trait(declaration) => {
+                    spans.types.insert(
+                        interner.resolve(declaration.name).to_owned(),
+                        FileSpan::new(source, declaration.name_span),
+                    );
+                }
                 Item::Function(_) | Item::Import(_) | Item::Extend(_) | Item::Unsupported(_) => {}
             }
         }

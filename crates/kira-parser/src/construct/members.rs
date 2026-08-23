@@ -156,6 +156,7 @@ impl Parser<'_> {
             export: None,
             foreign: None,
             execution: Execution::Inherited,
+            receiver: None,
             params,
             return_type: None,
             body: block,
@@ -289,7 +290,7 @@ impl Parser<'_> {
             Symbol::ERROR
         };
         self.refuse_type_params("function");
-        let params = self.parse_params();
+        let (receiver, params) = self.parse_signature_params();
         let return_type = self.parse_return_type();
         let empty = Span::from_bounds(self.previous_end(), self.previous_end());
         if self.at(TokenKind::LBrace) {
@@ -316,6 +317,7 @@ impl Parser<'_> {
                 export: None,
                 foreign: None,
                 execution: Execution::Inherited,
+                receiver,
                 params,
                 return_type,
                 body: Block {
@@ -517,6 +519,7 @@ impl Parser<'_> {
             foreign: None,
             export: None,
             execution: Execution::Inherited,
+            receiver: None,
             params,
             return_type,
             body,
@@ -539,6 +542,7 @@ impl Parser<'_> {
             foreign: None,
             export: None,
             execution: Execution::Inherited,
+            receiver: None,
             params: Vec::new(),
             return_type: Some(ty),
             body,

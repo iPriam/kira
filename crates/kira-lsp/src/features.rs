@@ -327,6 +327,25 @@ fn collect_item(symbols: &mut BTreeMap<String, Symbol>, names: &Names, item: &It
                 add_function(symbols, names, method, CompletionItemKind::METHOD, text);
             }
         }
+        Item::Trait(declaration) => {
+            add_declared(
+                symbols,
+                names,
+                declaration.name,
+                declaration.name_span,
+                CompletionItemKind::INTERFACE,
+                text,
+            );
+            for member in &declaration.members {
+                add_function(
+                    symbols,
+                    names,
+                    &member.function,
+                    CompletionItemKind::METHOD,
+                    text,
+                );
+            }
+        }
         Item::Unsupported(_) => {}
     }
 }
@@ -459,6 +478,8 @@ fn symbol_kind(file: &SourceFile, span: Span) -> CompletionItemKind {
         CompletionItemKind::CLASS
     } else if before.starts_with("enum") {
         CompletionItemKind::ENUM
+    } else if before.starts_with("trait") {
+        CompletionItemKind::INTERFACE
     } else if before.starts_with("type") {
         CompletionItemKind::TYPE_PARAMETER
     } else if before.starts_with("let") || before.starts_with("var") {

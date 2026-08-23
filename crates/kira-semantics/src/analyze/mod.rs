@@ -160,7 +160,7 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) interner: &'a Names,
-    sigs: Vec<FuncSig>,
+    pub(crate) sigs: Vec<FuncSig>,
     /// Every declaration answering to one written name, in declaration order.
     ///
     /// A name carries more than one entry when it is **overloaded**: several
@@ -264,6 +264,17 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) constructs: HashMap<StructId, crate::constructs::ConstructInfo>,
     /// Construct families keyed by their source name.
     pub(crate) construct_families: BTreeMap<String, crate::constructs::ConstructFamilyInfo<'a>>,
+    /// Every declared trait, keyed by name.
+    ///
+    /// Collected from syntax before any type table exists, because one type
+    /// namespace means every other declaration has to be able to lose a name
+    /// collision to a trait.
+    pub(crate) traits: crate::traits::TraitTable<'a>,
+    /// Every conformance the program declares, in source order.
+    ///
+    /// Beside the type table rather than in it: conformance is resolved away
+    /// before the HIR exists, so nothing downstream carries it.
+    pub(crate) conformances: Vec<crate::traits::Conformance>,
     /// Reverse lookup from synthesized family enum to source family name.
     pub(crate) construct_family_names: HashMap<EnumId, String>,
     /// The methods each struct and class declares itself, keyed by id.

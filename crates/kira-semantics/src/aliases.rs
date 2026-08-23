@@ -231,6 +231,7 @@ impl Analyzer<'_> {
                 Item::Struct(declaration) => ("struct", declaration.name),
                 Item::Enum(declaration) => ("enum", declaration.name),
                 Item::Class(declaration) => ("class", declaration.name),
+                Item::Trait(declaration) => ("trait", declaration.name),
                 _ => continue,
             };
             if self.interner.resolve(declared) == name {

@@ -7,15 +7,18 @@
 //! [`Stmt::Error`] / an [`Item::Unsupported`] node rather than aborting the
 //! parse.
 //!
-//! The nodes split across three cohesive modules — [`item`] for top-level
-//! declarations and the type references they name, [`stmt`] for statements and
-//! their sub-pieces, and [`expr`] for expressions and operators — plus [`tree`]
-//! for the whole-file container. Every type is re-exported flat here, so a
-//! consumer names `kira_syntax_model::ast::Expr`, never the submodule.
+//! The nodes split across four cohesive modules — [`item`] for top-level
+//! declarations and the type references they name, [`traits`] for trait
+//! declarations and the conformance clause every declaration form shares,
+//! [`stmt`] for statements and their sub-pieces, and [`expr`] for expressions
+//! and operators — plus [`tree`] for the whole-file container. Every type is
+//! re-exported flat here, so a consumer names `kira_syntax_model::ast::Expr`,
+//! never the submodule.
 
 mod expr;
 mod item;
 mod stmt;
+mod traits;
 mod tree;
 
 pub use expr::{BinaryOp, CallArg, ClosureParam, Expr, FieldInit, TrailingClosure, UnaryOp};
@@ -27,4 +30,5 @@ pub use item::{
     UnsupportedItem, VariantDecl,
 };
 pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt};
+pub use traits::{ReceiverDecl, TraitDecl, TraitMember, TraitRef};
 pub use tree::{ExprId, FileNodes, FilePart, NodeBase, StmtId, SyntaxTree, TypeRefId};

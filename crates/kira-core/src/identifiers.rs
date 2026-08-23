@@ -9,6 +9,7 @@ const KEYWORDS: &[&str] = &[
     "macro",
     "quote",
     "construct",
+    "trait",
     "enum",
     "struct",
     "type",

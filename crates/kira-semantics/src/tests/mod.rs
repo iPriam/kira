@@ -36,6 +36,7 @@ mod reuse;
 mod strings;
 mod syscall;
 mod tasks;
+mod traits;
 mod widening;
 mod widths;
 

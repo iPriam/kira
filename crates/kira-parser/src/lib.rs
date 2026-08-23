@@ -17,6 +17,7 @@ mod item;
 mod stmt;
 #[cfg(test)]
 mod tests;
+mod traits;
 
 use kira_core::{Interner, Names, Symbol};
 use kira_diagnostics::{Code, Diagnostic, Label, Severity};

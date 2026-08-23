@@ -38,6 +38,7 @@ impl Parser<'_> {
             self.bump();
         }
         self.refuse_type_params("struct");
+        let traits = self.parse_trait_list();
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         if !self.expect(TokenKind::LBrace) {
@@ -45,6 +46,7 @@ impl Parser<'_> {
             return Some(StructDecl {
                 name,
                 name_span,
+                traits,
                 fields,
                 methods,
                 ffi: None,
@@ -98,6 +100,7 @@ impl Parser<'_> {
         Some(StructDecl {
             name,
             name_span,
+            traits,
             fields,
             methods,
             ffi: None,
@@ -264,6 +267,10 @@ impl Parser<'_> {
         self.expect(TokenKind::Class);
         let (name, name_span) = self.parse_declaration_name("KPAR033", "expected a class name");
         self.refuse_type_params("class");
+        // `: traits` first, `extends parents` second: the colon is always
+        // conformance and `extends` is always a parent, so the two clauses
+        // never have to be told apart by what they name.
+        let traits = self.parse_trait_list();
         let parents = self.parse_extends_list();
         let mut fields = Vec::new();
         let mut overrides = Vec::new();
@@ -273,6 +280,7 @@ impl Parser<'_> {
             return Some(ClassDecl {
                 name,
                 name_span,
+                traits,
                 parents,
                 fields,
                 overrides,
@@ -353,6 +361,7 @@ impl Parser<'_> {
         Some(ClassDecl {
             name,
             name_span,
+            traits,
             parents,
             fields,
             overrides,

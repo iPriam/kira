@@ -17,7 +17,7 @@
 //! hold it in mind. Nothing here has behavior to accumulate; the file grows only
 //! when the language gains syntax, and then it grows by a node.
 
-use super::{Block, ExprId, TypeRefId};
+use super::{Block, ExprId, ReceiverDecl, TraitDecl, TraitRef, TypeRefId};
 use crate::ownership::OwnershipMode;
 use kira_core::Symbol;
 use kira_runtime_abi::Execution;
@@ -42,8 +42,11 @@ pub enum Item {
     /// `Family Name(params) { ... }` declaration that conforms to one.
     Construct(ConstructDecl),
     /// An `extend Family { function ... }` block: fluent modifier methods added
-    /// to a construct family's chainable surface.
+    /// to a construct family's chainable surface, or an `extend T: Trait { … }`
+    /// block: the implementation of a trait for a type declared elsewhere.
     Extend(ExtendDecl),
+    /// A `trait Name { ... }` declaration.
+    Trait(TraitDecl),
     /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
@@ -59,10 +62,18 @@ pub enum Item {
 /// receiver via `self`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtendDecl {
-    /// The construct family being extended (`Widget`).
+    /// The construct family being extended (`Widget`), or the type a trait is
+    /// being implemented for when [`conforms`](Self::conforms) is present.
     pub name: Symbol,
     /// Span of the family name, for diagnostics and definition links.
     pub name_span: Span,
+    /// The trait this block implements, when the header wrote `: Trait`.
+    ///
+    /// `Some` turns the block from a fluent modifier block into an **impl**:
+    /// its members are the trait's members for the named type, and the block
+    /// may add conformance only — never a parent, which is why this is one
+    /// trait rather than the two-clause header a declaration writes.
+    pub conforms: Option<TraitRef>,
     /// The modifier methods, in declaration order. Each is an ordinary
     /// [`Function`]; what makes it a modifier is the block it was written in —
     /// analysis binds `self` to the family value.
@@ -90,6 +101,8 @@ pub struct ConstructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The traits the declaration's `: Trait, Trait` clause named.
+    pub traits: Vec<TraitRef>,
     /// The stored members: `@Required let`, plain `let`, and defaulted `let`.
     pub fields: Vec<ConstructField>,
     /// The behaviour members: computed block-bodied bridges (`let node: Any { … }`,
@@ -343,6 +356,8 @@ pub struct StructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The traits the declaration's `: Trait, Trait` clause named.
+    pub traits: Vec<TraitRef>,
     /// The stored members, in declaration order.
     pub fields: Vec<FieldDecl>,
     /// The methods declared in the body, in declaration order.
@@ -381,6 +396,8 @@ pub struct ClassDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The traits the declaration's `: Trait, Trait` clause named.
+    pub traits: Vec<TraitRef>,
     /// The written parents, in declaration order. Empty when no `extends` was
     /// written — a class need not inherit.
     pub parents: Vec<ParentRef>,
@@ -681,6 +698,14 @@ pub struct Function {
     /// records what the source said, and leaves resolving the default to the
     /// build.
     pub execution: Execution,
+    /// The written `self` receiver, when the declaration spelled one.
+    ///
+    /// A method that writes none still has a receiver — every method does, and
+    /// it borrows — so this records only what was *written*, which is the one
+    /// thing the mode cannot be inferred from: `borrow mut self` says the body
+    /// writes through the value it was called on even where no statement in it
+    /// does yet.
+    pub receiver: Option<ReceiverDecl>,
     /// Declared parameters, in order.
     pub params: Vec<Param>,
     /// Declared return type, if written (absent means `Void`).

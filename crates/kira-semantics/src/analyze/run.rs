@@ -43,6 +43,8 @@ impl<'a> Analyzer<'a> {
             constructs: HashMap::new(),
             construct_families: BTreeMap::new(),
             construct_family_names: HashMap::new(),
+            traits: crate::traits::TraitTable::new(),
+            conformances: Vec::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
@@ -72,6 +74,10 @@ impl<'a> Analyzer<'a> {
         // below may name one; they resolve lazily on first use, so registering
         // them here does not require the struct or enum table to exist yet.
         self.collect_type_aliases();
+        // Traits are registered from syntax alone, before any type table, because
+        // one type namespace means a struct, class, enum, or family declared
+        // below has to be able to lose its name to a trait.
+        self.collect_traits();
         // Enum *names* are declared before structs, so a struct field may name
         // one; a struct is declared before signatures, so a parameter may name
         // either. Enum *payloads* wait until every struct exists, because a
@@ -108,6 +114,10 @@ impl<'a> Analyzer<'a> {
         // Every type a payload could name now has an id, so the variants the
         // header pass left empty are filled here.
         self.resolve_enum_payloads(&enum_headers);
+        // Conformance names a type, so it is resolved once every struct-shaped
+        // one has an id — and before callables are enumerated, because a
+        // default a conforming type did not write becomes one of its methods.
+        self.collect_conformances();
         // `@Derive(Copy)` asks a question about a whole reachable shape, so it
         // is answered once every struct, class, enum, and construct-backed type
         // exists and every payload is resolved.
@@ -132,6 +142,9 @@ impl<'a> Analyzer<'a> {
         // above built, so it runs after them.
         self.collect_mutating_methods(&callables);
         self.check_construct_method_signatures();
+        // A claimed conformance is checked against resolved shapes, so it waits
+        // for the signatures every implementation and every requirement has.
+        self.check_trait_conformance();
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
         // to the entry file rather than to whichever module happened to declare

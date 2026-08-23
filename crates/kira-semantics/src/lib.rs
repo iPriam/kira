@@ -73,6 +73,7 @@ pub(crate) mod stmt;
 mod strings;
 mod syscall;
 mod tasks;
+mod traits;
 mod typeck;
 mod types;
 
