@@ -79,6 +79,17 @@ pub(crate) struct LocalOwnership {
     /// to moved across its own body, so without this one mistake wears one
     /// diagnostic per level of nesting.
     pub(crate) loop_reported: bool,
+    /// Whether a native-state handle in this binding has been handed to
+    /// somebody else, by `nativeUserData`.
+    ///
+    /// The point where the compiler stops being able to say anything. A token
+    /// that has left is a token some other owner may free — a slot store, a
+    /// struct the function returns, a callback's user data — so a handle that
+    /// reaches the end of the body still live is only a *leak* if it never got
+    /// out. Tracking the fact here rather than inferring it from the move
+    /// column is deliberate: handing a token out is not a move, and the
+    /// canonical idiom hands one out and then frees the handle anyway.
+    pub(crate) handed_out: bool,
 }
 
 impl LocalOwnership {
@@ -88,6 +99,7 @@ impl LocalOwnership {
             mode: OwnershipMode::Owned,
             moved: None,
             loop_reported: false,
+            handed_out: false,
         }
     }
 
@@ -548,6 +560,83 @@ impl Analyzer<'_> {
                 }
                 value
             }
+        }
+    }
+
+    /// Rejects giving a binding a second state box while it still holds the
+    /// first (`KSEM117`).
+    ///
+    /// The assignment overwrites the only token that named the old box, so the
+    /// box survives with nothing able to name it. It is the same mistake
+    /// `KSEM116` catches at the end of a scope, reached one statement earlier
+    /// and for the same reason: a state box is released by being *named*, and
+    /// the program has just thrown the name away.
+    ///
+    /// Freeing first and assigning after is the correct shape and stays quiet,
+    /// because the free consumed the handle and the binding is no longer live —
+    /// which is exactly how a render pass replaces its encoder.
+    pub(crate) fn check_native_state_overwrite(
+        &mut self,
+        ctx: &FnCtx,
+        local: LocalId,
+        span: Span,
+    ) {
+        let state = ctx.ownership_of(local);
+        if !state.is_live() || state.handed_out {
+            return;
+        }
+        if !matches!(ctx.local_type(local), Type::NativeState(_)) {
+            return;
+        }
+        let name = ctx.local_name(local);
+        self.emit(
+            span,
+            "KSEM117",
+            format!(
+                "`{name}` still holds callback state, and this assignment overwrites the \
+                 only token that names it. Free it first — `nativeStateFree({name})` — or \
+                 hand it to another owner with `nativeUserData({name})`."
+            ),
+        );
+    }
+
+    /// Reports every native-state handle a body allocates and then loses
+    /// (`KSEM116`).
+    ///
+    /// `nativeState` is the one allocation in the language with no automatic
+    /// release. Arrays and strings are reference-counted and a struct's fields
+    /// go with it, but a state box is deliberately process-lifetime storage:
+    /// the runtime hands back a token and frees the box only when
+    /// `nativeStateFree` names that token again. A handle the body neither
+    /// frees nor hands out is therefore a box nothing can ever name again —
+    /// unreachable, and held until the process exits.
+    ///
+    /// This is a **local** check, and it is worth being exact about its edge,
+    /// because the shape it does not see is the more common one. It sees a
+    /// handle bound in this body and lost in this body. It does not see a
+    /// token that left through `nativeUserData` and was dropped by whoever took
+    /// it — a field overwritten without freeing what it held, a slot stored
+    /// twice. Following a token through the place that holds it is a
+    /// field-sensitive, cross-function analysis; refusing to guess is what
+    /// keeps this one free of false positives, which a check that fires on
+    /// correct code would not survive.
+    pub(crate) fn check_native_state_handles(&mut self, ctx: &FnCtx) {
+        for (local, span) in ctx.unfreed_native_state_handles() {
+            let Some(span) = span else {
+                continue;
+            };
+            let name = ctx.local_name(local);
+            self.emit(
+                span,
+                "KSEM116",
+                format!(
+                    "`{name}` holds callback state that is never released. A state box \
+                     outlives every scope — only `nativeStateFree({name})` frees it — so a \
+                     handle that is neither freed here nor handed to another owner with \
+                     `nativeUserData({name})` leaves the box unreachable for the life of the \
+                     process."
+                ),
+            );
         }
     }
 }

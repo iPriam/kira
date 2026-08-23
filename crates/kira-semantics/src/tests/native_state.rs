@@ -149,3 +149,199 @@ struct Right { var value: Int }
         vec!["KSEM218"]
     );
 }
+
+// --- KSEM116: a state box the body allocates and then loses -----------------
+//
+// `nativeState` is the one allocation with no automatic release, so a handle
+// that is neither freed nor handed on is a box nothing can name again. These
+// pin both halves: that the mistake is reported, and — the half that decides
+// whether the check is usable at all — that the idioms which *do* account for
+// a handle stay silent.
+
+#[test]
+fn a_state_box_that_is_never_freed_is_reported() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    let state = nativeState(CounterState { count: 0 })
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM116"]);
+}
+
+#[test]
+fn freeing_the_handle_accounts_for_it() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    let state = nativeState(CounterState { count: 0 })
+    nativeStateFree(state)
+    return
+}
+"#;
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+/// Handing the token out is the other way to account for a handle: some other
+/// owner has it now, and this body is not the one that must free it.
+///
+/// This is the shape a factory has — `makeRenderEncoder` in Kira Graphics binds
+/// a handle, puts its token in the struct it returns, and correctly never frees
+/// it — and a check that reported it would be wrong on working code.
+#[test]
+fn handing_the_token_out_accounts_for_it() {
+    let text = r#"
+struct CounterState { var count: Int }
+struct Holder { let storage: RawPtr }
+function make() -> Holder {
+    let state = nativeState(CounterState { count: 0 })
+    return Holder { storage: nativeUserData(state) }
+}
+@Main function main() {
+    let held = make()
+    return
+}
+"#;
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+/// The documented idiom hands a token out and then frees the handle anyway, so
+/// handing out must not consume the binding.
+#[test]
+fn a_handle_may_be_handed_out_and_still_freed_here() {
+    assert!(diagnostics(STATE).is_empty());
+}
+
+/// Freeing consumes the handle, so reading it afterwards is a use-after-free —
+/// and it is the ordinary use-after-move check that says so.
+#[test]
+fn reading_a_handle_after_freeing_it_is_use_after_move() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    let state = nativeState(CounterState { count: 0 })
+    nativeStateFree(state)
+    let token = nativeUserData(state)
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM107"]);
+}
+
+/// Freeing twice is the same mistake seen once more.
+#[test]
+fn freeing_a_handle_twice_is_reported() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    let state = nativeState(CounterState { count: 0 })
+    nativeStateFree(state)
+    nativeStateFree(state)
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM107"]);
+}
+
+/// A handle cannot be *declared* as a parameter type — `NativeState<T>` is a
+/// type the checker infers and prints, not one the grammar parses — so a
+/// borrowed handle is unreachable from source today and the `Owned`-only filter
+/// in [`FnCtx::unfreed_native_state_handles`] has nothing to exclude yet. It is
+/// written that way regardless, because the day the type becomes spellable a
+/// `borrow` parameter naming somebody else's box must not be this body's to
+/// free, and finding that out then would mean finding it out through a false
+/// positive on working code.
+#[test]
+fn a_handle_type_is_inferred_rather_than_written() {
+    let text = r#"
+struct CounterState { var count: Int }
+function peek(state: NativeState<CounterState>) {
+    return
+}
+@Main function main() {
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM050"]);
+}
+
+/// Overwriting a live handle throws away the only token that named the box.
+#[test]
+fn overwriting_a_live_handle_is_reported() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    var slot = nativeState(CounterState { count: 1 })
+    slot = nativeState(CounterState { count: 2 })
+    nativeStateFree(slot)
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM117"]);
+}
+
+/// Free first, then replace. This is the shape a render pass uses to swap its
+/// encoder every pass, and reporting it would be reporting correct code.
+#[test]
+fn freeing_before_replacing_a_handle_is_quiet() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    var slot = nativeState(CounterState { count: 1 })
+    nativeStateFree(slot)
+    slot = nativeState(CounterState { count: 2 })
+    nativeStateFree(slot)
+    return
+}
+"#;
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+/// Handed out, then replaced: the first box has another owner, so replacing the
+/// binding loses nothing.
+#[test]
+fn replacing_a_handle_that_was_handed_out_is_quiet() {
+    let text = r#"
+struct CounterState { var count: Int }
+function build() -> RawPtr {
+    var slot = nativeState(CounterState { count: 1 })
+    let first = nativeUserData(slot)
+    slot = nativeState(CounterState { count: 2 })
+    nativeStateFree(slot)
+    return first
+}
+@Main function main() {
+    let p = build()
+    return
+}
+"#;
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+/// A handle freed on only one arm is NOT reported.
+///
+/// The branch join takes a value moved on either path as moved, which is the
+/// sound direction for use-after-move and the unsound one for must-free. The
+/// choice is deliberate: this check is worth having only while it never fires
+/// on correct code, and a must-free join would need its own state rather than a
+/// reinterpretation of that column. Pinned here so the gap is a decision on the
+/// record rather than something to rediscover.
+#[test]
+fn a_handle_freed_on_one_arm_only_is_not_reported_yet() {
+    let text = r#"
+struct CounterState { var count: Int }
+function conditional(flag: Bool) {
+    let maybe = nativeState(CounterState { count: 3 })
+    if flag {
+        nativeStateFree(maybe)
+    }
+    return
+}
+@Main function main() {
+    conditional(true)
+    return
+}
+"#;
+    assert_eq!(codes(text), Vec::<String>::new());
+}
