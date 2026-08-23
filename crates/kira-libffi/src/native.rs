@@ -13,58 +13,6 @@ use kira_runtime_abi::{
 use crate::LibffiRuntime;
 use crate::types::PreparedCif;
 
-/// A scalar or aggregate position in a native FFI descriptor.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FfiTypeDescriptor {
-    /// Zero for a scalar, one for an aggregate.
-    pub kind: u32,
-    /// The [`ForeignType::tag`] for a scalar.
-    pub scalar: u32,
-    /// The aggregate table index for an aggregate.
-    pub aggregate: u32,
-}
-
-/// One member in a native aggregate descriptor.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FfiMemberDescriptor {
-    /// Zero for a scalar, one for a nested aggregate, two for an array.
-    pub kind: u32,
-    /// The scalar or array-element scalar tag.
-    pub scalar: u32,
-    /// The nested aggregate or array-element aggregate index.
-    pub aggregate: u32,
-    /// The fixed array extent, or zero for a non-array member.
-    pub count: u32,
-}
-
-/// One aggregate's member slice in a native descriptor.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FfiAggregateDescriptor {
-    /// Pointer to `count` member descriptors.
-    pub members: *const FfiMemberDescriptor,
-    /// Number of members.
-    pub count: u32,
-}
-
-/// A complete signature and aggregate table passed from generated LLVM code.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FfiSignatureDescriptor {
-    /// Pointer to the parameter descriptors.
-    pub parameters: *const FfiTypeDescriptor,
-    /// Number of parameters.
-    pub parameter_count: u32,
-    /// The result descriptor.
-    pub result: FfiTypeDescriptor,
-    /// Pointer to the aggregate descriptors.
-    pub aggregates: *const FfiAggregateDescriptor,
-    /// Number of aggregate descriptors.
-    pub aggregate_count: u32,
-}
-
 /// The raw call completed successfully.
 pub const KIRA_FFI_OK: u32 = 0;
 /// The bundled libffi runtime could not be loaded.
@@ -88,59 +36,6 @@ const HEADER_BYTES: usize = 8;
 /// triple, and the aggregate count.
 const MIN_DESCRIPTOR_BYTES: u32 = 28;
 
-/// Calls a native symbol through the bundled libffi runtime.
-///
-/// The descriptor and all pointed-to arrays are generated as immutable data by
-/// the LLVM backend. `arguments` points to one C-layout storage pointer per
-/// parameter, and `result` points to storage for the result unless the result
-/// is void.
-///
-/// # Safety
-/// `descriptor` must point to a live descriptor whose arrays remain valid for
-/// this call. `arguments` must be null for zero parameters or point to exactly
-/// `parameter_count` live storage pointers. `result` must be writable storage
-/// for the described result, or null only for a void result. `function` must
-/// be a callable address with the described C ABI.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_ffi_call(
-    function: *mut c_void,
-    descriptor: *const FfiSignatureDescriptor,
-    arguments: *mut *mut c_void,
-    result: *mut c_void,
-) -> u32 {
-    // SAFETY: the caller's contract is that `descriptor` is null or addresses a
-    // live descriptor whose arrays outlive this call.
-    let Some(descriptor) = (unsafe { descriptor.as_ref() }) else {
-        return KIRA_FFI_INVALID_DESCRIPTOR;
-    };
-    // SAFETY: the same contract, passed on to the decoder that reads them.
-    let (signature, aggregates) = match unsafe { decode_descriptor(descriptor) } {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-    if !matches!(
-        signature.result(),
-        ForeignTypeSpec::Scalar(ForeignType::Void)
-    ) && result.is_null()
-    {
-        return KIRA_FFI_INVALID_RESULT;
-    }
-    if !signature.parameters().is_empty() && arguments.is_null() {
-        return KIRA_FFI_INVALID_DESCRIPTOR;
-    }
-    let runtime = match LibffiRuntime::load() {
-        Ok(runtime) => runtime,
-        Err(_) => return KIRA_FFI_MISSING_BUNDLE,
-    };
-    // SAFETY: the caller's descriptor and storage contract was checked above;
-    // libffi receives the exact graph decoded from that descriptor.
-    match unsafe { runtime.call_raw(function, &signature, &aggregates, arguments, result) } {
-        Ok(()) => KIRA_FFI_OK,
-        Err(crate::LibffiError::NullFunction) => KIRA_FFI_NULL_FUNCTION,
-        Err(_) => KIRA_FFI_INVALID_DESCRIPTOR,
-    }
-}
-
 /// Calls a native symbol through a compact little-endian descriptor blob.
 ///
 /// LLVM uses this entrypoint because a byte descriptor keeps pointers out of
@@ -149,8 +44,10 @@ pub unsafe extern "C" fn kira_rt_ffi_call(
 ///
 /// # Safety
 /// `descriptor` must point to the complete immutable descriptor blob emitted by
-/// the LLVM backend. The other pointers have the same contract as
-/// [`kira_rt_ffi_call`].
+/// the LLVM backend. `arguments` must be null for zero parameters or point to
+/// exactly the described number of live storage pointers. `result` must be
+/// writable storage for the described result, or null only for a void result.
+/// `function` must be a callable address with the described C ABI.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_ffi_call_bytes(
     function: *mut c_void,
@@ -302,48 +199,6 @@ fn fatal(message: &str) -> ! {
 /// Every callback entry's prepared closure, by entry address.
 static CLOSURES: Mutex<BTreeMap<usize, u64>> = Mutex::new(BTreeMap::new());
 
-/// Decodes a pointer-based descriptor into the graph libffi is given.
-///
-/// # Safety
-/// Every pointer the descriptor carries must address the described number of
-/// immutable elements for the duration of this call.
-unsafe fn decode_descriptor(
-    descriptor: &FfiSignatureDescriptor,
-) -> Result<(ForeignSignature, ForeignAggregates), u32> {
-    if descriptor.parameter_count > MAX_DESCRIPTOR_ITEMS
-        || descriptor.aggregate_count > MAX_DESCRIPTOR_ITEMS
-    {
-        return Err(KIRA_FFI_INVALID_DESCRIPTOR);
-    }
-    // SAFETY: the caller's contract covers the parameter and aggregate arrays,
-    // and each aggregate's member array, for exactly the counts beside them.
-    let (parameters, aggregate_descriptors) = unsafe {
-        (
-            descriptor_slice(descriptor.parameters, descriptor.parameter_count)?,
-            descriptor_slice(descriptor.aggregates, descriptor.aggregate_count)?,
-        )
-    };
-    let mut aggregates = ForeignAggregates::new();
-    for aggregate in aggregate_descriptors {
-        // SAFETY: as above, for this aggregate's own member array.
-        let members = unsafe { descriptor_slice(aggregate.members, aggregate.count)? };
-        let mut decoded = Vec::with_capacity(members.len());
-        for member in members {
-            decoded.push(decode_member(*member)?);
-        }
-        aggregates
-            .push(ForeignAggregate::new(decoded))
-            .map_err(|_| KIRA_FFI_INVALID_DESCRIPTOR)?;
-    }
-    let parameters = parameters
-        .iter()
-        .copied()
-        .map(decode_type)
-        .collect::<Result<Vec<_>, _>>()?;
-    let result = decode_type(descriptor.result)?;
-    Ok((ForeignSignature::new(parameters, result), aggregates))
-}
-
 /// Decodes the compact blob the LLVM backend emits beside a call site.
 ///
 /// # Safety
@@ -407,6 +262,28 @@ fn decode_words(words: &mut Words<'_>) -> Result<(ForeignSignature, ForeignAggre
         return Err(KIRA_FFI_INVALID_DESCRIPTOR);
     }
     Ok((ForeignSignature::new(parameters, result), aggregates))
+}
+
+/// One scalar-or-aggregate position decoded out of a blob.
+struct FfiTypeDescriptor {
+    /// Zero for a scalar, one for an aggregate.
+    kind: u32,
+    /// The [`ForeignType::tag`] for a scalar.
+    scalar: u32,
+    /// The aggregate table index for an aggregate.
+    aggregate: u32,
+}
+
+/// One member decoded out of an aggregate's blob section.
+struct FfiMemberDescriptor {
+    /// Zero for a scalar, one for a nested aggregate, two for an array.
+    kind: u32,
+    /// The scalar or array-element scalar tag.
+    scalar: u32,
+    /// The nested aggregate or array-element aggregate index.
+    aggregate: u32,
+    /// The fixed array extent, or zero for a non-array member.
+    count: u32,
 }
 
 /// A bounds-checked little-endian word cursor over a descriptor blob.
@@ -488,21 +365,4 @@ fn decode_type(descriptor: FfiTypeDescriptor) -> Result<ForeignTypeSpec, u32> {
         ))),
         _ => Err(KIRA_FFI_INVALID_DESCRIPTOR),
     }
-}
-
-/// Borrows `count` descriptor elements from a caller-owned array.
-///
-/// # Safety
-/// For a non-zero `count`, `pointer` must address `count` initialized elements
-/// that stay immutable and live for the returned borrow.
-unsafe fn descriptor_slice<'a, T>(pointer: *const T, count: u32) -> Result<&'a [T], u32> {
-    if count == 0 {
-        return Ok(&[]);
-    }
-    if pointer.is_null() || count > MAX_DESCRIPTOR_ITEMS {
-        return Err(KIRA_FFI_INVALID_DESCRIPTOR);
-    }
-    // SAFETY: the caller owns the immutable descriptor memory for this call and
-    // the count is bounded before this slice is formed.
-    Ok(unsafe { slice::from_raw_parts(pointer, count as usize) })
 }

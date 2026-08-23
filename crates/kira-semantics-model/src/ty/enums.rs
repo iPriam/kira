@@ -84,14 +84,34 @@ pub struct Instantiation {
 /// The table is the one owner of enum shapes: the HIR, the IR, and every
 /// backend read tags and payload types from here rather than carrying their own
 /// copy.
+///
+/// # Why the name index is keyed by owner
+///
+/// One program holds every package it depends on, and two packages may each
+/// declare a `Color` without either being wrong — the same rule the struct
+/// table already follows. So the index is keyed by *owner and name* rather
+/// than name alone: both declarations get a row, and deciding which one a file
+/// means is the resolver's job, not the table's. An enum with no owner belongs
+/// to the program's own files, which share one scope and so share one key
+/// space.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EnumTable {
     defs: Vec<EnumDef>,
-    // Kept in step with `defs` by `declare`, which is the only way to add one.
+    // Kept in step with `defs` by `declare_owned`, the only way to add one.
     index: std::collections::HashMap<String, EnumId>,
+    // Index-aligned with `defs`, and written by the same one place.
+    owners: Vec<Option<String>>,
     // Only the rows a generic template minted appear here, so a hand-written
     // enum is distinguishable from an instantiation by absence.
     instantiations: std::collections::HashMap<EnumId, Instantiation>,
+}
+
+/// The index key a declaration sits under.
+fn owned_key(owner: Option<&str>, name: &str) -> String {
+    match owner {
+        Some(owner) => format!("{owner}::{name}"),
+        None => name.to_owned(),
+    }
 }
 
 impl EnumTable {
@@ -100,24 +120,47 @@ impl EnumTable {
         Self::default()
     }
 
-    /// Adds an enum, returning its id, or `None` when the name is taken.
+    /// Adds an enum owned by no package — the program's own.
+    pub fn declare(&mut self, def: EnumDef) -> Option<EnumId> {
+        self.declare_owned(None, def)
+    }
+
+    /// Adds an enum `owner` declares, returning its id, or `None` when that
+    /// owner already declares the name.
     ///
     /// Rejecting the duplicate here rather than overwriting keeps the name
     /// index and the rows in step: every id resolves, and every name resolves
-    /// to the first declaration.
-    pub fn declare(&mut self, def: EnumDef) -> Option<EnumId> {
-        if self.index.contains_key(&def.name) {
+    /// to the first declaration *of its owner*.
+    pub fn declare_owned(&mut self, owner: Option<&str>, def: EnumDef) -> Option<EnumId> {
+        let key = owned_key(owner, &def.name);
+        if self.index.contains_key(&key) {
             return None;
         }
         let id = EnumId(u32::try_from(self.defs.len()).ok()?);
-        self.index.insert(def.name.clone(), id);
+        self.index.insert(key, id);
         self.defs.push(def);
+        self.owners.push(owner.map(str::to_owned));
         Some(id)
     }
 
-    /// The enum `name` declares, or `None` when no enum has that name.
+    /// The enum `name` declares in the program's own files.
     pub fn lookup(&self, name: &str) -> Option<EnumId> {
-        self.index.get(name).copied()
+        self.lookup_owned(None, name)
+    }
+
+    /// The enum `owner` declares under `name`, or `None` when it declares
+    /// none.
+    pub fn lookup_owned(&self, owner: Option<&str>, name: &str) -> Option<EnumId> {
+        self.index.get(&owned_key(owner, name)).copied()
+    }
+
+    /// The package that declared the enum at `id`, or `None` for one of the
+    /// program's own files.
+    ///
+    /// `None` for an id this table never minted, matching how every other
+    /// out-of-range read here answers rather than erroring.
+    pub fn owner_of(&self, id: EnumId) -> Option<&str> {
+        self.owners.get(id.0 as usize).and_then(Option::as_deref)
     }
 
     /// The definition behind an id.

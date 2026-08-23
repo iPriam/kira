@@ -19,10 +19,7 @@ impl Vm<'_> {
     /// Every popped value is dropped on every path out, including the error
     /// paths, so a refused host call leaks no heap.
     pub(super) fn file_system(&mut self, op: FileSystemOp) -> Result<(), VmError> {
-        let mut operands = Vec::with_capacity(op.arity());
-        for _ in 0..op.arity() {
-            operands.push(self.pop()?);
-        }
+        let mut operands = self.pop_operands(op.arity())?;
         operands.reverse();
         let result = self.file_system_call(op, &operands);
         for operand in operands {

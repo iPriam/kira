@@ -1,0 +1,58 @@
+# The pinned libffi engine: the contract between this repo, the libffi fork's
+# CI, and the downloader (`knvm install libffi`).
+#
+# libffi is linked into Kira *statically*, so a user downloads Kira and nothing
+# else: there is no engine to ship beside an artifact, no library search path to
+# get right, and no version of libffi on the machine that could be found instead
+# of the one Kira was built against. What that costs is this file — a static
+# archive has to exist for every machine Kira emits code for, at build time
+# rather than at run time.
+#
+# The archives are the `-static` assets of the fork's own release, built by
+# `.github/workflows/_kira-artifacts.yml` in `kira-lang-com/libffi`. That fork is
+# not incidental: `ffi_get_default_abi` and `ffi_get_closure_size` are Kira
+# additions (`src/types.c`), and upstream libffi exposes both only as macros a
+# Rust caller cannot reach.
+#
+# Nothing invents asset names. The release workflow builds the matrix and must
+# publish archives whose names match `asset` here exactly.
+
+schema_version = 1
+
+[libffi]
+version = "3.5.2"
+repository = "kira-lang-com/libffi"
+release_tag = "v3.5.2"
+
+# The target table is keyed by the same spelling `libffi_vendor_target` returns,
+# so the build script that links an archive and the installer that fetches one
+# name the target identically.
+#
+# There is deliberately no `macos-x86_64`: the fork's CI publishes no Intel macOS
+# job, so that target has no archive and must report so rather than silently
+# link nothing.
+
+[target.linux-x86_64]
+platform = "linux"
+archive = "tar.gz"
+asset = "libffi-3.5.2-linux-x86_64-static.tar.gz"
+
+[target.linux-aarch64]
+platform = "linux"
+archive = "tar.gz"
+asset = "libffi-3.5.2-linux-arm64-static.tar.gz"
+
+[target.macos-aarch64]
+platform = "macos"
+archive = "tar.gz"
+asset = "libffi-3.5.2-macos-arm64-static.tar.gz"
+
+[target.windows-x86_64]
+platform = "windows"
+archive = "zip"
+asset = "libffi-3.5.2-windows-x64-static.zip"
+
+[target.windows-aarch64]
+platform = "windows"
+archive = "zip"
+asset = "libffi-3.5.2-windows-arm64-static.zip"

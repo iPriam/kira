@@ -47,6 +47,12 @@ pub fn build(args: &[String]) -> i32 {
         Ok(path) => path,
         Err(code) => return code,
     };
+    // Before the frontend runs, not after it succeeds. Every failure from here
+    // on — a parse error in a dependency, a link that cannot resolve a symbol —
+    // ends this function early, and each one used to leave the PREVIOUS build's
+    // executable sitting in `.kira-build` for someone to launch by hand and
+    // mistake for this one. See `Artifacts::discard_runnable`.
+    discard_stale_program(&options);
     let compiled = match verified(&options.path, &options_target(&options)) {
         Ok(compiled) => compiled,
         Err(code) => return code,
@@ -54,6 +60,10 @@ pub fn build(args: &[String]) -> i32 {
     if let Err(code) = apply_manifest_defaults("build", &mut options, &compiled) {
         return code;
     }
+    // Again, because the manifest is what may have named another machine: the
+    // first call cleared this host's layout, and a cross build's artifacts live
+    // under a directory of the target's own.
+    discard_stale_program(&options);
     let ir = &compiled.ir;
     // A library and a program are built by different paths on every backend:
     // one produces something a consumer depends on, the other something the OS
@@ -223,6 +233,19 @@ pub fn build(args: &[String]) -> i32 {
                 EXIT_FAILURE
             }
         },
+    }
+}
+
+/// Discards the runnable artifacts the last build of `options.path` left.
+///
+/// Best-effort by design: a program that has never been built has nothing to
+/// discard, and a build directory that cannot be opened is a build that is
+/// about to fail on its own terms with a better message than this could give.
+fn discard_stale_program(options: &crate::options::CompileOptions) {
+    let source = std::path::Path::new(&options.path);
+    let target = super::native_build_target(options);
+    if let Ok(artifacts) = native::Artifacts::for_source_targeting(source, &target) {
+        artifacts.discard_runnable(&target);
     }
 }
 

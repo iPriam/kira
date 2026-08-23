@@ -31,6 +31,7 @@ mod mutation;
 mod native_state;
 mod operators;
 mod overloads;
+mod repro_dep_enum;
 mod reuse;
 mod strings;
 mod syscall;

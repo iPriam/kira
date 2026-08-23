@@ -553,16 +553,30 @@ fn expand_file(
         }
         procedural::expand_declaration(file, &declaration, program, buffer, reporter);
     }
-    // A `comptime function` call wears no `!`, so it is found by name. Done
-    // before the macro calls so a macro argument may hold one: the value is
-    // already a literal by the time the macro reads its fragment.
+    // A `comptime function` call wears no `!`, so it is found by name. A call
+    // sitting **inside a macro's arguments** is left for a later round: its
+    // span is contained in the macro call's span, so rewriting both here would
+    // overlap and be refused as a bug in this crate. The macro expands first,
+    // and the literal its expansion carries is found and folded by name on the
+    // next pass.
     let comptime_names = registry.comptime_function_names();
     if !comptime_names.is_empty() {
+        let nested: Vec<kira_source::Span> = invoke::find(file)
+            .iter()
+            .filter(|call| {
+                registry.declarative(&call.name).is_some()
+                    || registry.procedural(&call.name).is_some()
+            })
+            .map(|call| call.span)
+            .collect();
         let calls = invoke::find_named(file, &comptime_names);
         for call in invoke::innermost(&calls) {
             if blanked
                 .iter()
                 .any(|span| span.start <= call.span.start && call.span.end() <= span.end())
+                || nested
+                    .iter()
+                    .any(|span| span.start <= call.span.start && call.span.end() <= span.end())
             {
                 continue;
             }

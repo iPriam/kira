@@ -106,6 +106,19 @@ impl Recorder {
     }
 }
 
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        // A run interrupted between start and finish — an error reading the
+        // recording, a caller bailing out early — still owns a live `perf`
+        // child and its temp file. Killing the one and removing the other on
+        // every drop keeps neither accumulating; on the paths that already
+        // waited and removed, both are no-ops.
+        let _ = self.perf.kill();
+        let _ = self.perf.wait();
+        let _ = std::fs::remove_file(&self.data);
+    }
+}
+
 /// The path of `program` on `PATH`, if it is there.
 fn which(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;

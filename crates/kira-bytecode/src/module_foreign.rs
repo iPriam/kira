@@ -185,9 +185,15 @@ pub(crate) fn write_foreign_callbacks(out: &mut Vec<u8>, callbacks: &[ForeignCal
 }
 
 /// Reads the callback table, or an empty one when the stream ends first.
+///
+/// The aggregate table is read before this, so a signature's aggregate
+/// references are resolved here against it: an index the table does not
+/// contain is refused at load with the same error an import gets, rather than
+/// surfacing later in engine-specific vocabulary at the first call.
 pub(crate) fn read_foreign_callbacks(
     reader: &mut Reader<'_>,
     format: Format,
+    aggregates: &ForeignAggregates,
 ) -> Result<Vec<ForeignCallback>, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(Vec::new());
@@ -205,10 +211,23 @@ pub(crate) fn read_foreign_callbacks(
             parameters.push(read_spec(reader, &named)?);
         }
         let result = read_spec(reader, &named)?;
-        callbacks.push(ForeignCallback::new(
-            function,
-            ForeignSignature::new(parameters, result),
-        ));
+        let signature = ForeignSignature::new(parameters, result);
+        for spec in signature
+            .parameters()
+            .iter()
+            .copied()
+            .chain(std::iter::once(signature.result()))
+        {
+            if let Some(id) = spec.aggregate()
+                && aggregates.get(id).is_none()
+            {
+                return Err(ModuleDecodeError::UnknownCallbackAggregate {
+                    callback: index,
+                    index: id.0,
+                });
+            }
+        }
+        callbacks.push(ForeignCallback::new(function, signature));
     }
     Ok(callbacks)
 }

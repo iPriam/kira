@@ -39,7 +39,27 @@ impl Heap {
     /// released; the new value is in place before the drop runs. A drop
     /// followed by a store would leave a freed handle readable in between, and
     /// a trap in that window would leave it there for good.
+    ///
+    /// This consumes `value` on every path out, refusals included: a caller
+    /// that handed a value over no longer owns it, whatever the answer was.
+    /// A value that *is* the cell being written is refused outright — storing
+    /// a box inside itself builds a share cycle no count can collect.
     pub fn cell_set(&mut self, id: CellId, value: Value) -> bool {
+        // Validated before ownership is taken: `own` can allocate, and either
+        // refusal below must release the incoming value rather than strand an
+        // owned copy of it.
+        let named = matches!(
+            self.slots.get(id.0 as usize),
+            Some(Some(Object::Cell { .. }))
+        );
+        if match value {
+            Value::Cell(self_id) => self_id == id,
+            _ => false,
+        } || !named
+        {
+            self.drop_value(value);
+            return false;
+        }
         let value = self.own(value);
         let previous = match self.slots.get_mut(id.0 as usize) {
             Some(Some(Object::Cell { payload, .. })) => std::mem::replace(payload, value),
@@ -100,11 +120,12 @@ impl Heap {
     /// Releases one hold on a capture cell, dropping its payload with the last.
     ///
     /// Bounded by the program's nesting depth for every value a cell can hold
-    /// *except* one: a cell holding a closure that captures the same cell is a
-    /// genuine reference cycle, and share counts cannot collect it. That leaks
-    /// the box and its payload — memory-safe, never freed twice, never freed
-    /// early — and is recorded rather than defended against, because detecting
-    /// it needs a tracing collector this runtime does not have.
+    /// *except* an indirect share cycle: a cell whose payload reaches it again
+    /// through a struct or erased box cannot be collected by counts. Storing a
+    /// box in itself is refused at [`Heap::cell_set`]; the indirect form is
+    /// memory-safe — never freed twice, never freed early — but strands the
+    /// box, and collecting it needs either weak handles or a tracing pass,
+    /// neither of which this runtime has.
     pub fn free_cell(&mut self, id: CellId) {
         // Another value still holds this box, so nothing it owns goes here.
         if let Some(Some(Object::Cell { shares, .. })) = self.slots.get_mut(id.0 as usize)

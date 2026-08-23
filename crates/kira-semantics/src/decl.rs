@@ -92,7 +92,9 @@ impl<'a> Analyzer<'a> {
     /// variant reports that the type is a class. Neither mentions the second
     /// declaration, which is the only thing that was actually wrong.
     pub(crate) fn name_taken_by_enum(&mut self, name: &str, span: Span, kind: &str) -> bool {
-        if self.program.types.enums().lookup(name).is_none() {
+        // Visible *here* is the question: an enum of this name in a package
+        // this file neither owns nor imports is no conflict at all.
+        if self.visible_enum(name).is_none() {
             return false;
         }
         self.emit(

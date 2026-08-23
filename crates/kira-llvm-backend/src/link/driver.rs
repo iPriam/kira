@@ -58,6 +58,29 @@ pub(super) fn native_live_runtime_arguments() -> Vec<String> {
     }
 }
 
+/// Makes libraries staged BESIDE a linked program visible to its loader.
+///
+/// A Kira program that imports a dynamic native library — Dawn, say — is linked
+/// against it by name and the library is copied next to the executable. Nothing
+/// in that arrangement tells the loader to look next to the executable, so the
+/// program builds, ships its own dependency, and then refuses to start with
+/// `cannot open shared object file` unless the caller happens to set
+/// `LD_LIBRARY_PATH`. Having to set it is the bug: the library is right there.
+///
+/// Asked of the TARGET rather than the host, because a cross link produces an
+/// image whose loader is the target's — `$ORIGIN` is what ELF spells this and
+/// `@loader_path` is what Mach-O does, and Windows resolves a DLL beside the
+/// executable already, so it needs nothing.
+pub(super) fn staged_library_runtime_arguments(target: &NativeBuildTarget) -> Vec<String> {
+    if target.is_macos() {
+        return vec!["-Wl,-rpath,@loader_path".to_owned()];
+    }
+    if target.is_windows() {
+        return Vec::new();
+    }
+    vec!["-Wl,-rpath,$ORIGIN".to_owned()]
+}
+
 /// Exports Kira body names from a Windows native image so LLDB can resolve
 /// them even when the platform linker keeps native debug records in a separate
 /// PDB without translating every subprogram name to the exported symbol.

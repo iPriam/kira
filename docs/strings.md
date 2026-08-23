@@ -26,6 +26,38 @@ converted never disagree: `String(2.0)` is `"2"`, `String(1.0 / 3.0)` is
 
 An empty needle matches at the front, so `s.indexOf("")` is `0`.
 
+## Writing one
+
+A literal resolves seven escapes — `\n`, `\t`, `\r`, `\e`, `\0`, `\"` and
+`\\`. A backslash before anything else is an error (`KLEX003`) rather than the
+character itself, so a Windows path written with single backslashes is caught
+where it is written instead of arriving somewhere as text nobody meant.
+
+A backslash before a **newline** continues the literal on the next line:
+
+```kira
+let message = "this compositor offers no wl_compositor or no \
+               xdg_wm_base, and a window needs both"
+```
+
+That is one string with no newline in it. The line break and the indentation
+lining the second line up under the first are layout for whoever reads the
+source; neither reaches the value, so the literal above is exactly the string
+written on one long line. A run of spaces in the middle of a sentence is never
+what the indentation meant.
+
+The space before the backslash is ordinary text and is kept, which is where the
+one between `no` and `xdg_wm_base` comes from. A continuation written without
+one joins the halves directly:
+
+```kira
+let joined = "un\
+              split"          // "unsplit"
+```
+
+This is the only escape whose meaning is *produce nothing*, and it is why a
+message too long for a line does not have to be concatenated out of pieces.
+
 ## The two operations that count scalars, not bytes
 
 `dropLastScalar` and `scalarText` are the exceptions, and they exist because

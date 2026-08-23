@@ -195,7 +195,7 @@ impl Codegen<'_> {
             let llvm_type = self.llvm_type(ty)?;
             // SAFETY: `llvm_type` belongs to this context and the runtime writes
             // one owned aggregate value into this slot.
-            let out = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
+            let (out, saved) = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
             self.lifetime_start(out);
             self.call(self.runtime.enum_payload_aggregate, &mut [value, out], c"");
             // SAFETY: the helper initialized `out` as `llvm_type`.
@@ -207,7 +207,7 @@ impl Codegen<'_> {
                     c"enum.aggregate.value".as_ptr(),
                 )
             };
-            self.lifetime_end(out);
+            self.release_dynamic_alloca(out, saved);
             return Ok(payload);
         }
         let word = self.call(self.runtime.enum_payload, &mut [value], c"enum.payload");
@@ -224,7 +224,7 @@ impl Codegen<'_> {
             let llvm_type = self.llvm_type(ty)?;
             let size = self.abi_size(ty)?;
             // SAFETY: the slot belongs to this context and `value` has its type.
-            let source = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
+            let (source, saved) = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
             self.lifetime_start(source);
             // SAFETY: `source` was allocated with `llvm_type` and `value` has
             // that same type.
@@ -236,7 +236,7 @@ impl Codegen<'_> {
                 &mut [tag, source, size, clone, free],
                 c"enum.aggregate",
             );
-            self.lifetime_end(source);
+            self.release_dynamic_alloca(source, saved);
             return Ok(result);
         }
         let (kind, word) = self.encode_payload_word(ty, value)?;

@@ -20,9 +20,15 @@ mod expr;
 mod stmt;
 
 /// The words that open a top-level declaration, used to resynchronize.
-const DECLARATION_STARTS: [TokenKind; 4] = [
+///
+/// Every word that can start an item belongs here: recovery skips to the next
+/// one, so a missing entry silently swallows every following declaration of
+/// that kind instead of reporting the one broken item.
+const DECLARATION_STARTS: [TokenKind; 6] = [
     TokenKind::Import,
     TokenKind::Type,
+    TokenKind::Const,
+    TokenKind::Enum,
     TokenKind::Function,
     TokenKind::Shader,
 ];

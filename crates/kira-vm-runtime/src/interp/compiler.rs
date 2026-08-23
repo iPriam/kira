@@ -20,10 +20,7 @@ impl Vm<'_> {
     /// dropped on every path out, including the error paths, so a refused host
     /// call leaks no heap.
     pub(super) fn compiler(&mut self, op: CompilerOp) -> Result<(), VmError> {
-        let mut operands = Vec::with_capacity(op.arity());
-        for _ in 0..op.arity() {
-            operands.push(self.pop()?);
-        }
+        let mut operands = self.pop_operands(op.arity())?;
         operands.reverse();
         let result = self.compiler_call(op, &operands);
         for operand in operands {

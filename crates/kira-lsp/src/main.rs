@@ -50,7 +50,7 @@ const EXIT_FAILURE: i32 = 1;
 fn main() {
     if let Err(error) = run() {
         eprintln!("kira-language-server: {error}");
-        std::process::exit(EXIT_FAILURE);
+        kira_toolchain::process::exit(EXIT_FAILURE);
     }
 }
 
@@ -195,6 +195,12 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handles one notification, republishing diagnostics when the text changed.
+///
+/// A notification whose parameters fail to deserialize is logged and dropped:
+/// notifications take no reply, so the only "answer" a malformed one could get
+/// would be killing this server — which would take every open document's
+/// language features down with it over one bad message from a client bug or
+/// version mismatch. Only transport-level errors propagate.
 fn notify(
     connection: &Connection,
     session: &mut analysis::AnalysisSession,
@@ -203,7 +209,9 @@ fn notify(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match notification.method.as_str() {
         DidOpenTextDocument::METHOD => {
-            let params: DidOpenTextDocumentParams = extract(notification)?;
+            let Some(params) = extract_logged::<DidOpenTextDocumentParams>(notification) else {
+                return Ok(());
+            };
             documents.set(
                 &params.text_document.uri,
                 params.text_document.text,
@@ -212,7 +220,9 @@ fn notify(
             publish(connection, session, documents, &params.text_document.uri)?;
         }
         DidChangeTextDocument::METHOD => {
-            let params: DidChangeTextDocumentParams = extract(notification)?;
+            let Some(params) = extract_logged::<DidChangeTextDocumentParams>(notification) else {
+                return Ok(());
+            };
             // Full sync, so the last change carries the whole document.
             if let Some(change) = params.content_changes.into_iter().next_back() {
                 documents.set(
@@ -224,7 +234,9 @@ fn notify(
             }
         }
         DidCloseTextDocument::METHOD => {
-            let params: DidCloseTextDocumentParams = extract(notification)?;
+            let Some(params) = extract_logged::<DidCloseTextDocumentParams>(notification) else {
+                return Ok(());
+            };
             documents.remove(&params.text_document.uri);
             // A closed document's squiggles are the client's to forget, and it
             // only does so if told: clear them explicitly.
@@ -393,6 +405,21 @@ fn extract<P: serde::de::DeserializeOwned>(
             }
         })
 }
+
+/// Deserializes a notification's parameters, logging the refusal instead of
+/// failing the session.
+///
+/// A malformed notification would otherwise have no answer short of killing
+/// this server — which would take every open document's language features down
+/// with it over one bad message from a client bug or version mismatch.
+fn extract_logged<P: serde::de::DeserializeOwned>(notification: Notification) -> Option<P> {
+    let params = extract(notification);
+    if let Err(error) = &params {
+        eprintln!("kira-language-server: {error}; ignoring the notification");
+    }
+    params.ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

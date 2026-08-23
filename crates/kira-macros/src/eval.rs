@@ -575,6 +575,19 @@ impl Evaluator<'_> {
                 else {
                     return Err(EvalError::unsupported("a range over non-integers"));
                 };
+                // Materialized lazily and bounded like a `while`: a range the
+                // width of an address space would otherwise be collected up
+                // front and end the compiler with an allocation failure
+                // instead of this diagnostic.
+                let count = to.saturating_sub(from).max(0);
+                if count > i64::from(LOOP_LIMIT) {
+                    return Err(EvalError::coded(
+                        diagnostics::DEPTH_LIMIT,
+                        format!(
+                            "a `for` in an `expand` body ranges over more than {LOOP_LIMIT} items"
+                        ),
+                    ));
+                }
                 (from..to).map(Value::Int).collect()
             }
             ForIterable::Each { array } => match self.value(*array)? {

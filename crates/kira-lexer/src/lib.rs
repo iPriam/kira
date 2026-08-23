@@ -175,9 +175,41 @@ impl<'a> Lexer<'a> {
                     break;
                 }
                 b'\\' => {
+                    let escape = self.pos;
                     self.pos += 1;
-                    if self.peek().is_some() {
-                        self.pos += 1;
+                    match self.peek() {
+                        // A backslash at the end of a line CONTINUES the string
+                        // on the next one: the literal keeps scanning past the
+                        // newline instead of running into the unterminated
+                        // diagnostic below.
+                        //
+                        // This is how a message longer than a line is written
+                        // without either overrunning the margin or being
+                        // concatenated out of pieces, and it is the one escape
+                        // whose meaning is "produce nothing" — the newline and
+                        // the indentation that follows it are layout, so
+                        // `decode_string_literal` drops them.
+                        Some(b'\n') => self.pos += 1,
+                        // The same line ending written the other way. Splitting
+                        // the pair would leave the `\r` in the text and the
+                        // `\n` to close the literal.
+                        Some(b'\r') if self.peek_at(1) == Some(b'\n') => self.pos += 2,
+                        // A backslash with nothing after it at all: the file
+                        // ended mid-literal, which the unterminated diagnostic
+                        // below is exactly the report for.
+                        None => {}
+                        Some(escaped) => {
+                            if !matches!(escaped, b'n' | b't' | b'r' | b'e' | b'0' | b'"' | b'\\') {
+                                // The diagnostic names the whole escaped
+                                // character, so its span must cover every
+                                // byte of it rather than cut one mid-char.
+                                let end =
+                                    (escape + 1 + utf8_char_len(escaped)).min(self.bytes.len());
+                                let span = Span::from_bounds(escape as u32, end as u32);
+                                self.diagnostics.push(unknown_escape(self.source, span));
+                            }
+                            self.pos += 1;
+                        }
                     }
                 }
                 b'\n' => break,
@@ -262,7 +294,8 @@ impl<'a> Lexer<'a> {
 }
 
 /// Decodes the contents of a string-literal token span into an owned string,
-/// resolving the escapes the lexer accepts (`\n`, `\t`, `\r`, `\e`, `\"`, `\\`, `\0`).
+/// resolving the escapes the lexer accepts (`\n`, `\t`, `\r`, `\e`, `\"`, `\\`, `\0`)
+/// and the line continuation a backslash before a newline writes.
 ///
 /// `raw` is the full literal text including the surrounding quotes.
 pub fn decode_string_literal(raw: &str) -> String {
@@ -271,7 +304,7 @@ pub fn decode_string_literal(raw: &str) -> String {
         .map(|s| s.strip_suffix('"').unwrap_or(s))
         .unwrap_or(raw);
     let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
+    let mut chars = inner.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\\' {
             out.push(ch);
@@ -285,11 +318,34 @@ pub fn decode_string_literal(raw: &str) -> String {
             Some('0') => out.push('\0'),
             Some('"') => out.push('"'),
             Some('\\') => out.push('\\'),
+            // A line continuation contributes nothing. The newline is not in
+            // the message, and neither is the indentation that lines the next
+            // line up under this one — that whitespace is there for the reader
+            // of the source, and a literal that kept it would put a run of
+            // spaces in the middle of a sentence.
+            Some('\n') => skip_continuation_indent(&mut chars),
+            Some('\r') => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                skip_continuation_indent(&mut chars);
+            }
             Some(other) => out.push(other),
             None => out.push('\\'),
         }
     }
     out
+}
+
+/// Drops the whitespace a continued line is indented by.
+///
+/// Every whitespace character, not just the spaces on the next line: a
+/// continuation followed by a blank line is still one continuation, and the
+/// text resumes at the first thing that is not layout.
+fn skip_continuation_indent(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+        chars.next();
+    }
 }
 
 fn utf8_char_len(first: u8) -> usize {
@@ -322,6 +378,21 @@ fn unterminated_string(source: SourceId, span: Span) -> Diagnostic {
         Label::primary(file_span, "string is not closed before end of line"),
     );
     diagnostic.code = Some(Code::known("KLEX002"));
+    diagnostic.phase = Some("lexer");
+    diagnostic
+}
+
+fn unknown_escape(source: SourceId, span: Span) -> Diagnostic {
+    let file_span = FileSpan::new(source, span);
+    let mut diagnostic = Diagnostic::single(
+        Severity::Error,
+        "unknown string escape",
+        Label::primary(
+            file_span,
+            "the escapes are \\n \\t \\r \\e \\0 \\\" \\\\, and a newline, which continues the string",
+        ),
+    );
+    diagnostic.code = Some(Code::known("KLEX003"));
     diagnostic.phase = Some("lexer");
     diagnostic
 }
@@ -442,6 +513,71 @@ mod tests {
                 .iter()
                 .any(|t| t.kind == TokenKind::StringLiteral)
         );
+        assert_eq!(result.diagnostics.len(), 1);
+    }
+
+    /// A backslash before a newline continues the literal, so what would
+    /// otherwise be an unterminated string is one token and no diagnostic.
+    #[test]
+    fn a_backslash_before_a_newline_continues_the_string() {
+        let result = lex(SourceId::new(0), "\"first \\\n   second\"");
+        assert_eq!(
+            result
+                .tokens
+                .iter()
+                .filter(|t| t.kind == TokenKind::StringLiteral)
+                .count(),
+            1
+        );
+        assert!(
+            result.diagnostics.is_empty(),
+            "a continued string is not unterminated: {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// The continuation produces nothing: neither the newline nor the
+    /// indentation lining the next line up reaches the message.
+    #[test]
+    fn a_continuation_contributes_neither_newline_nor_indent() {
+        assert_eq!(
+            decode_string_literal("\"first \\\n            second\""),
+            "first second"
+        );
+        // The space belongs to the text before the backslash, so a
+        // continuation written without one joins the halves directly.
+        assert_eq!(
+            decode_string_literal("\"un\\\n            split\""),
+            "unsplit"
+        );
+    }
+
+    /// A CRLF line ending is the same continuation. Consuming only the `\r`
+    /// would leave the `\n` to close the literal.
+    #[test]
+    fn a_continuation_spans_a_crlf_line_ending() {
+        let result = lex(SourceId::new(0), "\"first \\\r\n   second\"");
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(
+            decode_string_literal("\"first \\\r\n   second\""),
+            "first second"
+        );
+    }
+
+    /// A blank line inside a continuation is still layout.
+    #[test]
+    fn a_continuation_swallows_a_blank_line() {
+        assert_eq!(
+            decode_string_literal("\"first \\\n\n      second\""),
+            "first second"
+        );
+    }
+
+    /// The continuation does not swallow a string that never closes: a
+    /// backslash at end of file still leaves the literal unterminated.
+    #[test]
+    fn a_backslash_at_end_of_file_is_still_unterminated() {
+        let result = lex(SourceId::new(0), "\"open \\");
         assert_eq!(result.diagnostics.len(), 1);
     }
 

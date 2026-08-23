@@ -93,7 +93,7 @@ impl Codegen<'_> {
         let size = self.abi_size(ty)?;
         // SAFETY: `llvm_type` belongs to this context, `value` has that type, and
         // the builder is positioned on a live block.
-        let slot = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
+        let (slot, saved) = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
         self.lifetime_start(slot);
         // SAFETY: `slot` was allocated with `llvm_type` and `value` has that
         // same type.
@@ -110,7 +110,7 @@ impl Codegen<'_> {
             &mut [tag, slot, size, clone, free, eq],
             c"enum.aggregate",
         );
-        self.lifetime_end(slot);
+        self.release_dynamic_alloca(slot, saved);
         Ok(result)
     }
 
@@ -131,7 +131,7 @@ impl Codegen<'_> {
         let llvm_type = self.llvm_type(ty)?;
         // SAFETY: `llvm_type` belongs to this context and the runtime writes
         // one owned value of exactly that type into `out`.
-        let out = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
+        let (out, saved) = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
         self.lifetime_start(out);
         self.call(self.runtime.enum_payload_aggregate, &mut [boxed, out], c"");
         // SAFETY: the helper initialized `out` with a value of `llvm_type`.
@@ -143,7 +143,7 @@ impl Codegen<'_> {
                 c"enum.aggregate.value".as_ptr(),
             )
         };
-        self.lifetime_end(out);
+        self.release_dynamic_alloca(out, saved);
         Ok(value)
     }
 

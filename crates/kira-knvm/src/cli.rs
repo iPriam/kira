@@ -41,6 +41,11 @@ pub enum KnvmCommand {
         /// Which channel to install it from.
         channel: Channel,
     },
+    /// Provision the pinned libffi archives the runtime links statically.
+    InstallLibffi {
+        /// Whether to replace archives that are already installed.
+        force: bool,
+    },
     /// Build the enclosing checkout and install it as the dev toolchain.
     Binstall {
         /// Which cargo profile the toolchain is built with.
@@ -134,6 +139,28 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
     match verb.as_str() {
         "help" | "--help" | "-h" => Ok(KnvmCommand::Help),
         "install" => {
+            // `libffi` where a version goes is the engine, not a toolchain
+            // called `libffi`. It is spelled as an argument to `install` rather
+            // than as an `install-libffi` verb because it is a thing knvm
+            // installs, and the reason `install-llvm` is its own verb —
+            // that LLVM is a versioned sibling selected per toolchain — does
+            // not apply: libffi's version is the pin and nothing selects it.
+            if rest.first().is_some_and(|first| first == "libffi") {
+                let force = match rest.get(1).map(String::as_str) {
+                    None => false,
+                    Some("--force") => {
+                        reject_arguments(&rest[2..])?;
+                        true
+                    }
+                    Some(extra) if extra.starts_with("--") => {
+                        return Err(UsageError::UnknownOption(extra.to_string()));
+                    }
+                    Some(extra) => {
+                        return Err(UsageError::UnexpectedArgument(extra.to_string()));
+                    }
+                };
+                return Ok(KnvmCommand::InstallLibffi { force });
+            }
             let parsed = parse_version_and_channel(rest)?;
             Ok(KnvmCommand::Install {
                 spec: parsed
@@ -290,13 +317,18 @@ pub fn usage(paint: crate::Paint) -> String {
     // Invocation, arguments, one-line note. The note column is aligned by the
     // *visible* width of the invocation — padding is computed before color is
     // applied, because ANSI escapes inflate `len()` and would stagger it.
-    const VERBS: [(&str, &str, &str); 10] = [
+    const VERBS: [(&str, &str, &str); 11] = [
         (
             "install",
             " <version|latest> [--channel]",
             "fetch a release and select it",
         ),
         ("install-llvm", " [--force]", "the LLVM the backend links"),
+        (
+            "install libffi",
+            " [--force]",
+            "the libffi the runtime links in",
+        ),
         (
             "binstall",
             " [--debug]",

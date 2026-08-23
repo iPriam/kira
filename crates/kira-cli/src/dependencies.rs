@@ -112,7 +112,9 @@ fn parse_add(args: &[String]) -> Result<AddOptions, String> {
                             return Err("--tag may be supplied only once".to_owned());
                         }
                     }
-                    _ => unreachable!(),
+                    // Total by construction — the outer arm admits exactly
+                    // these spellings — but answered rather than trusted.
+                    _ => return Err(format!("unknown option `{argument}`")),
                 }
             }
             flag if flag.starts_with('-') => return Err(format!("unknown option `{flag}`")),

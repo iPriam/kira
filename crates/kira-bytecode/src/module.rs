@@ -241,6 +241,15 @@ pub enum ModuleDecodeError {
         /// The unresolved aggregate index.
         index: u32,
     },
+    /// A callback signature named an aggregate index the table does not
+    /// contain.
+    #[error("callback {callback} names aggregate {index}, which this module does not define")]
+    UnknownCallbackAggregate {
+        /// The offending callback's table index.
+        callback: u64,
+        /// The unresolved aggregate index.
+        index: u32,
+    },
     /// The release section named a different number of functions than the
     /// module has.
     ///
@@ -408,7 +417,7 @@ impl Module {
         let exports = read_exports(&mut reader, format)?;
         let foreign_imports = read_foreign(&mut reader, format)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports, format)?;
-        let foreign_callbacks = read_foreign_callbacks(&mut reader, format)?;
+        let foreign_callbacks = read_foreign_callbacks(&mut reader, format, &foreign_aggregates)?;
         read_releases(&mut reader, &mut functions, format)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(

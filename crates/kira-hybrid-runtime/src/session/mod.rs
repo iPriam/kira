@@ -158,27 +158,16 @@ impl Session {
                 .iter()
                 .any(|library: &ForeignLibrary| library.path() == path)
             {
-                let runtime_path = base.join(kira_libffi::bundled_file_name());
                 let library = if process {
-                    ForeignLibrary::load_process_with_runtime_path(
-                        manifest.foreign_aggregates.clone(),
-                        runtime_path,
-                    )?
+                    ForeignLibrary::load_process(manifest.foreign_aggregates.clone())?
                 } else {
-                    ForeignLibrary::load_with_runtime_path(
-                        &path,
-                        manifest.foreign_aggregates.clone(),
-                        runtime_path,
-                    )?
+                    ForeignLibrary::load(&path, manifest.foreign_aggregates.clone())?
                 };
                 foreign_libraries.push(library);
             }
             foreign_paths.push(Some(path));
         }
-        let runtime_path = base.join(kira_libffi::bundled_file_name());
-        let libffi = (callbacks != 0)
-            .then(|| LibffiRuntime::load_from(&runtime_path))
-            .transpose()?;
+        let libffi = (callbacks != 0).then(LibffiRuntime::load).transpose()?;
         let callback_closures = (0..callbacks).map(|_| None).collect();
 
         Ok(Session {

@@ -33,17 +33,10 @@ unsafe impl Send for PreparedCall {}
 unsafe impl Sync for PreparedCall {}
 
 impl LibffiRuntime {
-    /// Loads the libffi binary shipped with Kira.
+    /// The libffi linked into this image.
     pub fn load() -> Result<Self, LibffiError> {
         Ok(Self {
             api: std::sync::Arc::new(RawLibffi::load()?),
-        })
-    }
-
-    /// Loads libffi from a staged bundle path.
-    pub fn load_from(path: impl AsRef<std::path::Path>) -> Result<Self, LibffiError> {
-        Ok(Self {
-            api: std::sync::Arc::new(RawLibffi::load_from(path.as_ref())?),
         })
     }
 

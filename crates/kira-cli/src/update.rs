@@ -34,6 +34,16 @@ pub fn update(args: &[String]) -> i32 {
     for diagnostic in &graph.diagnostics {
         eprintln!("{}", renderer::render(diagnostic, &sources));
     }
+    // The same refusal `sync` makes: a lockfile pinned from a graph with a
+    // missing package records the hole as if it were the answer.
+    if graph
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == kira_diagnostics::Severity::Error)
+    {
+        err!("kira update: resolve the errors above before updating; nothing was written");
+        return EXIT_FAILURE;
+    }
     match kira_package_manager::sync_lockfile(&root, &graph.packages) {
         Ok(SyncOutcome::Written) => {
             println!("updated: {}", root.join("kira.lock").display());

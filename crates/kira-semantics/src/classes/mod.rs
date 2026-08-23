@@ -632,13 +632,22 @@ impl<'a> Analyzer<'a> {
     ///
     /// Matched on the key rather than the name, because a name may be
     /// overloaded and the two declarations are two different bodies.
+    ///
+    /// The candidate must also be written in the package that *owns* the
+    /// receiver struct: two packages may each declare a class of one name, and
+    /// the first tree-order match by name alone would compile the other
+    /// package's body against this package's field layout.
     fn method_ast(
         &self,
         owner: StructId,
         key: &str,
     ) -> Option<(&'a kira_syntax_model::ast::Function, SourceId)> {
         let owner_name = self.program.types.type_name(Type::Struct(owner));
+        let owner_package = self.program.types.structs().owner_of(owner);
         self.tree.items_with_source().find_map(|(source, item)| {
+            if self.imports.package_of(source) != owner_package {
+                return None;
+            }
             let matches = |function: &&'a kira_syntax_model::ast::Function| {
                 self.member_key(self.interner.resolve(function.name), &function.params) == key
             };

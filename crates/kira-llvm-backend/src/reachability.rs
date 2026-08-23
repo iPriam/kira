@@ -161,12 +161,16 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
             walk_expr(program, *base, facts);
             walk_expr(program, *index, facts);
         }
-        IrExpr::MathOperation { value, .. }
-        | IrExpr::ScalarText { value }
+        IrExpr::ScalarText { value }
         | IrExpr::ArrayElements { value, .. }
         | IrExpr::StringLen { text: value }
         | IrExpr::StringOf { value }
         | IrExpr::ArrayLen { array: value } => walk_expr(program, *value, facts),
+        IrExpr::MathOperation { operands, .. } => {
+            for operand in operands {
+                walk_expr(program, *operand, facts);
+            }
+        }
         IrExpr::StringCharAt { text, index } => {
             walk_expr(program, *text, facts);
             walk_expr(program, *index, facts);

@@ -169,29 +169,13 @@ impl<H: HostCapabilities> ForeignHost<H> {
         aggregates: ForeignAggregates,
         inner: H,
     ) -> Result<ForeignHost<H>, ForeignLibraryError> {
-        Self::load_dynamic_inner(imports, aggregates, inner, None)
-    }
-
-    /// Opens direct foreign bindings with libffi staged beside a live bundle.
-    pub fn load_dynamic_with_runtime_path(
-        imports: Vec<ForeignBinding>,
-        aggregates: ForeignAggregates,
-        runtime_path: impl AsRef<Path>,
-        inner: H,
-    ) -> Result<ForeignHost<H>, ForeignLibraryError> {
-        Self::load_dynamic_inner(
-            imports,
-            aggregates,
-            inner,
-            Some(runtime_path.as_ref().to_path_buf()),
-        )
+        Self::load_dynamic_inner(imports, aggregates, inner)
     }
 
     fn load_dynamic_inner(
         imports: Vec<ForeignBinding>,
         aggregates: ForeignAggregates,
         inner: H,
-        runtime_path: Option<PathBuf>,
     ) -> Result<ForeignHost<H>, ForeignLibraryError> {
         let mut libraries = Vec::new();
         for binding in &imports {
@@ -202,27 +186,14 @@ impl<H: HostCapabilities> ForeignHost<H> {
                     }) {
                         continue;
                     }
-                    let library = match runtime_path.as_deref() {
-                        Some(runtime_path) => ForeignLibrary::load_with_runtime_path(
-                            path,
-                            aggregates.clone(),
-                            runtime_path,
-                        ),
-                        None => ForeignLibrary::load(path, aggregates.clone()),
-                    }?;
+                    let library = ForeignLibrary::load(path, aggregates.clone())?;
                     libraries.push(library);
                 }
                 ForeignBindingTarget::Process { .. } => {
                     if libraries.iter().any(ForeignLibrary::is_process) {
                         continue;
                     }
-                    let library = match runtime_path.as_deref() {
-                        Some(runtime_path) => ForeignLibrary::load_process_with_runtime_path(
-                            aggregates.clone(),
-                            runtime_path,
-                        ),
-                        None => ForeignLibrary::load_process(aggregates.clone()),
-                    }?;
+                    let library = ForeignLibrary::load_process(aggregates.clone())?;
                     libraries.push(library);
                 }
                 // Neither of these opens anything: one has no artifact to open

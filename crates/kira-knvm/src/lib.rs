@@ -24,12 +24,14 @@ pub mod cli;
 pub mod digest;
 pub mod github;
 pub mod install;
+pub mod libffi;
 pub mod llvm;
 pub mod manage;
 pub mod path_setup;
 pub mod selfupdate;
 pub mod sinstall;
 pub mod source;
+pub mod unpack;
 
 /// The layout vocabulary knvm produces trees for, re-exported so a consumer
 /// needs one crate. These are `kira-toolchain`'s types, not copies of them.

@@ -157,6 +157,40 @@ impl Artifacts {
     pub fn foreign_bindings(&self) -> PathBuf {
         self.directory.join(format!("{}.ffi-bindings", self.stem))
     }
+
+    /// Deletes what the previous build of this program left behind that can
+    /// still be *started*.
+    ///
+    /// A build that fails writes no executable — and the executable already
+    /// sitting in `.kira-build` does not stop being one. The file left there
+    /// after a failed build is the program as it was before the edit, and
+    /// launching it looks exactly like launching the program as it is now: the
+    /// window opens, the old code runs, and the change that was just rejected
+    /// appears to have had no effect. Nothing about that is visible, which is
+    /// what makes it worth a compiler's while to prevent — the compiler said
+    /// the build failed, and then left behind the one artifact that says it
+    /// did not.
+    ///
+    /// So a build begins by discarding them, and what is in `.kira-build`
+    /// afterwards always describes the build that just ran. Only the things
+    /// that can be RUN go: an object file is overwritten by the next link, and
+    /// staged runtime libraries, generated bindings and their stamps belong to
+    /// the package rather than to this compilation.
+    ///
+    /// Missing files are not an error. The first build of a program has none of
+    /// these, and neither does a build whose backend produces only some of
+    /// them.
+    pub fn discard_runnable(&self, target: &NativeBuildTarget) {
+        for path in [
+            self.executable_for(target),
+            self.executable(),
+            self.bytecode(),
+            self.manifest(),
+            self.shared_library(),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// The platform's file name for a shared library called `stem`.

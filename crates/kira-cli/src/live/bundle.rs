@@ -67,9 +67,6 @@ pub(crate) fn build_bundle(
                     named_payload(&bindings_path, PayloadKind::ForeignBindings, backend)?,
                     backend,
                 )?;
-                let libffi = kira_libffi::stage_bundle(artifacts.directory())
-                    .map_err(|error| LiveError::build(backend, &error))?;
-                direct_dependencies.push(libffi);
             }
             payloads.extend(native_dependency_payloads(
                 foreign_link,
@@ -104,19 +101,7 @@ fn build_native_live_bundle(
     let mut names = HashSet::new();
     let mut payloads: Vec<NamedPayload> = Vec::new();
     append_payload(&mut payloads, &mut names, library_payload, backend)?;
-    let mut extra_dependencies = native::dynamic_foreign_library_paths(foreign_link);
-    if has_foreign_surface(program) {
-        let directory = library.parent().ok_or_else(|| LiveError::Build {
-            backend: backend.label(),
-            reason: format!(
-                "native live library `{}` has no parent directory",
-                library.display()
-            ),
-        })?;
-        let libffi = kira_libffi::stage_bundle(directory)
-            .map_err(|error| LiveError::build(backend, &error))?;
-        extra_dependencies.push(libffi);
-    }
+    let extra_dependencies = native::dynamic_foreign_library_paths(foreign_link);
     payloads.extend(native_dependency_payloads(
         foreign_link,
         &extra_dependencies,
@@ -205,12 +190,7 @@ fn build_hybrid_bundle(
     let manifest_path = bundle.manifest;
     let bytecode_path = artifacts.bytecode();
     let library_path = artifacts.shared_library();
-    let mut extra_dependencies = bundle.foreign_dependencies;
-    if has_foreign_surface(program) {
-        let libffi = kira_libffi::stage_bundle(artifacts.directory())
-            .map_err(|error| LiveError::build(backend, &error))?;
-        extra_dependencies.push(libffi);
-    }
+    let extra_dependencies = bundle.foreign_dependencies;
 
     let mut names = HashSet::new();
     let mut payloads = Vec::new();
@@ -232,10 +212,6 @@ fn build_hybrid_bundle(
     Ok(Bundle::build(runner, BuildProfile::Debug, payloads, 0)?)
 }
 
-/// Whether the runtime must carry the Libffi engine for this program.
-fn has_foreign_surface(program: &IrProgram) -> bool {
-    !program.foreign_imports.is_empty() || !program.foreign_callbacks.is_empty()
-}
 
 /// Reads `path` into a payload named by its file name.
 fn named_payload(

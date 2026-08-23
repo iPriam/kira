@@ -286,15 +286,39 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
         }
         // `enum Name { A B }` — read for its case names, so a macro body may
         // name one. Only the shape is taken; what the cases mean is the
-        // program's business.
-        if file.kind(index) == TokenKind::Enum
-            && file.is_ident(index + 1)
-            && file.kind(index + 2) == TokenKind::LBrace
-            && let Some(end) = file.match_close(index + 2)
-        {
+        // program's business. A generic `enum Result<Value, Failure> { … }`
+        // carries its parameter list between the name and the body, so the
+        // body is found by walking that list rather than by assuming it is
+        // exactly two tokens away. The walk is bounded to what a parameter
+        // list can be — identifiers, commas, and angle brackets — so a
+        // malformed enum never swallows some later declaration's brace.
+        if file.kind(index) == TokenKind::Enum && file.is_ident(index + 1) {
+            let mut probe = index + 2;
+            let mut angle_depth = 0u32;
+            let mut body = None;
+            while probe < file.len() && probe <= index + 16 {
+                match file.kind(probe) {
+                    TokenKind::LBrace => {
+                        body = Some(probe);
+                        break;
+                    }
+                    TokenKind::Lt => angle_depth += 1,
+                    TokenKind::Gt => angle_depth = angle_depth.saturating_sub(1),
+                    TokenKind::Identifier | TokenKind::Comma if angle_depth > 0 => {}
+                    _ => break,
+                }
+                probe += 1;
+            }
+            let Some(brace) = body else {
+                index += 1;
+                continue;
+            };
+            let Some(end) = file.match_close(brace) else {
+                break;
+            };
             let name = file.text_at(index + 1).to_owned();
             let mut variants = Vec::new();
-            let mut at = index + 3;
+            let mut at = brace + 1;
             while at < end {
                 // A case is an identifier at the top of the body; anything
                 // nested belongs to a payload and is skipped whole.
@@ -368,7 +392,18 @@ fn scan_declarative(
 ) -> Option<(Declarative, Span, usize)> {
     let name = file.text_at(start + 1).to_owned();
     let open_params = start + 2;
-    let close_params = file.match_close(open_params)?;
+    let Some(close_params) = file.match_close(open_params) else {
+        // Reported rather than silent: a `None` here would otherwise stop the
+        // whole file's collection with no diagnostic, and every macro declared
+        // after this one would be reported as unknown at its call sites.
+        reporter.error(
+            file.source,
+            file.span(open_params),
+            diagnostics::EXPAND_SIGNATURE,
+            format!("macro `{name}` has an unclosed `( … )` parameter list"),
+        );
+        return None;
+    };
     let mut fragments = Vec::new();
     for (first, last) in file.split_group(open_params, close_params) {
         let parameter_name = file.text_at(first).to_owned();
@@ -408,7 +443,15 @@ fn scan_declarative(
         );
         return None;
     }
-    let close_body = file.match_close(open_body)?;
+    let Some(close_body) = file.match_close(open_body) else {
+        reporter.error(
+            file.source,
+            file.span(open_body),
+            diagnostics::EXPAND_SIGNATURE,
+            format!("macro `{name}` has an unclosed `{{ … }}` body"),
+        );
+        return None;
+    };
     let template = match find_expand_block(file, open_body, close_body) {
         Some((open, close)) => file
             .slice(Span::from_bounds(
@@ -483,7 +526,15 @@ fn scan_comptime_function(
         );
         return None;
     }
-    let close_parameters = file.match_close(open_parameters)?;
+    let Some(close_parameters) = file.match_close(open_parameters) else {
+        reporter.error(
+            file.source,
+            name_span,
+            diagnostics::EXPAND_SIGNATURE,
+            format!("`comptime function {name}` has an unclosed `( … )` parameter list"),
+        );
+        return None;
+    };
     let parameters = file
         .split_group(open_parameters, close_parameters)
         .into_iter()
@@ -505,7 +556,15 @@ fn scan_comptime_function(
         }
         open_body += 1;
     }
-    let close_body = file.match_close(open_body)?;
+    let Some(close_body) = file.match_close(open_body) else {
+        reporter.error(
+            file.source,
+            name_span,
+            diagnostics::EXPAND_SIGNATURE,
+            format!("`comptime function {name}` has an unclosed `{{ … }}` body"),
+        );
+        return None;
+    };
     let body = file
         .slice(Span::from_bounds(
             file.span(open_body).end(),
@@ -552,7 +611,15 @@ fn scan_procedural(
         );
         return None;
     }
-    let close_body = file.match_close(open_body)?;
+    let Some(close_body) = file.match_close(open_body) else {
+        reporter.error(
+            file.source,
+            file.span(open_body),
+            diagnostics::EXPAND_SIGNATURE,
+            format!("`comptime macro {name}` has an unclosed `{{ … }}` body"),
+        );
+        return None;
+    };
 
     let mut kind = None;
     let mut applies_to = Vec::new();

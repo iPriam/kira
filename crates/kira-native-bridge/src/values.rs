@@ -60,9 +60,15 @@ pub fn handle_of(text: &str) -> KStr {
 /// slot is an `i64`; `esize` decides where the next slot starts.
 ///
 /// # Safety
-/// `esize` must be the ABI size the backend gives a Kira integer element.
+/// `esize` must be at least `size_of::<i64>()`: each slot receives a full
+/// eight-byte write, and a narrower stride would run element *i*'s bytes into
+/// element *i + 1*'s.
 #[must_use]
 pub unsafe fn int_array(values: &[i64], esize: i64) -> KArray {
+    assert!(
+        esize >= size_of::<i64>() as i64,
+        "int_array writes {esize}-byte slots, but an i64 needs 8"
+    );
     let stride = esize.max(0) as usize;
     let array = kira_rt_array_new(values.len(), stride);
     // SAFETY: the array was just built with exactly `values.len()` slots, and

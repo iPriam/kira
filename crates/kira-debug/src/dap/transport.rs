@@ -47,7 +47,11 @@ impl std::fmt::Display for TransportError {
 /// A framed connection to a running debug adapter.
 pub struct Transport {
     child: Child,
-    input: ChildStdin,
+    /// The request pipe, until an orderly close gives it back to the adapter.
+    ///
+    /// An option because [`Transport::finish`] closes it by taking it, and a
+    /// type with a `Drop` impl cannot be partially moved out of.
+    input: Option<ChildStdin>,
     incoming: Receiver<Incoming>,
     errors: Arc<Mutex<String>>,
     next_sequence: u64,
@@ -73,7 +77,7 @@ impl Transport {
         std::thread::spawn(move || collect_errors(error, &collected));
         Ok(Self {
             child,
-            input,
+            input: Some(input),
             incoming,
             errors,
             next_sequence: 1,
@@ -93,9 +97,14 @@ impl Transport {
         });
         let body = serde_json::to_vec(&message)
             .map_err(|error| TransportError::Protocol(error.to_string()))?;
-        write!(self.input, "Content-Length: {}\r\n\r\n", body.len())
-            .and_then(|()| self.input.write_all(&body))
-            .and_then(|()| self.input.flush())
+        let Some(input) = self.input.as_mut() else {
+            return Err(TransportError::Protocol(
+                "the request pipe was already closed".to_owned(),
+            ));
+        };
+        write!(input, "Content-Length: {}\r\n\r\n", body.len())
+            .and_then(|()| input.write_all(&body))
+            .and_then(|()| input.flush())
             .map_err(|error| TransportError::Closed(error.to_string()))?;
         Ok(sequence)
     }
@@ -152,25 +161,67 @@ impl Transport {
     }
 
     /// Closes the request pipe and waits for the adapter to exit on its own.
-    pub fn finish(self) -> (Option<i32>, String) {
-        let Self {
-            mut child,
-            input,
-            errors,
-            ..
-        } = self;
-        drop(input);
-        let code = child.wait().ok().and_then(|status| status.code());
-        let collected = errors
+    ///
+    /// The wait is bounded: an adapter that ignores stdin EOF — one wedged
+    /// inside a live debuggee, say — would otherwise hold this caller forever,
+    /// and the synchronous servers above this have no other thread to notice
+    /// with. Past the grace period the adapter is killed so the wait ends.
+    pub fn finish(mut self) -> (Option<i32>, String) {
+        drop(self.input.take());
+        let code = self
+            .wait_for_exit(ADAPTER_EXIT_GRACE)
+            .ok()
+            .and_then(|status| status.code())
+            .or_else(|| {
+                let _ = self.child.kill();
+                self.child.wait().ok().and_then(|status| status.code())
+            });
+        let collected = self
+            .errors
             .lock()
             .map(|errors| errors.clone())
             .unwrap_or_default();
         (code, collected)
     }
 
+    /// Waits up to `limit` for the child to exit on its own.
+    fn wait_for_exit(&mut self, limit: Duration) -> std::io::Result<std::process::ExitStatus> {
+        let started = std::time::Instant::now();
+        loop {
+            match self.child.try_wait()? {
+                Some(status) => return Ok(status),
+                None if started.elapsed() >= limit => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "the debug adapter did not exit in time",
+                    ));
+                }
+                None => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+
     fn close(&mut self, reason: String) -> TransportError {
         self.closed = Some(reason.clone());
         TransportError::Closed(reason)
+    }
+}
+
+/// How long [`Transport::finish`] waits for an orderly exit before killing.
+const ADAPTER_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+impl Drop for Transport {
+    fn drop(&mut self) {
+        // A session that never reached an orderly close — a failed launch
+        // between spawn and `configurationDone`, a dropped client — still owns
+        // this child. Leaving it running leaks the adapter, its reader threads,
+        // and every debuggee it already started; killing here costs nothing on
+        // paths where `terminate` or `finish` ran first, because those leave
+        // the child reaped and a second kill/wait is a no-op.
+        if self.child.try_wait().is_ok_and(|status| status.is_none()) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

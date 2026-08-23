@@ -83,14 +83,22 @@ impl VmStop {
         {
             match key {
                 "function" => {
-                    let (name, id) = split_named_identifier(value)?;
-                    stop.function = name.to_owned();
-                    stop.function_id = id;
+                    if let Some((name, id)) = split_named_identifier(value) {
+                        stop.function = name.to_owned();
+                        stop.function_id = id;
+                    }
                 }
-                "pc" => stop.pc = value.parse().ok()?,
-                "opcode" => stop.opcode = value.parse().ok()?,
-                "call_depth" => stop.call_depth = value.parse().ok()?,
-                "stack_depth" => stop.stack_depth = value.parse().ok()?,
+                // One malformed field skips itself, not the whole stop: a
+                // garbled number must not make a real stop look like the VM
+                // published nothing.
+                "pc" => stop.pc = value.parse().unwrap_or(stop.pc),
+                "opcode" => stop.opcode = value.parse().unwrap_or(stop.opcode),
+                "call_depth" => {
+                    stop.call_depth = value.parse().unwrap_or(stop.call_depth);
+                }
+                "stack_depth" => {
+                    stop.stack_depth = value.parse().unwrap_or(stop.stack_depth);
+                }
                 _ => {}
             }
         }

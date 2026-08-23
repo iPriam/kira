@@ -371,17 +371,21 @@ pub fn run(
 /// there); a `kira` running out of a cargo target tree finds the archive
 /// where the matching `cargo build -p kira-native-bridge --target
 /// <device>-unknown-emscripten` left it, two directories over.
+///
+/// The bare `libkira_native_bridge.a` name is looked up **only** inside the
+/// per-target development tree, where it genuinely is the target's archive.
+/// Beside the executable that name is the *host* archive — knvm stages it
+/// there for native builds — and linking host objects into a wasm module
+/// fails in the linker at best and at runtime at worst.
 fn wasm_runtime_archive(device: WasmDevice) -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let directory = executable.parent()?;
     let installed_name = runtime_archive_name(device);
     let development_name = "libkira_native_bridge.a";
 
-    for name in [installed_name, development_name] {
-        let installed = directory.join(name);
-        if installed.is_file() {
-            return Some(installed);
-        }
+    let installed = directory.join(installed_name);
+    if installed.is_file() {
+        return Some(installed);
     }
 
     // target/<profile>/kira -> target/<device>-unknown-emscripten/<profile>/

@@ -315,6 +315,10 @@ pub(crate) struct Analyzer<'a> {
     /// while a *declaration* belongs to one package, and telling two same-named
     /// declarations apart needs to know which package each came from.
     pub(crate) struct_sources: HashMap<StructId, SourceId>,
+    /// The file each declared enum was written in, for the same reason
+    /// [`Self::struct_sources`] is kept: owner-keyed tables answer "whose is
+    /// this?" from the declaring file's package.
+    pub(crate) enum_sources: HashMap<EnumId, SourceId>,
     /// The C extent of each `@FFI.Array` type, which its Kira type does not
     /// carry: a Kira array's length is its own, while the C declaration reserves
     /// exactly this many elements.
@@ -409,6 +413,61 @@ impl Analyzer<'_> {
             .imported_packages(self.source)
             .into_iter()
             .find_map(|package| structs.lookup_owned(Some(&package), name))
+    }
+
+    /// The enum `name` denotes *here*, or `None` when no declaration of that
+    /// name is visible from the file being analyzed.
+    ///
+    /// The same rule [`Self::visible_struct`] applies, because the enum table
+    /// is owner-keyed for the same reason the struct table is: two packages may
+    /// each declare a `Color`, and a bare name means this file's own package's
+    /// first.
+    pub(crate) fn visible_enum(&self, name: &str) -> Option<EnumId> {
+        let home = self.imports.package_of(self.source);
+        self.program
+            .types
+            .enums()
+            .lookup_owned(home, name)
+            .or_else(|| self.enum_beyond_own_package(name))
+    }
+
+    /// The enum a module-qualified name denotes here — `Lib.Color` means the
+    /// one the qualified module declares, even from a package that declares its
+    /// own `Color`.
+    pub(crate) fn visible_enum_qualified(
+        &self,
+        name: &crate::types::QualifiedName,
+    ) -> Option<EnumId> {
+        let Some(module) = name.qualifier else {
+            return self.visible_enum(&name.text);
+        };
+        let owner = self.imports.package_of(module);
+        self.program
+            .types
+            .enums()
+            .lookup_owned(owner, &name.text)
+            .or_else(|| self.enum_beyond_own_package(&name.text))
+    }
+
+    /// The enum resolution that does not depend on which package this file
+    /// belongs to: rows no package owns (a bundled library's declarations and
+    /// the instantiations a generic template minted), then what this file's
+    /// imports provide.
+    fn enum_beyond_own_package(&self, name: &str) -> Option<EnumId> {
+        let enums = self.program.types.enums();
+        if self.imports.package_of(self.source).is_some()
+            && let Some(id) = enums.lookup(name)
+            && match self.enum_sources.get(&id) {
+                Some(declared) => self.imports.sees(self.source, *declared),
+                None => true,
+            }
+        {
+            return Some(id);
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .find_map(|package| enums.lookup_owned(Some(&package), name))
     }
 }
 

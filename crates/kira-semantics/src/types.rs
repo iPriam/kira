@@ -322,7 +322,7 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return Type::Struct(id);
         }
-        if let Some(id) = self.program.types.enums().lookup(&text) {
+        if let Some(id) = self.visible_enum_qualified(&qualified) {
             self.link_type_name(&text, span);
             return Type::Enum(id);
         }

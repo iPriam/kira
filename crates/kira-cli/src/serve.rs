@@ -190,10 +190,15 @@ fn content_type(path: &Path) -> &'static str {
 /// the run because a browser did not open would be refusing to do the thing that
 /// worked.
 pub fn open_browser(url: &str) -> bool {
-    let (program, leading) = if cfg!(target_os = "macos") {
+    let (program, leading): (&str, &[&str]) = if cfg!(target_os = "macos") {
         ("open", &[][..])
     } else if cfg!(target_os = "windows") {
-        ("cmd", &["/C", "start", ""][..])
+        // `explorer`, not `cmd /C start`: cmd re-parses its argument string,
+        // so meta characters (`&`, `^`) in a page name derived from a cloned
+        // repo's source file would execute as a command separator. explorer
+        // receives each argument as data and hands a URL to the default
+        // browser all the same.
+        ("explorer", &[][..])
     } else {
         ("xdg-open", &[][..])
     };

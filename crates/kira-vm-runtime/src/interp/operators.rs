@@ -307,11 +307,13 @@ impl Vm<'_> {
     /// comparison itself borrows the heap and takes nothing from it, so the
     /// drops are the only ownership this arm has to get right.
     fn any_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
-        let rhs = self.pop()?;
-        let lhs = self.pop()?;
+        let operands = self.pop_operands(2)?;
+        let rhs = operands[0];
+        let lhs = operands[1];
         let equal = self.heap.values_equal(lhs, rhs);
-        self.heap.drop_value(lhs);
-        self.heap.drop_value(rhs);
+        for operand in operands {
+            self.heap.drop_value(operand);
+        }
         let value = match instruction {
             Instruction::EqAny => equal,
             Instruction::NeAny => !equal,

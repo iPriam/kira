@@ -20,14 +20,27 @@ pub struct Sessions {
 
 impl Sessions {
     /// Starts a session over `target` and returns its identifier.
+    ///
+    /// A start that fails — no adapter installed, a launch that never came up
+    /// — still owns `target`, so its build artifacts are removed here rather
+    /// than left to accumulate one per failed attempt.
     pub fn open(&mut self, target: PreparedTarget) -> Result<&mut Session, String> {
         self.next += 1;
         let id = format!("s{}", self.next);
-        let session = Session::start(id, target)?;
-        self.open.push(session);
-        self.open
-            .last_mut()
-            .ok_or_else(|| "the session was lost while being started".to_owned())
+        match Session::start(id, target) {
+            Ok(session) => {
+                self.open.push(session);
+                self.open
+                    .last_mut()
+                    .ok_or_else(|| "the session was lost while being started".to_owned())
+            }
+            // `Session::start` consumed the target on success only; on
+            // failure it hands it back so the artifacts can be removed here.
+            Err(failure) => {
+                failure.target.clean();
+                Err(failure.reason)
+            }
+        }
     }
 
     /// The session `id` names.

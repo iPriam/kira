@@ -82,6 +82,176 @@ Test PrimitiveAbsDropsTheSign {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
+// --- the exponential and the logarithm -------------------------------------
+
+// The pair a program used to reach for a series expansion to get. Ten digits
+// of `e` is past where a Taylor sum written in Kira stopped agreeing.
+Test PrimitiveExpAtOneIsE {
+    test { return prmScaled(exp(1.0), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2718281828); return e }
+}
+
+Test PrimitiveLogOfOneIsZero {
+    test { return Int(log(1.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+// Each undoes the other, which a pair of independent approximations would only
+// nearly do.
+// Each undoes the other to within a last-bit rounding, and `prmScaled` folds
+// toward zero — so the round trip lands one unit below where the arithmetic
+// says. The assertion is what IEEE-754 gives, for the reason the tangent above
+// gives: rounding it up to 37000000 here would also pass against an
+// implementation that is wrong by more.
+Test PrimitiveExpAndLogInvertEachOther {
+    test { return prmScaled(exp(log(37.0)), 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(36999999); return e }
+}
+
+Test PrimitiveLog2AndExp2OnAPowerOfTwo {
+    test { return Int(log2(1024.0)) * 10000 + Int(exp2(10.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(101024); return e }
+}
+
+Test PrimitiveLog10OnAPowerOfTen {
+    test { return prmScaled(log10(1000.0), 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(3000000); return e }
+}
+
+// --- rounding --------------------------------------------------------------
+
+// Halves go away from zero, and the fraction is dropped toward it. A cast to
+// `Int` gives the second answer for both, which is why `round` is here.
+Test PrimitiveRoundAndTruncDisagreeOnAHalf {
+    test { return Int(round(0.0 - 1.5)) * 10 + Int(trunc(0.0 - 1.5)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
+}
+
+Test PrimitiveRoundGoesAwayFromZero {
+    test { return Int(round(1.5)) * 10 + Int(round(2.5)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
+}
+
+// --- inverse and hyperbolic trigonometry -----------------------------------
+
+Test PrimitiveAsinAndAcosAtOne {
+    test { return prmScaled(asin(1.0), 9) + Int(acos(1.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1570796326); return e }
+}
+
+Test PrimitiveAtanAtOneIsAnEighthTurn {
+    test { return prmScaled(atan(1.0), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(785398163); return e }
+}
+
+Test PrimitiveHyperbolicsAtZero {
+    test { return Int(sinh(0.0)) * 100 + Int(cosh(0.0)) * 10 + Int(tanh(0.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+Test PrimitiveTanhSaturatesBelowOne {
+    test { return prmScaled(tanh(1.0), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(761594155); return e }
+}
+
+// --- the two-operand operations --------------------------------------------
+
+// Two operands travel on one instruction, and the second is not ignored: an
+// arity taken from the operation is what makes `pow` reachable at all.
+Test PrimitivePowRaisesTheFirstToTheSecond {
+    test { return Int(pow(2.0, 10.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1024); return e }
+}
+
+// The operands are not interchangeable, and a lowering that popped them in the
+// wrong order would answer 100 here.
+Test PrimitivePowKeepsItsOperandsInOrder {
+    test { return Int(pow(10.0, 2.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+}
+
+// A scroll view's deceleration: the rate is per millisecond, so where a fling
+// comes to rest is the rate raised to a count of them.
+Test PrimitivePowDeceleratesAFling {
+    test { return prmScaled(pow(0.998, 500.0), 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(367511); return e }
+}
+
+Test PrimitiveMinAndMaxPickAnOperand {
+    test { return Int(min(1.0, 2.0)) * 10 + Int(max(1.0, 2.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+Test PrimitiveMinAndMaxOnNegatives {
+    test { return Int(min(0.0 - 1.0, 0.0 - 2.0)) * 10 + Int(max(0.0 - 1.0, 0.0 - 2.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
+}
+
+Test PrimitiveHypotIsTheThreeFourFiveTriangle {
+    test { return Int(hypot(3.0, 4.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+// The sign comes from the second operand and the magnitude from the first, so
+// the two directions answer -15 and 15.
+Test PrimitiveCopysignTakesTheSecondSign {
+    test { return prmScaled(copysign(1.5, 0.0 - 2.0), 1) * 100 + prmScaled(copysign(0.0 - 1.5, 2.0), 1) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1485); return e }
+}
+
+// Negative zero is the case `copysign` exists for: `0.0 - 0.0` is POSITIVE
+// zero, so the sign has to be carried rather than derived, and a `< 0.0` test
+// on the second operand would answer with the wrong sign here.
+Test PrimitiveCopysignReadsANegativeZerosSign {
+    test {
+        let negativeZero = copysign(0.0, 0.0 - 1.0)
+        return prmScaled(copysign(1.5, negativeZero), 1) * 100 + prmScaled(copysign(1.5, 0.0 - 0.0), 1)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1485); return e }
+}
+
+// Truncated toward zero, so the remainder keeps the dividend's sign.
+Test PrimitiveFmodKeepsTheDividendsSign {
+    test { return Int(fmod(7.0, 4.0)) * 10 + Int(fmod(0.0 - 7.0, 4.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+}
+
+// `atan2` reads both signs to place the angle in its quadrant, which is the
+// whole reason it exists beside `atan`.
+Test PrimitiveAtan2TakesItsQuadrantFromBothSigns {
+    test { return prmScaled(atan2(1.0, 0.0 - 1.0), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2356194490); return e }
+}
+
+// A two-operand primitive nested in another: the inner call must leave exactly
+// one value behind or the outer one pops the wrong operand.
+Test PrimitiveTwoOperandCallsNest {
+    test { return Int(pow(min(2.0, 3.0), max(3.0, 2.0))) }
+    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+}
+
+// The operands are `Float`, and a count held as an `Int` is converted at the
+// call rather than silently: `pow(2, 8)` is KSEM063, exactly as `sqrt(2)` is.
+Test PrimitiveTwoOperandCallsTakeConvertedInts {
+    test {
+        let base = 2
+        let exponent = 8
+        return Int(pow(Float(base), Float(exponent)))
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(256); return e }
+}
+
+// A program may still name a function `min`; a two-operand primitive is
+// shadowed by a user's declaration exactly as `sqrt` is.
+function prmMin(a: Int, b: Int) -> Int {
+    return a * 100 + b
+}
+
+Test PrimitiveAProgramsOwnTwoOperandNameWins {
+    test { return prmMin(4, 2) }
+    expect { let e: Result<Int, TestFailure> = .Ok(402); return e }
+}
+
 // A program may still name a function `sqrt`; the primitive answers only when
 // nothing else does.
 function prmSqrt(value: Int) -> Int {

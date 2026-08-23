@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kira_toolchain::{
-    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, bundled_libffi_name,
+    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY,
     executable_name, static_archive_name,
 };
 
@@ -120,6 +120,28 @@ pub enum BinstallError {
     /// Staging, validating, or landing the tree failed.
     #[error(transparent)]
     Install(#[from] InstallError),
+    /// The new toolchain failed to land *and* the previous one could not be
+    /// put back.
+    ///
+    /// Both copies are named: the previous build still exists under staging,
+    /// and the remedy is moving it back by hand — losing it silently would
+    /// turn a failed upgrade into a wiped toolchain.
+    #[error(
+        "the built toolchain could not be moved into `{destination}` \
+         ({source}) and the previous build could not be restored from \
+         `{retired}` ({restore}); move `{retired}` back to \
+         `{destination}` to recover the old toolchain"
+    )]
+    SwapLostPrevious {
+        /// Where the new toolchain was being landed.
+        destination: PathBuf,
+        /// Where the previous build waits inside staging.
+        retired: PathBuf,
+        /// Why landing the new build failed.
+        source: Box<InstallError>,
+        /// Why restoring the old one failed.
+        restore: Box<InstallError>,
+    },
 }
 
 /// The packages `binstall` builds before it stages a toolchain.
@@ -216,11 +238,10 @@ pub fn binstall(
     // that one rather than the host toolchain.
     let host_archive = built_dir.join(static_archive_name("kira_native_bridge"));
     let compiler_archive = built_dir.join(static_archive_name("kira_compiler_bridge"));
-    // Every native artifact links the libffi helper and loads the libffi binary
-    // beside it, so a toolchain that shipped neither could build no program
-    // with a foreign import.
+    // Every native artifact links the libffi helper, which carries libffi
+    // itself: the engine is linked in rather than shipped beside the artifact,
+    // so there is no separate binary for a toolchain to stage.
     let libffi_archive = built_dir.join(static_archive_name("kira_libffi"));
-    let libffi_binary = built_dir.join(bundled_libffi_name());
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
         .join(profile.target_subdirectory())
@@ -232,7 +253,6 @@ pub fn binstall(
         &host_archive,
         &compiler_archive,
         &libffi_archive,
-        &libffi_binary,
         &wasm_archive,
     ] {
         if !artifact.is_file() {
@@ -243,8 +263,9 @@ pub fn binstall(
     }
 
     // The same discipline as a release install: shape and validate the whole
-    // tree in staging, then swap it into place. The staging guard also carries
-    // the replaced tree out, so a failure after the swap point cannot lose it.
+    // tree in staging, then swap it into place. The previous build is set
+    // aside inside staging and restored by hand if the swap fails, so a
+    // failure at the swap point can cost neither the new build nor the old.
     let staging = Staging::create(toolchains_root)?;
     let payload = staging.path().join(format!("kira-{version}"));
     let bin = payload.join("bin");
@@ -303,10 +324,6 @@ pub fn binstall(
             error,
         )
     })?;
-    let staged_libffi_binary = bin.join(bundled_libffi_name());
-    std::fs::copy(&libffi_binary, &staged_libffi_binary).map_err(|error| {
-        InstallError::io("copy the libffi binary to", &staged_libffi_binary, error)
-    })?;
     let staged_wasm = bin.join("libkira_native_bridge-wasm32-emscripten.a");
     std::fs::copy(&wasm_archive, &staged_wasm).map_err(|error| {
         InstallError::io("copy the Web runtime archive to", &staged_wasm, error)
@@ -319,14 +336,49 @@ pub fn binstall(
         create_dir(parent)?;
     }
     let replaced = destination.is_dir();
+    let retired = staging.path().join("replaced");
     if replaced {
-        let retired = staging.path().join("replaced");
         std::fs::rename(&destination, &retired).map_err(|error| {
             InstallError::io("set aside the previous build at", &destination, error)
         })?;
     }
-    std::fs::rename(&payload, &destination)
-        .map_err(|error| InstallError::io("move the built toolchain into", &destination, error))?;
+    // The previous build is set aside *inside* staging, whose guard deletes
+    // everything under it on the error paths — so a failed final swap would
+    // take the only copy of it down with the rest. Before returning that
+    // failure, put it back: a binstall that replaces nothing must not also
+    // destroy what was already there.
+    if let Err(error) = std::fs::rename(&payload, &destination) {
+        if replaced {
+            let restored = std::fs::rename(&retired, &destination);
+            match restored {
+                Ok(()) => {
+                    return Err(InstallError::io(
+                        "move the built toolchain into",
+                        &destination,
+                        error,
+                    )
+                    .into());
+                }
+                Err(restore) => {
+                    return Err(BinstallError::SwapLostPrevious {
+                        destination: destination.clone(),
+                        retired: retired.clone(),
+                        source: Box::new(InstallError::io(
+                            "move the built toolchain into",
+                            &destination,
+                            error,
+                        )),
+                        restore: Box::new(InstallError::io(
+                            "restore the previous build from",
+                            &retired,
+                            restore,
+                        )),
+                    });
+                }
+            }
+        }
+        return Err(InstallError::io("move the built toolchain into", &destination, error).into());
+    }
 
     write_current(
         toolchains_root,

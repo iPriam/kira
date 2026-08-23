@@ -63,8 +63,12 @@ pub fn shader(args: &[String]) -> i32 {
     let mut map = SourceMap::new();
     for (path, text) in &sources {
         // The ids come back in insertion order, which is the order
-        // `compile_files` numbered its diagnostics against.
-        let _ = map.insert(path.clone(), text.clone());
+        // `compile_files` numbered its diagnostics against. A file the map
+        // refuses would desync that numbering, so it fails the verb.
+        if let Err(error) = map.insert(path.clone(), text.clone()) {
+            eprintln!("kira shader build: {error}");
+            return EXIT_UNAVAILABLE;
+        }
     }
     crate::diagnostics::emit(&diagnostics, &map);
     let failed = diagnostics

@@ -35,11 +35,15 @@ const SOURCE: &str = "kira";
 /// information, so a multi-span diagnostic keeps the secondary sites a reader
 /// needs instead of flattening to one.
 pub fn diagnostic(diagnostic: &Diagnostic, file: &SourceFile, uri: &Uri) -> LspDiagnostic {
-    let primary = diagnostic
+    // The primary label is the first one anchored in this document, which is
+    // not necessarily the first in the list: a diagnostic may open with a
+    // label pointing into another module.
+    let primary_index = diagnostic
         .labels
         .iter()
-        .find(|label| label.span.source == DOCUMENT_SOURCE)
-        .map(|label| range(file, label.span.span))
+        .position(|label| label.span.source == DOCUMENT_SOURCE);
+    let primary = primary_index
+        .map(|index| range(file, diagnostic.labels[index].span.span))
         // A diagnostic about the program as a whole (no `@Main`, say) has no
         // site to point at. Anchor it at the start rather than dropping it: an
         // unplaceable error is still an error the user must see.
@@ -48,9 +52,13 @@ pub fn diagnostic(diagnostic: &Diagnostic, file: &SourceFile, uri: &Uri) -> LspD
     let related: Vec<DiagnosticRelatedInformation> = diagnostic
         .labels
         .iter()
-        .skip(1)
-        .filter(|label| label.span.source == DOCUMENT_SOURCE)
-        .map(|label| DiagnosticRelatedInformation {
+        .enumerate()
+        // The primary site is already the squiggle; repeating it as related
+        // information would point at itself.
+        .filter(|(index, label)| {
+            Some(*index) != primary_index && label.span.source == DOCUMENT_SOURCE
+        })
+        .map(|(_, label)| DiagnosticRelatedInformation {
             location: Location {
                 uri: uri.clone(),
                 range: range(file, label.span.span),

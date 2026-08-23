@@ -228,11 +228,11 @@ pub struct NativeLibrary {
 
 /// The entry thunk symbol for callback `index`.
 ///
-/// Spelled here rather than imported: this crate is the host side and does not
-/// depend on the backend that defines the symbol. The name is the same wire
-/// contract `kira_llvm_backend::callback_name` writes.
+/// One spelling, imported: `kira_runtime_abi::foreign_callback_name` is the
+/// wire contract every side reads — a rename on any one side turning into a
+/// missing symbol at load is exactly what a shared function prevents.
 fn kira_llvm_backend_callback_name(index: usize) -> String {
-    format!("kira_ffi_callback_{index}")
+    kira_runtime_abi::foreign_callback_name(index)
 }
 
 impl NativeLibrary {
@@ -492,13 +492,26 @@ impl NativeLibrary {
         std::str::from_utf8(bytes).map(str::to_owned)
     }
 
-    /// Frees a handle. A null handle is a no-op.
+    /// Frees a string handle. A null handle is a no-op.
     ///
     /// # Safety
     /// `handle` must be null or a live handle from this library, freed once.
     pub unsafe fn free_string(&self, handle: StrHandle) {
         // SAFETY: the caller upholds the free-once contract.
         unsafe { (self.str_free)(handle as *mut c_void) };
+    }
+
+    /// Frees one callback-state node this library allocated.
+    ///
+    /// Exists for a marshaler that created several transfers and then failed
+    /// partway: everything already created is still this library's to release,
+    /// and the callee that would have consumed them never runs.
+    ///
+    /// # Safety
+    /// `node` must be null or a live node from this library, freed once.
+    pub unsafe fn free_state_node(&self, node: *mut c_void) {
+        // SAFETY: the caller upholds the free-once contract.
+        unsafe { (self.state_value_free)(node as StateNode) };
     }
 
     /// Copies a handle's bytes out and frees it: the host taking ownership.
@@ -672,8 +685,18 @@ impl NativeLibrary {
                 let type_id = unsafe { (self.state_value_read_any_type)(node) };
                 // SAFETY: the `Any` node has exactly one owned payload child.
                 let child = unsafe { (self.state_value_child)(node, 0) };
-                // SAFETY: recursion consumes the child node.
-                let payload = unsafe { self.decode_state_value(child)? };
+                // SAFETY: recursion consumes the child. A payload that fails
+                // to decode frees this node first: an early return here would
+                // otherwise strand it, with every not-yet-decoded sibling
+                // behind it.
+                let payload = match unsafe { self.decode_state_value(child) } {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        // SAFETY: `node` is still live and uniquely owned.
+                        unsafe { (self.state_value_free)(node) };
+                        return Err(error);
+                    }
+                };
                 NativeStateValue::any_of(type_id, payload)
             }
             NativeStateValueTag::RAW_PTR => {
@@ -712,8 +735,20 @@ impl NativeLibrary {
                 for index in 0..len {
                     // SAFETY: `index < len`; the returned child is owned.
                     let child = unsafe { (self.state_value_child)(node, index) };
-                    // SAFETY: recursion consumes that owned child.
-                    values.push(unsafe { self.decode_state_value(child)? });
+                    // SAFETY: recursion consumes that owned child. A child
+                    // that fails frees this node before the error returns —
+                    // the values decoded so far are dropped with `values`,
+                    // and this node would otherwise be skipped by the free
+                    // at the function's tail.
+                    let value = match unsafe { self.decode_state_value(child) } {
+                        Ok(value) => value,
+                        Err(error) => {
+                            // SAFETY: `node` is still live and uniquely owned.
+                            unsafe { (self.state_value_free)(node) };
+                            return Err(error);
+                        }
+                    };
+                    values.push(value);
                 }
                 if tag == NativeStateValueTag::STRUCT {
                     NativeStateValue::struct_of(values)
@@ -731,8 +766,18 @@ impl NativeLibrary {
                 } else if len == 1 {
                     // SAFETY: child zero exists and is returned owned.
                     let child = unsafe { (self.state_value_child)(node, 0) };
-                    // SAFETY: recursion consumes the child.
-                    Some(unsafe { self.decode_state_value(child)? })
+                    // SAFETY: recursion consumes the child. A payload that
+                    // fails frees this node first, as every other error path
+                    // here does.
+                    let decoded = unsafe { self.decode_state_value(child) };
+                    match decoded {
+                        Ok(payload) => Some(payload),
+                        Err(error) => {
+                            // SAFETY: `node` is still live and uniquely owned.
+                            unsafe { (self.state_value_free)(node) };
+                            return Err(error);
+                        }
+                    }
                 } else {
                     // SAFETY: `node` is still live and uniquely owned.
                     unsafe { (self.state_value_free)(node) };

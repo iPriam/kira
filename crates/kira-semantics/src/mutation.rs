@@ -227,12 +227,15 @@ impl<'a> Analyzer<'a> {
 
     /// Whether the method named `method` on receiver type `ty` is currently
     /// marked mutating.
+    ///
+    /// Matched by receiver, not by display name: two packages may each declare
+    /// a type of one name, and the flag that matters is the one on *this*
+    /// receiver's declaration.
     fn method_mutates(&self, ty: Type, method: &str) -> bool {
         let Type::Struct(id) = ty else {
             return false;
         };
-        let qualified = format!("{}.{method}", self.type_name(Type::Struct(id)));
-        self.lookup_function(&qualified)
+        self.lookup_method_for_receiver(id, method)
             .is_some_and(|(id, _, _)| self.mutates_self(id))
     }
 

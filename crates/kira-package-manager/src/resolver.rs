@@ -4,7 +4,7 @@ use crate::graph::{ResolvedDependency, ResolvedPackage, ResolvedPackageGraph};
 use crate::lockfile_check;
 use kira_diagnostic_messages::package_messages::{
     conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
-    missing_dependency_package,
+    missing_dependency_package, unreadable_dependency_manifest,
 };
 use kira_diagnostics::Diagnostic;
 use kira_manifest::{
@@ -145,12 +145,33 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedPackageGraph, ResolveError> {
             continue;
         }
 
-        let dependency_manifest = match find_manifest(&canonical_dir).and_then(|path| {
-            fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| load_manifest_text(&path, &text).ok())
-        }) {
-            Some(manifest) => manifest,
+        let dependency_manifest = match find_manifest(&canonical_dir) {
+            Some(path) => match fs::read_to_string(&path) {
+                Ok(text) => match load_manifest_text(&path, &text) {
+                    Ok(manifest) => manifest,
+                    Err(error) => {
+                        let reason = match error {
+                            ManifestLoadError::Declaration(source) => source.to_string(),
+                            ManifestLoadError::Legacy(message) => message,
+                        };
+                        diagnostics.push(unreadable_dependency_manifest(
+                            &dependency.name,
+                            &canonical_dir.display().to_string(),
+                            &reason,
+                        ));
+                        continue;
+                    }
+                },
+                Err(error) => {
+                    diagnostics.push(unreadable_dependency_manifest(
+                        &dependency.name,
+                        &canonical_dir.display().to_string(),
+                        &error.to_string(),
+                    ));
+                    continue;
+                }
+            },
+            // No manifest file at all is genuinely a missing package.
             None => {
                 diagnostics.push(missing_dependency_package(
                     &dependency.name,

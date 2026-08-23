@@ -388,6 +388,16 @@ impl FunctionLowering<'_, '_> {
             let callee = if existing.is_null() {
                 LLVMAddFunction(self.codegen.module, name.as_ptr(), function_type)
             } else {
+                // Two same-named imports at different signatures — or an
+                // import colliding with a maths declaration — would build a
+                // call whose type disagrees with the definition. Name the
+                // collision rather than fail verification far from the cause.
+                let found = LLVMGlobalGetValueType(existing);
+                if found != function_type {
+                    return Err(LlvmError::SymbolCollision {
+                        symbol: symbol.to_owned(),
+                    });
+                }
                 existing
             };
             LLVMBuildCall2(

@@ -71,7 +71,7 @@ impl FunctionLowering<'_, '_> {
             IrExpr::EnumTag { value } => self.lower_enum_tag(value),
             IrExpr::EnumPayload { value, ty } => self.lower_enum_payload(value, ty),
             IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
-            IrExpr::MathOperation { op, value } => self.lower_math_operation(op, value),
+            IrExpr::MathOperation { op, operands } => self.lower_math_operation(op, &operands),
             IrExpr::ScalarText { value } => self.lower_scalar_text(value),
             IrExpr::ArrayElements { value, element } => self.lower_array_elements(value, element),
             IrExpr::ForeignField {

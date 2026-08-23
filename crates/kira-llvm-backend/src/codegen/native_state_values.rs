@@ -221,14 +221,14 @@ impl Codegen<'_> {
         value: LLVMValueRef,
     ) -> Result<LLVMValueRef, LlvmError> {
         let llvm_type = self.llvm_type(Type::Any)?;
-        let source = self.dynamic_alloca(llvm_type, c"native.any.source");
+        let (source, saved) = self.dynamic_alloca(llvm_type, c"native.any.source");
         self.lifetime_start(source);
         // SAFETY: `source` has the LLVM representation of `Any`, and `value`
         // was produced with that same type.
         unsafe { LLVMBuildStore(self.builder, value, source) };
         let encoder = self.native_state_element_leaf(Type::Any, StateLeaf::Encode)?;
         let node = self.call(encoder, &mut [source], c"native.any");
-        self.lifetime_end(source);
+        self.release_dynamic_alloca(source, saved);
         Ok(node)
     }
 
@@ -238,7 +238,7 @@ impl Codegen<'_> {
         node: LLVMValueRef,
     ) -> Result<LLVMValueRef, LlvmError> {
         let llvm_type = self.llvm_type(Type::Any)?;
-        let target = self.dynamic_alloca(llvm_type, c"native.any.target");
+        let (target, saved) = self.dynamic_alloca(llvm_type, c"native.any.target");
         self.lifetime_start(target);
         let decoder = self.native_state_element_leaf(Type::Any, StateLeaf::Decode)?;
         self.call(decoder, &mut [node, target], c"native.any");
@@ -251,7 +251,7 @@ impl Codegen<'_> {
                 c"native.any.value".as_ptr(),
             )
         };
-        self.lifetime_end(target);
+        self.release_dynamic_alloca(target, saved);
         Ok(value)
     }
 

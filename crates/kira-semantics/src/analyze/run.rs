@@ -53,6 +53,7 @@ impl<'a> Analyzer<'a> {
             current_execution: kira_semantics_model::Execution::Inherited,
             ffi_structs: HashMap::new(),
             struct_sources: HashMap::new(),
+            enum_sources: HashMap::new(),
             ffi_array_counts: HashMap::new(),
             ffi_callback_signatures: HashMap::new(),
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),

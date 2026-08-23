@@ -371,9 +371,12 @@ impl Lowerer<'_> {
             HirExpr::ScalarText { value } => IrExpr::ScalarText {
                 value: self.lower_expr(value),
             },
-            HirExpr::MathOperation { op, value } => IrExpr::MathOperation {
+            HirExpr::MathOperation { op, operands } => IrExpr::MathOperation {
                 op,
-                value: self.lower_expr(value),
+                operands: operands
+                    .into_iter()
+                    .map(|operand| self.lower_expr(operand))
+                    .collect(),
             },
             HirExpr::ForeignField {
                 base,

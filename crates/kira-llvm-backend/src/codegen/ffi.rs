@@ -35,6 +35,32 @@ pub(super) unsafe fn take_message(message: *mut std::os::raw::c_char) -> String 
     }
 }
 
+/// Takes ownership of an [`LLVMErrorRef`](llvm_sys::error::LLVMErrorRef)'s
+/// message, returning it as a `String` and consuming the error itself.
+///
+/// An error's message is freed by `LLVMDisposeErrorMessage`, not by
+/// `LLVMDisposeMessage`, and the error ref by `LLVMConsumeError` — a pairing
+/// that must not drift onto the generic message helpers even where both
+/// allocators happen to be plain `free` today.
+///
+/// # Safety
+/// `error` must be a live `LLVMErrorRef`, consumed exactly once.
+pub(super) unsafe fn take_error(error: llvm_sys::error::LLVMErrorRef) -> String {
+    use llvm_sys::error::{LLVMConsumeError, LLVMDisposeErrorMessage, LLVMGetErrorMessage};
+    // SAFETY: the caller guarantees a live error ref; the message is copied
+    // out with its own disposer, then the error itself is consumed.
+    unsafe {
+        let message = LLVMGetErrorMessage(error);
+        let mut text = "LLVM reported no detail".to_owned();
+        if !message.is_null() {
+            text = CStr::from_ptr(message).to_string_lossy().into_owned();
+        }
+        LLVMDisposeErrorMessage(message);
+        LLVMConsumeError(error);
+        text
+    }
+}
+
 /// Releases an LLVM-allocated message, if any.
 ///
 /// # Safety

@@ -6,11 +6,12 @@
 //! optimiser and lowered to an instruction where one exists, and to a libm call
 //! where one does not.
 //!
-//! `tan` has no LLVM intrinsic — it is the one of these the ISAs do not carry —
-//! so it calls libm's `tan` directly. That is what the intrinsic would have
-//! become anyway.
-
-use std::ffi::CString;
+//! The transcendentals LLVM has no intrinsic for — `tan`, the inverse and
+//! hyperbolic trigonometry, `atan2`, `hypot` and `fmod` — call libm by name
+//! directly. That is what an intrinsic would have become anyway.
+//!
+//! An operation takes one operand or two, so the declaration's signature is
+//! built from its own `argument_count` rather than fixed at `double(double)`.
 
 use kira_runtime_abi::MathOp;
 use kira_semantics_model::Type;
@@ -26,15 +27,22 @@ impl FunctionLowering<'_, '_> {
     pub(super) fn lower_math_operation(
         &mut self,
         op: MathOp,
-        value: kira_ir::IrExprId,
+        operands: &[kira_ir::IrExprId],
     ) -> Result<LLVMValueRef, LlvmError> {
-        let value = self.lower_expr(value)?;
-        let callee = self.codegen.math_callable(op);
-        // SAFETY: the callee takes one `double` and returns one, and `value` is
-        // a `double` on the live current block.
+        // In source order, which is the order the declaration takes them in:
+        // `pow(x, y)` is x to the y and `atan2(y, x)` takes its quadrant from
+        // both, so the two are not interchangeable.
+        let mut arguments = Vec::with_capacity(operands.len());
+        for &operand in operands {
+            arguments.push(self.lower_expr(operand)?);
+        }
+        let callee = self.codegen.math_callable(op)?;
+        // SAFETY: the callee takes `argument_count` `double`s and returns one;
+        // the typechecker coerced every operand to `Float`, so each is a
+        // `double` on the live current block.
         Ok(unsafe {
             self.codegen
-                .call_runtime(callee, &mut [value], c"math.call")
+                .call_runtime(callee, &mut arguments, c"math.call")
         })
     }
 }
@@ -90,29 +98,70 @@ impl FunctionLowering<'_, '_> {
 
 impl crate::codegen::Codegen<'_> {
     /// The declaration one floating-point operation calls, adding it once.
-    pub(crate) fn math_callable(&mut self, op: MathOp) -> Callable {
-        let symbol = match op {
-            MathOp::Sqrt => "llvm.sqrt.f64",
-            MathOp::Sin => "llvm.sin.f64",
-            MathOp::Cos => "llvm.cos.f64",
-            MathOp::Floor => "llvm.floor.f64",
-            MathOp::Ceil => "llvm.ceil.f64",
-            MathOp::Abs => "llvm.fabs.f64",
+    ///
+    /// The name is only taken when it is free or already carries exactly this
+    /// `double(double)` shape: a foreign import of a same-named C symbol
+    /// declares first with its own signature, and calling through that would
+    /// hand libm's callee the wrong type — a verifier failure far from the
+    /// line that caused it.
+    pub(crate) fn math_callable(&mut self, op: MathOp) -> Result<Callable, LlvmError> {
+        let name: &std::ffi::CStr = match op {
+            MathOp::Sqrt => c"llvm.sqrt.f64",
+            MathOp::Sin => c"llvm.sin.f64",
+            MathOp::Cos => c"llvm.cos.f64",
+            MathOp::Floor => c"llvm.floor.f64",
+            MathOp::Ceil => c"llvm.ceil.f64",
+            MathOp::Abs => c"llvm.fabs.f64",
+            MathOp::Exp => c"llvm.exp.f64",
+            MathOp::Log => c"llvm.log.f64",
+            MathOp::Log2 => c"llvm.log2.f64",
+            MathOp::Log10 => c"llvm.log10.f64",
+            MathOp::Exp2 => c"llvm.exp2.f64",
+            MathOp::Round => c"llvm.round.f64",
+            MathOp::Trunc => c"llvm.trunc.f64",
+            MathOp::Pow => c"llvm.pow.f64",
+            MathOp::CopySign => c"llvm.copysign.f64",
+            // `minnum`/`maxnum` are IEEE-754's: given one NaN they answer with
+            // the other operand, which is what `f64::min` does and therefore
+            // what the VM already answers.
+            MathOp::Min => c"llvm.minnum.f64",
+            MathOp::Max => c"llvm.maxnum.f64",
             // No intrinsic exists; libm is what one would lower to.
-            MathOp::Tan => "tan",
+            MathOp::Tan => c"tan",
+            MathOp::Asin => c"asin",
+            MathOp::Acos => c"acos",
+            MathOp::Atan => c"atan",
+            MathOp::Sinh => c"sinh",
+            MathOp::Cosh => c"cosh",
+            MathOp::Tanh => c"tanh",
+            MathOp::Atan2 => c"atan2",
+            MathOp::Hypot => c"hypot",
+            MathOp::Fmod => c"fmod",
         };
-        let name = CString::new(symbol).expect("a maths symbol holds no NUL");
-        // SAFETY: the module is live, and the type is the one every declaration
-        // here shares — `double(double)`.
+        // SAFETY: the module is live, and the type is `double(double...)` with
+        // as many parameters as the operation takes operands.
         unsafe {
-            let ty = LLVMFunctionType(self.types.f64, [self.types.f64].as_mut_ptr(), 1, 0);
+            let mut parameters = [self.types.f64; MathOp::MAX_ARGUMENTS];
+            let arity = op.argument_count();
+            let ty = LLVMFunctionType(
+                self.types.f64,
+                parameters[..arity].as_mut_ptr(),
+                arity as u32,
+                0,
+            );
             let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
             let value = if existing.is_null() {
                 LLVMAddFunction(self.module, name.as_ptr(), ty)
             } else {
+                let found = LLVMGlobalGetValueType(existing);
+                if found != ty {
+                    return Err(LlvmError::SymbolCollision {
+                        symbol: name.to_string_lossy().into_owned(),
+                    });
+                }
                 existing
             };
-            Callable { ty, value }
+            Ok(Callable { ty, value })
         }
     }
 }

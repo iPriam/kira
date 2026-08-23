@@ -261,7 +261,10 @@ fn walk(
                 if !seen.insert(key) {
                     continue;
                 }
-                if seen.len() > MAX_MODULES {
+                // The bound is `>=`: a program may hold exactly MAX_MODULES
+                // modules, and only one past that is the generator loop this
+                // refuses.
+                if seen.len() >= MAX_MODULES {
                     break;
                 }
                 // The bytes are wanted here and nowhere earlier: a module

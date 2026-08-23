@@ -30,8 +30,6 @@ pub enum Staged {
         /// a bundled native dependency. A missing path represents an unavailable
         /// optional binding and is preserved as `None`.
         bindings: Option<Vec<Option<PathBuf>>>,
-        /// The staged bundled libffi runtime, when the module has a foreign surface.
-        runtime: Option<PathBuf>,
     },
     /// A VM bytecode entry, validated and ready to run.
     VmLinked {

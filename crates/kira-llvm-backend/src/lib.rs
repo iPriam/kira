@@ -88,11 +88,13 @@ pub fn supports_target(target: &NativeTarget) -> Result<(), LlvmError> {
     }
 }
 
-/// The exported symbol of the generated adapter for foreign import `index`.
+/// The symbol a foreign import's adapter is bound under.
 ///
-/// A wire contract shared by every backend and every host: the LLVM backend
-/// defines this symbol, the VM sidecar host resolves it, and the hybrid manifest
-/// records it. The spelling lives in the runtime ABI crate.
+/// The spelling lives in the runtime ABI crate and is what a hybrid manifest
+/// records per import. The LLVM backend does **not** define this symbol: both
+/// live hosts bind imports through libffi closures generated at load time,
+/// which carry these names. An emitter that wants to define adapters natively
+/// again owns this contract afresh.
 pub fn adapter_name(index: usize) -> String {
     kira_runtime_abi::foreign_adapter_name(index)
 }
@@ -125,7 +127,18 @@ pub fn callback_body_name(index: usize) -> String {
 /// The symbol LLVM defines the entry thunk for callback `index` under.
 ///
 /// [`callback_name`] for a signature LLVM can present to C on its own, and
-/// [`callback_body_name`] for one whose by-value struct the shim classifies.
+/// [`callback_body_name`] for one whose by-value struct the shim classifies —
+/// the same split [`crate::shim::callback_needs_entry`], so the name emitted
+/// here and the entry the shim generates always agree.
+/// Always [`callback_name`] today. A signature taking a struct by value is
+/// *meant* to split — shim entry under [`callback_name`] with the true C
+/// prototype, LLVM body under [`callback_body_name`] — but the body this
+/// backend emits carries libffi's closure signature
+/// `(cif, result, arguments, user_data)`, which the shim's positional forward
+/// call does not speak. Renaming the emission without a second,
+/// true-prototype body would trade today's duplicate-symbol link error for
+/// silent miscompiled arguments, so the split stays unimplemented until that
+/// body exists. See `.codex/work/wasm-callback-shims.md`.
 pub fn callback_thunk_symbol(index: usize, signature: &ForeignSignature) -> String {
     let _ = signature;
     callback_name(index)
@@ -212,6 +225,19 @@ pub enum LlvmError {
         target: String,
         /// Its architecture component.
         arch: String,
+    },
+    /// Two declarations want the same symbol name with different signatures —
+    /// a foreign import colliding with a maths declaration, or two imports
+    /// of one C symbol at different types. One flat namespace cannot hold
+    /// both, and calling through the wrong signature fails module
+    /// verification far from the line that caused it.
+    #[error(
+        "the symbol `{symbol}` is already declared with a different signature; \
+         a foreign import and a builtin maths call are competing for one name"
+    )]
+    SymbolCollision {
+        /// The symbol both declarations want.
+        symbol: String,
     },
     /// LLVM refused the normalized triple for a target whose code generator is
     /// linked and registered.
@@ -479,8 +505,10 @@ fn ffi_link_inputs(
         return Ok(foreign_link.clone());
     }
     let mut link = foreign_link.clone();
+    // The helper archive carries libffi itself, linked in: there is no engine
+    // file to put beside the artifact, and therefore nothing for the artifact
+    // to find at run time.
     link.push_archive(kira_libffi::runtime_archive()?);
-    link.push_runtime_file(kira_libffi::bundled_path()?);
     Ok(link)
 }
 

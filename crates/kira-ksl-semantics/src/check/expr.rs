@@ -403,6 +403,58 @@ impl Checker<'_> {
             .map(|&id| self.module.expr(id).ty.clone())
             .collect();
         let float = Type::Scalar(ScalarType::Float);
+        // The component-wise math family takes float scalars and float
+        // vectors, with every vector argument sharing one shape — a scalar
+        // beside a vector splats, which is what `mix(color, color, blend)`
+        // means in every dialect. The vector family (`dot`, `cross`,
+        // `normalize`, `length`) takes only same-shaped float vectors.
+        // Checking here is what keeps `cross(1.0, 2.0)` from compiling
+        // "clean" and reaching backends as a call they cannot spell.
+        if which.wants_floats() || which.wants_vectors() {
+            let mut vector_shape: Option<&Type> = None;
+            let mut shaped = true;
+            for ty in &types {
+                match ty {
+                    Type::Scalar(ScalarType::Float) => {}
+                    Type::Vector(_) if vector_shape.is_none_or(|shape| shape == ty) => {
+                        vector_shape = Some(ty)
+                    }
+                    _ => shaped = false,
+                }
+            }
+            // The vector family refuses scalar arguments outright, and
+            // `cross` is the one of them whose width every dialect pins.
+            if which.wants_vectors() && vector_shape.is_none() {
+                shaped = false;
+            }
+            if which == BuiltinFn::Cross
+                && vector_shape.is_some_and(|shape| {
+                    shape
+                        != &Type::Vector(VectorType {
+                            scalar: ScalarType::Float,
+                            width: 3,
+                        })
+                })
+            {
+                shaped = false;
+            }
+            if !shaped {
+                self.reporter.error(
+                    span,
+                    diagnostics::TYPE_MISMATCH,
+                    format!(
+                        "`{name}` takes {}of one shape; got {}",
+                        if which.wants_vectors() {
+                            "float vectors "
+                        } else {
+                            "floats or float vectors "
+                        },
+                        types.iter().map(describe).collect::<Vec<_>>().join(", ")
+                    ),
+                );
+                return self.invalid();
+            }
+        }
         let result = match which {
             // `mul` is the one call whose operands each dialect orders its own
             // way, so its result follows the second operand's shape.
@@ -531,7 +583,46 @@ impl Checker<'_> {
             (lhs, rhs, left, right)
         };
 
-        let result = if op.is_comparison() {
+        // An ordering over booleans has no answer in any dialect; equality
+        // does, so only the orderings are refused here.
+        if op.is_ordering() && left == Type::Scalar(ScalarType::Bool) {
+            self.reporter.error(
+                span,
+                diagnostics::BAD_OPERATOR,
+                format!(
+                    "`{}` orders values; booleans combine with `&&`, `||`, `!`, and `==`",
+                    op_spelling(op)
+                ),
+            );
+            return self.invalid();
+        }
+        let result = if op.is_logical() {
+            // A logical connective takes two booleans, period: `&&`/`||` on
+            // numbers or vectors would compile to different operators in
+            // different dialects (C's truthiness versus WGSL's type error),
+            // which is exactly the disagreement KSL exists to prevent.
+            let boolean = Type::Scalar(ScalarType::Bool);
+            match (&left, &right) {
+                (Type::Scalar(ScalarType::Bool), Type::Scalar(ScalarType::Bool)) => {
+                    let lhs = self.coerce(lhs, &boolean, span);
+                    let rhs = self.coerce(rhs, &boolean, span);
+                    return self.alloc(boolean, CheckedExprKind::Binary { op, lhs, rhs });
+                }
+                _ => {
+                    self.reporter.error(
+                        span,
+                        diagnostics::BAD_OPERATOR,
+                        format!(
+                            "`{}` combines two booleans, not `{}` and `{}`",
+                            op_spelling(op),
+                            describe(&left),
+                            describe(&right)
+                        ),
+                    );
+                    return self.invalid();
+                }
+            }
+        } else if op.is_comparison() {
             match (&left, &right) {
                 _ if left == right => Type::Scalar(ScalarType::Bool),
                 _ => {
