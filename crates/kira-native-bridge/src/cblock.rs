@@ -530,7 +530,11 @@ mod tests {
             let portable = into_native_cblock(image).expect("the live tree moves out");
             let moved = from_native_cblock(portable);
             let moved_word = (moved as usize as *const i64).read_unaligned();
-            assert_ne!(moved_word, image_word);
+            // Compared against the *clone*'s child, which is still alive:
+            // `image`'s tree was consumed above, so the allocator may hand its
+            // exact addresses back, and an inequality against a freed block
+            // would flake on reuse. Two live blocks can never share one.
+            assert_ne!(moved_word, clone_word);
             let payload = std::slice::from_raw_parts(moved_word as usize as *const u8, 3);
             assert_eq!(payload, &[4, 5, 6]);
             kira_rt_cblock_free(clone);

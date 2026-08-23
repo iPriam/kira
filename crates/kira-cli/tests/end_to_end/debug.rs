@@ -79,7 +79,12 @@ fn vm_lldb_debugger_stops_at_a_bytecode_function_and_pc() {
         stdout.contains("General Purpose Registers:"),
         "stdout was: {stdout}"
     );
-    assert!(stdout.contains("rip ="), "stdout was: {stdout}");
+    // The program counter spells per architecture: `rip` on x86-64, `pc` on
+    // arm64. Either proves the register dump is real.
+    assert!(
+        stdout.contains("rip =") || stdout.contains("pc ="),
+        "stdout was: {stdout}"
+    );
     assert!(stdout.contains("kira-vm-stop"), "stdout was: {stdout}");
     assert!(
         stdout.contains("instruction-bytes:"),
@@ -315,7 +320,12 @@ fn hybrid_lldb_debugger_combines_vm_stops_with_native_runtime_inspection() {
     assert!(stdout.contains("stopped: main"), "stdout was: {stdout}");
     assert!(stdout.contains("kira_native_fn_0"), "stdout was: {stdout}");
     assert!(stdout.contains("frame #0"), "stdout was: {stdout}");
-    assert!(stdout.contains("rip ="), "stdout was: {stdout}");
+    // The program counter spells per architecture: `rip` on x86-64, `pc` on
+    // arm64. Either proves the register dump is real.
+    assert!(
+        stdout.contains("rip =") || stdout.contains("pc ="),
+        "stdout was: {stdout}"
+    );
     assert!(stdout.contains("<+0>"), "stdout was: {stdout}");
 }
 
