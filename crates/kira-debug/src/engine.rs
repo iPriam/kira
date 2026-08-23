@@ -46,12 +46,48 @@ impl Engine {
     }
 
     /// The executable this frontend will run.
+    ///
+    /// The override variable wins; otherwise the bare name is used when `PATH`
+    /// resolves it, and on macOS `xcrun` is asked as the fallback — Xcode
+    /// ships `lldb-dap` inside the developer directory without linking it
+    /// into `/usr/bin`, so a stock machine has one that no `PATH` lookup
+    /// finds.
     #[must_use]
     pub fn executable(self) -> PathBuf {
-        std::env::var_os(self.variable())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(self.default_executable()))
+        if let Some(overridden) = std::env::var_os(self.variable()) {
+            return PathBuf::from(overridden);
+        }
+        let name = self.default_executable();
+        if on_path(name) {
+            return PathBuf::from(name);
+        }
+        developer_tool(name).unwrap_or_else(|| PathBuf::from(name))
     }
+}
+
+/// Whether `name` resolves through `PATH`.
+fn on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| directory.join(name).is_file())
+}
+
+/// The developer-directory copy of `name`, as `xcrun` reports it.
+///
+/// `None` off macOS, when `xcrun` is absent, or when it does not know the
+/// tool — each of which leaves the bare name to fail with its own message.
+fn developer_tool(name: &str) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = Command::new("xcrun").args(["-f", name]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = PathBuf::from(path.trim());
+    path.is_file().then_some(path)
 }
 
 /// Prepares `command` so the LLDB executable can load its own libraries.

@@ -198,8 +198,14 @@ impl FunctionLowering<'_, '_> {
     /// drops them once the call is over — and gives back the native stack
     /// each dynamic alloca reserved, which is what keeps a lent argument in a
     /// loop from walking the stack to its limit.
+    ///
+    /// In **reverse** order, because the restores are stack-pointer restores
+    /// and therefore nest: each temporary's save was taken while every earlier
+    /// one was already allocated, so restoring the oldest first would pop the
+    /// younger slots while their values still wait to be released — and the
+    /// release calls that follow would scribble over exactly those bytes.
     fn drop_lent_temporaries(&mut self, temporaries: Vec<LentTemporary>) -> Result<(), LlvmError> {
-        for temporary in temporaries {
+        for temporary in temporaries.into_iter().rev() {
             // Through the temporary's own storage: it is dead after this, so
             // loading it only to hand the value back through memory is work
             // with nobody to read it.

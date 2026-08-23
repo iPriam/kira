@@ -1,0 +1,105 @@
+import Foundation
+
+// ---------------------------------------------------------------------------
+// Lent-temporary release order. A call-result used directly as a `borrow`
+// argument lives in a caller-owned temporary backed by a dynamic alloca, and
+// each temporary carries a stack-pointer save. The saves nest, so the
+// temporaries must be released newest-first: restoring the oldest save first
+// pops the younger slots while their values still wait to be released, and
+// the release calls that follow scribble over exactly those bytes. The native
+// backend crashed on this shape (SIGSEGV at frame release) whenever a call
+// lent two temporaries and one held a struct with two owning fields.
+// ---------------------------------------------------------------------------
+
+struct LtxInner {
+    var path: String = ""
+}
+
+struct LtxOuter {
+    var name: String = ""
+    var items: [LtxInner] = []
+}
+
+struct LtxHolder {
+    var root: String = ""
+    var outers: [LtxOuter] = []
+}
+
+function ltxMakeOuter(name: borrow String, items: borrow [LtxInner]) -> LtxOuter {
+    var built = LtxOuter()
+    built.name = name
+    built.items = items
+    return built
+}
+
+function ltxHold(root: borrow String, outer: borrow LtxOuter) -> LtxHolder {
+    var holder = LtxHolder()
+    holder.root = root
+    holder.outers.append(outer)
+    return holder
+}
+
+function ltxScore(holder: borrow LtxHolder) -> Int {
+    var total = holder.outers.count * 100
+    var index = 0
+    while index < holder.outers.count {
+        total = total + holder.outers[index].items.count
+        index = index + 1
+    }
+    if holder.root == "App" {
+        total = total + 10
+    }
+    return total
+}
+
+// Two lent temporaries in one call: the literal and the call result. The
+// crash was in the caller's cleanup after `ltxHold` returned, so surviving to
+// the checksum is most of the assertion and the value pins the copies.
+Test LtxTwoLentTemporariesReleaseInOrder {
+    test {
+        var items: [LtxInner] = []
+        var one = LtxInner()
+        one.path = "p"
+        items.append(one)
+        let holder = ltxHold("App", ltxMakeOuter("m", items))
+        return ltxScore(holder)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+}
+
+// The same shape churned: a per-call clobber or leak scales with the loop and
+// the leak run catches what the checksum cannot.
+Test LtxLentTemporariesChurn {
+    test {
+        var total = 0
+        var round = 0
+        while round < 200 {
+            var items: [LtxInner] = []
+            var one = LtxInner()
+            one.path = "p"
+            items.append(one)
+            let holder = ltxHold("App", ltxMakeOuter("m", items))
+            total = total + ltxScore(holder)
+            round = round + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(22200); return e }
+}
+
+// Three lent temporaries, nested call results, both field orders — the widest
+// shape the release loop has to unwind in one go.
+Test LtxNestedLentTemporaries {
+    test {
+        var items: [LtxInner] = []
+        var one = LtxInner()
+        one.path = "q"
+        items.append(one)
+        var two = LtxInner()
+        two.path = "r"
+        items.append(two)
+        let holder = ltxHold("App", ltxMakeOuter("deep", items))
+        return ltxScore(holder)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+}
