@@ -396,3 +396,53 @@ Test CfxSDeepRecursionCompletes {
     test { return cfxsDeepRec(1000) }
     expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
 }
+
+// ---------------------------------------------------------------------------
+// Float infinity and NaN
+//
+// Division by zero follows IEEE: x/0 is ±infinity (sign of the dividend and
+// the zero), 0/0 and inf-inf are NaN, and NaN compares unequal to everything,
+// itself included. Pinned here because a regression on one backend and not
+// another would be visible in nothing else — every ordinary float case has
+// the same answer either way.
+// ---------------------------------------------------------------------------
+
+Test CfxSFloatDivideByZeroIsInfinity {
+    test { return 1.0 / 0.0 == 2.0 / 0.0 ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSFloatNegativeInfinityOrdersBelowEverything {
+    test { return (0.0 - 1.0) / 0.0 < -1000000.0 ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSFloatPositiveInfinityOrdersAboveEverything {
+    test { return 1000000.0 < 1.0 / 0.0 ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSFloatZeroOverZeroIsNaN {
+    test {
+        // The one way NaN is written: 0.0/0.0. It is not equal to itself,
+        // which no other float value can say.
+        return (0.0 / 0.0) == (0.0 / 0.0) ? 0 : 1
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSFloatNaNComparesUnequalToNumbers {
+    test {
+        let nan = 0.0 / 0.0
+        if nan == 1.0 { return 0 }
+        if nan < 1.0 { return 0 }
+        if nan > 1.0 { return 0 }
+        return 1
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSFloatInfinitySubtractsItselfToNaN {
+    test { return ((1.0 / 0.0) - (1.0 / 0.0)) == (1.0 / 0.0) ? 0 : 1 }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}

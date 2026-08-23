@@ -365,6 +365,9 @@ pub struct SourceWatcher {
     _watcher: RecommendedWatcher,
     events: Receiver<notify::Result<Event>>,
     registered: Vec<(PathBuf, RecursiveMode)>,
+    /// Whether some root does not exist yet, so its tree is being waited for
+    /// through an ancestor watch that cannot see the creation atomically.
+    watching_for_arrival: bool,
 }
 
 /// Events that can represent a file becoming, remaining, or ceasing to exist.

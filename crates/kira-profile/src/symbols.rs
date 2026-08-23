@@ -41,7 +41,15 @@ pub struct SymbolIdentity {
 /// The Kira identities behind one program's symbols.
 #[derive(Debug, Clone)]
 pub struct KiraSymbols {
-    functions: Vec<FunctionIdentity>,
+    /// Every function by the ID the program's own tables use.
+    ///
+    /// Keyed rather than positional. The backend spells a symbol
+    /// `kira_fn_<id>_<name>`, and that ID is the program's, not an offset into
+    /// whatever subset of functions a debug record happens to list — so a
+    /// program whose first listed function has ID 4 resolved nothing, and every
+    /// frame in it reported as the raw `kira_fn_4_Grid_step`. The two agree
+    /// only when the list happens to start at zero and skip nothing.
+    functions: HashMap<u32, FunctionIdentity>,
     /// Every function by the name it was written under.
     ///
     /// A platform symbolizer that reads a program's debug records answers with
@@ -61,9 +69,14 @@ impl KiraSymbols {
         let functions = info
             .functions
             .iter()
-            .map(|function| FunctionIdentity {
-                name: function.name.clone(),
-                line: function.line,
+            .map(|function| {
+                (
+                    function.id,
+                    FunctionIdentity {
+                        name: function.name.clone(),
+                        line: function.line,
+                    },
+                )
             })
             .collect();
         let by_name = info
@@ -94,7 +107,7 @@ impl KiraSymbols {
     /// The identity of Kira function `index`.
     #[must_use]
     pub fn function(&self, index: u32) -> Option<&FunctionIdentity> {
-        self.functions.get(index as usize)
+        self.functions.get(&index)
     }
 
     /// How many functions the program has.

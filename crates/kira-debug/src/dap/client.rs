@@ -119,6 +119,14 @@ pub struct DapClient {
     output: String,
     capabilities: Value,
     executable: PathBuf,
+    /// Whether the adapter's `initialized` event has already gone by.
+    ///
+    /// DAP puts that event after `initialize`, not after `launch`, and an
+    /// adapter is free to send it as soon as it has answered the first request.
+    /// Waiting for it inside the launch exchange then waits for a second one
+    /// that never comes — the whole session times out with the adapter sitting
+    /// there, having already said everything it was going to say.
+    initialized: bool,
 }
 
 impl DapClient {
@@ -130,6 +138,16 @@ impl DapClient {
         command
             .arg("--pre-init-command")
             .arg("settings set target.inline-breakpoint-strategy always")
+            // The probe's breakpoint carries a condition over the ARGUMENT
+            // REGISTERS, and those hold the arguments only at the function's
+            // first instruction. DAP has no per-breakpoint prologue flag, so the
+            // setting is made for the session — which is what this session is
+            // for. Skipping the prologue put the breakpoint past the spill in an
+            // unoptimized host, the condition never matched, the process ran to
+            // completion, and `wait_for_stop` waited out its two minutes for a
+            // stop that could not arrive.
+            .arg("--pre-init-command")
+            .arg("settings set target.skip-prologue false")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -151,6 +169,7 @@ impl DapClient {
             output: String::new(),
             capabilities: Value::Null,
             executable,
+            initialized: false,
         })
     }
 
@@ -275,6 +294,11 @@ impl DapClient {
 
     /// Updates session state from one incoming message.
     fn record(&mut self, message: &Value) {
+        if message.get("type").and_then(Value::as_str) == Some("event")
+            && message.get("event").and_then(Value::as_str) == Some("initialized")
+        {
+            self.initialized = true;
+        }
         apply_event(
             message,
             &mut self.state,
@@ -288,7 +312,16 @@ impl DapClient {
         self.capabilities = capabilities;
     }
 
-    /// Waits for the adapter's `initialized` event and the reply to `sequence`.
+    /// Sends a configuration request and waits for the adapter's `initialized`
+    /// event.
+    ///
+    /// It does NOT wait for the request's own reply. An adapter is allowed to
+    /// hold the `launch` response until `configurationDone`, and newer LLDB
+    /// does — so waiting for it here deadlocks: the adapter waits for the
+    /// configuration this caller has not sent, because this caller is waiting
+    /// for the adapter. `initialized` is what DAP defines as "now send your
+    /// breakpoints", so that is the gate. A reply that arrives early is still
+    /// checked, because a FAILED launch has to be an error wherever it lands.
     pub fn await_configuration(
         &mut self,
         command: &str,
@@ -297,8 +330,8 @@ impl DapClient {
     ) -> Result<Value, DapError> {
         let sequence = self.transport.send(command, arguments)?;
         let mut reply = None;
-        let mut initialized = false;
-        while reply.is_none() || !initialized {
+        let mut initialized = self.initialized;
+        while !initialized {
             let message = self.transport.receive(timeout)?;
             self.record(&message);
             if message.get("type").and_then(Value::as_str) == Some("event")
