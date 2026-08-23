@@ -140,6 +140,16 @@ pub fn ensure_archive_current(
     } else {
         flags.push("-fPIC".into());
     }
+    // The managed LLVM clang ships no default sysroot, so on Apple targets it
+    // finds neither the frameworks (`<CoreFoundation/CoreFoundation.h>`) nor the
+    // C library headers unless `-isysroot` names the active SDK. Apple's own `cc`
+    // embeds that path; a portable LLVM clang has to be told it.
+    if matches!(target.os(), "macos" | "ios" | "tvos" | "xros") {
+        if let Some(sdk) = apple_sdk_root() {
+            flags.push("-isysroot".into());
+            flags.push(sdk);
+        }
+    }
     if let Some(headers) = spec.headers() {
         for directory in &headers.include_dirs {
             flags.push("-I".into());
@@ -265,6 +275,21 @@ fn tool(variable: &str, managed: Option<PathBuf>, fallback: &str) -> PathBuf {
     managed
         .filter(|path| path.exists())
         .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+/// The active Apple SDK's root, as `xcrun` reports it.
+///
+/// `xcrun --show-sdk-path` is the supported way to ask which SDK `xcode-select`
+/// has active. Returns `None` when `xcrun` is absent or fails, in which case the
+/// compile falls back to whatever default the compiler carries — correct for
+/// Apple's `cc`, and no worse than before for a managed clang.
+fn apple_sdk_root() -> Option<String> {
+    let output = Command::new("xcrun").args(["--show-sdk-path"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
 }
 
 /// The compiler to look for on `PATH` when no install was discovered.
