@@ -115,49 +115,6 @@ fn print_line(bytes: &[u8]) {
     let _ = handle.write_all(b"\n");
 }
 
-/// Copies a Kira string into C storage that outlives the call, returning its
-/// address; consumes the string handle.
-///
-/// The native mirror of the VM's `CStringNew`, and the same storage rule: see
-/// [`kira_runtime_abi::c_storage`] for why a `CString` *member* of a struct C
-/// keeps can never be freed on any schedule this side can guess.
-///
-/// # Safety
-/// `value` must be null or a live handle from this runtime; it is freed here.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_cstring_retain(value: KStr) -> i64 {
-    // SAFETY: the caller vouches for the handle; `bytes_of` accepts null.
-    let bytes = unsafe { bytes_of(value) };
-    let word = match std::str::from_utf8(bytes) {
-        Ok(text) => kira_runtime_abi::c_storage::retain_text(text),
-        // Not UTF-8, so it is not a Kira `String` this runtime produced. A C
-        // string of the raw bytes would be a value the program never wrote, so
-        // this answers null exactly as an interior NUL does.
-        Err(_) => 0,
-    };
-    // SAFETY: same handle, given up by the caller.
-    unsafe { drop_handle(value) };
-    word as i64
-}
-
-/// Copies `len` bytes of a C-layout image into storage that outlives the call,
-/// returning its address.
-///
-/// The native mirror of the VM's `CLayoutAddress`. See
-/// [`kira_runtime_abi::c_storage`] for why the image is never released.
-///
-/// # Safety
-/// `src` must address at least `len` initialized bytes for this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_clayout_retain(src: *const u8, len: i64) -> i64 {
-    if src.is_null() || len <= 0 {
-        return 0;
-    }
-    // SAFETY: the caller guarantees `len` initialized bytes at `src`.
-    let bytes = unsafe { slice::from_raw_parts(src, len as usize) };
-    kira_runtime_abi::c_storage::retain_bytes(bytes) as i64
-}
-
 /// Prints an `Int` and a newline. Mirrors the VM's `Int` formatting.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_print_int(value: i64) {
@@ -663,7 +620,7 @@ pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
 /// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
 /// below is what keeps the two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_abi_version_9() {}
+pub extern "C" fn kira_rt_abi_version_10() {}
 
 #[cfg(test)]
 mod tests {
@@ -678,12 +635,12 @@ mod tests {
     fn the_abi_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::RUNTIME_ABI_MARKER,
-            "kira_rt_abi_version_9"
+            "kira_rt_abi_version_10"
         );
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 9);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 10);
         // Referenced so the marker cannot be dead-code-eliminated out of an
         // rlib build, and so a rename breaks this test rather than the link.
-        kira_rt_abi_version_9();
+        kira_rt_abi_version_10();
     }
 
     /// The backend reads `shares` out of this object, so its shape is a

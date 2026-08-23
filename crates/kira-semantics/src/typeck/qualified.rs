@@ -140,8 +140,10 @@ impl Analyzer<'_> {
                     upcast,
                     family_id,
                     method,
-                    args,
-                    &[],
+                    crate::constructs::ConstructCallContent {
+                        args,
+                        children: &[],
+                    },
                     method_span,
                 );
             }

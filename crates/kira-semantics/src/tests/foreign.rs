@@ -876,3 +876,90 @@ function take(w: Wrapped<I32>): I32;
     assert!(said.contains("Wrapped<I32>"), "{said}");
     assert!(!said.contains("a generic type cannot"), "{said}");
 }
+
+#[test]
+fn a_retained_cstring_consumes_an_owned_block() {
+    let source = r#"
+@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: text; }
+function keep(text: CString): Void;
+
+@Main
+function main() {
+    let text = "kept"
+    keep(move text)
+    return
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let program = program(source);
+    assert!(program.foreign[0].signature.is_retained(0));
+    let argument = program
+        .exprs
+        .iter()
+        .find_map(|(_, expr)| match expr {
+            HirExpr::Call {
+                callee: Callee::Foreign(_),
+                args,
+                ..
+            } => args.first().copied(),
+            _ => None,
+        })
+        .expect("the foreign call has one argument");
+    assert!(matches!(program.expr(argument), HirExpr::CStringNew { .. }));
+    assert_eq!(program.expr(argument).type_of(), Type::CBlock);
+}
+
+#[test]
+fn a_retained_named_argument_requires_move() {
+    let source = r#"
+@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: text; }
+function keep(text: CString): Void;
+
+@Main
+function main() {
+    let text = "kept"
+    keep(text)
+    return
+}
+"#;
+    assert_eq!(codes(source), vec!["KSEM287"]);
+}
+
+#[test]
+fn retains_names_real_parameters_once() {
+    let unknown = r#"
+@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: missing; }
+function keep(text: CString): Void;
+"#;
+    assert_eq!(library_codes(unknown), vec!["KSEM285"]);
+
+    let duplicate = r#"
+@FFI.Extern {
+    library: fixture;
+    symbol: keep;
+    abi: c;
+    retains: text;
+    retains: text;
+}
+function keep(text: CString): Void;
+"#;
+    assert_eq!(library_codes(duplicate), vec!["KSEM286"]);
+}
+
+#[test]
+fn a_c_layout_value_moves_when_bound() {
+    let source = r#"
+@FFI.Struct { layout: c; }
+struct Desc { var label: CString }
+
+@Main
+function main() {
+    let first = Desc { label = "owned" }
+    let second = first
+    let third = first
+    return
+}
+"#;
+    let found = codes(source);
+    assert!(found.iter().any(|code| code == "KSEM107"), "{found:?}");
+}

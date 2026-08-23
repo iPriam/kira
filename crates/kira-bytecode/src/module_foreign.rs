@@ -50,6 +50,70 @@ pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
     }
 }
 
+/// Writes the retained-parameters section: one row per import, each a count of
+/// retained positions followed by the positions themselves.
+///
+/// Appended after every other section and omitted when no import retains
+/// anything, so a module without a `retains:` declaration is byte-for-byte
+/// what it was before the section existed.
+pub(crate) fn write_foreign_retained(out: &mut Vec<u8>, imports: &[ForeignImport]) {
+    write_count(out, imports.len());
+    for import in imports {
+        let positions: Vec<usize> = import.signature().retained_positions().collect();
+        write_count(out, positions.len());
+        for position in positions {
+            write_u32(out, position as u32);
+        }
+    }
+}
+
+/// Reads the retained-parameters section back onto `imports`, or leaves every
+/// parameter borrowed when the stream ended first.
+///
+/// A row count that disagrees with the import count, or a position outside its
+/// signature, is a typed error: both mean the module was not produced by this
+/// compiler's writer.
+pub(crate) fn read_foreign_retained(
+    reader: &mut Reader<'_>,
+    imports: &mut [ForeignImport],
+    format: Format,
+) -> Result<(), ModuleDecodeError> {
+    if reader.is_at_end() {
+        return Ok(());
+    }
+    let rows = reader.read_index_count(format, "retained foreign parameter")?;
+    if rows != imports.len() as u64 {
+        return Err(ModuleDecodeError::RetainedRowMismatch {
+            rows,
+            imports: imports.len(),
+        });
+    }
+    for import in imports.iter_mut() {
+        let count = reader.read_count(format)?;
+        let params = import.signature().parameters().len();
+        let mut retained = vec![false; params];
+        for _ in 0..count {
+            let position = reader.read_u32()? as usize;
+            let slot = retained.get_mut(position).ok_or_else(|| {
+                ModuleDecodeError::RetainedOutOfRange {
+                    import: import.symbol().to_owned(),
+                    position,
+                    params,
+                }
+            })?;
+            if *slot {
+                return Err(ModuleDecodeError::DuplicateRetainedPosition {
+                    import: import.symbol().to_owned(),
+                    position,
+                });
+            }
+            *slot = true;
+        }
+        import.retain_parameters(retained);
+    }
+    Ok(())
+}
+
 /// Writes the aggregate table: a count, then each aggregate's members in
 /// declaration order.
 ///
@@ -351,6 +415,75 @@ mod tests {
         assert_eq!(decoded, module);
         assert_eq!(decoded.foreign_imports.len(), 2);
         assert_eq!(decoded.foreign_imports[0].symbol(), "kira_ffi_add");
+    }
+
+    #[test]
+    fn retained_parameters_round_trip_and_absence_means_borrowed() {
+        let mut module = foreign_module();
+        // Without a `retains:` mark, the bytes carry no retained section and
+        // every parameter decodes borrowed.
+        let borrowed = Module::from_bytes(&module.to_bytes()).expect("decodes");
+        assert!(!borrowed.foreign_imports[0].signature().any_retained());
+
+        module.foreign_imports[0].retain_parameters([false, true]);
+        let decoded = Module::from_bytes(&module.to_bytes()).expect("decodes");
+        assert_eq!(decoded, module);
+        let signature = decoded.foreign_imports[0].signature();
+        assert!(!signature.is_retained(0));
+        assert!(signature.is_retained(1));
+        assert!(!decoded.foreign_imports[1].signature().any_retained());
+    }
+
+    #[test]
+    fn a_truncated_retained_section_is_a_typed_error() {
+        let mut module = foreign_module();
+        module.foreign_imports[0].retain_parameters([false, true]);
+        let complete = module.to_bytes();
+        let mut section = Vec::new();
+        write_foreign_retained(&mut section, &module.foreign_imports);
+        // Every cut *inside* the retained section must be a typed refusal,
+        // never a module that silently decodes with different lifetimes. The
+        // cut at the section's own boundary is the append-only bargain — it
+        // reads as a module written before the section existed — and is
+        // exercised by the absence test above, not here.
+        let start = complete.len() - section.len();
+        for cut in start + 1..complete.len() {
+            assert!(
+                Module::from_bytes(&complete[..cut]).is_err(),
+                "prefix of {cut}/{} bytes decoded",
+                complete.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_retained_position_outside_the_signature_is_a_typed_error() {
+        let mut module = foreign_module();
+        // The *last* import retains, so the section's final four bytes are the
+        // retained position (little-endian u32); pointing it past the
+        // signature must be refused, not clamped.
+        module.foreign_imports[1].retain_parameters([true]);
+        let mut bytes = module.to_bytes();
+        let at = bytes.len() - 4;
+        bytes[at..].copy_from_slice(&9u32.to_le_bytes());
+        assert!(matches!(
+            Module::from_bytes(&bytes).unwrap_err(),
+            ModuleDecodeError::RetainedOutOfRange { position: 9, .. }
+        ));
+    }
+
+    #[test]
+    fn a_duplicate_retained_position_is_a_typed_error() {
+        let mut module = foreign_module();
+        module.foreign_imports[1].retain_parameters([true]);
+        let mut bytes = module.to_bytes();
+        let count = bytes.len() - 12;
+        bytes[count..count + 8].copy_from_slice(&2u64.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            Module::from_bytes(&bytes).unwrap_err(),
+            ModuleDecodeError::DuplicateRetainedPosition { position: 0, .. }
+        ));
     }
 
     #[test]

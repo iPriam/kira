@@ -255,12 +255,13 @@ fn a_class_index_on_a_non_handle_type_is_rejected() {
 fn bytes_after_the_last_section_are_rejected() {
     // `exporting_module` has exports but no foreign imports, so its bytes
     // end after the exports section. Each appended section is complete when
-    // it carries a count of zero — four zero bytes — and there are three of
-    // them: foreign imports, aggregates, callbacks. The release section
-    // cannot be empty the same way: its entries are positional, so a complete
-    // one names every function, here two, each asking for every local. Three
-    // more bytes past all of that is trailing garbage the decoder must reject
-    // once every section is read, rather than run half an artifact.
+    // it carries a count of zero — four zero bytes — and there are four of
+    // them: foreign imports, aggregates, callbacks, and retained parameters.
+    // The release section cannot be empty the same way: its entries are
+    // positional, so a complete one names every function, here two, each
+    // asking for every local. Three more bytes past all of that is trailing
+    // garbage the decoder must reject once every section is read, rather than
+    // run half an artifact.
     let module = exporting_module();
     let mut bytes = module.to_bytes();
     for _ in 0..3 {
@@ -270,6 +271,7 @@ fn bytes_after_the_last_section_are_rejected() {
     for _ in 0..module.functions.len() {
         bytes.extend_from_slice(&[0xff; 8]);
     }
+    bytes.extend_from_slice(&[0; 8]);
     bytes.extend_from_slice(&[0, 0, 0]);
     assert_eq!(
         Module::from_bytes(&bytes).unwrap_err(),

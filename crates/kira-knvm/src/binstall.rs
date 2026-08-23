@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kira_toolchain::{
-    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY,
-    executable_name, static_archive_name,
+    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, executable_name,
+    static_archive_name,
 };
 
 use crate::install::{

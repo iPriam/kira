@@ -20,8 +20,7 @@ pub use bundled_discovery::{
     discover_foundation_from,
 };
 pub use libffi_metadata::{
-    link_name_for,
-    LibffiArchive, LibffiMetadata, LibffiPin, archive_for as libffi_archive_for,
+    LibffiArchive, LibffiMetadata, LibffiPin, archive_for as libffi_archive_for, link_name_for,
     pinned as libffi_pinned, pinned_version as libffi_pinned_version, static_archive_name_for,
 };
 pub use llvm_code_generators::{CodeGeneratorError, WEB_CODE_GENERATOR};

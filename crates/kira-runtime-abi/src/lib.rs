@@ -73,9 +73,10 @@ pub fn foreign_callback_name(index: usize) -> String {
 }
 pub use math_op::MathOp;
 pub use native_state::{
-    NativeCell, NativeStateError, NativeStateHost, NativeStatePathStep, NativeStateStatus,
-    NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
-    native_state_walk, native_state_walk_mut,
+    CBlockOffset, NativeCBlock, NativeCBlockChild, NativeCBlockError, NativeCell, NativeStateError,
+    NativeStateHost, NativeStatePathStep, NativeStateStatus, NativeStateStore, NativeStateToken,
+    NativeStateTypeId, NativeStateValue, NativeStateValueTag, native_state_walk,
+    native_state_walk_mut,
 };
 pub use ownership::Ownership;
 pub use string_op::StringOp;
@@ -100,7 +101,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 9;
+pub const RUNTIME_ABI_VERSION: u32 = 10;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -132,7 +133,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_9";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_10";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -190,11 +191,20 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_native_value_len",
     "kira_rt_native_value_enum_tag",
     "kira_rt_native_value_child",
+    "kira_rt_native_value_cblock",
+    "kira_rt_native_value_read_cblock_len",
+    "kira_rt_native_value_read_cblock_data",
     "kira_rt_native_value_free",
     "kira_rt_native_state_new",
     "kira_rt_native_state_recover",
     "kira_rt_native_state_replace",
     "kira_rt_native_state_free",
+    "kira_rt_native_value_set_cblock_child",
+    "kira_rt_native_value_cblock_child_offset",
+    "kira_rt_native_value_cblock_child_width",
+    "kira_rt_native_value_cblock_from_handle",
+    "kira_rt_native_value_cblock_to_handle",
+    "kira_rt_cblock_release_retained",
 ];
 
 /// An argument the VM hands to a native function.

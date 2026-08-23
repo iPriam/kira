@@ -134,9 +134,11 @@ pub extern "C" fn kira_rt_heap_report() {
         kira_rt_heap_freed(),
         kira_rt_heap_live(),
     );
-    eprintln!("kira: heap allocated={allocated} freed={freed} live={live}");
-    if live != 0 {
-        eprintln!("kira: the native heap did not balance: {live} object(s) leaked");
+    let retained = crate::cblock::kira_rt_cblock_retained_block_count();
+    let unowned = live.saturating_sub(retained);
+    eprintln!("kira: heap allocated={allocated} freed={freed} live={live} retained={retained}");
+    if unowned != 0 {
+        eprintln!("kira: the native heap did not balance: {unowned} object(s) leaked");
         std::process::exit(1);
     }
 }

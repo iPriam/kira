@@ -1,0 +1,45 @@
+import Foundation
+
+@FFI.Struct { layout: c; }
+struct FltFrameDesc {
+    let tag: Int
+    let label: CString
+}
+
+@Native
+function fltBuildAndDropFrames(count: Int) -> Int {
+    var index = 0
+    while index < count {
+        let desc = FltFrameDesc { tag: index, label: "frame" }
+        index = index + 1
+    }
+    return index
+}
+
+@Native
+function fltMakeFrame(tag: Int) -> FltFrameDesc {
+    return FltFrameDesc { tag: tag, label: "native" }
+}
+
+@Native
+function fltReadFrame(desc: borrow FltFrameDesc) -> Int {
+    return desc.tag
+}
+
+Test FltCStorageLoop {
+    test { return fltBuildAndDropFrames(500) }
+    expect { let e: Result<Int, TestFailure> = .Ok(500); return e }
+}
+
+Test FltCStorageNativeReturn {
+    test { let desc = fltMakeFrame(73); return desc.tag }
+    expect { let e: Result<Int, TestFailure> = .Ok(73); return e }
+}
+
+Test FltCStorageNativeArgument {
+    test {
+        let desc = FltFrameDesc { tag: 91, label: "runtime" }
+        return fltReadFrame(desc)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(91); return e }
+}

@@ -65,6 +65,7 @@ impl Analyzer<'_> {
                     ty: Type::INT,
                     mutable: false,
                 }],
+                c_layout: false,
             })
         else {
             return Type::Error;
@@ -503,9 +504,7 @@ impl Analyzer<'_> {
         // garbage path inside an unrelated allocation. `{ in expr }` and the
         // terse `{ expr }` both reach it, because a bare expression is a
         // statement in a block and Kira returns by saying `return`.
-        if result != Type::Void
-            && result != Type::Error
-            && !self.body_definitely_returns(&analyzed)
+        if result != Type::Void && result != Type::Error && !self.body_definitely_returns(&analyzed)
         {
             self.emit(
                 body.span,

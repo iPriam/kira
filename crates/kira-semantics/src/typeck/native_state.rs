@@ -338,6 +338,7 @@ impl Analyzer<'_> {
             Type::Void
             | Type::Error
             | Type::CString
+            | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::Any => false,

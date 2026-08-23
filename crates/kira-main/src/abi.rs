@@ -126,7 +126,7 @@ mod tests {
     /// one never silently moves the other.
     #[test]
     fn the_export_version_is_not_the_runtime_version() {
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 9);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 10);
         assert_eq!(EXPORT_ABI_VERSION, 1);
     }
 }

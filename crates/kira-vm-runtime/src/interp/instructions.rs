@@ -208,7 +208,17 @@ impl Vm<'_> {
                 // The field is copied out before the struct is dropped: the
                 // struct owns its fields, so handing one out without copying
                 // would hand out storage this drop is about to free.
-                let copy = self.heap.copy_value(field);
+                //
+                // A C-block field is the exception: a member read *resolves* to
+                // the pointer word C would see rather than cloning the block,
+                // because the block belongs to the struct and only the struct.
+                // The word is exactly as raw as the same read on native — it
+                // outlives nothing; the struct's lifetime is what keeps it
+                // good.
+                let copy = match field {
+                    Value::CBlock(_) => self.heap.seam_word(field),
+                    _ => self.heap.copy_value(field),
+                };
                 self.heap.drop_value(base);
                 self.stack.push(copy);
             }
@@ -445,9 +455,17 @@ impl Vm<'_> {
                     self.heap.drop_value(value);
                     return Err(VmError::NotAString);
                 };
-                let word = kira_runtime_abi::c_storage::retain_text(self.heap.get(id));
+                // An owned block, not process-lifetime storage: it lives as
+                // long as the value it lands in and is freed with it. An
+                // interior NUL crosses as C's null, the same refusal the
+                // transient argument path makes.
+                let block = self.heap.get(id).to_owned();
+                let block = self.heap.cblock_text(&block);
                 self.heap.drop_value(value);
-                self.stack.push(Value::RawPtr(word));
+                self.stack.push(match block {
+                    Some(block) => Value::CBlock(block),
+                    None => Value::RawPtr(0),
+                });
             }
             Instruction::ArrayElements(element) => {
                 self.array_elements(*element)?;
@@ -532,14 +550,31 @@ impl Vm<'_> {
                     value,
                     kira_runtime_abi::ForeignPointerWidth::HOST,
                 );
-                self.heap.drop_value(value);
-                let bytes = bytes.map_err(|_| VmError::TypeMismatch {
-                    expected: "a C-layout struct",
-                })?;
-                self.stack
-                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
-                        &bytes,
-                    )));
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        self.heap.drop_value(value);
+                        return Err(VmError::TypeMismatch {
+                            expected: "a C-layout struct",
+                        });
+                    }
+                };
+                // The image becomes the unique parent of every block whose
+                // address its pointer members contain. Moving those children
+                // keeps the graph valid across copies and engine boundaries.
+                let block = self
+                    .heap
+                    .cblock_aggregate_image(
+                        &module.foreign_aggregates,
+                        id,
+                        value,
+                        kira_runtime_abi::ForeignPointerWidth::HOST,
+                        bytes,
+                    )
+                    .map_err(|_| VmError::TypeMismatch {
+                        expected: "a C-layout struct",
+                    })?;
+                self.stack.push(Value::CBlock(block));
             }
             Instruction::FileSystem(op) => self.file_system(*op)?,
             Instruction::Compiler(op) => self.compiler(*op)?,

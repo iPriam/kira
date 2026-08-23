@@ -668,8 +668,10 @@ impl HirExpr {
             // Every one of them takes a `Float` and answers one.
             HirExpr::MathOperation { .. } => Type::FLOAT,
             HirExpr::ScalarText { .. } => Type::String,
-            HirExpr::CStringNew { .. } | HirExpr::CStringNull => Type::CString,
-            HirExpr::CLayoutAddress { .. } | HirExpr::ArrayElements { .. } => Type::RawPtr,
+            HirExpr::CStringNew { .. }
+            | HirExpr::CStringNull
+            | HirExpr::CLayoutAddress { .. }
+            | HirExpr::ArrayElements { .. } => Type::CBlock,
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }

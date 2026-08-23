@@ -52,6 +52,9 @@ impl FunctionLowering<'_, '_> {
         }
         let signature = import.signature();
         let params = signature.parameters().to_vec();
+        let retained: Vec<bool> = (0..params.len())
+            .map(|position| signature.is_retained(position))
+            .collect();
         let result_spec = signature.result();
 
         if self.codegen.unavailable.contains(&idx) {
@@ -102,11 +105,26 @@ impl FunctionLowering<'_, '_> {
                     ));
                 }
                 ForeignTypeSpec::Scalar(ForeignType::CString) => {
-                    let c_string = self.call(
-                        self.codegen.runtime.cstring_new,
-                        &mut [value],
-                        c"ffi.cstring.new",
-                    );
+                    let c_string = if ty == Type::CBlock {
+                        let word = self.call(
+                            self.codegen.runtime.cblock_word,
+                            &mut [value],
+                            c"ffi.cblock.word",
+                        );
+                        // SAFETY: a C-block word is the target pointer encoded
+                        // in Kira's i64 seam representation.
+                        unsafe {
+                            LLVMBuildIntToPtr(builder, word, types.ptr, c"ffi.cblock.ptr".as_ptr())
+                        }
+                    } else {
+                        let c_string = self.call(
+                            self.codegen.runtime.cstring_new,
+                            &mut [value],
+                            c"ffi.cstring.new",
+                        );
+                        cstring_pointers.push(c_string);
+                        c_string
+                    };
                     // SAFETY: the builder is positioned in this function and
                     // both operands are values of this module's pointer type.
                     let is_null = unsafe {
@@ -137,7 +155,6 @@ impl FunctionLowering<'_, '_> {
                     // SAFETY: the foreign trap never returns.
                     unsafe { LLVMBuildUnreachable(builder) };
                     self.position_at(good);
-                    cstring_pointers.push(c_string);
                     // SAFETY: the builder is positioned in this function and the
                     // pointer type belongs to this live module.
                     let storage =
@@ -172,6 +189,15 @@ impl FunctionLowering<'_, '_> {
                     // SAFETY: the alloca and store use the scalar's shared C
                     // alignment, so libffi sees correctly aligned storage.
                     unsafe { LLVMSetAlignment(storage, layout.align) };
+                    let value = if ty == Type::CBlock {
+                        self.call(
+                            self.codegen.runtime.cblock_word,
+                            &mut [value],
+                            c"ffi.cblock.word",
+                        )
+                    } else {
+                        value
+                    };
                     let converted = self.codegen.kira_value_to_c(value, ft)?;
                     // SAFETY: `storage` is the alloca above, whose type is this
                     // scalar's own C type.
@@ -251,8 +277,12 @@ impl FunctionLowering<'_, '_> {
                 result_storage,
             )?;
             // The call owns the values its argument expressions produced.
-            for (value, ty) in values {
-                self.drop_value(value, ty)?;
+            for (position, (value, ty)) in values.into_iter().enumerate() {
+                self.release_foreign_argument(
+                    value,
+                    ty,
+                    retained.get(position).copied().unwrap_or(false),
+                )?;
             }
         } else {
             let function = self.codegen.declare_foreign_address(import.symbol());
@@ -263,12 +293,6 @@ impl FunctionLowering<'_, '_> {
                 &mut call_args,
                 c"foreign.status",
             );
-
-            // The call owns the values its argument expressions produced. The C
-            // storage is separate, so Kira values can be released before lifting.
-            for (value, ty) in values {
-                self.drop_value(value, ty)?;
-            }
 
             let function = self.current_function();
             let ok = self.append_block(function, c"foreign.ok");
@@ -286,10 +310,22 @@ impl FunctionLowering<'_, '_> {
                 LLVMBuildCondBr(builder, failed, fail, ok);
             }
             self.position_at(fail);
+            // A refused adapter call showed C no retained pointer. Release all
+            // evaluated arguments before the trap rather than transferring any.
+            for (value, ty) in values.iter().copied() {
+                self.release_foreign_argument(value, ty, false)?;
+            }
             self.call(self.codegen.runtime.trap_foreign, &mut [status], c"");
             // SAFETY: `kira_rt_trap_foreign` never returns.
             unsafe { LLVMBuildUnreachable(builder) };
             self.position_at(ok);
+            for (position, (value, ty)) in values.into_iter().enumerate() {
+                self.release_foreign_argument(
+                    value,
+                    ty,
+                    retained.get(position).copied().unwrap_or(false),
+                )?;
+            }
         }
 
         // Lift before freeing transient C strings: a C function may return a
@@ -311,6 +347,104 @@ impl FunctionLowering<'_, '_> {
         }
         self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
         Ok(value)
+    }
+
+    /// Releases one evaluated foreign argument or transfers its C-block tree.
+    fn release_foreign_argument(
+        &mut self,
+        value: LLVMValueRef,
+        ty: Type,
+        retained: bool,
+    ) -> Result<(), LlvmError> {
+        if retained && self.codegen.contains_c_storage(ty) {
+            return self.keep_c_storage(value, ty);
+        }
+        self.drop_value(value, ty)
+    }
+
+    /// Transfers every C block reachable from `value` to the native registry.
+    fn keep_c_storage(&mut self, value: LLVMValueRef, ty: Type) -> Result<(), LlvmError> {
+        if ty == Type::CBlock {
+            self.call(self.codegen.runtime.cblock_keep, &mut [value], c"");
+            return Ok(());
+        }
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        let (source, saved) = self.codegen.dynamic_alloca(llvm_type, c"retained.source");
+        // SAFETY: `source` is one writable slot of `llvm_type`.
+        unsafe { LLVMBuildStore(self.codegen.builder, value, source) };
+        self.keep_c_storage_at(source, ty)?;
+        self.codegen.release_at(source, ty)?;
+        self.codegen.release_dynamic_alloca(source, saved);
+        Ok(())
+    }
+
+    /// Moves reachable C-block handles out of `at` into the registry.
+    fn keep_c_storage_at(&mut self, at: LLVMValueRef, ty: Type) -> Result<(), LlvmError> {
+        match ty {
+            Type::CBlock => {
+                // SAFETY: `at` addresses one C-block handle.
+                let handle = unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.i64,
+                        at,
+                        c"keep".as_ptr(),
+                    )
+                };
+                self.call(self.codegen.runtime.cblock_keep, &mut [handle], c"");
+                // SAFETY: ownership moved to the registry; null keeps the later
+                // release walk from freeing it a second time.
+                unsafe { LLVMBuildStore(self.codegen.builder, self.codegen.const_int(0), at) };
+                Ok(())
+            }
+            Type::Struct(id) => {
+                let def = self
+                    .codegen
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .ok_or(LlvmError::internal("a retained struct not in the table"))?
+                    .clone();
+                let struct_type = self.codegen.llvm_type(ty)?;
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
+                    let field = self.codegen.field_pointer(struct_type, at, index as u32);
+                    if def.owns_c_storage_at(index as u32) {
+                        self.keep_c_storage_at(field, Type::CBlock)?;
+                    } else if self.codegen.contains_c_storage(field_ty) {
+                        self.keep_c_storage_at(field, field_ty)?;
+                    }
+                }
+                Ok(())
+            }
+            Type::Array(_) => {
+                let element = self.codegen.element_of(ty)?;
+                if !self.codegen.contains_c_storage(element) {
+                    return Ok(());
+                }
+                // SAFETY: `at` addresses one array handle.
+                let array = unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.ptr,
+                        at,
+                        c"keep.array".as_ptr(),
+                    )
+                };
+                let len = self.call(self.codegen.runtime.array_len, &mut [array], c"keep.len");
+                let esize = self.codegen.abi_size(element)?;
+                let clone = self.codegen.element_clone(element)?;
+                self.emit_index_loop(len, |lowering, index| {
+                    let slot = lowering.call(
+                        lowering.codegen.runtime.array_slot_mut,
+                        &mut [at, index, esize, clone],
+                        c"keep.slot",
+                    );
+                    lowering.keep_c_storage_at(slot, element)
+                })
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Calls the declared symbol itself, for a target with no run-time loader.

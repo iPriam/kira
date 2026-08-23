@@ -323,6 +323,7 @@ struct NativeHeapReport {
     allocated: u64,
     freed: u64,
     live: u64,
+    retained: u64,
 }
 
 /// Parses and validates one native runtime heap report.
@@ -340,14 +341,16 @@ fn assert_native_heap_balanced(backend: &str, run: &Output) -> NativeHeapReport 
         allocated: heap_report_field(line, "allocated", backend),
         freed: heap_report_field(line, "freed", backend),
         live: heap_report_field(line, "live", backend),
+        retained: heap_report_field(line, "retained", backend),
     };
     assert_eq!(
-        report.allocated, report.freed,
-        "the {backend} backend allocated and freed different numbers of objects:\n{stderr}"
+        report.allocated,
+        report.freed + report.retained,
+        "the {backend} backend has objects owned by neither the frame nor retained C storage:\n{stderr}"
     );
     assert_eq!(
-        report.live, 0,
-        "the {backend} backend left native objects live:\n{stderr}"
+        report.live, report.retained,
+        "the {backend} backend left unowned native objects live:\n{stderr}"
     );
     assert_eq!(
         run.status.code(),

@@ -133,6 +133,18 @@ pub enum Type {
     /// a runtime value: the VM builds a transient C string from the `String` at
     /// the boundary and frees it before the foreign call returns.
     CString,
+    /// A uniquely owned block of C storage: a NUL-terminated string member, a
+    /// C-layout image, or an array flattened to C widths, built for the
+    /// foreign seam.
+    ///
+    /// **Not surface.** No source text spells this type; the analyzer mints it
+    /// as the type of the seam materializations (`HirExpr::CStringNew`,
+    /// `CLayoutAddress`, `ArrayElements`), which is what carries their
+    /// ownership through both backends' ordinary machinery: the block is
+    /// cloned where a value truly copies, freed where its owner dies, and
+    /// transferred to the retained registry by a `retains:` parameter. At the
+    /// seam it reads as the pointer word its payload sits at.
+    CBlock,
 }
 
 impl Type {
@@ -358,7 +370,14 @@ impl Type {
             // boxed `var` into a closure needs no `move`, which is the whole
             // point of boxing it.
             Type::Cell(_) => true,
-            Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) | Type::Any => false,
+            // A C block owns its allocation, so copying one is a real clone —
+            // it moves like an array and copies like a `String`.
+            Type::String
+            | Type::Struct(_)
+            | Type::Array(_)
+            | Type::Enum(_)
+            | Type::Any
+            | Type::CBlock => false,
         }
     }
 
@@ -394,7 +413,10 @@ impl Type {
     /// holders of one box can observe nothing a deep copy would have hidden.
     pub fn moves_on_bind(self) -> bool {
         match self {
-            Type::Array(_) | Type::Enum(_) => true,
+            // A C block is uniquely owned — two bindings would be two owners of
+            // one allocation, which is exactly the aliasing this rule exists
+            // to consume.
+            Type::Array(_) | Type::Enum(_) | Type::CBlock => true,
             Type::Any
             | Type::Int(_)
             | Type::Float(_)
@@ -432,6 +454,7 @@ mod tests {
                     ty: Type::INT,
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("a fresh name declares");
         (table, id)

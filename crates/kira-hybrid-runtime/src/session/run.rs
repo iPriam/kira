@@ -175,6 +175,7 @@ impl Session {
             | NativeStateValue::Float(_)
             | NativeStateValue::Bool(_)
             | NativeStateValue::String(_)
+            | NativeStateValue::CBlock(_)
             | NativeStateValue::RawPtr(_) => {}
         }
     }

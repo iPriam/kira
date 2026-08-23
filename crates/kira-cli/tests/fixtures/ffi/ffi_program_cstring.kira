@@ -1,9 +1,8 @@
 // A `CString` member of a C-layout struct, and a struct handed to C by address.
 //
-// Both need storage that outlives the call: a descriptor is given to C once and
-// read for the rest of the run, so a pointer valid only for the call that passed
-// it would be read after free. `kira_runtime_abi::c_storage` explains why that
-// storage is never released, which is the only answer that cannot dangle.
+// Ordinary calls borrow the descriptor storage and release it on return.
+// `ffi_desc_keep` says it retains the descriptor, so that call consumes the
+// value and transfers its ownership tree to the runtime registry.
 
 @FFI.Struct { layout: c; }
 struct ffi_desc {
@@ -18,8 +17,27 @@ struct ffi_desc_ptr {}
 function ffiDescByValue(d: ffi_desc): I32;
 @FFI.Extern { library: ffifixture; symbol: ffi_desc_by_pointer; abi: c; }
 function ffiDescByPointer(d: ffi_desc_ptr): I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_desc_keep; abi: c; }
+@FFI.Extern {
+    library: ffifixture;
+    symbol: ffi_desc_keep;
+    abi: c;
+    retains: d;
+}
 function ffiDescKeep(d: ffi_desc_ptr): Void;
+@FFI.Extern {
+    library: ffifixture;
+    symbol: ffi_desc_keep_value;
+    abi: c;
+    retains: d;
+}
+function ffiDescKeepValue(d: ffi_desc): Void;
+@FFI.Extern {
+    library: ffifixture;
+    symbol: ffi_cstr_keep;
+    abi: c;
+    retains: text;
+}
+function ffiCstrKeep(text: CString): Void;
 @FFI.Extern { library: ffifixture; symbol: ffi_desc_recall; abi: c; }
 function ffiDescRecall(): I32;
 
@@ -67,6 +85,23 @@ function recallIt() -> I32 {
 }
 
 @Native
+function keepValue(name: borrow String) -> Void {
+    let d = ffi_desc {
+        tag: 4
+        title: name
+    }
+    ffiDescKeepValue(move d)
+    return
+}
+
+@Native
+function keepText() -> Void {
+    let text = "kira"
+    ffiCstrKeep(move text)
+    return
+}
+
+@Native
 function emptyTitle() -> I32 {
     let d = ffi_desc {
         tag: 5
@@ -82,6 +117,10 @@ function main() {
     print(byValue("kira"))
     print(emptyTitle())
     keepIt("kira")
+    print(recallIt())
+    keepValue("kira")
+    print(recallIt())
+    keepText()
     print(recallIt())
     return
 }

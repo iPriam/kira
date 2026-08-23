@@ -69,7 +69,7 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         "the ffi harness reported failures: {tally}"
     );
     assert_eq!(
-        tally, "267 passed, 0 failed, 0 skipped, 267 total",
+        tally, "270 passed, 0 failed, 0 skipped, 270 total",
         "the ffi harness tally changed"
     );
 }

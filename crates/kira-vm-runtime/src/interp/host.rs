@@ -155,6 +155,11 @@ impl Vm<'_> {
                     },
                 },
                 Value::RawPtr(value) => NativeArg::RawPtr(value),
+                // A C block crosses as its payload address. The block stays on
+                // the stack until the drop loop after the call, so the callee
+                // reads live storage for exactly the duration of the call —
+                // the borrowed half of the `c_storage` contract.
+                Value::CBlock(block) => NativeArg::RawPtr(self.heap.cblock_address(block)),
                 // A cell is refused with the handles: it is shared mutable
                 // storage this heap counts holds on, and no ordinary seam
                 // signature names one. An erased value has an explicit state
@@ -340,8 +345,17 @@ impl Vm<'_> {
             }
         };
         drop(lowered);
-        for value in self.stack.split_off(first) {
-            self.heap.drop_value(value);
+        // A `retains:` parameter's argument transfers to the retained registry
+        // instead of dropping: the callee kept pointers into its C storage, so
+        // the value must outlive every schedule this side could guess. Only a
+        // call that actually ran retains — a refused call showed C nothing.
+        let succeeded = outcome.is_ok();
+        for (index, value) in self.stack.split_off(first).into_iter().enumerate() {
+            if succeeded && import.signature().is_retained(index) {
+                self.heap.retain_for_foreign(value);
+            } else {
+                self.heap.drop_value(value);
+            }
         }
 
         let outcome = outcome?;

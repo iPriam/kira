@@ -237,12 +237,22 @@ pub(crate) struct Runtime {
     pub(super) ffi_call: Callable,
     /// `kira_rt_ffi_closure`: the C-callable address of one callback entry.
     pub(super) ffi_closure: Callable,
-    /// `kira_rt_cstring_retain`: C storage for a `CString` struct member, never
-    /// freed because C keeps reading it after the call returns.
-    pub(super) cstring_retain: Callable,
-    /// `kira_rt_clayout_retain`: the same storage rule for a struct handed to C
-    /// by address.
-    pub(super) clayout_retain: Callable,
+    /// Creates a uniquely owned NUL-terminated C block from a Kira string.
+    pub(super) cblock_text: Callable,
+    /// Creates a uniquely owned C block by copying a byte image.
+    pub(super) cblock_bytes: Callable,
+    /// Wraps a foreign pointer word in a uniquely owned C block.
+    pub(super) cblock_alien: Callable,
+    /// Resolves a C-block handle to the pointer word C reads.
+    pub(super) cblock_word: Callable,
+    /// Deep-clones one uniquely owned C-block tree.
+    pub(super) cblock_clone: Callable,
+    /// Frees one uniquely owned C-block tree.
+    pub(super) cblock_free: Callable,
+    /// Moves one child C block under a parent image at a pointer offset.
+    pub(super) cblock_attach: Callable,
+    /// Transfers a C-block tree to the retained registry.
+    pub(super) cblock_keep: Callable,
     /// `kira_hybrid_call_runtime`: how native code reaches the VM half.
     pub(super) call_runtime: Callable,
     pub(super) native_value_int: Callable,
@@ -255,6 +265,10 @@ pub(crate) struct Runtime {
     pub(super) native_value_float: Callable,
     pub(super) native_value_bool: Callable,
     pub(super) native_value_string: Callable,
+    /// Moves a native C-block handle into a portable state node.
+    pub(super) native_value_cblock_from_handle: Callable,
+    /// Moves a portable C-block state node into a native handle.
+    pub(super) native_value_cblock_to_handle: Callable,
     pub(super) native_value_aggregate: Callable,
     pub(super) native_value_set_child: Callable,
     pub(super) native_value_read_int: Callable,
@@ -529,12 +543,22 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.i64,
                 &mut [types.ptr, types.ptr],
             ),
-            cstring_retain: declare(c"kira_rt_cstring_retain", types.i64, &mut [types.ptr]),
-            clayout_retain: declare(
-                c"kira_rt_clayout_retain",
+            cblock_text: declare(c"kira_rt_cblock_text", types.i64, &mut [types.ptr]),
+            cblock_bytes: declare(
+                c"kira_rt_cblock_bytes",
                 types.i64,
                 &mut [types.ptr, types.i64],
             ),
+            cblock_alien: declare(c"kira_rt_cblock_alien", types.i64, &mut [types.i64]),
+            cblock_word: declare(c"kira_rt_cblock_word", types.i64, &mut [types.i64]),
+            cblock_clone: declare(c"kira_rt_cblock_clone", types.i64, &mut [types.i64]),
+            cblock_free: declare(c"kira_rt_cblock_free", types.void, &mut [types.i64]),
+            cblock_attach: declare(
+                c"kira_rt_cblock_attach",
+                types.void,
+                &mut [types.i64, types.i64, types.i64, types.i64],
+            ),
+            cblock_keep: declare(c"kira_rt_cblock_keep", types.void, &mut [types.i64]),
             str_from_cstr: declare(c"kira_rt_str_from_cstr", types.ptr, &mut [types.ptr]),
             str_count: declare(c"kira_rt_str_count", types.i64, &mut [types.ptr]),
             str_char_at: declare(
@@ -634,6 +658,16 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             native_value_string: declare(
                 c"kira_rt_native_value_string",
                 types.ptr,
+                &mut [types.ptr],
+            ),
+            native_value_cblock_from_handle: declare(
+                c"kira_rt_native_value_cblock_from_handle",
+                types.ptr,
+                &mut [types.i64],
+            ),
+            native_value_cblock_to_handle: declare(
+                c"kira_rt_native_value_cblock_to_handle",
+                types.i64,
                 &mut [types.ptr],
             ),
             native_value_aggregate: declare(

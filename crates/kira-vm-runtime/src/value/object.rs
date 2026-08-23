@@ -118,6 +118,95 @@ impl Heap {
         }
     }
 
+    /// Copies `text` into a heap-owned, NUL-terminated C block, or `None` when
+    /// an interior NUL means the bytes C would read are not the bytes Kira
+    /// holds.
+    pub fn cblock_text(&mut self, text: &str) -> Option<CBlockId> {
+        let bytes = kira_runtime_abi::c_storage::nul_terminated(text)?;
+        Some(self.cblock_bytes(bytes))
+    }
+
+    /// Moves `bytes` into a heap-owned C block.
+    pub fn cblock_bytes(&mut self, bytes: Vec<u8>) -> CBlockId {
+        CBlockId(self.alloc_object(Object::CBlock {
+            bytes: bytes.into_boxed_slice(),
+            children: Vec::new(),
+        }))
+    }
+
+    /// Moves `child` under `parent` and patches the embedded pointer word.
+    pub fn cblock_attach(
+        &mut self,
+        parent: CBlockId,
+        offset: kira_runtime_abi::CBlockOffset,
+        width: kira_runtime_abi::ForeignPointerWidth,
+        child: CBlockId,
+    ) -> bool {
+        let word = self.cblock_address(child).to_le_bytes();
+        let start = match usize::try_from(offset.bytes()) {
+            Ok(start) => start,
+            Err(_) => return false,
+        };
+        let width_bytes = width.bytes() as usize;
+        let Some(end) = start.checked_add(width_bytes) else {
+            return false;
+        };
+        let Some(Some(Object::CBlock { bytes, children })) = self.slots.get_mut(parent.0 as usize)
+        else {
+            return false;
+        };
+        let Some(target) = bytes.get_mut(start..end) else {
+            return false;
+        };
+        target.copy_from_slice(&word[..width_bytes]);
+        children.push(VmCBlockChild {
+            offset,
+            width,
+            block: child,
+        });
+        true
+    }
+
+    /// The address a foreign callee reads this block's bytes at.
+    ///
+    /// Zero for a freed or non-block handle — the same null a refused C string
+    /// crosses as — so a misbehaving caller hands C a null rather than a
+    /// dangling pointer.
+    pub fn cblock_address(&self, id: CBlockId) -> u64 {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::CBlock { bytes, .. })) => bytes.as_ptr() as usize as u64,
+            _ => 0,
+        }
+    }
+
+    /// Frees the C block behind a handle, drops whatever it kept alive, and
+    /// records the free.
+    pub fn free_cblock(&mut self, id: CBlockId) {
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::CBlock { .. })) => slot.take(),
+            _ => None,
+        };
+        let Some(Object::CBlock { children, .. }) = taken else {
+            return;
+        };
+        self.freed += 1;
+        self.free_list.push(id.0);
+        for child in children {
+            self.free_cblock(child.block);
+        }
+    }
+
+    /// Transfers `value` to the retained registry: alive, slots occupied,
+    /// until the heap itself drops.
+    ///
+    /// This is what a `retains:` foreign parameter does to its argument — the
+    /// callee kept pointers into the value's C blocks, so freeing any of it on
+    /// a schedule this side can guess would hand C dangling storage. Teardown
+    /// is the one moment provably after every foreign call has returned.
+    pub fn retain_for_foreign(&mut self, value: Value) {
+        self.retained.push(value);
+    }
+
     /// Frees the string behind a handle and records the free.
     pub fn free(&mut self, id: StrId) {
         if let Some(slot) = self.slots.get_mut(id.0 as usize)
@@ -160,6 +249,7 @@ impl Heap {
             allocated: self.allocated,
             freed: self.freed,
             current: self.allocated - self.freed,
+            retained: self.retained.len() as u64,
         }
     }
 
@@ -173,6 +263,7 @@ impl Heap {
             Value::Erased(id) => self.free_erased(id),
             Value::Cell(id) => self.free_cell(id),
             Value::NativeSnapshot(id) => self.free_snapshot(id),
+            Value::CBlock(id) => self.free_cblock(id),
             _ => {}
         }
     }
@@ -267,7 +358,73 @@ impl Heap {
                 }
                 Value::NativeSnapshot(id)
             }
+            // A genuinely deep copy, and deliberately the only kind here that
+            // takes one: a C block has exactly one owner, so a second holder
+            // needs bytes of its own at a fresh address. The ownership
+            // checker's move rules keep this arm off every hot path — a copy
+            // happens only where a struct unshares, never per read.
+            //
+            // The kept value copies with it — but the fresh image's pointer
+            // members still name the *original*'s storage, which the fresh
+            // hold keeps alive exactly as the original block did.
+            Value::CBlock(id) => Value::CBlock(self.copy_cblock(id)),
             scalar => scalar,
         }
+    }
+
+    /// Deep-clones one uniquely owned C-block tree.
+    fn copy_cblock(&mut self, id: CBlockId) -> CBlockId {
+        let (bytes, children) = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::CBlock { bytes, children })) => (bytes.to_vec(), children.clone()),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let copy = self.cblock_bytes(bytes);
+        for child in children {
+            let child_copy = self.copy_cblock(child.block);
+            let _ = self.cblock_attach(copy, child.offset, child.width, child_copy);
+        }
+        copy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kira_runtime_abi::{CBlockOffset, ForeignPointerWidth};
+
+    use super::*;
+
+    #[test]
+    fn a_cblock_tree_clone_rewrites_its_embedded_pointer() {
+        let mut heap = Heap::new();
+        let child = heap.cblock_bytes(vec![7, 8, 9]);
+        let root = heap.cblock_bytes(vec![0; 8]);
+        assert!(heap.cblock_attach(
+            root,
+            CBlockOffset::new(0),
+            ForeignPointerWidth::Bits64,
+            child,
+        ));
+        let Value::CBlock(copy) = heap.copy_value(Value::CBlock(root)) else {
+            panic!("a C-block copy stays a C block");
+        };
+        // SAFETY: `root` owns an eight-byte live image payload.
+        let root_word =
+            unsafe { kira_runtime_abi::c_storage::read_bytes(heap.cblock_address(root), 0, 8) }
+                .map(u64::from_le_bytes)
+                .expect("the original image is readable");
+        // SAFETY: `copy` owns an eight-byte live image payload.
+        let copy_word =
+            unsafe { kira_runtime_abi::c_storage::read_bytes(heap.cblock_address(copy), 0, 8) }
+                .map(u64::from_le_bytes)
+                .expect("the copied image is readable");
+        assert_eq!(root_word, heap.cblock_address(child));
+        assert_ne!(copy_word, root_word);
+        // SAFETY: `copy_word` is the payload address of the cloned child.
+        let bytes = unsafe { kira_runtime_abi::c_storage::read_bytes(copy_word, 0, 3) }
+            .expect("the cloned child is readable");
+        assert_eq!(&bytes[..3], &[7, 8, 9]);
+        heap.drop_value(Value::CBlock(root));
+        heap.drop_value(Value::CBlock(copy));
+        assert_eq!(heap.stats().current, 0);
     }
 }

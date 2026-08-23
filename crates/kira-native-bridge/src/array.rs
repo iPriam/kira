@@ -502,16 +502,17 @@ pub extern "C" fn kira_rt_trap_index_negative() -> ! {
     std::process::exit(1);
 }
 
-/// Writes an array's elements into C storage as `tag`, and answers its address.
+/// Writes an array's elements out as `tag` into an owned C block, and answers
+/// the block's handle.
 ///
 /// The native half of `HirExpr::ArrayElements`. Two widths are in play and they
 /// are not the same: `stride` is what Kira holds an element in — a `[F32]` holds
 /// `double`s — and `tag` is what C reads, which is four bytes for that array.
 /// Converting is the whole job.
 ///
-/// The storage is never reclaimed, for the reason [`kira_runtime_abi::c_storage`]
-/// gives: a C API handed a buffer may keep it, and nothing on this side knows
-/// which kind of callee it has.
+/// The block is uniquely owned, exactly as [`crate::cblock`] states: the value
+/// it lands in frees it, and a `retains:` parameter transfers it. Null for an
+/// empty array, which has no element row to address.
 ///
 /// # Safety
 /// `array` must be null or a live handle from this runtime, and `stride` must be
@@ -538,7 +539,8 @@ pub unsafe extern "C" fn kira_rt_array_elements(array: KArray, tag: u32, stride:
         unsafe { std::ptr::copy_nonoverlapping(slot, word.as_mut_ptr(), take) };
         write_seam_scalar(&mut bytes, element, word);
     }
-    kira_runtime_abi::c_storage::retain_bytes(&bytes)
+    // SAFETY: `bytes` is a live local buffer of exactly `bytes.len()` bytes.
+    unsafe { crate::cblock::kira_rt_cblock_bytes(bytes.as_ptr(), bytes.len() as i64) as u64 }
 }
 
 /// Writes one element's Kira bytes out as the seam type `ty`.

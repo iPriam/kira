@@ -40,6 +40,8 @@ pub mod value_tag {
     pub const NATIVE_VIEW: u32 = 12;
     /// The slot contains a native-state snapshot handle.
     pub const NATIVE_SNAPSHOT: u32 = 13;
+    /// The slot contains a C-storage block handle.
+    pub const C_BLOCK: u32 = 14;
 }
 
 /// One debugger-stable Kira value.
@@ -462,6 +464,7 @@ fn encode_value(value: Value) -> KiraVmDebugValue {
         Value::NativeState(token) => (value_tag::NATIVE_STATE, token.as_word()),
         Value::NativeView { token, .. } => (value_tag::NATIVE_VIEW, token.as_word()),
         Value::NativeSnapshot(id) => (value_tag::NATIVE_SNAPSHOT, id.debug_word()),
+        Value::CBlock(id) => (value_tag::C_BLOCK, id.debug_word()),
     };
     KiraVmDebugValue { tag, payload }
 }

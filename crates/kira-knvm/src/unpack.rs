@@ -13,7 +13,9 @@ use crate::install::InstallError;
 #[derive(Debug, thiserror::Error)]
 pub enum UnpackError {
     /// The archive format is not one this can unpack.
-    #[error("`{format}` is not an archive format knvm unpacks (expected `tar.xz`, `tar.gz` or `zip`)")]
+    #[error(
+        "`{format}` is not an archive format knvm unpacks (expected `tar.xz`, `tar.gz` or `zip`)"
+    )]
     UnsupportedFormat {
         /// What the caller asked for.
         format: String,
@@ -86,11 +88,7 @@ pub(crate) fn unpack_arguments<'a>(
 /// Each tool [`unpackers`] names is tried until one succeeds; a tool that is
 /// absent or that refuses the archive hands over to the next, and the last
 /// refusal is what gets reported when none of them worked.
-pub(crate) fn extract(
-    archive: &Path,
-    destination: &Path,
-    format: &str,
-) -> Result<(), UnpackError> {
+pub(crate) fn extract(archive: &Path, destination: &Path, format: &str) -> Result<(), UnpackError> {
     let Some(tools) = unpackers(format) else {
         return Err(UnpackError::UnsupportedFormat {
             format: format.to_string(),

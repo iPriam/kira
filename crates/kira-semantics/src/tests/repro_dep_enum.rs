@@ -12,8 +12,7 @@ const LIB: &str = "enum Fruit { Apple Banana }\n\
 
 fn packaged(modules: Vec<ModuleSource>, entry: &str) -> Vec<Diagnostic> {
     let db = DatabaseImpl::new();
-    let source =
-        SourceProgram::application(&db, entry.to_owned(), "main.kira".to_owned(), modules);
+    let source = SourceProgram::application(&db, entry.to_owned(), "main.kira".to_owned(), modules);
     analyzed::accumulated::<crate::DiagnosticAccumulator>(&db, source)
         .into_iter()
         .map(|accumulator| accumulator.0.clone())

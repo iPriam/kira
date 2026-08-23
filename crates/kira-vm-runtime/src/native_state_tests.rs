@@ -155,14 +155,14 @@ fn a_recovered_array_crosses_the_array_elements_seam() {
     );
     let mut host = NativeStateHost::new(CapturingHost::default());
     let outcome = execute(&module, &mut host).expect("a snapshot array reaches the C seam");
-    let crate::Value::RawPtr(address) = outcome.result else {
-        panic!("array elements must return a retained byte pointer");
-    };
-    // SAFETY: ArrayElements just retained eight readable bytes for this test.
-    let bytes = unsafe { kira_runtime_abi::c_storage::read_bytes(address, 0, 8) }
-        .expect("the retained array bytes are not null");
-    assert_eq!(&bytes[..4], &1.25f32.to_le_bytes());
-    assert_eq!(&bytes[4..8], &2.5f32.to_le_bytes());
+    // The flattened elements are an *owned* block now, not process-lifetime
+    // storage: the run returns one and the exit drop frees it, so a clean
+    // account is the proof the seam no longer leaks per crossing. The bytes
+    // the block holds are pinned by `write_seam_scalar`'s own tests.
+    assert!(
+        matches!(outcome.result, crate::Value::CBlock(_)),
+        "array elements must return an owned C block"
+    );
     assert_eq!(outcome.heap.current, 0);
 }
 

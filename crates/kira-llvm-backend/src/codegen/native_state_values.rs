@@ -72,6 +72,11 @@ impl Codegen<'_> {
                 &mut [value],
                 c"native.value",
             ),
+            Type::CBlock => self.call(
+                self.runtime.native_value_cblock_from_handle,
+                &mut [value],
+                c"native.cblock",
+            ),
             // Three spellings of one opaque target word, so one node carries
             // them all. A `CString` member of a C-layout struct is the address
             // of bytes some foreign library owns: this side stores it, hands it
@@ -86,11 +91,23 @@ impl Codegen<'_> {
                 c"native.value",
             ),
             Type::Struct(id) => {
-                let fields = self.field_types(id)?;
-                let node = self.aggregate_node(NativeStateValueTag::STRUCT, 0, fields.len());
-                for (index, field_ty) in fields.into_iter().enumerate() {
+                let def = self
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .ok_or(LlvmError::internal(
+                        "a native-state struct not in the table",
+                    ))?
+                    .clone();
+                let node = self.aggregate_node(NativeStateValueTag::STRUCT, 0, def.fields.len());
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
                     let field = self.extract_field(value, index as u32);
-                    let child = self.encode_native_state_value(field, field_ty)?;
+                    let child = if def.owns_c_storage_at(index as u32) {
+                        self.encode_native_state_value(field, Type::CBlock)?
+                    } else {
+                        self.encode_native_state_value(field, field_ty)?
+                    };
                     self.set_native_child(node, index, child);
                 }
                 node
@@ -147,23 +164,40 @@ impl Codegen<'_> {
                 }
             }
             Type::String => self.read_and_free_node(node, self.runtime.native_value_read_string),
+            Type::CBlock => self.call(
+                self.runtime.native_value_cblock_to_handle,
+                &mut [node],
+                c"native.cblock",
+            ),
             // The mirror of the encode side: one opaque word comes back out of
             // the node it went into, for `CString` exactly as for `RawPtr`.
             Type::RawPtr | Type::ForeignPtr(_) | Type::CString => {
                 self.read_and_free_node(node, self.runtime.native_value_read_raw_ptr)
             }
             Type::Struct(id) => {
-                let fields = self.field_types(id)?;
+                let def = self
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .ok_or(LlvmError::internal(
+                        "a native-state struct not in the table",
+                    ))?
+                    .clone();
                 let llvm_type = self.llvm_type(ty)?;
                 // SAFETY: this type belongs to the live context.
                 let mut value = unsafe { LLVMGetUndef(llvm_type) };
-                for (index, field_ty) in fields.into_iter().enumerate() {
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
                     let child = self.call(
                         self.runtime.native_value_child,
                         &mut [node, self.const_int(index as i64)],
                         c"native.child",
                     );
-                    let field = self.decode_native_state_value(child, field_ty)?;
+                    let field = if def.owns_c_storage_at(index as u32) {
+                        self.decode_native_state_value(child, Type::CBlock)?
+                    } else {
+                        self.decode_native_state_value(child, field_ty)?
+                    };
                     value = self.insert_field(value, field, index as u32);
                 }
                 self.call(self.runtime.native_value_free, &mut [node], c"");
@@ -664,6 +698,7 @@ mod tests {
                         mutable: false,
                     },
                 ],
+                c_layout: true,
             })
             .expect("the struct table accepts one declaration");
         let ty = Type::Struct(struct_id);

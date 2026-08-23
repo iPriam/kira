@@ -911,7 +911,8 @@ impl<'a> Codegen<'a> {
             | Type::ForeignPtr(_)
             | Type::NativeState(_)
             | Type::CString
-            | Type::Task(_) => self.types.i64,
+            | Type::Task(_)
+            | Type::CBlock => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types

@@ -29,6 +29,8 @@ use llvm_sys::prelude::*;
 use super::FunctionLowering;
 use crate::LlvmError;
 
+mod cblock;
+
 impl FunctionLowering<'_, '_> {
     /// Writes the Kira struct `value` of Kira type `ty` into a fresh C-layout
     /// buffer.
@@ -84,14 +86,23 @@ impl FunctionLowering<'_, '_> {
         for (index, member) in members.iter().enumerate() {
             let field = self.extract_field(value, index as u32)?;
             match member {
-                ForeignMember::Scalar(ty) => {
-                    let layout = scalar_layout(*ty, self.codegen.pointer_width);
+                ForeignMember::Scalar(scalar) => {
+                    let layout = scalar_layout(*scalar, self.codegen.pointer_width);
                     offset = round_up(offset, layout.align)?;
                     let at = base
                         .checked_add(offset)
                         .ok_or(LlvmError::internal("an aggregate offset past 4GiB"))?;
                     let slot = self.byte_offset_ptr(buffer, at)?;
-                    let converted = self.codegen.kira_value_to_c(field, *ty)?;
+                    let field = if self.c_storage_slot(ty, index)? {
+                        self.call(
+                            self.codegen.runtime.cblock_word,
+                            &mut [field],
+                            c"aggregate.cblock.word",
+                        )
+                    } else {
+                        field
+                    };
+                    let converted = self.codegen.kira_value_to_c(field, *scalar)?;
                     // SAFETY: `slot` addresses `layout.size` bytes inside the
                     // buffer, and `converted` has exactly this scalar's C type.
                     unsafe {
@@ -165,6 +176,7 @@ impl FunctionLowering<'_, '_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         let ty = self.type_of(value);
         let lowered = self.lower_expr(value)?;
+        let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"clayout.stack");
         let buffer = self.write_aggregate_buffer(id, lowered, ty)?;
         let layout = self
             .codegen
@@ -174,11 +186,23 @@ impl FunctionLowering<'_, '_> {
             .map_err(|_| LlvmError::internal("an aggregate with no computable C layout"))?;
         // SAFETY: `types.i64` belongs to this module's context.
         let size = unsafe { LLVMConstInt(self.codegen.types.i64, u64::from(layout.size), 0) };
-        Ok(self.call(
-            self.codegen.runtime.clayout_retain,
+        let block = self.call(
+            self.codegen.runtime.cblock_bytes,
             &mut [buffer, size],
-            c"clayout",
-        ))
+            c"clayout.block",
+        );
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        // SAFETY: the outer stack save below reclaims this source slot before
+        // the expression returns, even when the call site is inside a loop.
+        let source =
+            unsafe { LLVMBuildAlloca(self.codegen.builder, llvm_type, c"clayout.source".as_ptr()) };
+        // SAFETY: `source` holds exactly one value of `llvm_type`.
+        unsafe { LLVMBuildStore(self.codegen.builder, lowered, source) };
+        let zero = self.codegen.const_int(0);
+        self.move_cblock_members(id, source, ty, block, zero)?;
+        self.codegen.release_at(source, ty)?;
+        self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
+        Ok(block)
     }
 
     pub(super) fn read_aggregate_buffer(
@@ -234,7 +258,16 @@ impl FunctionLowering<'_, '_> {
                     offset = offset
                         .checked_add(layout.size)
                         .ok_or(LlvmError::internal("an aggregate larger than 4GiB"))?;
-                    self.codegen.c_value_to_kira(loaded, *scalar)?
+                    let field = self.codegen.c_value_to_kira(loaded, *scalar)?;
+                    if self.c_storage_slot(ty, index)? {
+                        self.call(
+                            self.codegen.runtime.cblock_alien,
+                            &mut [field],
+                            c"aggregate.cblock.alien",
+                        )
+                    } else {
+                        field
+                    }
                 }
                 ForeignMember::Aggregate(nested) => {
                     let layout = self
@@ -511,7 +544,11 @@ impl FunctionLowering<'_, '_> {
     /// The induction variable is a phi rather than an alloca, because this loop
     /// can nest — an array of structs holding their own arrays — and an alloca
     /// inside a loop grows the frame once per iteration.
-    fn emit_index_loop<F>(&mut self, limit: LLVMValueRef, body: F) -> Result<(), LlvmError>
+    pub(super) fn emit_index_loop<F>(
+        &mut self,
+        limit: LLVMValueRef,
+        body: F,
+    ) -> Result<(), LlvmError>
     where
         F: FnOnce(&mut Self, LLVMValueRef) -> Result<(), LlvmError>,
     {

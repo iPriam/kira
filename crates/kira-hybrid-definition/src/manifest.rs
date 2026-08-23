@@ -30,6 +30,12 @@ use kira_runtime_abi::{
     ForeignSignature, ForeignType, ForeignTypeSpec, Ownership,
 };
 
+mod reader;
+mod retained;
+
+use reader::Reader;
+use retained::read_foreign_retained;
+
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
 
@@ -273,6 +279,35 @@ pub enum ManifestDecodeError {
         /// The unresolved aggregate index.
         index: u32,
     },
+    /// The retained-parameter section named a different number of imports.
+    #[error("retained section has {rows} rows for {imports} foreign imports")]
+    RetainedRowMismatch {
+        /// Rows carried by the section.
+        rows: u32,
+        /// Imports carried by the manifest.
+        imports: usize,
+    },
+    /// A retained position did not name a parameter in its import.
+    #[error("retained position {position} is outside import `{import}` with {params} parameters")]
+    RetainedOutOfRange {
+        /// The affected C symbol.
+        import: String,
+        /// The invalid parameter position.
+        position: u32,
+        /// The import's parameter count.
+        params: usize,
+    },
+    /// One retained parameter position appeared twice in an import row.
+    #[error("retained position {position} appears twice for import `{import}`")]
+    DuplicateRetainedPosition {
+        /// The affected C symbol.
+        import: String,
+        /// The repeated parameter position.
+        position: u32,
+    },
+    /// Bytes remained after the last known manifest section.
+    #[error("hybrid manifest has {0} trailing bytes")]
+    TrailingBytes(usize),
 }
 
 impl HybridManifest {
@@ -312,7 +347,11 @@ impl HybridManifest {
         // only be written if every earlier one is — otherwise the decoder reads
         // this section's count as the foreign count. A program that widens
         // nothing writes no tail at all and keeps its bytes unchanged.
-        let tail = self.internal_functions != 0;
+        let has_retained = self
+            .foreign
+            .iter()
+            .any(|import| import.signature.any_retained());
+        let tail = self.internal_functions != 0 || has_retained;
         // The foreign-import section, written when there is something in it (or
         // when the tail below forces it): a program with no `@FFI.Extern`
         // imports writes nothing here, so its bytes are identical to a manifest
@@ -364,12 +403,22 @@ impl HybridManifest {
         if tail {
             write_u32(&mut out, self.internal_functions);
         }
+        if has_retained {
+            write_u32(&mut out, self.foreign.len() as u32);
+            for import in &self.foreign {
+                let positions: Vec<usize> = import.signature.retained_positions().collect();
+                write_u32(&mut out, positions.len() as u32);
+                for position in positions {
+                    write_u32(&mut out, position as u32);
+                }
+            }
+        }
         out
     }
 
     /// Decodes a manifest, validating it rather than trusting it.
     pub fn from_bytes(bytes: &[u8]) -> Result<HybridManifest, ManifestDecodeError> {
-        let mut reader = Reader { bytes, pos: 0 };
+        let mut reader = Reader::new(bytes);
         if reader.take(4)? != MAGIC {
             return Err(ManifestDecodeError::BadMagic);
         }
@@ -407,11 +456,15 @@ impl HybridManifest {
             });
         }
 
-        let foreign = read_foreign(&mut reader)?;
+        let mut foreign = read_foreign(&mut reader)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign)?;
         // Absent means zero: a manifest written before this field existed ends
         // here, and so does one for a program that widens nothing.
-        let internal_functions = reader.u32().unwrap_or_default();
+        let internal_functions = if reader.is_at_end() { 0 } else { reader.u32()? };
+        read_foreign_retained(&mut reader, &mut foreign)?;
+        if !reader.is_at_end() {
+            return Err(ManifestDecodeError::TrailingBytes(reader.remaining()));
+        }
 
         // A library carries no entrypoint, so there is no index to bound. The
         // count is reported as it was written — it was read as a `u32` and the
@@ -609,66 +662,6 @@ fn write_string(out: &mut Vec<u8>, text: &str) {
 /// Appends a little-endian `u32`.
 fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
-}
-
-/// A bounds-checked cursor over a serialized manifest.
-struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, count: usize) -> Result<&'a [u8], ManifestDecodeError> {
-        let end = self
-            .pos
-            .checked_add(count)
-            .ok_or(ManifestDecodeError::Truncated)?;
-        let slice = self
-            .bytes
-            .get(self.pos..end)
-            .ok_or(ManifestDecodeError::Truncated)?;
-        self.pos = end;
-        Ok(slice)
-    }
-
-    fn byte(&mut self) -> Result<u8, ManifestDecodeError> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.bytes.len()
-    }
-
-    fn u32(&mut self) -> Result<u32, ManifestDecodeError> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    /// Reads a count that is about to size an allocation, and rejects one the
-    /// input could not possibly satisfy.
-    ///
-    /// Every element of every counted run in this format costs at least one
-    /// byte, so a count larger than the bytes remaining is malformed however
-    /// the rest of the stream reads. Checking it here is what keeps a
-    /// `Vec::with_capacity` off a number the artifact chose: one corrupted byte
-    /// in the high end of a count is two billion elements, and reserving for
-    /// them aborts the process on a host that will not overcommit — a decoder
-    /// killing its caller instead of returning the typed error every other
-    /// malformed byte gets.
-    fn count(&mut self) -> Result<usize, ManifestDecodeError> {
-        let count = self.u32()? as usize;
-        let remaining = self.bytes.len().saturating_sub(self.pos);
-        if count > remaining {
-            return Err(ManifestDecodeError::CountExceedsInput { count, remaining });
-        }
-        Ok(count)
-    }
-
-    fn string(&mut self) -> Result<String, ManifestDecodeError> {
-        let length = self.u32()? as usize;
-        let bytes = self.take(length)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| ManifestDecodeError::InvalidString)
-    }
 }
 
 #[cfg(test)]

@@ -304,9 +304,7 @@ impl Analyzer<'_> {
                     .lookup_function(&name)
                     .map(|(id, _, _)| id)
                     .and_then(|id| self.init_content_param(id));
-                if !children.is_empty()
-                    && !is_construct_construction
-                    && function_content.is_none()
+                if !children.is_empty() && !is_construct_construction && function_content.is_none()
                 {
                     for &child in &children {
                         self.analyze_expr(ctx, child);
@@ -690,8 +688,10 @@ impl Analyzer<'_> {
                 receiver,
                 method,
                 method_span,
-                &args,
-                &children,
+                calls::MethodCallContent {
+                    args: &args,
+                    children: &children,
+                },
                 expected,
             ),
             // A bare `{ … }` block is the anonymous spelling of a named child

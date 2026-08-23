@@ -8,8 +8,8 @@
 
 use crate::exports::{ExportTable, ExportType, ModuleExport};
 use crate::module_foreign::{
-    read_foreign, read_foreign_aggregates, read_foreign_callbacks, write_foreign,
-    write_foreign_aggregates, write_foreign_callbacks,
+    read_foreign, read_foreign_aggregates, read_foreign_callbacks, read_foreign_retained,
+    write_foreign, write_foreign_aggregates, write_foreign_callbacks, write_foreign_retained,
 };
 use crate::module_release::{read_releases, write_releases};
 use crate::op::{DecodeError, Instruction, decode, decode_legacy, encode};
@@ -263,6 +263,39 @@ pub enum ModuleDecodeError {
         /// How many the section claimed.
         entries: u64,
     },
+    /// The retained-parameters section named a different number of imports
+    /// than the module has.
+    ///
+    /// Its rows are positional, so a disagreeing count means the writer and
+    /// this reader do not agree on what a row names — and retaining by a
+    /// misaligned plan transfers one import's arguments on another's call.
+    #[error("retained-parameters section names {rows} imports; the module has {imports}")]
+    RetainedRowMismatch {
+        /// How many rows the section claimed.
+        rows: u64,
+        /// How many imports the module actually has.
+        imports: usize,
+    },
+    /// A retained-parameter position lies outside its import's signature.
+    #[error(
+        "foreign import `{import}` retains parameter {position}, but has {params} parameter(s)"
+    )]
+    RetainedOutOfRange {
+        /// The C symbol of the offending import.
+        import: String,
+        /// The out-of-range parameter position.
+        position: usize,
+        /// How many parameters the signature has.
+        params: usize,
+    },
+    /// A retained position appeared twice in one import row.
+    #[error("foreign import `{import}` retains parameter {position} twice")]
+    DuplicateRetainedPosition {
+        /// The C symbol of the offending import.
+        import: String,
+        /// The repeated parameter position.
+        position: usize,
+    },
     /// Bytes remained after the last section the format defines.
     ///
     /// Every section is self-delimiting, so leftovers mean the stream was
@@ -305,10 +338,15 @@ impl Module {
         // Each later section forces the ones before it to be written, empty or
         // not, for the same reason: a section is only unambiguous when every
         // section it follows is present to be consumed first.
+        let has_retained = self
+            .foreign_imports
+            .iter()
+            .any(|import| import.signature().any_retained());
         let has_releases = self
             .functions
             .iter()
-            .any(|function| function.releases != FrameRelease::EveryLocal);
+            .any(|function| function.releases != FrameRelease::EveryLocal)
+            || has_retained;
         let has_callbacks = !self.foreign_callbacks.is_empty() || has_releases;
         let has_aggregates = !self.foreign_aggregates.is_empty() || has_callbacks;
         let has_foreign = !self.foreign_imports.is_empty() || has_aggregates;
@@ -326,9 +364,14 @@ impl Module {
         if has_callbacks {
             write_foreign_callbacks(&mut out, &self.foreign_callbacks);
         }
-        // And the release plans last, on the same terms.
+        // And the release plans after them, on the same terms.
         if has_releases {
             write_releases(&mut out, &self.functions);
+        }
+        // The retained-parameters section is last: a module with no `retains:`
+        // declaration is byte-for-byte what it was before the section existed.
+        if has_retained {
+            write_foreign_retained(&mut out, &self.foreign_imports);
         }
         out
     }
@@ -415,10 +458,11 @@ impl Module {
             });
         }
         let exports = read_exports(&mut reader, format)?;
-        let foreign_imports = read_foreign(&mut reader, format)?;
+        let mut foreign_imports = read_foreign(&mut reader, format)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports, format)?;
         let foreign_callbacks = read_foreign_callbacks(&mut reader, format, &foreign_aggregates)?;
         read_releases(&mut reader, &mut functions, format)?;
+        read_foreign_retained(&mut reader, &mut foreign_imports, format)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,

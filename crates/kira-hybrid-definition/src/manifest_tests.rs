@@ -75,6 +75,30 @@ fn a_manifest_with_foreign_imports_round_trips() {
 }
 
 #[test]
+fn retained_foreign_parameters_round_trip_in_the_appended_tail() {
+    let mut original = foreign_manifest();
+    original.foreign[0].signature = original.foreign[0]
+        .signature
+        .clone()
+        .with_retained([false, true]);
+    let bytes = original.to_bytes();
+    let decoded = HybridManifest::from_bytes(&bytes).expect("decodes");
+    assert_eq!(decoded, original);
+    assert!(decoded.foreign[0].signature.is_retained(1));
+    assert!(!decoded.foreign[0].signature.is_retained(0));
+
+    // Two rows: one count plus position for the first import, and a zero count
+    // for the second, behind the section's row count.
+    let retained_start = bytes.len() - 16;
+    for length in retained_start + 1..bytes.len() {
+        assert!(
+            HybridManifest::from_bytes(&bytes[..length]).is_err(),
+            "retained tail truncated to {length} bytes must be rejected"
+        );
+    }
+}
+
+#[test]
 fn an_old_manifest_without_a_foreign_section_decodes_with_none() {
     // A manifest with no foreign imports writes no foreign bytes at all, so
     // its encoding is identical to one produced before the section existed.

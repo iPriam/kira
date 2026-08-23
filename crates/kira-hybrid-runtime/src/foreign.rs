@@ -153,6 +153,10 @@ fn lower_argument(
             }
             BridgeData::String(strings.copy(text))
         }
+        ForeignArg::CStringPtr(pointer) => {
+            check_pointer_width(pointer)?;
+            BridgeData::CStringPtr(pointer)
+        }
     };
     Ok(BridgeValue::encode(data))
 }

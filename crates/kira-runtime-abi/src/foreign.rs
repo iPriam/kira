@@ -224,6 +224,12 @@ impl PartialEq<ForeignType> for ForeignTypeSpec {
 pub struct ForeignSignature {
     parameters: Box<[ForeignTypeSpec]>,
     result: ForeignTypeSpec,
+    /// Which parameters the callee retains past the call, in parameter order.
+    ///
+    /// Empty means none — the common case, and what every constructor builds
+    /// until [`ForeignSignature::with_retained`] says otherwise. Non-empty is
+    /// always exactly `parameters.len()` long.
+    retained: Box<[bool]>,
 }
 
 impl ForeignSignature {
@@ -235,7 +241,43 @@ impl ForeignSignature {
         Self {
             parameters: parameters.into(),
             result: result.into(),
+            retained: Box::default(),
         }
+    }
+
+    /// This signature with the callee's retained parameters recorded.
+    ///
+    /// `retained` marks the positions an `@FFI.Extern` block's `retains:`
+    /// fields named: the callee keeps pointers reachable from that argument
+    /// past the call, so the argument is consumed and its C storage transfers
+    /// to the engine's retained registry. Flags for more positions than the
+    /// signature has parameters are discarded rather than trusted — the
+    /// analyzer refuses the declaration before one is built.
+    #[must_use]
+    pub fn with_retained(mut self, retained: impl Into<Box<[bool]>>) -> Self {
+        let retained = retained.into();
+        if retained.len() == self.parameters.len() && retained.iter().any(|kept| *kept) {
+            self.retained = retained;
+        }
+        self
+    }
+
+    /// Whether the callee retains parameter `index` past the call.
+    pub fn is_retained(&self, index: usize) -> bool {
+        self.retained.get(index).copied().unwrap_or(false)
+    }
+
+    /// Whether any parameter is retained past the call.
+    pub fn any_retained(&self) -> bool {
+        !self.retained.is_empty()
+    }
+
+    /// The positions the callee retains, in parameter order.
+    pub fn retained_positions(&self) -> impl Iterator<Item = usize> + '_ {
+        self.retained
+            .iter()
+            .enumerate()
+            .filter_map(|(index, kept)| kept.then_some(index))
     }
 
     /// Creates a signature whose every position is a seam scalar.
@@ -349,6 +391,15 @@ impl ForeignImport {
     pub const fn signature(&self) -> &ForeignSignature {
         &self.signature
     }
+
+    /// Records which parameters the callee retains past the call.
+    ///
+    /// The decoder's half of [`ForeignSignature::with_retained`]: rows are
+    /// decoded before the retained-parameters section that marks them, so the
+    /// flags land on the signature after the fact.
+    pub fn retain_parameters(&mut self, retained: impl Into<Box<[bool]>>) {
+        self.signature = self.signature.clone().with_retained(retained);
+    }
 }
 
 /// A borrowed argument supplied to a foreign call.
@@ -382,6 +433,8 @@ pub enum ForeignArg<'a> {
     RawPtr(u64),
     /// UTF-8 bytes borrowed for this call and copied to transient C storage.
     CString(&'a str),
+    /// A pointer to already NUL-terminated C-block storage borrowed for this call.
+    CStringPtr(u64),
     /// A C-layout aggregate, borrowed for this call.
     Aggregate {
         /// The aggregate's index in the program's table.
@@ -408,7 +461,7 @@ impl ForeignArg<'_> {
             Self::F32(_) => ForeignType::F32,
             Self::F64(_) => ForeignType::F64,
             Self::RawPtr(_) => ForeignType::RawPtr,
-            Self::CString(_) => ForeignType::CString,
+            Self::CString(_) | Self::CStringPtr(_) => ForeignType::CString,
             Self::Aggregate { id, .. } => return ForeignTypeSpec::Aggregate(id),
         })
     }
@@ -521,10 +574,10 @@ impl ForeignAdapterStatus {
 /// call. Version 1 adapters have neither, and a version-1 caller would hand a
 /// version-2 adapter an out slot it does not fill — so the marker name carries
 /// the version and a mismatch fails the link rather than the run.
-pub const FOREIGN_ADAPTER_ABI_VERSION: u32 = 2;
+pub const FOREIGN_ADAPTER_ABI_VERSION: u32 = 3;
 
 /// The versioned marker symbol every generated adapter library must export.
-pub const FOREIGN_ADAPTER_ABI_MARKER: &str = "kira_foreign_adapter_abi_version_2";
+pub const FOREIGN_ADAPTER_ABI_MARKER: &str = "kira_foreign_adapter_abi_version_3";
 
 /// The string-allocation helper resolved from an adapter library.
 pub const FOREIGN_STRING_NEW_SYMBOL: &str = "kira_rt_str_new";
@@ -731,10 +784,10 @@ mod tests {
 
     #[test]
     fn adapter_marker_and_status_values_are_pinned() {
-        assert_eq!(FOREIGN_ADAPTER_ABI_VERSION, 2);
+        assert_eq!(FOREIGN_ADAPTER_ABI_VERSION, 3);
         assert_eq!(
             FOREIGN_ADAPTER_ABI_MARKER,
-            "kira_foreign_adapter_abi_version_2"
+            "kira_foreign_adapter_abi_version_3"
         );
         assert_eq!(ForeignAdapterStatus::SUCCESS.0, 0);
         assert_eq!(ForeignAdapterStatus::BAD_ARGUMENT_COUNT.0, 1);

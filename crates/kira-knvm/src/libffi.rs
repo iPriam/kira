@@ -39,9 +39,7 @@ pub enum LibffiInstallError {
         asset: String,
     },
     /// The unpacked archive is not a libffi install tree.
-    #[error(
-        "the unpacked archive for `{target}` holds no `lib/{archive}`; nothing was installed"
-    )]
+    #[error("the unpacked archive for `{target}` holds no `lib/{archive}`; nothing was installed")]
     NotALibffiTree {
         /// The target being installed.
         target: String,

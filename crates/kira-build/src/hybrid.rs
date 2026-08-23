@@ -322,7 +322,7 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         // so it never crosses either — a hold taken on one side and released on
         // the other is a count neither engine owns. It is not surface, so no
         // signature an author writes reaches this arm.
-        Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+        Type::CString | Type::CBlock | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,

@@ -105,6 +105,16 @@ impl Heap {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::RawPtr(a), Value::RawPtr(b)) => a == b,
+            // A C block compares as the pointer word C would read — its
+            // payload address — against another block or a bare word. Two
+            // blocks are two allocations, so equality here is identity, which
+            // is exactly what comparing the same members on native computes.
+            (Value::CBlock(_), _) | (_, Value::CBlock(_)) => {
+                match (self.seam_word(left), self.seam_word(right)) {
+                    (Value::RawPtr(a), Value::RawPtr(b)) => a == b,
+                    _ => false,
+                }
+            }
             (Value::Void, Value::Void) => true,
             (Value::Str(a), Value::Str(b)) => self.get(a) == self.get(b),
             (Value::Struct(a), Value::Struct(b)) => {

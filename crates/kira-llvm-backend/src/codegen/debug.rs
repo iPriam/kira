@@ -286,7 +286,8 @@ impl DebugBuilder {
             | Type::Struct(_)
             | Type::Void
             | Type::Error
-            | Type::CString => return self.unspecified_type("KiraValue"),
+            | Type::CString
+            | Type::CBlock => return self.unspecified_type("KiraValue"),
         };
         let name = c_string(name);
         // SAFETY: the name is live for this C call, and all metadata belongs to

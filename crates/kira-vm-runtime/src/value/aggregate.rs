@@ -24,7 +24,9 @@ use kira_runtime_abi::{
     ForeignPointerWidth, ForeignType, scalar_layout,
 };
 
-use super::{Heap, Value};
+use super::{ArrayId, CBlockId, Heap, Object, StructId, Value};
+
+mod cblock;
 
 /// Why a Kira value could not be written as C-layout bytes.
 ///
@@ -148,7 +150,7 @@ impl Heap {
                     let layout = scalar_layout(*ty, walk.width);
                     offset = shape(round_up(offset, layout.align))?;
                     let at = shape(base.checked_add(offset))? as usize;
-                    let encoded = shape(encode_scalar(*ty, field, walk.width))?;
+                    let encoded = shape(encode_scalar(*ty, self.seam_word(field), walk.width))?;
                     shape(bytes.get_mut(at..at + encoded.len()))?.copy_from_slice(&encoded);
                     offset = shape(offset.checked_add(layout.size))?;
                 }
@@ -203,7 +205,7 @@ impl Heap {
             let at = shape(base.checked_add(shape(stride.checked_mul(index as u32))?))?;
             match element {
                 ForeignArrayElement::Scalar(ty) => {
-                    let encoded = shape(encode_scalar(ty, value, walk.width))?;
+                    let encoded = shape(encode_scalar(ty, self.seam_word(value), walk.width))?;
                     let at = at as usize;
                     shape(bytes.get_mut(at..at + encoded.len()))?.copy_from_slice(&encoded);
                 }
@@ -304,6 +306,21 @@ impl Heap {
             elements.push(value);
         }
         Some(Value::Array(self.alloc_array(elements)))
+    }
+}
+
+impl Heap {
+    /// The value a seam writer encodes for `value`: a C block resolves to its
+    /// payload address, everything else is already the word it crosses as.
+    ///
+    /// Resolution reads the block without consuming it — the struct holding
+    /// the handle keeps ownership, so the address stays live for as long as
+    /// that struct does.
+    pub(crate) fn seam_word(&self, value: Value) -> Value {
+        match value {
+            Value::CBlock(id) => Value::RawPtr(self.cblock_address(id)),
+            other => other,
+        }
     }
 }
 

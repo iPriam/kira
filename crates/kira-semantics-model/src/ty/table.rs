@@ -165,9 +165,13 @@ impl TypeTable {
             // `Any` has no identity to give: the whole point of the type is
             // that the value inside it kept its own and this one has none, so
             // there is nothing for a recovery to check against.
+            // A C block is seam-local storage; state that kept one across a
+            // rebuild would keep a pointer into a program that no longer
+            // exists, so it has no recovery identity either.
             Type::Void
             | Type::Error
             | Type::CString
+            | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::Any => {
@@ -284,6 +288,7 @@ impl TypeTable {
             Type::Void
             | Type::Error
             | Type::CString
+            | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::Any => mix_native_state_bytes(hash, b"unsupported"),
@@ -306,6 +311,9 @@ impl TypeTable {
             Type::Void => "Void".to_owned(),
             Type::RawPtr => "RawPtr".to_owned(),
             Type::CString => "CString".to_owned(),
+            // Not surface: a reader meeting this name is looking at seam
+            // storage the analyzer minted, not at a type they can spell.
+            Type::CBlock => "<C storage>".to_owned(),
             Type::NativeState(id) => match self.native_states.target(id) {
                 Some(target) => format!("NativeState<{}>", self.type_name(target)),
                 None => "<unknown native state>".to_owned(),
@@ -362,13 +370,78 @@ impl TypeTable {
             // the value inside was a scalar that owned nothing.
             // A cell always is: it is a share-counted box, and the last holder
             // releases what is inside it.
-            Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => true,
+            // A C block always is: it *is* the owned allocation.
+            Type::String
+            | Type::Array(_)
+            | Type::Enum(_)
+            | Type::Any
+            | Type::Cell(_)
+            | Type::CBlock => true,
             Type::Struct(id) => match self.structs.get(id) {
-                Some(def) => def.fields.iter().any(|field| self.owns_heap(field.ty)),
+                Some(def) => {
+                    def.owning_c_slots().next().is_some()
+                        || def.fields.iter().any(|field| self.owns_heap(field.ty))
+                }
                 None => false,
             },
             _ => false,
         }
+    }
+
+    /// Whether copying `ty` must replace unique C-block handles in the copy.
+    ///
+    /// Shared heap objects such as arrays and enums answer false: copying their
+    /// handle takes a share, and their copy-on-write path clones contained
+    /// values only when it builds independent storage. A C block and a struct
+    /// containing one directly answer true because two owners may never carry
+    /// the same block handle.
+    pub fn owns_unique_c_storage(&self, ty: Type) -> bool {
+        match ty {
+            Type::CBlock => true,
+            Type::Struct(id) => self.structs.get(id).is_some_and(|def| {
+                def.owning_c_slots().next().is_some()
+                    || def
+                        .fields
+                        .iter()
+                        .any(|field| self.owns_unique_c_storage(field.ty))
+            }),
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` can reach a uniquely owned C block.
+    ///
+    /// Unlike [`TypeTable::owns_unique_c_storage`], this follows arrays. An
+    /// array copy shares its item block safely, but a retained foreign call
+    /// must still transfer C blocks nested inside those items.
+    pub fn contains_c_storage(&self, ty: Type) -> bool {
+        match ty {
+            Type::CBlock => true,
+            Type::Struct(id) => self.structs.get(id).is_some_and(|def| {
+                def.owning_c_slots().next().is_some()
+                    || def
+                        .fields
+                        .iter()
+                        .any(|field| self.contains_c_storage(field.ty))
+            }),
+            Type::Array(id) => self
+                .arrays
+                .element(id)
+                .is_some_and(|element| self.contains_c_storage(element)),
+            _ => false,
+        }
+    }
+
+    /// Whether binding a value of `ty` consumes its source.
+    ///
+    /// [`Type::moves_on_bind`] with the one answer the bare type cannot give:
+    /// a C-layout struct with owning seam slots aliases its source exactly as
+    /// an array does — its blocks have one owner — so binding one moves.
+    pub fn moves_on_bind(&self, ty: Type) -> bool {
+        if ty.moves_on_bind() {
+            return true;
+        }
+        self.owns_unique_c_storage(ty)
     }
 }
 
@@ -434,6 +507,7 @@ mod tests {
                     ty: Type::INT,
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("declares");
         let points = table.array_of(Type::Struct(point));
@@ -461,6 +535,7 @@ mod tests {
                     ty: Type::INT,
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("declares");
         assert!(!table.owns_heap(Type::Struct(scalars)));
@@ -474,6 +549,7 @@ mod tests {
                     ty: Type::String,
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(labelled)));
@@ -488,6 +564,7 @@ mod tests {
                     ty: Type::Struct(labelled),
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(nested)));
@@ -507,6 +584,7 @@ mod tests {
                     ty: ints,
                     mutable: true,
                 }],
+                c_layout: false,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(holder)));

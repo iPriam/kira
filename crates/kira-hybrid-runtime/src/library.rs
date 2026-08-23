@@ -20,11 +20,13 @@ use std::sync::Arc;
 
 use kira_hybrid_definition::HybridFunction;
 use kira_runtime_abi::{
-    BridgeValue, NativeStateError, NativeStateStatus, NativeStateToken, NativeStateTypeId,
-    NativeStateValue, NativeStateValueTag,
+    BridgeValue, CBlockOffset, ForeignPointerWidth, NativeCBlock, NativeStateError,
+    NativeStateStatus, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
 };
 
 use crate::error::HybridError;
+
+mod native_state;
 
 /// A native function's trampoline: `kira_native_fn_<id>`.
 ///
@@ -97,6 +99,12 @@ type StateReadFloatFn = unsafe extern "C" fn(StateNode) -> f64;
 type StateReadBoolFn = unsafe extern "C" fn(StateNode) -> u8;
 type StateReadStringFn = unsafe extern "C" fn(StateNode) -> *mut c_void;
 type StateLenFn = unsafe extern "C" fn(StateNode) -> usize;
+type StateCBlockFn = unsafe extern "C" fn(*const u8, usize, usize) -> StateNode;
+type StateSetCBlockChildFn = unsafe extern "C" fn(StateNode, usize, u64, u32, StateNode) -> u32;
+type StateReadCBlockLenFn = unsafe extern "C" fn(StateNode) -> usize;
+type StateReadCBlockDataFn = unsafe extern "C" fn(StateNode) -> *const u8;
+type StateReadCBlockChildOffsetFn = unsafe extern "C" fn(StateNode, usize) -> u64;
+type StateReadCBlockChildWidthFn = unsafe extern "C" fn(StateNode, usize) -> u32;
 type StateEnumTagFn = unsafe extern "C" fn(StateNode) -> u32;
 type StateChildFn = unsafe extern "C" fn(StateNode, usize) -> StateNode;
 type StateNodeFreeFn = unsafe extern "C" fn(StateNode);
@@ -104,6 +112,7 @@ type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
 type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
 type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
 type StateFreeFn = unsafe extern "C" fn(u64) -> u32;
+type CBlockReleaseRetainedFn = unsafe extern "C" fn();
 /// The loaded library lease carried by a decoded cell's release closure.
 struct CellReleaseOwner<L> {
     /// Keeps the image containing `free` loaded until all cell shares release.
@@ -157,6 +166,12 @@ const STATE_VALUE_READ_FLOAT: &[u8] = b"kira_rt_native_value_read_float\0";
 const STATE_VALUE_READ_BOOL: &[u8] = b"kira_rt_native_value_read_bool\0";
 const STATE_VALUE_READ_STRING: &[u8] = b"kira_rt_native_value_read_string\0";
 const STATE_VALUE_LEN: &[u8] = b"kira_rt_native_value_len\0";
+const STATE_VALUE_CBLOCK: &[u8] = b"kira_rt_native_value_cblock\0";
+const STATE_VALUE_SET_CBLOCK_CHILD: &[u8] = b"kira_rt_native_value_set_cblock_child\0";
+const STATE_VALUE_READ_CBLOCK_LEN: &[u8] = b"kira_rt_native_value_read_cblock_len\0";
+const STATE_VALUE_READ_CBLOCK_DATA: &[u8] = b"kira_rt_native_value_read_cblock_data\0";
+const STATE_VALUE_CBLOCK_CHILD_OFFSET: &[u8] = b"kira_rt_native_value_cblock_child_offset\0";
+const STATE_VALUE_CBLOCK_CHILD_WIDTH: &[u8] = b"kira_rt_native_value_cblock_child_width\0";
 const STATE_VALUE_ENUM_TAG: &[u8] = b"kira_rt_native_value_enum_tag\0";
 const STATE_VALUE_CHILD: &[u8] = b"kira_rt_native_value_child\0";
 const STATE_VALUE_FREE: &[u8] = b"kira_rt_native_value_free\0";
@@ -164,6 +179,7 @@ const STATE_NEW: &[u8] = b"kira_rt_native_state_new\0";
 const STATE_RECOVER: &[u8] = b"kira_rt_native_state_recover\0";
 const STATE_REPLACE: &[u8] = b"kira_rt_native_state_replace\0";
 const STATE_FREE: &[u8] = b"kira_rt_native_state_free\0";
+const CBLOCK_RELEASE_RETAINED: &[u8] = b"kira_rt_cblock_release_retained\0";
 
 /// The native half of a hybrid program, loaded and bound.
 pub struct NativeLibrary {
@@ -214,6 +230,12 @@ pub struct NativeLibrary {
     state_value_read_bool: StateReadBoolFn,
     state_value_read_string: StateReadStringFn,
     state_value_len: StateLenFn,
+    state_value_cblock: StateCBlockFn,
+    state_value_set_cblock_child: StateSetCBlockChildFn,
+    state_value_read_cblock_len: StateReadCBlockLenFn,
+    state_value_read_cblock_data: StateReadCBlockDataFn,
+    state_value_cblock_child_offset: StateReadCBlockChildOffsetFn,
+    state_value_cblock_child_width: StateReadCBlockChildWidthFn,
     state_value_enum_tag: StateEnumTagFn,
     state_value_child: StateChildFn,
     state_value_free: StateNodeFreeFn,
@@ -221,6 +243,7 @@ pub struct NativeLibrary {
     state_recover: StateRecoverFn,
     state_replace: StateReplaceFn,
     state_free: StateFreeFn,
+    cblock_release_retained: CBlockReleaseRetainedFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
     _library: Arc<libloading::Library>,
@@ -288,6 +311,13 @@ impl NativeLibrary {
         let state_value_read_bool = bind(&library, path, STATE_VALUE_READ_BOOL)?;
         let state_value_read_string = bind(&library, path, STATE_VALUE_READ_STRING)?;
         let state_value_len = bind(&library, path, STATE_VALUE_LEN)?;
+        let state_value_cblock = bind(&library, path, STATE_VALUE_CBLOCK)?;
+        let state_value_set_cblock_child = bind(&library, path, STATE_VALUE_SET_CBLOCK_CHILD)?;
+        let state_value_read_cblock_len = bind(&library, path, STATE_VALUE_READ_CBLOCK_LEN)?;
+        let state_value_read_cblock_data = bind(&library, path, STATE_VALUE_READ_CBLOCK_DATA)?;
+        let state_value_cblock_child_offset =
+            bind(&library, path, STATE_VALUE_CBLOCK_CHILD_OFFSET)?;
+        let state_value_cblock_child_width = bind(&library, path, STATE_VALUE_CBLOCK_CHILD_WIDTH)?;
         let state_value_enum_tag = bind(&library, path, STATE_VALUE_ENUM_TAG)?;
         let state_value_child = bind(&library, path, STATE_VALUE_CHILD)?;
         let state_value_free = bind(&library, path, STATE_VALUE_FREE)?;
@@ -295,6 +325,7 @@ impl NativeLibrary {
         let state_recover = bind(&library, path, STATE_RECOVER)?;
         let state_replace = bind(&library, path, STATE_REPLACE)?;
         let state_free = bind(&library, path, STATE_FREE)?;
+        let cblock_release_retained = bind(&library, path, CBLOCK_RELEASE_RETAINED)?;
 
         let mut trampolines = vec![None; functions.len()];
         let mut mutable_params = vec![Vec::new(); functions.len()];
@@ -367,6 +398,12 @@ impl NativeLibrary {
             state_value_read_bool,
             state_value_read_string,
             state_value_len,
+            state_value_cblock,
+            state_value_set_cblock_child,
+            state_value_read_cblock_len,
+            state_value_read_cblock_data,
+            state_value_cblock_child_offset,
+            state_value_cblock_child_width,
             state_value_enum_tag,
             state_value_child,
             state_value_free,
@@ -374,6 +411,7 @@ impl NativeLibrary {
             state_recover,
             state_replace,
             state_free,
+            cblock_release_retained,
             _library: library,
         })
     }
@@ -527,296 +565,14 @@ impl NativeLibrary {
         unsafe { self.free_string(handle) };
         text
     }
+}
 
-    /// Boxes callback state in the loaded native half's process-lifetime store.
-    pub fn native_state_create(
-        &self,
-        ty: NativeStateTypeId,
-        value: NativeStateValue,
-    ) -> Result<NativeStateToken, NativeStateError> {
-        // SAFETY: every node is allocated and consumed by this same loaded library.
-        let node = unsafe { self.encode_state_value(&value)? };
-        let mut token = 0;
-        // SAFETY: `node` is live and `token` is one writable word.
-        let status = unsafe { (self.state_new)(ty.as_word(), node, &mut token) };
-        self.check_state_status(status, token)?;
-        Ok(NativeStateToken::from_word(token))
-    }
-
-    /// Recovers an owned callback-state copy from the loaded native half.
-    pub fn native_state_recover(
-        &self,
-        token: NativeStateToken,
-        ty: NativeStateTypeId,
-    ) -> Result<NativeStateValue, NativeStateError> {
-        let mut node = std::ptr::null_mut();
-        // SAFETY: `node` is one writable pointer slot.
-        let status = unsafe { (self.state_recover)(token.as_word(), ty.as_word(), &mut node) };
-        self.check_state_status(status, token.as_word())?;
-        // SAFETY: success initializes one live node from this library.
-        unsafe { self.decode_state_value(node) }
-    }
-
-    /// Replaces callback state in the loaded native half.
-    pub fn native_state_replace(
-        &self,
-        token: NativeStateToken,
-        ty: NativeStateTypeId,
-        value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
-        // SAFETY: every node is allocated and consumed by this same loaded library.
-        let node = unsafe { self.encode_state_value(&value)? };
-        // SAFETY: `node` is live and consumed by the runtime call.
-        let status = unsafe { (self.state_replace)(token.as_word(), ty.as_word(), node) };
-        self.check_state_status(status, token.as_word())
-    }
-
-    /// Releases callback state in the loaded native half exactly once.
-    pub fn native_state_free(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        // SAFETY: this function pointer accepts any token word and validates it.
-        let status = unsafe { (self.state_free)(token.as_word()) };
-        self.check_state_status(status, token.as_word())
-    }
-
-    /// Builds the library's node tree from a stored value, reading it.
-    ///
-    /// Read rather than consumed: an aggregate's children are shared, so taking
-    /// ownership of one would mean copying the whole subtree just to walk it.
-    pub(crate) unsafe fn encode_state_value(
-        &self,
-        value: &NativeStateValue,
-    ) -> Result<StateNode, NativeStateError> {
-        Ok(match value {
-            // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Int(value) => unsafe { (self.state_value_int)(*value) },
-            NativeStateValue::Any { type_id, payload } => {
-                // SAFETY: the child is allocated by this library and ownership
-                // moves into the parent node.
-                let child = unsafe { self.encode_state_value(payload)? };
-                // SAFETY: the constructor consumes the live child exactly once.
-                unsafe { (self.state_value_any)(*type_id, child) }
-            }
-            // SAFETY: the constructor accepts its opaque word by value.
-            NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(*value) },
-            // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Float(value) => unsafe { (self.state_value_float)(*value) },
-            // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Bool(value) => unsafe { (self.state_value_bool)(u8::from(*value)) },
-            NativeStateValue::String(value) => {
-                let string = self.new_string(value) as *mut c_void;
-                // SAFETY: the constructor consumes this live string handle.
-                unsafe { (self.state_value_string)(string) }
-            }
-            // SAFETY: the aggregate owns every child this builds.
-            NativeStateValue::Struct(values) => unsafe {
-                self.encode_aggregate(NativeStateValueTag::STRUCT, 0, values)?
-            },
-            // SAFETY: the aggregate owns every child this builds.
-            NativeStateValue::Array(values) => unsafe {
-                self.encode_aggregate(NativeStateValueTag::ARRAY, 0, values)?
-            },
-            NativeStateValue::Enum { tag, payload } => {
-                let values = payload.as_deref().map_or(&[][..], std::slice::from_ref);
-                // SAFETY: the aggregate owns every child this builds.
-                unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, *tag, values)? }
-            }
-            // A cell crosses as an opaque handle; the declaring half owns its
-            // storage.
-            NativeStateValue::Cell(cell) => {
-                if cell.is_vm_owned() {
-                    // SAFETY: the proxy is a fresh native cell box. The state
-                    // node takes one share, and this releases the constructor
-                    // share immediately below.
-                    let proxy = unsafe { (self.cell_proxy_new)(cell.handle()) };
-                    // SAFETY: `proxy` is that fresh box, so the node takes its
-                    // own share of a live cell.
-                    let node = unsafe { (self.state_value_cell)(proxy) };
-                    // SAFETY: this releases the constructor share only; the
-                    // node above holds the one that keeps the box alive.
-                    unsafe { (self.cell_release.free)(proxy) };
-                    node
-                } else {
-                    // SAFETY: the constructor takes the box by handle and
-                    // takes its own share; this node keeps the one it had.
-                    unsafe { (self.state_value_cell)(cell.handle()) }
-                }
-            }
-        })
-    }
-
-    unsafe fn encode_aggregate(
-        &self,
-        tag: NativeStateValueTag,
-        enum_tag: u32,
-        values: &[NativeStateValue],
-    ) -> Result<StateNode, NativeStateError> {
-        // SAFETY: constructor takes plain scalar metadata.
-        let node = unsafe { (self.state_value_aggregate)(tag.0, enum_tag, values.len()) };
-        for (index, value) in values.iter().enumerate() {
-            // SAFETY: recursion allocates a child in this same library.
-            let child = unsafe { self.encode_state_value(value)? };
-            // SAFETY: node and child are live; each in-range slot is set once.
-            let status = unsafe { (self.state_value_set_child)(node, index, child) };
-            if status != NativeStateStatus::OK.0 {
-                // SAFETY: the parent remains live after a refused child store.
-                unsafe { (self.state_value_free)(node) };
-                return Err(NativeStateError::MalformedValue);
-            }
-        }
-        Ok(node)
-    }
-
-    pub(crate) unsafe fn decode_state_value(
-        &self,
-        node: StateNode,
-    ) -> Result<NativeStateValue, NativeStateError> {
-        if node.is_null() {
-            return Err(NativeStateError::MalformedValue);
-        }
-        // SAFETY: `node` is live and belongs to this library.
-        let tag = NativeStateValueTag(unsafe { (self.state_value_tag)(node) });
-        let value = match tag {
-            NativeStateValueTag::INT => {
-                // SAFETY: tag validation established the node shape.
-                NativeStateValue::Int(unsafe { (self.state_value_read_int)(node) })
-            }
-            NativeStateValueTag::ANY => {
-                // SAFETY: tag validation established the node shape.
-                let type_id = unsafe { (self.state_value_read_any_type)(node) };
-                // SAFETY: the `Any` node has exactly one owned payload child.
-                let child = unsafe { (self.state_value_child)(node, 0) };
-                // SAFETY: recursion consumes the child. A payload that fails
-                // to decode frees this node first: an early return here would
-                // otherwise strand it, with every not-yet-decoded sibling
-                // behind it.
-                let payload = match unsafe { self.decode_state_value(child) } {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        // SAFETY: `node` is still live and uniquely owned.
-                        unsafe { (self.state_value_free)(node) };
-                        return Err(error);
-                    }
-                };
-                NativeStateValue::any_of(type_id, payload)
-            }
-            NativeStateValueTag::RAW_PTR => {
-                // SAFETY: tag validation established the node shape.
-                NativeStateValue::RawPtr(unsafe { (self.state_value_read_raw_ptr)(node) })
-            }
-            NativeStateValueTag::CELL => {
-                // SAFETY: tag validation established the node shape.
-                let handle = unsafe { (self.state_value_read_cell)(node) };
-                // Keep the loaded library with the share's release function.
-                let release = Arc::clone(&self.cell_release);
-                NativeStateValue::Cell(kira_runtime_abi::NativeCell::new(handle, move |handle| {
-                    release.release(handle);
-                }))
-            }
-            NativeStateValueTag::FLOAT => {
-                // SAFETY: tag validation established the node shape.
-                NativeStateValue::Float(unsafe { (self.state_value_read_float)(node) })
-            }
-            NativeStateValueTag::BOOL => {
-                // SAFETY: tag validation established the node shape.
-                NativeStateValue::Bool(unsafe { (self.state_value_read_bool)(node) } != 0)
-            }
-            NativeStateValueTag::STRING => {
-                // SAFETY: tag validation established the node shape.
-                let handle = unsafe { (self.state_value_read_string)(node) } as StrHandle;
-                // SAFETY: the reader returned one owned handle from this library.
-                let text = unsafe { self.take_string(handle) }
-                    .map_err(|_| NativeStateError::MalformedValue)?;
-                NativeStateValue::String(text)
-            }
-            NativeStateValueTag::STRUCT | NativeStateValueTag::ARRAY => {
-                // SAFETY: aggregate accessors accept this live node.
-                let len = unsafe { (self.state_value_len)(node) };
-                let mut values = Vec::with_capacity(len);
-                for index in 0..len {
-                    // SAFETY: `index < len`; the returned child is owned.
-                    let child = unsafe { (self.state_value_child)(node, index) };
-                    // SAFETY: recursion consumes that owned child. A child
-                    // that fails frees this node before the error returns —
-                    // the values decoded so far are dropped with `values`,
-                    // and this node would otherwise be skipped by the free
-                    // at the function's tail.
-                    let value = match unsafe { self.decode_state_value(child) } {
-                        Ok(value) => value,
-                        Err(error) => {
-                            // SAFETY: `node` is still live and uniquely owned.
-                            unsafe { (self.state_value_free)(node) };
-                            return Err(error);
-                        }
-                    };
-                    values.push(value);
-                }
-                if tag == NativeStateValueTag::STRUCT {
-                    NativeStateValue::struct_of(values)
-                } else {
-                    NativeStateValue::array_of(values)
-                }
-            }
-            NativeStateValueTag::ENUM => {
-                // SAFETY: enum accessors accept this live node.
-                let enum_tag = unsafe { (self.state_value_enum_tag)(node) };
-                // SAFETY: same live aggregate node.
-                let len = unsafe { (self.state_value_len)(node) };
-                let payload = if len == 0 {
-                    None
-                } else if len == 1 {
-                    // SAFETY: child zero exists and is returned owned.
-                    let child = unsafe { (self.state_value_child)(node, 0) };
-                    // SAFETY: recursion consumes the child. A payload that
-                    // fails frees this node first, as every other error path
-                    // here does.
-                    let decoded = unsafe { self.decode_state_value(child) };
-                    match decoded {
-                        Ok(payload) => Some(payload),
-                        Err(error) => {
-                            // SAFETY: `node` is still live and uniquely owned.
-                            unsafe { (self.state_value_free)(node) };
-                            return Err(error);
-                        }
-                    }
-                } else {
-                    // SAFETY: `node` is still live and uniquely owned.
-                    unsafe { (self.state_value_free)(node) };
-                    return Err(NativeStateError::MalformedValue);
-                };
-                NativeStateValue::enum_of(enum_tag, payload)
-            }
-            _ => {
-                // SAFETY: `node` is still live and uniquely owned.
-                unsafe { (self.state_value_free)(node) };
-                return Err(NativeStateError::MalformedValue);
-            }
-        };
-        // SAFETY: decoding copied or cloned every value out; release the node.
-        unsafe { (self.state_value_free)(node) };
-        Ok(value)
-    }
-
-    /// Returns the VM word carried by a native callback-state cell proxy.
-    pub(crate) fn vm_cell_proxy_handle(&self, handle: u64) -> Option<u64> {
-        // SAFETY: the loaded library validates null, inline, and ordinary
-        // handles before reading the proxy tag.
-        let value = unsafe { (self.cell_proxy_handle)(handle) };
-        (value != u64::MAX).then_some(value)
-    }
-
-    fn check_state_status(&self, status: u32, token: u64) -> Result<(), NativeStateError> {
-        match NativeStateStatus(status) {
-            NativeStateStatus::OK => Ok(()),
-            NativeStateStatus::NO_HOST => Err(NativeStateError::NoStateHost),
-            NativeStateStatus::NULL_TOKEN => Err(NativeStateError::NullToken),
-            NativeStateStatus::UNKNOWN_TOKEN => Err(NativeStateError::UnknownToken(token)),
-            NativeStateStatus::WRONG_TYPE => Err(NativeStateError::WrongType {
-                actual: 0,
-                requested: 0,
-            }),
-            NativeStateStatus::TOKEN_EXHAUSTED => Err(NativeStateError::TokenExhausted),
-            _ => Err(NativeStateError::MalformedValue),
-        }
+impl Drop for NativeLibrary {
+    fn drop(&mut self) {
+        // SAFETY: dropping the session's last library wrapper happens after
+        // active calls and callbacks have stopped, so no callee can read a
+        // retained pointer again. The library remains loaded through this call.
+        unsafe { (self.cblock_release_retained)() };
     }
 }
 

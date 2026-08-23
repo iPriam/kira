@@ -247,6 +247,7 @@ mod tests {
             .declare(StructDef {
                 name: "Button".to_owned(),
                 fields: Vec::new(),
+                c_layout: false,
             })
             .expect("a fresh struct table takes the declaration");
         program.exports.push(IrExport {
