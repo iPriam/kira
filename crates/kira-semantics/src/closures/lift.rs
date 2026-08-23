@@ -11,6 +11,19 @@ use super::{
 };
 use crate::analyze::{Analyzer, FnCtx};
 
+/// The shape a lifted function shares with the closure it came from.
+///
+/// One bundle for what every minting path needs about the function type:
+/// its representation struct, parameter types, per-parameter ownership
+/// modes, and result. Carried as a value so no helper here takes a
+/// parameter list long enough to need an allowance.
+pub(crate) struct ClosureShape<'a> {
+    pub(crate) repr: StructId,
+    pub(crate) params: &'a [Type],
+    pub(crate) modes: &'a [OwnershipMode],
+    pub(crate) result: Type,
+}
+
 impl Analyzer<'_> {
     /// The type of `(params) -> result`, minting its representation struct on
     /// first mention.
@@ -195,7 +208,13 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.lift_closure(ctx, repr, &param_types, &modes, result, params, body)
+        let shape = ClosureShape {
+            repr,
+            params: &param_types,
+            modes: &modes,
+            result,
+        };
+        self.lift_closure(ctx, shape, params, body)
     }
 
     /// Resolves a bare function name as a first-class function value.
@@ -254,20 +273,26 @@ impl Analyzer<'_> {
             },
         };
         self.link_function(target, span);
-        Some(self.named_function_value(repr, target, name, &params, &modes, result))
+        let shape = ClosureShape {
+            repr,
+            params: &params,
+            modes: &modes,
+            result,
+        };
+        Some(self.named_function_value(shape, target, name))
     }
 
     /// Builds or reuses one named function's tag and returns its function value.
-    #[allow(clippy::too_many_arguments)]
     fn named_function_value(
         &mut self,
-        repr: StructId,
+        shape: ClosureShape<'_>,
         target: FuncId,
         name: &str,
-        params: &[Type],
-        modes: &[OwnershipMode],
-        result: Type,
     ) -> HirExprId {
+        let repr = shape.repr;
+        let params = shape.params;
+        let modes = shape.modes;
+        let result = shape.result;
         let tag = match self
             .fn_types
             .get(repr)
@@ -290,15 +315,13 @@ impl Analyzer<'_> {
                     .fn_types
                     .get(repr)
                     .map_or(candidate, |info| unique_impl_tag(info, candidate));
-                let wrapper = self.named_function_wrapper(
+                let shape = ClosureShape {
                     repr,
-                    target,
-                    name,
                     params,
                     modes,
                     result,
-                    display_tag,
-                );
+                };
+                let wrapper = self.named_function_wrapper(shape, target, name, display_tag);
                 if let Some(info) = self.fn_types.get_mut(repr) {
                     info.impls.push(ClosureImpl {
                         tag,
@@ -332,17 +355,17 @@ impl Analyzer<'_> {
     /// target's. Without it the wrapper would call a by-reference function and
     /// throw away what it wrote, which is what the bytecode compiler's
     /// missing-writeback invariant catches.
-    #[allow(clippy::too_many_arguments)]
     fn named_function_wrapper(
         &mut self,
-        repr: StructId,
+        shape: ClosureShape<'_>,
         target: FuncId,
         name: &str,
-        params: &[Type],
-        modes: &[OwnershipMode],
-        result: Type,
         tag: u32,
     ) -> FuncId {
+        let repr = shape.repr;
+        let params = shape.params;
+        let modes = shape.modes;
+        let result = shape.result;
         let wrapper = self.reserve_synth();
         let mut ctx = FnCtx::new(result);
         ctx.declare_hidden(Type::Struct(repr), false);
@@ -406,17 +429,17 @@ impl Analyzer<'_> {
     }
 
     /// Lifts one closure literal to a top-level function and builds its value.
-    #[allow(clippy::too_many_arguments)]
     fn lift_closure(
         &mut self,
         ctx: &mut FnCtx,
-        repr: StructId,
-        param_types: &[Type],
-        modes: &[OwnershipMode],
-        result: Type,
+        shape: ClosureShape<'_>,
         params: &[ClosureParam],
         body: &Block,
     ) -> HirExprId {
+        let repr = shape.repr;
+        let param_types = shape.params;
+        let modes = shape.modes;
+        let result = shape.result;
         let function = self.reserve_synth();
         // The tag is claimed **before** the body is analyzed, not after. A
         // literal nested inside this one is lifted while this body is being
@@ -472,6 +495,29 @@ impl Analyzer<'_> {
         // thread a capture back through every frame it crossed.
         inner.enclosing = Some(Box::new(std::mem::replace(ctx, FnCtx::new(Type::Void))));
         let analyzed = self.analyze_block(&mut inner, body);
+        // A closure owes its result exactly as a function does.
+        //
+        // Nothing checked this, so a body that fell off its end handed the
+        // caller whatever the return slot happened to hold — and a caller that
+        // read a struct out of it corrupted the heap, surfacing far away as a
+        // garbage path inside an unrelated allocation. `{ in expr }` and the
+        // terse `{ expr }` both reach it, because a bare expression is a
+        // statement in a block and Kira returns by saying `return`.
+        if result != Type::Void
+            && result != Type::Error
+            && !self.body_definitely_returns(&analyzed)
+        {
+            self.emit(
+                body.span,
+                "KSEM136",
+                format!(
+                    "this closure must return `{}` on every path, and this body can finish \
+                     without returning; a bare expression is a statement, so write \
+                     `return <value>`",
+                    self.type_name(result)
+                ),
+            );
+        }
         if let Some(outer) = inner.enclosing.take() {
             *ctx = *outer;
         }
