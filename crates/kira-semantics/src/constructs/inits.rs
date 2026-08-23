@@ -21,11 +21,12 @@
 //! init, and the call picks among them by [the same rule every other overloaded
 //! name uses](crate::typeck::overloads).
 
-use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
+use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId, HirStmt};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
 
+use super::ContentSlot;
 use crate::analyze::{Analyzer, Callable, FnCtx, InitContent};
 
 /// How one construction site was resolved.
@@ -47,9 +48,14 @@ impl<'a> Analyzer<'a> {
     /// written arguments after it.
     pub(crate) fn record_init_content(&mut self, callables: &[Callable<'a>]) {
         for (index, callable) in callables.iter().enumerate() {
-            let Some(owner) = callable.initializes else {
-                continue;
-            };
+            // Content is not an `init` idea. Any callable whose LAST parameter
+            // is `some X` — a method, a modifier, a free function — takes its
+            // children from a trailing block, because the children are written
+            // after every parenthesized argument and so fill the slot that
+            // follows them. Only the "not last" mistake stays init-specific,
+            // because only a construction can currently write children before
+            // an argument and be sure it meant to.
+            let owner = callable.initializes;
             self.source = callable.source;
             let params = &callable.function.params;
             let mut content: Option<InitContent> = None;
@@ -67,6 +73,9 @@ impl<'a> Analyzer<'a> {
                     _ => continue,
                 };
                 if content.is_some() || slot + 1 != params.len() {
+                    if owner.is_none() {
+                        continue;
+                    }
                     self.emit(
                         param.name_span,
                         "KSEM276",
@@ -85,7 +94,14 @@ impl<'a> Analyzer<'a> {
             if let Some(content) = content {
                 self.init_content.insert(index as u32, content);
             }
-            self.refuse_init_shadowing_the_header(FuncId(index as u32), owner, callable, content);
+            if let Some(owner) = owner {
+                self.refuse_init_shadowing_the_header(
+                    FuncId(index as u32),
+                    owner,
+                    callable,
+                    content,
+                );
+            }
         }
     }
 
@@ -133,7 +149,7 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The content parameter of `init`, when it declared one.
-    fn init_content_param(&self, init: FuncId) -> Option<InitContent> {
+    pub(crate) fn init_content_param(&self, init: FuncId) -> Option<InitContent> {
         self.init_content.get(&init.0).copied()
     }
 
@@ -161,7 +177,7 @@ impl<'a> Analyzer<'a> {
                 // already analyzed — there is no written expression for them.
                 let trailing = match self.init_content_param(chosen) {
                     Some(content) if !children.is_empty() => {
-                        vec![self.init_content_value(ctx, &content, children, span)]
+                        vec![self.content_value(ctx, &content, children, span)]
                     }
                     _ => Vec::new(),
                 };
@@ -172,7 +188,7 @@ impl<'a> Analyzer<'a> {
 
     /// Builds the value a content parameter takes from a construction's
     /// trailing children.
-    fn init_content_value(
+    pub(crate) fn content_value(
         &mut self,
         ctx: &mut FnCtx,
         content: &InitContent,
@@ -181,6 +197,35 @@ impl<'a> Analyzer<'a> {
     ) -> HirExprId {
         if content.list {
             let ty = self.program.types.array_of(content.element);
+            // A `For`/`if` builder among the children builds the list at run
+            // time, exactly as one in a construction's block does. Sharing the
+            // expansion rather than repeating it is what keeps the two blocks
+            // the same language: a builder that works inside `HStack { … }` has
+            // no reason to stop working inside `.toolbar { … }`.
+            if children.iter().any(|&child| self.is_builder_item(child)) {
+                let slot = ContentSlot {
+                    field_index: 0,
+                    name: "content".to_owned(),
+                    list: true,
+                    element_ty: content.element,
+                    field_ty: ty,
+                    has_default: false,
+                };
+                let acc = ctx.declare_hidden(ty, true);
+                let empty = self.program.exprs.alloc(HirExpr::ArrayNew {
+                    ty,
+                    elements: Vec::new(),
+                });
+                let mut stmts = vec![self.program.stmts.alloc(HirStmt::Let {
+                    local: acc,
+                    init: empty,
+                })];
+                self.expand_content_items(ctx, children, acc, &slot, "content", &mut stmts);
+                for stmt in stmts {
+                    ctx.hoist_stmt(stmt);
+                }
+                return self.program.exprs.alloc(HirExpr::Local { local: acc, ty });
+            }
             let elements = children
                 .iter()
                 .map(|&child| self.analyze_expr_expecting(ctx, child, Some(content.element)))

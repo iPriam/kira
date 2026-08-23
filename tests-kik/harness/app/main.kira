@@ -41,6 +41,7 @@ function main() {
     print(cfSection())
     print(aggSection())
     print(ovxSection())
+    print(mcxSection())
     print("kik-harness-end")
     return
 }

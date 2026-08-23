@@ -1,0 +1,121 @@
+import Foundation
+
+// A trailing `{ … }` on a METHOD, filling that method's content parameter.
+// Prefix: mcx / Mcx.
+//
+// A construction has always taken children — `HStack(spacing: 8) { … }`. A
+// method could not, so every content-bearing modifier had to name a container
+// its caller did not care about: `.toolbar(Content() { … })` rather than
+// `.toolbar { … }`. The rule is the same one constructions use — the children
+// fill the LAST parameter, because they are written after every parenthesized
+// argument — and it now applies wherever that parameter is declared.
+//
+// Exercises: one child into a `some X` parameter; several into a `[some X]`;
+// a method called with parentheses and a block; one called with the block
+// alone; and a content parameter reached through a construct family, which is
+// where a modifier lives.
+
+construct McxNode {
+    @Required function total() -> Int
+}
+
+McxNode McxLeaf(n: Int) {
+    function total() -> Int {
+        return n
+    }
+}
+
+McxNode McxPair(first: Any McxNode, second: Any McxNode) {
+    function total() -> Int {
+        return first.total() * 10 + second.total()
+    }
+}
+
+McxNode McxSum(scale: Int) {
+    let parts: [some McxNode]
+
+    function total() -> Int {
+        var sum = 0
+        for index in 0..parts.count {
+            sum = sum + parts[index].total()
+        }
+        return sum * scale
+    }
+}
+
+extend McxNode {
+    // One child. The block fills it, so the call site names no container.
+    function paired(with: some McxNode) -> Any McxNode {
+        return McxPair(first: self, second: with)
+    }
+
+    // Several children, and an ordinary argument before them.
+    function gathered(scale: Int, parts: [some McxNode]) -> Any McxNode {
+        var all: [Any McxNode] = [self]
+        for index in 0..parts.count {
+            all.append(parts[index])
+        }
+        return McxSum(scale: scale) {
+            For(part in all) {
+                part
+            }
+        }
+    }
+}
+
+Test McxAMethodTakesOneChild {
+    test {
+        let node = McxLeaf(n: 3).paired {
+            McxLeaf(n: 4)
+        }
+        return node.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(34); return e }
+}
+
+Test McxAMethodTakesSeveralChildren {
+    test {
+        let node = McxLeaf(n: 1).gathered(scale: 2) {
+            McxLeaf(n: 3)
+            McxLeaf(n: 5)
+        }
+        return node.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+}
+
+// The block is the whole argument list, so the parentheses go away entirely —
+// which is the spelling the feature exists for.
+Test McxAMethodWithNoArgumentsNeedsNoParentheses {
+    test {
+        let node = McxLeaf(n: 2).paired {
+            McxLeaf(n: 7)
+        }
+        return node.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+}
+
+// A builder inside the block produces children exactly as one inside a
+// construction's block does.
+Test McxAForInsideTheBlockProducesChildren {
+    test {
+        let node = McxLeaf(n: 1).gathered(scale: 1) {
+            For(value in [2, 3, 4]) {
+                McxLeaf(n: value)
+            }
+        }
+        return node.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+function mcxSection() -> Int {
+    var checksum = 0
+    checksum = checksum + McxLeaf(n: 3).paired { McxLeaf(n: 4) }.total()
+    checksum = checksum * 31 + McxLeaf(n: 1).gathered(scale: 2) {
+        McxLeaf(n: 3)
+        McxLeaf(n: 5)
+    }.total()
+    return checksum
+}

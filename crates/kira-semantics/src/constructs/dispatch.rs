@@ -5,10 +5,10 @@ use kira_semantics_model::hir::{
 };
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::CallArg;
+use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
 
 use super::ConstructVariant;
-use crate::analyze::{Analyzer, FnCtx};
+use crate::analyze::{Analyzer, FnCtx, InitContent};
 
 /// The dispatch-facing signature of one construct-family method.
 struct FamilyMethodShape {
@@ -127,6 +127,7 @@ impl Analyzer<'_> {
         family_id: EnumId,
         method: &str,
         args: &[CallArg],
+        children: &[ExprId],
         span: Span,
     ) -> HirExprId {
         let Some(shape) = self.family_method_shape(family_id, method) else {
@@ -203,6 +204,31 @@ impl Analyzer<'_> {
                 _ => values.push(self.analyze_expr(ctx, arg)),
             }
         }
+        // The trailing block fills the method's content parameter, which is its
+        // last — the children are written after every parenthesized argument,
+        // so they fill the slot that follows them. This is what lets a modifier
+        // read the way SwiftUI's do: `.toolbar { … }` rather than
+        // `.toolbar(SomeContainer() { … })`.
+        if !children.is_empty() {
+            match self.family_method_content(family_id, method) {
+                Some(content) => {
+                    let value = self.content_value(ctx, &content, children, span);
+                    values.push(value);
+                }
+                None => {
+                    for &child in children {
+                        self.analyze_expr(ctx, child);
+                    }
+                    self.emit(
+                        span,
+                        "KSEM278",
+                        format!(
+                            "`{callable}` takes no trailing content; give it a last parameter of                              `some X` for one child or `[some X]` for a list of them"
+                        ),
+                    );
+                }
+            }
+        }
         // A positional call that omitted trailing arguments fills them from
         // their defaults, left to right, stopping at the first with none.
         while values.len() - 1 < params.len() {
@@ -261,7 +287,36 @@ impl Analyzer<'_> {
         method: &str,
         span: Span,
     ) -> HirExprId {
-        self.analyze_construct_family_call(ctx, receiver, family_id, method, &[], span)
+        self.analyze_construct_family_call(ctx, receiver, family_id, method, &[], &[], span)
+    }
+
+    /// The content parameter of a family method, when its last parameter is one.
+    ///
+    /// Derived from the declared syntax rather than stored, because `some X` and
+    /// `Any X` resolve to the SAME type — the difference is only visible in the
+    /// type reference the author wrote, so a resolved parameter list cannot
+    /// answer this on its own.
+    fn family_method_content(&mut self, family_id: EnumId, method: &str) -> Option<InitContent> {
+        let family = self.construct_family_names.get(&family_id)?.clone();
+        let entry = self.construct_families.get(&family)?.methods.get(method)?;
+        let source = entry.source;
+        let params = &entry.function.params;
+        let slot = params.len().checked_sub(1)?;
+        let param_ty = params[slot].ty;
+        let (element_ref, list) = match self.tree.type_ref(param_ty) {
+            TypeRef::SomeConstruct { .. } => (param_ty, false),
+            TypeRef::Array { element, .. }
+                if matches!(self.tree.type_ref(*element), TypeRef::SomeConstruct { .. }) =>
+            {
+                (*element, true)
+            }
+            _ => return None,
+        };
+        let previous = self.source;
+        self.source = source;
+        let element = self.resolve_type_ref(element_ref);
+        self.source = previous;
+        Some(InitContent { slot, list, element })
     }
 
     fn family_method_shape(&self, family_id: EnumId, method: &str) -> Option<FamilyMethodShape> {
@@ -485,8 +540,21 @@ impl Analyzer<'_> {
         // balanced tag tree keeps both the native frame and the runtime depth
         // bounded, while the original final arm remains the unknown-tag
         // fallback.
+        //
+        // The empty case returned above, so a last arm exists.
         let Some((_, fallback)) = arms.last().copied() else {
-            unreachable!("an empty family dispatcher was handled above");
+            return HirFunction {
+                name: format!("Any {family}.{method}$dispatch"),
+                param_count: 1 + params.len() as u32,
+                return_type: result,
+                locals: Vec::new(),
+                body: Vec::new(),
+                is_main: false,
+                is_async: false,
+                execution: kira_semantics_model::Execution::Inherited,
+                mutates_self: false,
+                name_span: Span::new(0, 0),
+            };
         };
         arms.sort_by_key(|(variant, _)| variant.tag);
         let mut tree_number = 0;

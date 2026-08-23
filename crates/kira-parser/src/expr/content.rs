@@ -395,6 +395,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR012", "expected a loop variable");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the loop variable just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
@@ -450,6 +451,40 @@ impl Parser<'_> {
     /// Attaches a trailing content block's children to a construction call, or
     /// returns `None` when the base is not a call the children can attach to.
     pub(super) fn attach_content_block(&mut self, base: ExprId) -> Option<ExprId> {
+        // A modifier takes content too. `.toolbar { … }` is a method call with
+        // children, and it is the shape most of SwiftUI's content-bearing
+        // modifiers have — an overlay, a context menu, a sheet. Analysis decides
+        // whether the method actually has a slot for them; the parser's job is
+        // only to stop dropping the brace on the floor.
+        if let Expr::MethodCall {
+            receiver,
+            method,
+            method_span,
+            args,
+            children: existing,
+            span: base_span,
+        } = self.tree.expr(base).clone()
+        {
+            if !existing.is_empty() {
+                return None;
+            }
+            // Only the content reading. A block a method means as a CLOSURE is
+            // written with `in` and was taken by `attach_trailing_closure`
+            // before the cursor ever reached here, so a brace arriving at this
+            // point can only be content — and carrying the closure reading too
+            // would let it win over the children the method actually asked for.
+            let mut args = args;
+            let brace = self.parse_deferred_brace(&mut args);
+            let span = Span::from_bounds(base_span.start, self.previous_end());
+            return Some(self.tree.add_expr(Expr::MethodCall {
+                receiver,
+                method,
+                method_span,
+                args,
+                children: brace.children,
+                span,
+            }));
+        }
         let Expr::Call {
             callee,
             callee_span,

@@ -45,10 +45,9 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         call: HirExprId,
-        qualified: &str,
         receiver: ExprId,
     ) {
-        if !self.callee_mutates(call, qualified) {
+        if !self.callee_mutates(call) {
             return;
         }
         match self.resolve_place(ctx, receiver, PlacePurpose::MutCall) {
@@ -63,13 +62,8 @@ impl Analyzer<'_> {
     /// `self` inside a mutating method is always a mutable place (the fixpoint
     /// marks the enclosing method mutating whenever it calls one on `self`), so
     /// the place is `self` with an empty path and no refusal is possible.
-    pub(crate) fn record_mut_self(
-        &mut self,
-        call: HirExprId,
-        qualified: &str,
-        self_local: LocalId,
-    ) {
-        if !self.callee_mutates(call, qualified) {
+    pub(crate) fn record_mut_self(&mut self, call: HirExprId, self_local: LocalId) {
+        if !self.callee_mutates(call) {
             return;
         }
         self.add_writeback(
@@ -84,13 +78,24 @@ impl Analyzer<'_> {
         );
     }
 
-    /// Whether `call` is a real call whose callee `qualified` is a mutating
-    /// method.
-    fn callee_mutates(&self, call: HirExprId, qualified: &str) -> bool {
-        matches!(self.program.expr(call), HirExpr::Call { .. })
-            && self
-                .lookup_function(qualified)
-                .is_some_and(|(id, _, _)| self.mutates_self(id))
+    /// Whether `call` is a real user call whose chosen callee mutates its
+    /// receiver.
+    ///
+    /// The question is asked of the callee *the call resolved to* — overload
+    /// resolution already picked the right declaration for this receiver's
+    /// type — rather than of a display name looked up again: two packages may
+    /// each declare a method of one name under one index key, and re-asking
+    /// by name can read the other package's flag, losing or inventing a
+    /// writeback.
+    fn callee_mutates(&self, call: HirExprId) -> bool {
+        let HirExpr::Call {
+            callee: Callee::User(id),
+            ..
+        } = self.program.expr(call)
+        else {
+            return false;
+        };
+        self.mutates_self(*id)
     }
 
     /// Adds a writeback to a call node, keeping the list in parameter order.
@@ -125,6 +130,7 @@ impl Analyzer<'_> {
         method: kira_core::Symbol,
         method_span: kira_source::Span,
         args: &[CallArg],
+        children: &[ExprId],
         expected: Option<Type>,
     ) -> HirExprId {
         // `Support.hello()` is a *module-qualified free call*, not a method
@@ -210,6 +216,7 @@ impl Analyzer<'_> {
                 family_id,
                 &name,
                 args,
+                children,
                 method_span,
             );
         }
@@ -278,6 +285,7 @@ impl Analyzer<'_> {
                     family_id,
                     &name,
                     args,
+                    children,
                     method_span,
                 );
             }
@@ -301,11 +309,40 @@ impl Analyzer<'_> {
             self.emit(method_span, "KSEM097", message);
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        let call =
-            self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver_hir], args, method_span);
+        // A trailing block on a struct method fills that method's content
+        // parameter, exactly as it does on a construction or a family modifier.
+        // The children are already analyzed into one value, so they occupy the
+        // last parameter slot rather than arriving as written arguments.
+        let trailing = match self.lookup_function(&qualified).map(|(id, _, _)| id) {
+            Some(id) if !children.is_empty() => match self.init_content_param(id) {
+                Some(content) => vec![self.content_value(ctx, &content, children, method_span)],
+                None => {
+                    for &child in children {
+                        self.analyze_expr(ctx, child);
+                    }
+                    self.emit(
+                        method_span,
+                        "KSEM278",
+                        format!(
+                            "`{qualified}` takes no trailing content; give it a last parameter                              of `some X` for one child or `[some X]` for a list of them"
+                        ),
+                    );
+                    Vec::new()
+                }
+            },
+            _ => Vec::new(),
+        };
+        let call = self.analyze_user_call_from_syntax_with(
+            ctx,
+            &qualified,
+            &[receiver_hir],
+            args,
+            &trailing,
+            method_span,
+        );
         // When the method mutates its receiver, the written receiver is resolved
         // as a mutable place so the mutation lands back in the caller's storage.
-        self.record_mut_receiver(ctx, call, &qualified, receiver);
+        self.record_mut_receiver(ctx, call, receiver);
         call
     }
 
@@ -855,33 +892,45 @@ impl Analyzer<'_> {
         span: kira_source::Span,
     ) -> HirExprId {
         let name = op.name();
-        let [value] = args else {
+        let expected = op.argument_count();
+        if args.len() != expected {
+            let arguments = if expected == 1 {
+                "argument"
+            } else {
+                "arguments"
+            };
             self.emit(
                 span,
                 "KSEM062",
                 format!(
-                    "`{name}` takes one argument, and this call passes {}",
+                    "`{name}` takes {expected} {arguments}, and this call passes {}",
                     args.len()
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
-        };
-        let actual = self.program.expr(*value).type_of();
-        if !actual.assignable_to(Type::FLOAT) {
-            self.emit(
-                span,
-                "KSEM063",
-                format!(
-                    "`{name}` takes a `Float`, and this call passes a `{}`",
-                    self.type_name(actual)
-                ),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
         }
-        let value = self.coerce_into(*value, Type::FLOAT);
+        // Every operand is checked before any is coerced, so a two-operand call
+        // that is wrong in its second argument says so about that argument
+        // rather than about the call.
+        let mut operands = Vec::with_capacity(expected);
+        for &arg in args {
+            let actual = self.program.expr(arg).type_of();
+            if !actual.assignable_to(Type::FLOAT) {
+                self.emit(
+                    span,
+                    "KSEM063",
+                    format!(
+                        "`{name}` takes a `Float`, and this call passes a `{}`",
+                        self.type_name(actual)
+                    ),
+                );
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
+            operands.push(self.coerce_into(arg, Type::FLOAT));
+        }
         self.program
             .exprs
-            .alloc(HirExpr::MathOperation { op, value })
+            .alloc(HirExpr::MathOperation { op, operands })
     }
 
     /// Analyzes `scalarText(codePoint)` — one Unicode scalar as text.
