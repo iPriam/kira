@@ -329,6 +329,36 @@ impl Codegen<'_> {
         })
     }
 
+    /// Calls a type's user `Drop` body on the value at `at`.
+    ///
+    /// The body takes its receiver the way every method does — by pointer when
+    /// this module lends, by value otherwise — so the address is loaded only
+    /// where the signature asks for a value. Either way the body owns nothing:
+    /// the members are released by the walk that follows this call, which is
+    /// why the glue's own release plan excludes its receiver.
+    fn call_drop_glue(&mut self, at: LLVMValueRef, glue: u32) -> Result<(), crate::LlvmError> {
+        let callee =
+            self.program.functions.get(glue as usize).ok_or_else(|| {
+                crate::LlvmError::internal("a `Drop` body the module never declared")
+            })?;
+        let by_pointer = self.param_is_pointer(callee, 0);
+        let receiver = callee.locals.first().copied().unwrap_or(Type::Void);
+        let target = self.functions.get(glue as usize).copied().flatten().ok_or(
+            crate::LlvmError::internal("a `Drop` body compiled for the other engine"),
+        )?;
+        let argument = match by_pointer {
+            true => at,
+            false => {
+                let llvm_type = self.llvm_type(receiver)?;
+                // SAFETY: `at` addresses a live value of the receiver's type and
+                // the builder is on a live block.
+                unsafe { LLVMBuildLoad2(self.builder, llvm_type, at, c"drop.self".as_ptr()) }
+            }
+        };
+        self.call(target, &mut [argument], c"");
+        Ok(())
+    }
+
     /// Releases whatever heap storage the value at `at` owns, mirroring the
     /// VM's `Heap::drop_value`.
     ///
@@ -367,6 +397,12 @@ impl Codegen<'_> {
                         "a struct the module never declared",
                     ))?
                     .clone();
+                // Before the members, which is the whole of the ordering rule:
+                // the body reads the value it is being told about, so what it
+                // holds is still there when it runs.
+                if let Some(glue) = def.drop_glue {
+                    self.call_drop_glue(at, glue)?;
+                }
                 for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
                     let field = self.field_pointer(struct_type, at, index as u32);
                     if def.owns_c_storage_at(index as u32) {

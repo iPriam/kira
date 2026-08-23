@@ -245,6 +245,9 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         }
         let name = self.interner.resolve(method).to_owned();
+        if self.refuse_direct_drop_call(receiver_ty, &name, method_span) {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let Type::Struct(_) = receiver_ty else {
             self.emit(
                 method_span,

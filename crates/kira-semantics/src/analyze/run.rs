@@ -145,6 +145,10 @@ impl<'a> Analyzer<'a> {
         // A claimed conformance is checked against resolved shapes, so it waits
         // for the signatures every implementation and every requirement has.
         self.check_trait_conformance();
+        // A `Drop` body is a method, so it has no id until signatures exist; and
+        // whether a type runs one decides whether it is released at all, so it
+        // is recorded before any body is analyzed.
+        self.record_user_drops();
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
         // to the entry file rather than to whichever module happened to declare

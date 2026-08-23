@@ -66,6 +66,7 @@ impl Analyzer<'_> {
                     mutable: false,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
         else {
             return Type::Error;

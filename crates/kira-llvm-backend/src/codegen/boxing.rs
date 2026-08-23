@@ -276,6 +276,7 @@ mod tests {
                 name: "Payload".to_owned(),
                 fields: Vec::new(),
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("a fresh table accepts the first struct");
         assert_eq!(

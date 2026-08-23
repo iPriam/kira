@@ -86,6 +86,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
         } else {
             let mut compiler = FnCompiler {
                 program,
+                function,
                 function_name: &function.name,
                 strings: &mut strings,
                 engines,
@@ -194,6 +195,8 @@ impl StringPool {
 
 struct FnCompiler<'a> {
     program: &'a IrProgram,
+    /// The function being compiled, for the questions a slot's *type* answers.
+    function: &'a kira_ir::IrFunction,
     function_name: &'a str,
     strings: &'a mut StringPool,
     /// Which engine owns each function, so a call site knows which of the two

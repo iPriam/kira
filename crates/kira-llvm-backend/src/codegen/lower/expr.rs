@@ -598,7 +598,66 @@ impl FunctionLowering<'_, '_> {
             return self.load_native_state_local(slot, type_id, ty);
         }
         let pointer = self.local_pointer(slot)?;
-        self.read_owned(pointer, ty)
+        let value = self.read_owned(pointer, ty)?;
+        // A value that runs a user `Drop` is never copied — binding one moves
+        // (`TypeTable::moves_on_bind`), so the checker has already refused a
+        // second use of this local. Reading it therefore *takes* it: the local
+        // no longer holds anything, and the release at the end of the frame
+        // must not run a body the value's new owner will run.
+        self.clear_live_flag(slot);
+        Ok(value)
+    }
+
+    /// Lowers `expr` in a position that does not consume it.
+    ///
+    /// Only a local read differs: a local whose type runs a user `Drop` is
+    /// *taken* by an ordinary read, and a borrowed position leaves the caller
+    /// holding the value. Everywhere else the value is a temporary the position
+    /// owns either way.
+    pub(super) fn lower_borrowed_expr(
+        &mut self,
+        expr: IrExprId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let IrExpr::Local(slot) = *self.codegen.program.expr(expr) else {
+            return self.lower_expr(expr);
+        };
+        let value = self.lower_expr(expr)?;
+        self.set_live_flag(slot);
+        Ok(value)
+    }
+
+    /// Marks a local whose type runs a user `Drop` as holding a value again,
+    /// undoing the take an ordinary read performed.
+    fn set_live_flag(&mut self, slot: u32) {
+        let Some(flag) = self.live_flag(slot) else {
+            return;
+        };
+        // SAFETY: `flag` addresses an `i1` in this function's entry block and
+        // the builder is on a live block.
+        unsafe {
+            LLVMBuildStore(
+                self.codegen.builder,
+                LLVMConstInt(self.codegen.types.i1, 1, 0),
+                flag,
+            );
+        }
+    }
+
+    /// Marks a local whose type runs a user `Drop` as no longer holding a
+    /// value. A local of any other type has no flag and this does nothing.
+    fn clear_live_flag(&mut self, slot: u32) {
+        let Some(flag) = self.live_flag(slot) else {
+            return;
+        };
+        // SAFETY: `flag` addresses an `i1` in this function's entry block and
+        // the builder is on a live block.
+        unsafe {
+            LLVMBuildStore(
+                self.codegen.builder,
+                LLVMConstInt(self.codegen.types.i1, 0, 0),
+                flag,
+            );
+        }
     }
 
     /// Builds a struct value from its fields.
@@ -674,7 +733,8 @@ impl FunctionLowering<'_, '_> {
             }
             return self.read_owned(field, ty);
         }
-        let base_value = self.lower_expr(base)?;
+        // Reading a member does not consume the value it is read from.
+        let base_value = self.lower_borrowed_expr(base)?;
         let field = self.extract_field(base_value, index)?;
         if self.c_storage_slot(base_ty, index as usize)? {
             let word = self.call(

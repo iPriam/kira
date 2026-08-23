@@ -455,6 +455,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("a fresh name declares");
         (table, id)

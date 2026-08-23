@@ -22,19 +22,37 @@ use kira_syntax_model::ast::Item;
 
 use crate::analyze::Analyzer;
 
-/// The reason a type is not copyable: the member that owns something, and what
-/// it owns.
-struct NotCopyable {
-    /// The field or variant that made the type move.
-    member: String,
-    /// That member's type, as a user sees it.
-    ty: String,
-    /// The type the member belongs to.
-    ///
-    /// Named separately from the claiming type so a transitively non-copyable
-    /// member is reported at the member that owns it rather than at the field
-    /// that merely holds it.
-    owner: String,
+/// Why a type is not copyable.
+///
+/// Two reasons, and they are different mistakes: a member owning storage is
+/// about what the value *holds*, and a user `Drop` is about what releasing it
+/// *runs*. Each names the type it was found on, so a reason reached through a
+/// field is reported at the type that owns it rather than at the field that
+/// merely holds it.
+enum NotCopyable {
+    /// A member owning storage a copy would have to clone.
+    Member {
+        /// The type the member belongs to.
+        owner: String,
+        /// The field or variant that made the type move.
+        member: String,
+        /// That member's type, as a user sees it.
+        ty: String,
+    },
+    /// A type running a user `Drop` body, which a copy would run twice.
+    UserDrop {
+        /// The type claiming `Drop`.
+        owner: String,
+    },
+}
+
+impl NotCopyable {
+    /// The type this reason was found on.
+    fn owner(&self) -> &str {
+        match self {
+            NotCopyable::Member { owner, .. } | NotCopyable::UserDrop { owner } => owner,
+        }
+    }
 }
 
 impl Analyzer<'_> {
@@ -78,15 +96,29 @@ impl Analyzer<'_> {
         ty: Type,
         seen: &mut HashSet<Type>,
     ) -> Option<String> {
-        let NotCopyable { member, ty, owner } = self.not_copyable(ty, seen)?;
-        let where_it_is = match owner == claimed {
-            true => format!("its member `{member}`"),
-            false => format!("`{owner}`'s member `{member}`"),
-        };
-        Some(format!(
-            "{where_it_is} has type `{ty}`, which is not copyable — it owns storage a copy would \
-             have to clone"
-        ))
+        let reason = self.not_copyable(ty, seen)?;
+        let here = reason.owner() == claimed;
+        Some(match &reason {
+            NotCopyable::Member { owner, member, ty } => {
+                let where_it_is = match here {
+                    true => format!("its member `{member}`"),
+                    false => format!("`{owner}`'s member `{member}`"),
+                };
+                format!(
+                    "{where_it_is} has type `{ty}`, which is not copyable — it owns storage a \
+                     copy would have to clone"
+                )
+            }
+            NotCopyable::UserDrop { owner } => match here {
+                true => "it runs a user `Drop` body, which a copy would run a second time \
+                         for storage that only goes away once"
+                    .to_owned(),
+                false => format!(
+                    "`{owner}` runs a user `Drop` body, which a copy would run a second time \
+                     for storage that only goes away once"
+                ),
+            },
+        })
     }
 
     /// Every `@Derive(Copy)` written in the program, resolved to its type.
@@ -149,6 +181,12 @@ impl Analyzer<'_> {
         }
         let def = self.program.types.structs().get(id)?;
         let owner = def.name.clone();
+        // Asked of the conformance rather than of the recorded body, because a
+        // `Drop` body is a method and has no id until signatures exist — later
+        // than the copy question is first asked.
+        if self.conforms_to(id, crate::traits::DROP) {
+            return Some(NotCopyable::UserDrop { owner });
+        }
         for field in &def.fields {
             if let Some(reason) = self.member_not_copyable(&owner, &field.name, field.ty, seen) {
                 return Some(reason);
@@ -192,10 +230,10 @@ impl Analyzer<'_> {
         if matches!(ty, Type::Struct(_) | Type::Enum(_)) {
             return self.not_copyable(ty, seen);
         }
-        Some(NotCopyable {
+        Some(NotCopyable::Member {
+            owner: owner.to_owned(),
             member: member.to_owned(),
             ty: self.type_name(ty),
-            owner: owner.to_owned(),
         })
     }
 }

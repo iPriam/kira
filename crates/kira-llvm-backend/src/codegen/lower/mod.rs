@@ -73,10 +73,20 @@ impl<'a> Codegen<'a> {
                 entry,
             );
         }
+        let drop_glue = self
+            .program
+            .types
+            .structs()
+            .defs()
+            .iter()
+            .any(|def| def.drop_glue == Some(index as u32));
+        let live = self.allocate_live_flags(function, &locals)?;
         let mut body = FunctionLowering {
             codegen: self,
             function,
+            drop_glue,
             locals,
+            live,
             loops: Vec::new(),
         };
         body.lower_block(&function.body)?;
@@ -144,6 +154,36 @@ impl<'a> Codegen<'a> {
             locals.push(alloca);
         }
         Ok(locals)
+    }
+
+    /// Allocates the liveness flag of every local whose type runs a user
+    /// `Drop`, and initializes it.
+    ///
+    /// A parameter arrives holding a value, so its flag starts set; every other
+    /// slot starts holding its type's zero, which is nothing.
+    fn allocate_live_flags(
+        &mut self,
+        function: &IrFunction,
+        locals: &[LLVMValueRef],
+    ) -> Result<Vec<Option<LLVMValueRef>>, LlvmError> {
+        let mut flags = Vec::with_capacity(locals.len());
+        for (slot, &ty) in function.locals.iter().enumerate() {
+            if !self.program.types.runs_user_drop(ty) {
+                flags.push(None);
+                continue;
+            }
+            let name = c_string(&format!("local.{slot}.live"));
+            // SAFETY: the builder sits on the function's entry block and `i1`
+            // belongs to this module's context.
+            let flag = unsafe { LLVMBuildAlloca(self.builder, self.types.i1, name.as_ptr()) };
+            let initial = u64::from((slot as u32) < function.param_count);
+            // SAFETY: same block, and `i1` matches the slot just allocated.
+            unsafe {
+                LLVMBuildStore(self.builder, LLVMConstInt(self.types.i1, initial, 0), flag);
+            }
+            flags.push(Some(flag));
+        }
+        Ok(flags)
     }
 
     /// An `Int` constant.
@@ -326,6 +366,19 @@ impl<'a> Codegen<'a> {
 pub(super) struct FunctionLowering<'a, 'p> {
     pub(super) codegen: &'a mut Codegen<'p>,
     pub(super) function: &'p IrFunction,
+    /// Whether this function is a type's user `Drop` body, which is what
+    /// excludes its receiver from the release plan.
+    pub(super) drop_glue: bool,
+    /// One `i1` flag per local whose type runs a user `Drop`, `None` for every
+    /// other slot.
+    ///
+    /// A slot starts at its type's zero, which for every other type is a value
+    /// a release can be handed — a null handle frees nothing. A user `Drop`
+    /// body has no such reading of zero: it would run on a value nobody wrote.
+    /// So the slot carries whether anything has been stored in it, and the
+    /// release asks. The VM needs none of this: its slots start at `Void`,
+    /// which is not a struct, so the same release does nothing there.
+    live: Vec<Option<LLVMValueRef>>,
     /// One `alloca` per local slot, in slot order.
     locals: Vec<LLVMValueRef>,
     /// The loops enclosing the statement being lowered, innermost last.
@@ -429,6 +482,11 @@ impl FunctionLowering<'_, '_> {
             .get(slot as usize)
             .copied()
             .ok_or(LlvmError::internal("a read of an unknown local"))
+    }
+
+    /// The liveness flag of a local whose type runs a user `Drop`.
+    pub(super) fn live_flag(&self, slot: u32) -> Option<LLVMValueRef> {
+        self.live.get(slot as usize).copied().flatten()
     }
 
     /// The `alloca` backing a local slot.

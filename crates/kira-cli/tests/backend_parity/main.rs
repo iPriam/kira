@@ -461,5 +461,6 @@ mod shaders;
 mod strings;
 mod structs;
 mod tasks;
+mod user_drop;
 mod widening;
 mod widths;

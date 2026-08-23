@@ -23,8 +23,12 @@ impl FnCompiler<'_> {
                 self.code.push(Instruction::ForeignCallback(*callback));
             }
             IrExpr::Local(slot) => {
+                let takes = self.local_is_taken(*slot);
                 let slot = self.local_slot(*slot)?;
-                self.code.push(Instruction::LoadLocal(slot));
+                self.code.push(match takes {
+                    true => Instruction::TakeLocal(slot),
+                    false => Instruction::LoadLocal(slot),
+                });
             }
             IrExpr::CellNew { value, .. } => {
                 let value = *value;
@@ -49,7 +53,8 @@ impl FnCompiler<'_> {
                 otherwise,
                 ..
             } => self.compile_select(*cond, *then, *otherwise)?,
-            IrExpr::StructNew { fields, .. } => {
+            IrExpr::StructNew { struct_id, fields } => {
+                let struct_id = *struct_id;
                 let fields = fields.clone();
                 let count = fields.len() as u64;
                 // Fields are pushed in declaration order, so the struct the VM
@@ -57,12 +62,29 @@ impl FnCompiler<'_> {
                 for field in fields {
                     self.compile_expr(field)?;
                 }
-                self.code.push(Instruction::NewStruct(count));
+                // The type is known here and nowhere later: the heap object the
+                // VM builds carries no type, so a user `Drop` body has to be
+                // recorded on it at construction or it can never be found.
+                match self
+                    .program
+                    .types
+                    .structs()
+                    .get(struct_id)
+                    .and_then(|def| def.drop_glue)
+                {
+                    Some(glue) => self.code.push(Instruction::NewStructDropping {
+                        fields: count,
+                        glue,
+                    }),
+                    None => self.code.push(Instruction::NewStruct(count)),
+                }
             }
             IrExpr::Field { base, index, .. } => {
                 let base = *base;
                 let index = self.field_index(*index)?;
-                self.compile_expr(base)?;
+                // Reading a member does not consume the value it is read from,
+                // so the base is borrowed rather than taken.
+                self.compile_borrowed_expr(base)?;
                 self.code.push(Instruction::GetField(index));
             }
             IrExpr::ArrayElements { value, element } => {
@@ -401,8 +423,11 @@ impl FnCompiler<'_> {
                     let writebacks = writebacks.clone();
                     return self.compile_writeback_call(callee, &args, &writebacks);
                 }
-                for arg in args {
-                    self.compile_expr(arg)?;
+                for (position, arg) in args.into_iter().enumerate() {
+                    match self.argument_is_borrowed(callee, position) {
+                        true => self.compile_borrowed_expr(arg)?,
+                        false => self.compile_expr(arg)?,
+                    }
                 }
                 match callee {
                     IrCallee::Print => self.code.push(Instruction::Print),

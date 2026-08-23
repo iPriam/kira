@@ -157,6 +157,9 @@ impl<'a> Analyzer<'a> {
                             crate::ffi_types::FfiStructKind::CLayout
                         ))
                     ),
+                    // Filled once signatures exist: a drop body is a method, and a
+                    // method has no id until then.
+                    drop_glue: None,
                 },
             ) {
                 Some(id) => {
@@ -509,6 +512,7 @@ impl<'a> Analyzer<'a> {
                 name,
                 fields,
                 c_layout: false,
+                drop_glue: None,
             },
             defaults,
         )

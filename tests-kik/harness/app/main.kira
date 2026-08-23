@@ -43,6 +43,7 @@ function main() {
     print(ovxSection())
     print(mcxSection())
     print(trxSection())
+    print(drxSection())
     print("kik-harness-end")
     return
 }

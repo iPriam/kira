@@ -22,6 +22,7 @@
 //! native runtime shares an array's item block on the same terms; this is one
 //! design serving both engines rather than two.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -326,6 +327,30 @@ pub struct Heap {
     /// heap slots stay occupied — until the whole heap drops at instance
     /// teardown, which never overlaps a foreign call in flight.
     retained: Vec<Value>,
+    /// The user `Drop` body each struct object runs, by slot.
+    ///
+    /// A map rather than a field on [`Object::Struct`] because a program that
+    /// declares no `Drop` must pay nothing: every struct free asks whether this
+    /// is empty, and stops there.
+    drop_glue: HashMap<u32, u32>,
+    /// Struct objects whose user `Drop` body the interpreter still owes.
+    ///
+    /// The heap cannot call Kira — the body would run with this borrowed, and
+    /// re-entrancy on the object table is not a thing a release can survive —
+    /// so the last holder going away *parks* the object here instead of freeing
+    /// it, and [`crate::interp`] drains this between instructions. The storage
+    /// stays alive until the body has run, which is what makes "before the
+    /// members are released" true rather than nearly true.
+    pending_drops: Vec<PendingDrop>,
+}
+
+/// One struct object waiting for its user `Drop` body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingDrop {
+    /// The parked object, still holding everything it owned.
+    pub id: StructId,
+    /// The function running the body.
+    pub glue: u32,
 }
 
 /// Cells a callback-state tree gave up its last share of.
@@ -364,6 +389,60 @@ impl Heap {
     pub fn alloc_struct(&mut self, fields: Vec<Value>) -> StructId {
         let fields = self.own_all(fields);
         StructId(self.alloc_object(Object::Struct(Rc::new(fields))))
+    }
+
+    /// Allocates a struct whose type declares a user `Drop`, recording the
+    /// body the last holder's release owes.
+    pub fn alloc_struct_dropping(&mut self, fields: Vec<Value>, glue: u32) -> StructId {
+        let id = self.alloc_struct(fields);
+        self.drop_glue.insert(id.0, glue);
+        id
+    }
+
+    /// The user `Drop` body the struct object at `slot` runs, if any.
+    pub(super) fn glue_of(&self, slot: u32) -> Option<u32> {
+        match self.drop_glue.is_empty() {
+            true => None,
+            false => self.drop_glue.get(&slot).copied(),
+        }
+    }
+
+    /// Whether any struct object is still owed its user `Drop` body.
+    ///
+    /// One length test, which is what makes draining affordable between
+    /// instructions: a program that declares no `Drop` never parks anything, so
+    /// the answer is always no and nothing else runs.
+    pub fn owes_drops(&self) -> bool {
+        !self.pending_drops.is_empty()
+    }
+
+    /// Takes the object whose user `Drop` body is owed next.
+    ///
+    /// Most recent first, so a body that parks another object finishes that one
+    /// before its own release resumes — the order a nested release has on the
+    /// native engine, where the inner walk runs inside the outer one. The
+    /// object leaves this list the moment its body is entered: what is left
+    /// here is what nothing has started yet, so a body still running cannot be
+    /// started a second time.
+    pub fn take_pending_drop(&mut self) -> Option<PendingDrop> {
+        self.pending_drops.pop()
+    }
+
+    /// Releases a parked object whose user `Drop` body has run.
+    pub fn finish_pending_drop(&mut self, id: StructId) {
+        self.drop_glue.remove(&id.0);
+        self.free_struct(id);
+    }
+
+    /// Releases every parked object without running the body it was owed.
+    ///
+    /// For a run that is already over: a trap unwound the frames, so there is
+    /// no interpreter left to call into, and the alternative to releasing the
+    /// storage is leaking it.
+    pub fn abandon_pending_drops(&mut self) {
+        while let Some(pending) = self.pending_drops.pop() {
+            self.finish_pending_drop(pending.id);
+        }
     }
 
     /// Allocates an array of `elements` on the heap, returning its handle.

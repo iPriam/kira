@@ -282,14 +282,23 @@ impl Module {
                     Instruction::ConstStr(string) => usize::try_from(*string)
                         .ok()
                         .is_some_and(|index| index < self.strings.len()),
-                    Instruction::LoadLocal(slot) | Instruction::StoreLocal(slot) => {
-                        *slot < function.local_count
-                    }
+                    Instruction::LoadLocal(slot)
+                    | Instruction::TakeLocal(slot)
+                    | Instruction::StoreLocal(slot) => *slot < function.local_count,
                     // A bytecode `Call` must land on a bytecode body. A native
                     // callee is reached with `CallNative`, which goes through
                     // the host; letting `Call` target one would push a frame
                     // over an empty body.
                     Instruction::Call(callee) => non_native_function(&self.functions, *callee),
+                    // A user `Drop` body is entered the way a `Call` is — the
+                    // interpreter pushes a frame for it — so it is bounded the
+                    // same way, and for the same reason: a native callee would
+                    // be a frame over an empty body.
+                    Instruction::NewStructDropping { glue, .. } => {
+                        non_native_function(&self.functions, u64::from(*glue))
+                            && function_at(&self.functions, u64::from(*glue))
+                                .is_some_and(|callee| callee.local_count > 0)
+                    }
                     // Like `Call`, a `CallMut` must land on a bytecode body:
                     // the writeback happens when that body returns, which a
                     // native callee never does here. Its `slot` roots the

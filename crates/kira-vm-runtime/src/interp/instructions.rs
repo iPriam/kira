@@ -40,6 +40,21 @@ impl Vm<'_> {
         Ok(())
     }
 
+    /// Pushes local `slot`, leaving unit behind.
+    ///
+    /// The read of a value that runs a user `Drop`: binding one moves, so a
+    /// read is its last use and the slot no longer holds it. Leaving the value
+    /// behind would let the frame release run a body the new owner will run.
+    pub(super) fn take_local(&mut self, frame: &mut Frame, slot: u64) -> Result<(), VmError> {
+        let index = usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?;
+        let held = frame
+            .locals
+            .get_mut(index)
+            .ok_or(VmError::LocalSlotOutOfRange(slot))?;
+        self.stack.push(std::mem::replace(held, Value::Void));
+        Ok(())
+    }
+
     /// Stores an operand into a local, including the special write-through
     /// behavior of a recovered native-state view.
     #[inline(always)]
@@ -124,6 +139,7 @@ impl Vm<'_> {
                 self.stack.push(Value::Str(id));
             }
             Instruction::LoadLocal(slot) => self.load_local(frame, *slot)?,
+            Instruction::TakeLocal(slot) => self.take_local(frame, *slot)?,
             Instruction::StoreLocal(slot) => self.store_local(frame, *slot)?,
             Instruction::Pop => {
                 let value = self.pop()?;
@@ -154,6 +170,20 @@ impl Vm<'_> {
                 // is copied and nothing is left on the stack to double-free.
                 let fields = self.stack.split_off(first);
                 let id = self.heap.alloc_struct(fields);
+                self.stack.push(Value::Struct(id));
+            }
+            Instruction::NewStructDropping { fields, glue } => {
+                let count = usize::try_from(*fields).map_err(|_| VmError::ArrayTooLong)?;
+                let first = self
+                    .stack
+                    .len()
+                    .checked_sub(count)
+                    .ok_or(VmError::StackUnderflow)?;
+                let fields = self.stack.split_off(first);
+                // The body travels with the object because the heap cannot ask
+                // a value what type it is, and the last holder's release is
+                // exactly where that question would have to be answered.
+                let id = self.heap.alloc_struct_dropping(fields, *glue);
                 self.stack.push(Value::Struct(id));
             }
             Instruction::GetField(index) => {
