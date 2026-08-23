@@ -30,7 +30,22 @@ mod content;
 
 impl Parser<'_> {
     /// Parses a full expression.
+    ///
+    /// Entry is guarded by the parser's nesting budget so pathological input
+    /// cannot recurse to a stack overflow; see [`Parser::enter_nesting`].
     pub(crate) fn parse_expr(&mut self) -> ExprId {
+        let allowed = self.enter_nesting();
+        let expr = if allowed {
+            self.parse_expr_descend()
+        } else {
+            self.recover_refused_nesting();
+            self.error_expr(self.current().span)
+        };
+        self.exit_nesting();
+        expr
+    }
+
+    fn parse_expr_descend(&mut self) -> ExprId {
         let cond = self.parse_binary(0);
         if !self.at(TokenKind::Question) {
             return cond;
@@ -106,6 +121,31 @@ impl Parser<'_> {
         starts_operand.then_some(op)
     }
 
+    /// Parses a prefix chain.
+    ///
+    /// One level deeper into a prefix chain, against the nesting budget.
+    ///
+    /// Every prefix operator recurses into [`Parser::parse_unary`] rather than
+    /// into [`Parser::parse_expr`] — `try`, `move`/`copy`, `-`, `!` and `~` all
+    /// descend directly — so a run of them never touched the budget and five
+    /// thousand of them reached the stack's end instead of a diagnostic.
+    ///
+    /// The budget is spent on the RECURSION, not on entering `parse_unary`:
+    /// every expression passes through it exactly once on its way to a primary,
+    /// and charging that would halve the depth an ordinary parenthesized
+    /// expression is allowed.
+    fn parse_unary_nested(&mut self) -> ExprId {
+        let allowed = self.enter_nesting();
+        let expr = if allowed {
+            self.parse_unary()
+        } else {
+            self.recover_refused_nesting();
+            self.error_expr(self.current().span)
+        };
+        self.exit_nesting();
+        expr
+    }
+
     fn parse_unary(&mut self) -> ExprId {
         // `try` binds like a prefix operator so `try f(n)` takes the whole
         // call. Whether this position is one where a `try` is allowed at all is
@@ -113,7 +153,7 @@ impl Parser<'_> {
         if self.at(TokenKind::Try) {
             let start = self.current().span;
             self.bump(); // `try`
-            let value = self.parse_unary();
+            let value = self.parse_unary_nested();
             let value_span = self.tree.expr(value).span();
             let span = Span::from_bounds(start.start, value_span.end());
             return self.tree.add_expr(Expr::Try { value, span });
@@ -121,7 +161,7 @@ impl Parser<'_> {
         if let Some(op) = self.ownership_op_here() {
             let start = self.current().span;
             self.bump(); // `move` / `copy`
-            let operand = self.parse_unary();
+            let operand = self.parse_unary_nested();
             let operand_span = self.tree.expr(operand).span();
             let span = Span::from_bounds(start.start, operand_span.end());
             return self.tree.add_expr(Expr::Ownership { op, operand, span });
@@ -135,7 +175,7 @@ impl Parser<'_> {
         if let Some(op) = op {
             let start = self.current().span;
             self.bump();
-            let operand = self.parse_unary();
+            let operand = self.parse_unary_nested();
             let operand_span = self.tree.expr(operand).span();
             let span = Span::from_bounds(start.start, operand_span.end());
             return self.tree.add_expr(Expr::Unary { op, operand, span });
@@ -230,6 +270,7 @@ impl Parser<'_> {
                 method: field,
                 method_span: field_span,
                 args,
+                children: Vec::new(),
                 span,
             }));
         }
@@ -250,6 +291,27 @@ impl Parser<'_> {
             let name_span = Span::from_bounds(base_span.start, field_span.end());
             let symbol = self.intern_text(&qualified, name_span);
             return Ok(self.parse_struct_literal(symbol, name_span));
+        }
+        // `view.toolbar { … }` is a method call whose arguments are all content.
+        // Without the parentheses there is nothing else for the `{` to be: a
+        // field read cannot take a block, and the qualified-literal reading
+        // above already claimed the case where the base is a bare name path. The
+        // call is built with no arguments and the postfix loop attaches the
+        // block to it, exactly as it does for `f(x) { … }`.
+        //
+        // A `{` that opens an enclosing body is excluded by `at_trailing_block`,
+        // which is gated on the same `no_struct_literal` flag that stops
+        // `if p.ready { … }` from reading its body as content.
+        if self.at_trailing_block() {
+            let span = Span::from_bounds(base_span.start, field_span.end());
+            return Ok(self.tree.add_expr(Expr::MethodCall {
+                receiver: base,
+                method: field,
+                method_span: field_span,
+                args: Vec::new(),
+                children: Vec::new(),
+                span,
+            }));
         }
         let span = Span::from_bounds(base_span.start, field_span.end());
         Ok(self.tree.add_expr(Expr::Field {
@@ -367,7 +429,16 @@ impl Parser<'_> {
     fn parse_float(&mut self, span: Span) -> ExprId {
         self.bump();
         let text = self.text_of(span);
-        let value = text.parse::<f64>().unwrap_or(0.0);
+        let value = match text.parse::<f64>() {
+            Ok(value) if value.is_finite() => value,
+            // A digit-run the lexer accepts cannot fail to parse today, but a
+            // literal that overflows to infinity or stops parsing must not
+            // become a silently wrong constant.
+            _ => {
+                self.error(span, "KPAR070", "float literal is out of range");
+                0.0
+            }
+        };
         self.tree.add_expr(Expr::Float { value, span })
     }
 

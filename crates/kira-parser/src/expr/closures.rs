@@ -155,6 +155,7 @@ impl Parser<'_> {
                 method,
                 method_span,
                 mut args,
+                children,
                 ..
             } => {
                 args.push(self.positional_arg(closure));
@@ -163,6 +164,7 @@ impl Parser<'_> {
                     method,
                     method_span,
                     args,
+                    children,
                     span,
                 })
             }
@@ -186,6 +188,7 @@ impl Parser<'_> {
                 method: field,
                 method_span: field_span,
                 args: vec![self.positional_arg(closure)],
+                children: Vec::new(),
                 span,
             }),
             // Anything else — a literal, an index, an operator result — is not

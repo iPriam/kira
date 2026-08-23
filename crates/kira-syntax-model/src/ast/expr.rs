@@ -144,6 +144,15 @@ pub enum Expr {
         /// The arguments, in written order, not counting the receiver, each
         /// optionally labeled with the parameter it binds.
         args: Vec<CallArg>,
+        /// The bare children of a trailing `{ … }` content block, in order.
+        ///
+        /// A modifier is where SwiftUI puts most of its content: `.toolbar { … }`,
+        /// `.overlay { … }`, `.contextMenu { … }`, `.safeAreaInset(edge:) { … }`.
+        /// They read as one thing with the view they modify, which a widget
+        /// passed as an ordinary argument does not. Analysis binds these to the
+        /// method's trailing content parameter and refuses them on a method with
+        /// none, exactly as it does for a construction's children.
+        children: Vec<ExprId>,
         /// Span covering the whole call.
         span: Span,
     },

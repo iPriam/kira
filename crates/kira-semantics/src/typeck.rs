@@ -294,7 +294,20 @@ impl Analyzer<'_> {
                     }
                     _ => (args, children),
                 };
-                if !children.is_empty() && !is_construct_construction {
+                // A free function takes a trailing block when it declared a
+                // content parameter, exactly as a construction and a method do.
+                // The rule is one rule — a callable whose LAST parameter is
+                // `some X` takes its children from a block — and a function left
+                // out of it would be the one caller shape that has to name a
+                // container for no reason but where it was declared.
+                let function_content = self
+                    .lookup_function(&name)
+                    .map(|(id, _, _)| id)
+                    .and_then(|id| self.init_content_param(id));
+                if !children.is_empty()
+                    && !is_construct_construction
+                    && function_content.is_none()
+                {
                     for &child in &children {
                         self.analyze_expr(ctx, child);
                     }
@@ -302,8 +315,8 @@ impl Analyzer<'_> {
                         callee_span,
                         "KSEM233",
                         format!(
-                            "`{name}` is not a construct-backed declaration, so it takes no \
-                             trailing child content"
+                            "`{name}` is not a construct-backed declaration and declares no \
+                             content parameter, so it takes no trailing child content"
                         ),
                     );
                 }
@@ -480,7 +493,20 @@ impl Analyzer<'_> {
                     // ceremony — resolved to `Callee::Foreign`.
                     self.analyze_foreign_call(ctx, id, &values, callee_span)
                 } else {
-                    self.analyze_user_call_from_syntax(ctx, &name, &[], &args, callee_span)
+                    let trailing = match function_content {
+                        Some(content) if !children.is_empty() => {
+                            vec![self.content_value(ctx, &content, &children, callee_span)]
+                        }
+                        _ => Vec::new(),
+                    };
+                    self.analyze_user_call_from_syntax_with(
+                        ctx,
+                        &name,
+                        &[],
+                        &args,
+                        &trailing,
+                        callee_span,
+                    )
                 }
             }
             Expr::StructLit {
@@ -657,8 +683,17 @@ impl Analyzer<'_> {
                 method,
                 method_span,
                 args,
+                children,
                 ..
-            } => self.analyze_method_call(ctx, receiver, method, method_span, &args, expected),
+            } => self.analyze_method_call(
+                ctx,
+                receiver,
+                method,
+                method_span,
+                &args,
+                &children,
+                expected,
+            ),
             // A bare `{ … }` block is the anonymous spelling of a named child
             // fill, so it is a value nowhere else. Its children are analyzed so
             // their own mistakes surface before it is refused.

@@ -302,7 +302,7 @@ impl Analyzer<'_> {
     }
 
     /// Whether `child` is a `For`/`if` builder item rather than a bare child.
-    fn is_builder_item(&self, child: ExprId) -> bool {
+    pub(crate) fn is_builder_item(&self, child: ExprId) -> bool {
         matches!(
             self.tree.expr(child),
             Expr::ContentFor { .. } | Expr::ContentIf { .. }
@@ -317,7 +317,7 @@ impl Analyzer<'_> {
     /// [`HirStmt::If`] whose branches append theirs. The recursion is what lets
     /// a builder nest inside a builder, and every child is still checked against
     /// the slot's element type where it is written.
-    fn expand_content_items(
+    pub(crate) fn expand_content_items(
         &mut self,
         ctx: &mut FnCtx,
         items: &[ExprId],
