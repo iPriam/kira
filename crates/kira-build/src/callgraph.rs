@@ -107,9 +107,14 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         IrExpr::EnumTag { value } => walk_expr(program, *value, found),
         IrExpr::EnumPayload { value, .. } => walk_expr(program, *value, found),
         IrExpr::Field { base, .. } => walk_expr(program, *base, found),
-        IrExpr::MathOperation { value, .. }
-        | IrExpr::ScalarText { value }
-        | IrExpr::ArrayElements { value, .. } => walk_expr(program, *value, found),
+        IrExpr::ScalarText { value } | IrExpr::ArrayElements { value, .. } => {
+            walk_expr(program, *value, found)
+        }
+        IrExpr::MathOperation { operands, .. } => {
+            for operand in operands {
+                walk_expr(program, *operand, found);
+            }
+        }
         IrExpr::ForeignField { base, .. } | IrExpr::ForeignMemberAddress { base, .. } => {
             walk_expr(program, *base, found)
         }

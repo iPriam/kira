@@ -141,6 +141,7 @@ impl Analyzer<'_> {
                     family_id,
                     method,
                     args,
+                    &[],
                     method_span,
                 );
             }
@@ -159,7 +160,7 @@ impl Analyzer<'_> {
         // Running against `self` means a mutating member writes this instance
         // back, exactly as a parent-qualified call does.
         if own_member && let Some(local) = ctx.resolve("self") {
-            self.record_mut_self(call, &qualified, local);
+            self.record_mut_self(call, local);
         }
         call
     }

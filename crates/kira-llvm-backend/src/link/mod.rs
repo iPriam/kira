@@ -232,6 +232,11 @@ pub(crate) fn link_with(
     for argument in extra {
         arguments.push(argument.into());
     }
+    // So a program finds the libraries staged next to it without being told
+    // where to look.
+    for argument in driver::staged_library_runtime_arguments(target) {
+        arguments.push(argument.into());
+    }
     for argument in platform_link_arguments(target) {
         arguments.push(argument.into());
     }

@@ -439,7 +439,17 @@ fn collect_kira_sources(
             message: error.to_string(),
         })?;
         let path = entry.path();
-        if path.is_dir() {
+        // Metadata without following links: a directory *symlink* is skipped
+        // below rather than walked, because one pointing at an ancestor would
+        // recurse without bound and two pointing at one directory would turn
+        // every module in it into a duplicate of itself.
+        let metadata = entry
+            .file_type()
+            .map_err(|error| DiscoveryError::Unreadable {
+                path: path.display().to_string(),
+                message: error.to_string(),
+            })?;
+        if metadata.is_dir() {
             // A dot-directory is never package source. `.kira-build/` holds
             // generated code and stale copies of the package's own files, so
             // walking into it would make every name in the package a duplicate
@@ -452,9 +462,10 @@ fn collect_kira_sources(
                 continue;
             }
             collect_kira_sources(&path, sources)?;
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "kira")
+        } else if !metadata.is_symlink()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "kira")
         {
             // In the root-layout fallback the declaration manifest itself is
             // beside the source files. It is data for discovery, not a module

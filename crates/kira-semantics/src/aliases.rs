@@ -68,6 +68,10 @@ enum AliasState {
     Resolving,
     /// Resolved to a concrete type, memoized so later uses are free.
     Resolved(Type),
+    /// Reported broken — a cycle, the one failure that names the alias
+    /// itself rather than one of its use sites. Every later use answers
+    /// `Type::Error` silently, so the report is exactly once.
+    Failed,
 }
 
 impl Analyzer<'_> {
@@ -238,16 +242,21 @@ impl Analyzer<'_> {
 
     /// Resolves `name` as a type alias, or `None` when no alias has that name.
     ///
-    /// Only a *successful* resolution is memoized. An alias whose target does
-    /// not resolve stays unresolved, so each use site reports against its own
-    /// span through its own [`NameContext`] rather than inheriting whichever
-    /// site happened to touch the alias first.
+    /// A *successful* resolution is memoized, and so is a cycle: both are
+    /// properties of the declaration. Only an alias whose target does not
+    /// resolve stays unresolved, because that failure is about a use site —
+    /// each one reports against its own span through its own [`NameContext`]
+    /// rather than inheriting whichever site happened to touch the alias
+    /// first.
     pub(crate) fn resolve_alias_name(&mut self, name: &str, context: &NameContext) -> Option<Type> {
         let header = self.aliases.get(name)?.clone();
         match header.state {
             AliasState::Resolved(ty) => return Some(ty),
+            AliasState::Failed => return Some(Type::Error),
             AliasState::Resolving => {
-                self.set_alias_state(name, AliasState::Unresolved);
+                // Reported once, at the alias; the state records that so no
+                // later use re-walks the cycle and repeats it.
+                self.set_alias_state(name, AliasState::Failed);
                 self.emit(
                     header.name_span,
                     "KSEM157",

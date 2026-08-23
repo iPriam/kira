@@ -227,7 +227,7 @@ fn hybrid_binding_target(
     entry: &kira_ir::IrForeignImport,
     foreign_link: &NativeLinkInputs,
     static_names: &HashSet<&str>,
-    native_half: &std::path::Path,
+    native_half: &Path,
 ) -> kira_main::ForeignBinding {
     {
         {

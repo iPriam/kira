@@ -258,17 +258,16 @@ pub enum Instruction {
     NewStruct(u64),
     /// Pop a struct, push a copy of field `n`, and drop the struct.
     GetField(u64),
-    /// Pop a pointer word and push the value `offset` bytes into it, read as
-    /// `ty`.
-    ///
-    /// The one instruction that reads memory Kira does not own. It exists so a
-    /// C callback's `const T*` argument can be used without a C accessor per
-    /// field; the offset is resolved from the target's C layout at compile time,
-    /// and the pointer comes from the foreign seam, never from Kira arithmetic.
     /// Pop a pointer word and push it advanced by `offset` bytes.
     ///
-    /// A member whose bytes live inside the container names a place, so what a
-    /// read of it produces is an address rather than a value.
+    /// The one instruction that forms an address into memory Kira does not own.
+    /// It exists so a C callback's `const T*` argument can have a member taken
+    /// without a C accessor per field; the offset is resolved from the target's
+    /// C layout at compile time, and the pointer comes from the foreign seam,
+    /// never from Kira arithmetic. A member whose bytes live inside the
+    /// container names a place, so what a read of it produces is an address
+    /// rather than a value — reading *through* that address is
+    /// [`Instruction::ForeignLoad`]'s job.
     ForeignOffset(u32),
     /// Pop an index and a pointer word, and push the pointer advanced by
     /// `index * stride` bytes — C's `pointer[index]` as an address.

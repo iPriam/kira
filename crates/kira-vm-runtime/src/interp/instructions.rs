@@ -472,14 +472,21 @@ impl Vm<'_> {
                 self.stack.push(Value::Str(id));
             }
             Instruction::MathOp(op) => {
-                let value = self.pop()?;
-                let Value::Float(value) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::TypeMismatch {
-                        expected: "a float to take a maths operation of",
-                    });
-                };
-                self.stack.push(Value::Float(op.apply(value)));
+                // Popped back to front, because the operands were pushed in
+                // source order: `pow(x, y)` finds `y` on top.
+                let mut operands = [0.0f64; kira_runtime_abi::MathOp::MAX_ARGUMENTS];
+                let count = op.argument_count();
+                for slot in operands[..count].iter_mut().rev() {
+                    let value = self.pop()?;
+                    let Value::Float(value) = value else {
+                        self.heap.drop_value(value);
+                        return Err(VmError::TypeMismatch {
+                            expected: "a float to take a maths operation of",
+                        });
+                    };
+                    *slot = value;
+                }
+                self.stack.push(Value::Float(op.apply(&operands[..count])));
             }
             Instruction::ForeignOffset(offset) => {
                 let address = self.pop_foreign_pointer()?;

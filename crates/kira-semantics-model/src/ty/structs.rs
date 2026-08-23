@@ -100,6 +100,11 @@ pub struct StructTable {
     index: std::collections::HashMap<String, StructId>,
     // Index-aligned with `defs`, and written by the same one place.
     origins: Vec<StructOrigin>,
+    // Index-aligned with `defs`: the package that declared each row, or
+    // `None` for one of the program's own files. Kept so an id can answer
+    // "whose is this?" — a question name lookups cannot, because names repeat
+    // across packages by design.
+    owners: Vec<Option<String>>,
 }
 
 /// The index key a declaration sits under.
@@ -167,6 +172,7 @@ impl StructTable {
         self.index.insert(key, id);
         self.defs.push(def);
         self.origins.push(StructOrigin::Declared);
+        self.owners.push(owner.map(str::to_owned));
         Some(id)
     }
 
@@ -179,6 +185,16 @@ impl StructTable {
     /// none.
     pub fn lookup_owned(&self, owner: Option<&str>, name: &str) -> Option<StructId> {
         self.index.get(&owned_key(owner, name)).copied()
+    }
+
+    /// The package that declared the struct at `id`, or `None` for one of the
+    /// program's own files.
+    ///
+    /// `None` for an id this table never minted, matching how every other
+    /// out-of-range read here answers as an ordinary shape rather than as an
+    /// error.
+    pub fn owner_of(&self, id: StructId) -> Option<&str> {
+        self.owners.get(id.0 as usize).and_then(Option::as_deref)
     }
 
     /// The definition behind an id.

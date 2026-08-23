@@ -13,6 +13,8 @@
 //! - every export names a real function at the arity it claims, every handle
 //!   names a listed class, and no consumer-facing name is claimed twice.
 
+use kira_runtime_abi::ForeignAggregateId;
+
 use crate::exports::ExportType;
 use crate::module::{FrameRelease, Module};
 use crate::op::Instruction;
@@ -129,6 +131,15 @@ pub enum ModuleValidateError {
         /// How many functions the module actually has.
         function_count: u64,
     },
+    /// A callback signature named an aggregate index the table does not
+    /// contain.
+    #[error("callback {callback} names aggregate {index}, which this module does not define")]
+    UnknownCallbackAggregate {
+        /// The offending callback row's index.
+        callback: usize,
+        /// The unresolved aggregate index.
+        index: u32,
+    },
     /// Two exports claim the same consumer-facing name.
     #[error("two exports are named `{export}`")]
     DuplicateExport {
@@ -180,6 +191,28 @@ impl Module {
                     function: entry.function(),
                     function_count,
                 });
+            }
+        }
+        // Every aggregate a callback signature names must resolve here, the
+        // same way an import's do at decode: a callback row is checked twice
+        // (decode and validate) because validation is what a hand-built module
+        // is asked for directly.
+        for (callback, entry) in self.foreign_callbacks.iter().enumerate() {
+            let signature = entry.signature();
+            for spec in signature
+                .parameters()
+                .iter()
+                .copied()
+                .chain(std::iter::once(signature.result()))
+            {
+                if let Some(id) = spec.aggregate()
+                    && self.foreign_aggregates.get(id).is_none()
+                {
+                    return Err(ModuleValidateError::UnknownCallbackAggregate {
+                        callback,
+                        index: id.0,
+                    });
+                }
             }
         }
         for function in &self.functions {
@@ -262,9 +295,14 @@ impl Module {
                     // native callee never does here. Its `slot` roots the
                     // writeback place in this frame, so it is bounded too; the
                     // path steps are checked by the runtime against the value in
-                    // hand, exactly as `StorePlace`'s are.
+                    // hand, exactly as `StorePlace`'s are. The writeback moves
+                    // callee slot 0 out, so — like `CallWriteback`'s targets —
+                    // the callee must have that slot at all.
                     Instruction::CallMut { func, slot, .. } => {
-                        non_native_function(&self.functions, *func) && *slot < function.local_count
+                        non_native_function(&self.functions, *func)
+                            && *slot < function.local_count
+                            && function_at(&self.functions, *func)
+                                .is_some_and(|callee| callee.local_count > 0)
                     }
                     // The general writeback call is bounded on both sides: the
                     // callee like `CallMut`'s, each target's caller slot against
@@ -305,6 +343,14 @@ impl Module {
                     Instruction::ForeignCallback(id) => usize::try_from(u64::from(*id))
                         .ok()
                         .is_some_and(|index| index < self.foreign_callbacks.len()),
+                    // A C-layout address names this module's aggregate table,
+                    // so like `CallForeign` it is bounded here: an id past the
+                    // table has no layout to spell, and reporting that at load
+                    // beats a misleading type-mismatch trap at run time.
+                    Instruction::CLayoutAddress(id) => self
+                        .foreign_aggregates
+                        .get(ForeignAggregateId(*id))
+                        .is_some(),
                     Instruction::Jump(target) | Instruction::JumpIfFalse(target) => {
                         *target < code_len
                     }

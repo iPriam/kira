@@ -380,6 +380,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR004", "expected a function name");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the name just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
@@ -510,7 +511,19 @@ impl Parser<'_> {
                 span: start,
             };
         }
-        self.parse_block_body(start)
+        let allowed = self.enter_nesting();
+        let block = if allowed {
+            self.parse_block_body(start)
+        } else {
+            self.recover_refused_nesting();
+            self.expect(TokenKind::RBrace);
+            Block {
+                stmts: Vec::new(),
+                span: start,
+            }
+        };
+        self.exit_nesting();
+        block
     }
 
     /// Parses statements up to and including the closing `}`, with the opening

@@ -55,23 +55,32 @@ impl Heap {
             // still holding it would be left reading what this took. They get
             // the object; this gets a copy of the payload.
             Value::Enum(id) => {
-                let (tag, payload) = match self.enum_shares(id.0) {
+                // The tag is checked before anything is consumed: taking the
+                // object first would strand its payload when the tag turns out
+                // not to fit callback state.
+                let tag = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Enum { tag, .. })) => *tag,
+                    _ => return Err("an enum whose payload was already taken"),
+                };
+                let tag =
+                    u32::try_from(tag).map_err(|_| "an enum tag too large for callback state")?;
+                let payload = match self.enum_shares(id.0) {
                     Some(1) | None => match self.take_object(id.0) {
-                        Some(Object::Enum { tag, payload, .. }) => (tag, payload),
+                        Some(Object::Enum { payload, .. }) => payload,
                         _ => return Err("an enum whose payload was already taken"),
                     },
                     Some(_) => {
-                        let (tag, payload) = match self.slots.get(id.0 as usize) {
-                            Some(Some(Object::Enum { tag, payload, .. })) => (*tag, *payload),
+                        let payload = match self.slots.get(id.0 as usize) {
+                            Some(Some(Object::Enum { payload, .. })) => *payload,
                             _ => return Err("an enum whose payload was already taken"),
                         };
                         let payload = payload.map(|value| self.copy_value(value));
                         self.free_enum(super::EnumId(id.0));
-                        (tag, payload)
+                        payload
                     }
                 };
                 NativeStateValue::enum_of(
-                    u32::try_from(tag).map_err(|_| "an enum tag too large for callback state")?,
+                    tag,
                     match payload {
                         Some(value) => Some(self.into_native_state(value)?),
                         None => None,
@@ -167,12 +176,16 @@ impl Heap {
             // of one: that is what makes a write through the recovered value and
             // a write through the frame's own binding land in one place. The
             // tree keeps its own hold, so this is a fresh one.
-            NativeStateValue::Cell(cell) if cell.handle() == 0 && !cell.is_vm_owned() => {
-                Value::RawPtr(0)
-            }
-            NativeStateValue::Cell(cell) => {
+            //
+            // Only a VM-owned handle names a slot in this heap; a native
+            // engine's handle is its own opaque word, so it crosses back as the
+            // pointer it is rather than being narrowed into a garbage slot id.
+            NativeStateValue::Cell(cell)
+                if cell.is_vm_owned() && cell.handle() <= u32::MAX as u64 =>
+            {
                 self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
             }
+            NativeStateValue::Cell(cell) => Value::RawPtr(cell.handle()),
         }
     }
 

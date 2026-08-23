@@ -267,6 +267,18 @@ impl Parser<'_> {
     }
 
     fn parse_type_ref_ending(&mut self, end: TypeEnd) -> TypeRefId {
+        let allowed = self.enter_nesting();
+        if !allowed {
+            self.recover_refused_nesting();
+            let span = self.current().span;
+            return self.tree.add_type(TypeRef::Error { span });
+        }
+        let ty = self.parse_type_ref_inner(end);
+        self.exit_nesting();
+        ty
+    }
+
+    fn parse_type_ref_inner(&mut self, end: TypeEnd) -> TypeRefId {
         if self.at(TokenKind::LParen) {
             return self.parse_function_type();
         }

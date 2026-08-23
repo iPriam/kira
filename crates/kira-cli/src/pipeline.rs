@@ -432,7 +432,7 @@ fn compile_with_frontend(
                 | FrontendError::Assembly(kira_program_graph::AssemblyError::Read { .. }) => {
                     EXIT_USAGE
                 }
-                FrontendError::SourceMapFull { .. } | FrontendError::Assembly(_) => EXIT_FAILURE,
+                FrontendError::SourceLimit { .. } | FrontendError::Assembly(_) => EXIT_FAILURE,
             }
         })
 }

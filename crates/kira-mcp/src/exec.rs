@@ -81,6 +81,13 @@ pub enum ExecError {
         #[source]
         source: std::io::Error,
     },
+    /// A subject naming nothing to run reached the executor.
+    ///
+    /// The tool layer refuses this shape when it parses arguments; this
+    /// variant exists so the dispatcher stays total without trusting that
+    /// every caller validated first.
+    #[error("the subject names neither a Kira source file nor a test to run")]
+    EmptySubject,
 }
 
 /// Runs `program` with `args` under `cwd`, bounded by `timeout`.
@@ -112,6 +119,17 @@ pub fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The child becomes the head of its own process group, which is what makes
+    // `kill -KILL -<pid>` below reach the whole tree: without this the child
+    // joins *this* server's group, its pid is not a pgid, the group kill
+    // misses everything, and the compiler's grandchildren keep the pipes open
+    // past the timeout. Windows needs none of this — `taskkill /T` walks the
+    // tree by parent id.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     for (key, value) in env {
         command.env(key, value);
     }
@@ -194,8 +212,9 @@ fn kill_tree(child: &mut std::process::Child) {
     }
     #[cfg(not(windows))]
     {
-        // Negative pid signals the group, which is the tree cargo put itself at
-        // the head of.
+        // Negative pid signals the group the spawn put this child at the head
+        // of (see `process_group(0)` above), which is everything it went on to
+        // start.
         let _ = Command::new("kill")
             .args(["-KILL", &format!("-{}", child.id())])
             .stdin(Stdio::null())
@@ -216,13 +235,17 @@ pub fn argv(parts: &[&str]) -> Vec<String> {
 ///
 /// Resolved from the crate's own manifest directory rather than from the
 /// working directory a client happened to launch it in: a tool that ran cargo
-/// in the wrong tree would answer about the wrong repository.
+/// in the wrong tree would answer about the wrong repository. If the crate
+/// were ever checked out shallower than `crates/kira-mcp`, the root degenerates
+/// to the manifest's own directory — every tool stays usable against a real
+/// cargo project instead of taking the server down.
 pub fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crates/kira-mcp sits two levels under the root")
-        .to_path_buf()
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| manifest.to_path_buf())
 }
 
 /// Renders a run as the JSON every tool embeds under `commands`.

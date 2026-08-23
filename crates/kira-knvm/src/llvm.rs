@@ -14,6 +14,7 @@ use kira_toolchain::{TargetBundle, is_llvm_home};
 
 use crate::digest::{Sha256, checksum_file_name};
 use crate::github;
+use crate::unpack::{self, UnpackError};
 use crate::install::{InstallError, Staging};
 use crate::source::{ReleaseSourceError, read_published_checksum};
 
@@ -299,90 +300,24 @@ fn fetch_bundle(
     Ok((archive, verified))
 }
 
-/// The tools that can unpack `format`, in the order they are tried.
-///
-/// The only zip the pin names is the Windows bundle, and no single tool
-/// unpacks it on every Windows shell. `unzip` is the format's own tool and is
-/// what a git-for-Windows or MSYS environment has; a stock `cmd` or PowerShell
-/// has none, but does have a `tar` that is bsdtar and reads zip. The `tar` on
-/// those same MSYS shells is GNU tar, which refuses a zip outright — so the
-/// fallthrough below is on failure and not only on a missing tool, or the
-/// first environment would never reach the second's tool.
-fn unpackers(format: &str) -> Option<&'static [&'static str]> {
-    match format {
-        "tar.xz" | "tar.gz" => Some(&["tar"]),
-        "zip" => Some(&["unzip", "tar"]),
-        _ => None,
-    }
-}
-
-/// How `tool` is asked to unpack `archive` into `destination`.
-fn unpack_arguments<'a>(
-    tool: &str,
-    archive: &'a Path,
-    destination: &'a Path,
-) -> Vec<&'a std::ffi::OsStr> {
-    match tool {
-        "unzip" => vec![
-            "-q".as_ref(),
-            archive.as_os_str(),
-            "-d".as_ref(),
-            destination.as_os_str(),
-        ],
-        _ => vec![
-            "-xf".as_ref(),
-            archive.as_os_str(),
-            "-C".as_ref(),
-            destination.as_os_str(),
-        ],
-    }
-}
-
 /// Unpacks a bundle archive into `destination`.
 ///
-/// `tar` reads `.tar.xz` without being told the compression. Each tool
-/// [`unpackers`] names is tried until one succeeds; a tool that is absent or
-/// that refuses the archive hands over to the next, and the last refusal is
-/// what gets reported when none of them worked.
+/// The mechanics are shared with everything else knvm installs; what is local
+/// here is only how a refusal is reported, because these variants are part of
+/// this verb's error surface and its callers match on them.
 fn extract(archive: &Path, destination: &Path, format: &str) -> Result<(), LlvmInstallError> {
-    let Some(tools) = unpackers(format) else {
-        return Err(LlvmInstallError::UnsupportedArchiveFormat {
-            format: format.to_string(),
-        });
-    };
-    std::fs::create_dir_all(destination)
-        .map_err(|error| InstallError::io("create", destination, error))?;
-
-    let mut refused: Option<String> = None;
-    for tool in tools {
-        let arguments = unpack_arguments(tool, archive, destination);
-        let output = match std::process::Command::new(tool).args(&arguments).output() {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(InstallError::io("run the unpacker on", archive, error).into());
-            }
-        };
-        if output.status.success() {
-            return Ok(());
+    unpack::extract(archive, destination, format).map_err(|error| match error {
+        UnpackError::UnsupportedFormat { format } => {
+            LlvmInstallError::UnsupportedArchiveFormat { format }
         }
-        refused = Some(format!(
-            "{tool} exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    match refused {
-        Some(detail) => Err(LlvmInstallError::ExtractFailed {
-            archive: archive.to_path_buf(),
-            detail,
-        }),
-        None => Err(LlvmInstallError::UnpackerUnavailable {
-            tools,
-            format: format.to_string(),
-        }),
-    }
+        UnpackError::UnpackerUnavailable { tools, format } => {
+            LlvmInstallError::UnpackerUnavailable { tools, format }
+        }
+        UnpackError::Failed { archive, detail } => {
+            LlvmInstallError::ExtractFailed { archive, detail }
+        }
+        UnpackError::Io(error) => error.into(),
+    })
 }
 
 /// Finds the LLVM tree inside an unpacked bundle.
@@ -417,6 +352,7 @@ fn locate_bundle(unpacked: &Path) -> Result<PathBuf, LlvmInstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::unpack::{unpack_arguments, unpackers};
 
     #[test]
     fn derives_the_home_discovery_looks_in() {

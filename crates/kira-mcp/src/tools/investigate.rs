@@ -120,7 +120,10 @@ impl Subject {
                     self.timeout,
                 )
             }
-            (None, None) => unreachable!("a subject always names a program or a test"),
+            // A subject with neither half is refused at parse time by
+            // `subject`, so this arm answers the same way rather than trusting
+            // that every future caller validated first.
+            (None, None) => Err(exec::ExecError::EmptySubject),
         }
     }
 

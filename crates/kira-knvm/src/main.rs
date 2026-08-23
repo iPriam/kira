@@ -192,6 +192,40 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                 }
             }
         }
+        KnvmCommand::InstallLibffi { force } => {
+            match kira_knvm::libffi::install_libffi(&toolchains_root, force) {
+                Ok(installed) => {
+                    // Reported per target rather than as one line, because the
+                    // set is the point: what makes a cross build work is the
+                    // archive for the machine it emits for being here too.
+                    let version =
+                        kira_toolchain::libffi_pinned_version().unwrap_or("(unknown version)");
+                    for entry in &installed {
+                        let state = if entry.already_installed {
+                            "already installed"
+                        } else {
+                            "installed"
+                        };
+                        println!(
+                            "knvm: libffi {version} for {} {state} at {}",
+                            entry.target,
+                            entry.home.display()
+                        );
+                        if !entry.already_installed {
+                            report_verification(entry.verified.as_ref(), false);
+                        }
+                    }
+                    if installed.iter().all(|entry| entry.already_installed) {
+                        println!("knvm: run `knvm install libffi --force` to replace them");
+                    }
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    EXIT_FAILED
+                }
+            }
+        }
         KnvmCommand::SelfUpdate { channel } => {
             let kira_home = match kira_toolchain::kira_home() {
                 Ok(home) => home,

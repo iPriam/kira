@@ -97,6 +97,23 @@ pub fn missing_dependency_package(name: &str, resolved_path: &str) -> Diagnostic
     )
 }
 
+/// Builds KPK032: dependency `name`'s package exists but its manifest could
+/// not be read or parsed.
+///
+/// Distinct from [`missing_dependency_package`] because the remedy differs:
+/// the package is exactly where the dependency says, so the path is right and
+/// the manifest's own text is what needs fixing.
+pub fn unreadable_dependency_manifest(name: &str, resolved_path: &str, reason: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk032UnreadableDependencyManifest,
+        "dependency manifest could not be read",
+        format!(
+            "Dependency `{name}` resolves to `{resolved_path}`, and its `package.kira` exists, but it could not be read: {reason}."
+        ),
+        "Fix the manifest of the dependency package; the depending package's paths are correct.",
+    )
+}
+
 /// Builds KPK021: package dependencies contain the ordered `cycle`.
 pub fn cyclic_package_dependency(cycle: &[String]) -> Diagnostic {
     package_error(

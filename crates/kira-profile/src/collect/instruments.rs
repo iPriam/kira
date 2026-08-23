@@ -98,6 +98,22 @@ impl Recorder {
     }
 }
 
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        // An interrupted run still owns the sampled child, maybe a live
+        // `sample`, and its report file. Releasing all three here keeps an
+        // error between start and finish from stranding any of them; on paths
+        // that already waited and removed, every step is a no-op.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(sampler) = self.sampler.as_mut() {
+            let _ = sampler.kill();
+            let _ = sampler.wait();
+        }
+        let _ = std::fs::remove_file(&self.report);
+    }
+}
+
 /// One line of the call tree, with the depth its indentation gave it.
 #[derive(Debug)]
 struct Node {

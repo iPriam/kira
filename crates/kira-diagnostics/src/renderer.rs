@@ -28,7 +28,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::label::{Label, LabelKind};
-use kira_source::SourceMap;
+use kira_source::{SourceFile, SourceMap, Span};
 
 /// How many excerpt lines a multi-line span shows before its middle is elided.
 ///
@@ -113,10 +113,17 @@ fn render_label(sources: &SourceMap, label: &Label, out: &mut String) {
     if first == last {
         let text = line_text(first);
         out.push_str(&format!("{:>gutter$} | {text}\n", start.line));
-        let caret_col = start.column.saturating_sub(1) as usize;
-        let available = text.len().saturating_sub(caret_col);
-        let caret_len = (span.span.len as usize).clamp(1, available.max(1));
-        let underline = format!("{}{}", " ".repeat(caret_col), "^".repeat(caret_len));
+        // Columns and lengths are counted in characters, not bytes: a terminal
+        // advances one cell per character, and a multi-byte character earlier
+        // on the line would otherwise push the caret right of its target.
+        let caret_col = display_column(&file.text, first_byte_of(file, first), span.span.start);
+        let caret_len = span_text_chars(&file.text, span.span).max(1);
+        let available = text.chars().count().saturating_sub(caret_col);
+        let underline = format!(
+            "{}{}",
+            " ".repeat(caret_col),
+            "^".repeat(caret_len.min(available.max(1)))
+        );
         out.push_str(&format!("{pad} | {underline} {}\n", label.message));
         return;
     }
@@ -125,7 +132,7 @@ fn render_label(sources: &SourceMap, label: &Label, out: &mut String) {
     // close it under the last line.
     let text = line_text(first);
     out.push_str(&format!("{:>gutter$} |   {text}\n", start.line));
-    let caret_col = start.column.saturating_sub(1) as usize;
+    let caret_col = display_column(&file.text, first_byte_of(file, first), span.span.start);
     out.push_str(&format!("{pad} |  {}^\n", "_".repeat(caret_col + 1)));
 
     let body: Vec<usize> = ((first + 1)..=last).collect();
@@ -145,6 +152,38 @@ fn render_label(sources: &SourceMap, label: &Label, out: &mut String) {
         out.push_str(&format!("{number:>gutter$} | | {}\n", line_text(index)));
     }
     out.push_str(&format!("{pad} | |{}^ {}\n", "_".repeat(4), label.message));
+}
+
+/// The first byte offset of line `index` in `file`.
+fn first_byte_of(file: &SourceFile, index: usize) -> u32 {
+    file.line_map.line_bounds(index, &file.text).0
+}
+
+/// How many characters of `file`'s line sit before `offset`, counted from the
+/// line's own first byte.
+///
+/// A terminal advances one cell per character, so this — not the byte
+/// difference — is where an underline belongs. Offsets outside the line
+/// degrade to zero rather than guessing.
+fn display_column(text: &str, line_start: u32, offset: u32) -> usize {
+    if offset < line_start {
+        return 0;
+    }
+    let prefix_bytes = (offset - line_start) as usize;
+    text.get((line_start as usize)..)
+        .and_then(|rest| rest.get(..prefix_bytes.min(rest.len())))
+        .map(|prefix| prefix.chars().count())
+        .unwrap_or(0)
+}
+
+/// How many characters a span covers, in the text it names.
+///
+/// Zero-length and out-of-bounds spans answer zero; callers add their own
+/// floor for the one-cell minimum.
+fn span_text_chars(text: &str, span: Span) -> usize {
+    text.get(span.start as usize..span.end() as usize)
+        .map(|covered| covered.chars().count())
+        .unwrap_or(0)
 }
 
 fn severity_word(severity: Severity) -> &'static str {

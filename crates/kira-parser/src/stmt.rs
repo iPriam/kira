@@ -70,6 +70,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR010", "expected a binding name");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the name just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
@@ -180,6 +181,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR012", "expected a loop variable");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the loop variable just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
@@ -233,6 +235,9 @@ impl Parser<'_> {
             | TokenKind::False
             | TokenKind::Identifier
             | TokenKind::LParen
+            // `return try g()` — `try` is a prefix operator in expression
+            // position, so it starts an expression like `-` and `!` do.
+            | TokenKind::Try
             | TokenKind::Minus
             | TokenKind::Bang
             // `return ~mask` — `~` is a prefix operator like `-` and `!`, so

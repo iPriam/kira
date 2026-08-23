@@ -66,11 +66,15 @@ impl EditBuffer {
     /// still points at the line it was written on. Newlines are preserved for
     /// the same reason: the line numbering after a removed macro declaration is
     /// unchanged.
+    ///
+    /// The blank is written **per byte**, not per character: a multi-byte
+    /// character blanked to one space byte would shrink the text and shift
+    /// every offset after it, breaking the invariant this exists to keep.
     pub(crate) fn blank(&mut self, span: Span, text: &str) {
         let slice = slice_of(text, span);
         let blanked: String = slice
-            .chars()
-            .map(|ch| if ch == '\n' { '\n' } else { ' ' })
+            .bytes()
+            .map(|byte| if byte == b'\n' { '\n' } else { ' ' })
             .collect();
         self.replace(span, blanked);
     }

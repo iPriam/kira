@@ -255,6 +255,17 @@ pub fn read_memory(sessions: &mut Sessions, arguments: &Value) -> Result<Value, 
 /// tool that ends the session it was asked to modify is worse than no tool.
 pub fn write_memory(sessions: &mut Sessions, arguments: &Value) -> Result<Value, String> {
     let address = required_string(arguments, "address")?.to_owned();
+    // The address is interpolated into an LLDB command line, so it must be
+    // exactly one hexadecimal word: anything else — spaces, flags, extra
+    // tokens — would be interpreted as command syntax rather than refused.
+    let address = address.trim();
+    let digits = address
+        .strip_prefix("0x")
+        .or_else(|| address.strip_prefix("0X"))
+        .unwrap_or(address);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("`address` must be a single hexadecimal address".to_owned());
+    }
     let bytes = parse_hex(required_string(arguments, "bytes")?)?;
     let session = sessions.select(session_field(arguments))?;
     let frame_id = session.top_frame_id()?;
@@ -263,13 +274,13 @@ pub fn write_memory(sessions: &mut Sessions, arguments: &Value) -> Result<Value,
         session,
         "evaluate",
         json!({
-            "expression": format!("memory write -s 1 {address} {values}"),
+            "expression": format!("memory write -s 1 0x{digits} {values}"),
             "frameId": frame_id,
             "context": "repl",
         }),
     )?;
     Ok(json!({
-        "address": address,
+        "address": format!("0x{digits}"),
         "written": bytes.len(),
         "output": reply["result"],
     }))

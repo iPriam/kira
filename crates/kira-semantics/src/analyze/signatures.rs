@@ -6,6 +6,7 @@
 //! lookup by name, parameter shapes, and the declaration site a call links to.
 
 use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
+use kira_semantics_model::ty::StructId;
 use kira_semantics_model::{OwnershipMode, Type};
 use kira_source::{FileSpan, SourceId, Span};
 
@@ -243,6 +244,29 @@ impl<'a> Analyzer<'a> {
                     .imports
                     .sees(self.source, self.sigs[id.0 as usize].source)
         })?;
+        let sig = &self.sigs[id.0 as usize];
+        Some((id, &sig.params, sig.return_type))
+    }
+
+    /// Looks up the method `method` as it is declared on receiver struct
+    /// `receiver`.
+    ///
+    /// The display name two packages may share — each may declare a class of
+    /// one name — lands both declarations under one index key, so picking by
+    /// name alone can read the other package's mutating flag and silently drop
+    /// or invent a receiver writeback. Matching the declared receiver instead
+    /// picks the body this value's type actually means.
+    pub(crate) fn lookup_method_for_receiver(
+        &self,
+        receiver: StructId,
+        method: &str,
+    ) -> Option<(FuncId, &[Type], Type)> {
+        let qualified = format!("{}.{method}", self.type_name(Type::Struct(receiver)));
+        let ids = self.sig_index.get(&qualified)?;
+        let wanted = Type::Struct(receiver);
+        let id = *ids
+            .iter()
+            .find(|id| self.sigs[id.0 as usize].params.first() == Some(&wanted))?;
         let sig = &self.sigs[id.0 as usize];
         Some((id, &sig.params, sig.return_type))
     }

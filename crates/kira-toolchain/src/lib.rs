@@ -5,17 +5,24 @@
 //! Layer 0 of the Kira package graph.
 
 pub mod bundled_discovery;
+pub mod libffi_metadata;
 pub mod llvm_code_generators;
 pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
 pub mod paint;
 pub mod pin;
+pub mod process;
 pub mod version;
 
 pub use bundled_discovery::{
     BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
     discover_foundation_from,
+};
+pub use libffi_metadata::{
+    link_name_for,
+    LibffiArchive, LibffiMetadata, LibffiPin, archive_for as libffi_archive_for,
+    pinned as libffi_pinned, pinned_version as libffi_pinned_version, static_archive_name_for,
 };
 pub use llvm_code_generators::{CodeGeneratorError, WEB_CODE_GENERATOR};
 pub use llvm_discovery::{
@@ -266,7 +273,12 @@ pub fn managed_libffi_version_root(
     Ok(managed_libffi_root()?.join(libffi_version))
 }
 
-/// `~/.kira/toolchains/libffi/<libffi-version>/<host-key>` — an installed libffi home.
+/// `~/.kira/toolchains/libffi/<libffi-version>/<target-key>` — an installed
+/// libffi home.
+///
+/// Keyed by target rather than by host, unlike the LLVM bundle beside it: libffi
+/// is linked into the artifact, so a cross build needs the archive for the
+/// machine it emits for. One host can therefore hold several.
 pub fn managed_libffi_home(
     libffi_version: &str,
     host_key: &str,
@@ -297,18 +309,47 @@ pub fn static_archive_name(base: &str) -> String {
     }
 }
 
-/// The file name of the libffi binary Kira ships and loads at run time.
+/// `<libffi-home>/lib/<archive>` — the static archive a build links.
 ///
-/// Named here rather than in the crate that loads it because it is a file a
-/// toolchain *ships*: an install has to place it, and an install has no reason
-/// to depend on the FFI engine to learn what it is called.
-pub fn bundled_libffi_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "libffi-8.dll"
-    } else if cfg!(target_os = "macos") {
-        "libffi.8.dylib"
-    } else {
-        "libffi.so.8"
+/// The archive is the whole of what an installed libffi home is for. Kira links
+/// libffi statically, so this file is consumed at build time and nothing is
+/// shipped beside the artifact that results: a user downloads Kira and has the
+/// engine already.
+#[must_use]
+pub fn managed_libffi_archive(libffi_home: &Path, os: &str, env: &str) -> PathBuf {
+    libffi_home
+        .join("lib")
+        .join(static_archive_name_for(os, env))
+}
+
+/// Whether `path` looks like an installed libffi home rather than some other
+/// directory that happens to exist.
+///
+/// The check is the archive itself, because that is the only file anything
+/// reads: a home with headers and no archive would pass a directory test and
+/// then fail at the link, naming a missing symbol instead of a missing install.
+#[must_use]
+pub fn is_libffi_home(path: &Path, os: &str, env: &str) -> bool {
+    managed_libffi_archive(path, os, env).is_file()
+}
+
+/// The key naming one target's libffi archive, or `None` where Kira publishes
+/// none.
+///
+/// This is the spelling `libffi-metadata.toml` keys its target table by and the
+/// directory name an installed archive sits in, so the build script that links
+/// one and the installer that fetches one cannot disagree about which machine
+/// they mean. A target outside the set links no engine, and every foreign
+/// import fails where it is written rather than at a link that quietly
+/// resolved nothing.
+pub fn libffi_vendor_target(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("windows", "x86_64") => Some("windows-x86_64"),
+        ("macos", "aarch64") => Some("macos-aarch64"),
+        ("macos", "x86_64") => Some("macos-x86_64"),
+        ("linux", "aarch64") => Some("linux-aarch64"),
+        ("linux", "x86_64") => Some("linux-x86_64"),
+        _ => None,
     }
 }
 

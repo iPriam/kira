@@ -246,7 +246,7 @@ impl Analyzer<'_> {
         let call = self.analyze_user_call_from_syntax(ctx, &target, &[self_hir], args, span);
         // A parent-qualified call still runs on this instance's `self`, so a
         // mutating parent method writes `self` back.
-        self.record_mut_self(call, &target, local);
+        self.record_mut_self(call, local);
         call
     }
 
@@ -446,7 +446,7 @@ impl Analyzer<'_> {
         // A bare call on a mutating sibling method writes `self` back: the
         // enclosing method is itself mutating (the fixpoint marks it so), so
         // `self` is a mutable place.
-        self.record_mut_self(call, &qualified, local);
+        self.record_mut_self(call, local);
         Some(call)
     }
 }

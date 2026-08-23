@@ -70,8 +70,11 @@ impl<'a> Analyzer<'a> {
             // decays it to a pointer at a parameter or result boundary. Its
             // diagnostic names the form and its valid representation.
             Type::Struct(id) if self.ffi_struct_kind(id).is_some_and(is_deferred_ffi) => {
-                let kind = self.ffi_struct_kind(id).expect("checked by the guard");
-                self.emit_ffi_not_executable(kind, id, span);
+                // The same guard as the match arm, spelled out so no `expect`
+                // is needed: a deferred FFI struct always carries its kind.
+                if let Some(kind) = self.ffi_struct_kind(id) {
+                    self.emit_ffi_not_executable(kind, id, span);
+                }
                 None
             }
             // `Any` is refused on its own terms rather than as an aggregate: it

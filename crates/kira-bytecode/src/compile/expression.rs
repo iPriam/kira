@@ -75,9 +75,13 @@ impl FnCompiler<'_> {
                 self.compile_expr(value)?;
                 self.code.push(Instruction::ScalarText);
             }
-            IrExpr::MathOperation { op, value } => {
-                let (op, value) = (*op, *value);
-                self.compile_expr(value)?;
+            IrExpr::MathOperation { op, operands } => {
+                let (op, operands) = (*op, operands.clone());
+                // Pushed in source order, so `pow(x, y)` leaves the exponent on
+                // top and the instruction pops back down to the base.
+                for operand in operands {
+                    self.compile_expr(operand)?;
+                }
                 self.code.push(Instruction::MathOp(op));
             }
             IrExpr::ForeignMemberAddress {

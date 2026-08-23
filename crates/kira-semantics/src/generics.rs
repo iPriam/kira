@@ -118,7 +118,7 @@ impl<'a> Analyzer<'a> {
             seen.push(param_name);
         }
         if self.generic_enums.contains_key(&name)
-            || self.program.types.enums().lookup(&name).is_some()
+            || self.visible_enum(&name).is_some()
             || self.visible_struct(&name).is_some()
         {
             self.emit(
@@ -239,7 +239,7 @@ impl<'a> Analyzer<'a> {
     /// the two mistakes it is.
     fn report_not_generic(&mut self, text: &str, name_span: Span, span: Span) {
         let known = Type::from_name(text).is_some()
-            || self.program.types.enums().lookup(text).is_some()
+            || self.visible_enum(text).is_some()
             || self.visible_struct(text).is_some()
             || self.aliases.contains_key(text);
         if known {
@@ -339,6 +339,12 @@ impl<'a> Analyzer<'a> {
     ///
     /// This is both the memo key and what every diagnostic prints, which is why
     /// it is spelled the way the source writes it rather than encoded.
+    ///
+    /// A nominal argument is spelled with its **owner** — `Lib::Point`, not
+    /// `Point` — because two packages may each declare a `Point`, and a
+    /// display-only spelling would let `Boxed<Point>` built on one package's
+    /// struct be reused as the other's: no diagnostic, and payload type
+    /// confusion at the erased boundary.
     fn mangle(&self, text: &str, args: &[Type]) -> String {
         let mut mangled = String::with_capacity(text.len() + 8 * args.len());
         mangled.push_str(text);
@@ -347,10 +353,33 @@ impl<'a> Analyzer<'a> {
             if index > 0 {
                 mangled.push_str(", ");
             }
-            mangled.push_str(&self.type_name(arg));
+            mangled.push_str(&self.identity_spelling(arg));
         }
         mangled.push('>');
         mangled
+    }
+
+    /// How `ty` is spelled when identity matters.
+    ///
+    /// Scalars and pointers have one spelling each; a nominal type repeats its
+    /// name across packages by design, so its owner travels with it. An
+    /// instantiation row already spells its own arguments' identities in its
+    /// name, so reusing the name is sound.
+    fn identity_spelling(&self, ty: Type) -> String {
+        match ty {
+            Type::Struct(id) => match self.program.types.structs().owner_of(id) {
+                Some(owner) => format!("{owner}::{}", self.program.types.type_name(ty)),
+                None => self.program.types.type_name(ty),
+            },
+            Type::Enum(id) => {
+                let name = self.program.types.type_name(ty);
+                match self.program.types.enums().owner_of(id) {
+                    Some(owner) => format!("{owner}::{name}"),
+                    None => name,
+                }
+            }
+            other => self.type_name(other),
+        }
     }
 }
 

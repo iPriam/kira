@@ -32,10 +32,20 @@ pub fn sync(args: &[String]) -> i32 {
 
     // Resolution problems are shown before anything is written: a lockfile
     // pinned from a graph with a missing package would record the hole as if
-    // it were the answer.
+    // it were the answer. An Error-severity diagnostic refuses the write and
+    // fails the verb — a lockfile that blesses a broken graph would also
+    // silence every future drift check, because it compares like-for-like.
     let sources = SourceMap::default();
     for diagnostic in &graph.diagnostics {
         eprintln!("{}", renderer::render(diagnostic, &sources));
+    }
+    if graph
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == kira_diagnostics::Severity::Error)
+    {
+        eprintln!("kira sync: resolve the errors above before syncing; nothing was written");
+        return EXIT_FAILURE;
     }
 
     match kira_package_manager::sync_lockfile(root, &graph.packages) {

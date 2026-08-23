@@ -80,15 +80,16 @@ enum RunError {
 /// the thread that starts it for as long as the window is open, and on macOS
 /// that thread has to be this one.
 fn run(options: &Options) -> Result<(), RunError> {
-    let cache = RunnerCache::open(options.cache.clone())?;
+    let cache = Arc::new(RunnerCache::open(options.cache.clone())?);
     let client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
     let mut host = DesktopHost::new(cache.path.clone());
     let (relay, app) = relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch_status());
     let running = app.running();
 
+    let session_cache = Arc::clone(&cache);
     let protocol = std::thread::Builder::new()
         .name("kira-live-protocol".to_owned())
-        .spawn(move || serve_session(client, relay, &running))
+        .spawn(move || serve_session(client, relay, &running, &session_cache))
         .map_err(RunError::Thread)?;
 
     // Every host call happens here, in order, on the one thread that is allowed
@@ -105,10 +106,15 @@ fn run(options: &Options) -> Result<(), RunError> {
 /// Ends the process itself when the app is still running, because then nothing
 /// else can: the main thread is inside a run loop that returns when the window
 /// closes, and the session has just been told to shut down.
+///
+/// The exit path releases the staging cache first. Skipping unwinding would
+/// otherwise strand every staged bundle in the system temporary directory — one
+/// per Ctrl-C'd session, reclaimed by nobody.
 fn serve_session(
     mut client: RunnerClient,
     mut relay: RelayHost,
     running: &Arc<AtomicBool>,
+    cache: &RunnerCache,
 ) -> Result<(), ClientError> {
     let outcome = session(&mut client, &mut relay);
     if running.load(Ordering::SeqCst) {
@@ -119,6 +125,7 @@ fn serve_session(
                 EXIT_FAILURE
             }
         };
+        cache.release();
         std::process::exit(i32::from(code));
     }
     outcome
@@ -244,13 +251,22 @@ impl RunnerCache {
         }
         Err(RunError::ScratchExhausted)
     }
+
+    /// Removes the scratch this cache owns, if it has not gone already.
+    ///
+    /// Idempotent, and safe to run before [`std::process::exit`]: dropping
+    /// without unwinding never runs `Drop`, so an exit that ends the process
+    /// must release what it owns first.
+    fn release(&self) {
+        if self.owned {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 impl Drop for RunnerCache {
     fn drop(&mut self) {
-        if self.owned {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
+        self.release();
     }
 }
 

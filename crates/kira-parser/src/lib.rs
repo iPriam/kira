@@ -130,6 +130,12 @@ pub fn parse_files(files: &[(SourceId, &str)]) -> ParseResult {
     assemble(&parsed)
 }
 
+/// How deeply expressions, type references, and blocks may nest before the
+/// parser stops descending and reports `KPAR068`. Real programs sit far
+/// below this; the cap exists so a hostile or generated file full of `((((…`
+/// produces a diagnostic instead of overflowing the host stack.
+const MAX_NESTING_DEPTH: u32 = 128;
+
 /// The parser's mutable working state.
 struct Parser<'a> {
     source: SourceId,
@@ -147,6 +153,9 @@ struct Parser<'a> {
     /// a named child fill. Cleared in the value positions where the same tokens
     /// belong to an enclosing initializer instead.
     no_named_fill: bool,
+    /// Current expression/type/block nesting depth, bounded by
+    /// [`MAX_NESTING_DEPTH`] so recursive descent cannot overflow the stack.
+    nesting: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -168,6 +177,7 @@ impl<'a> Parser<'a> {
             diagnostics: Vec::new(),
             no_struct_literal: false,
             no_named_fill: false,
+            nesting: 0,
         }
     }
 
@@ -360,13 +370,52 @@ impl<'a> Parser<'a> {
             if kind == open {
                 depth += 1;
             } else if kind == close {
-                depth -= 1;
-                if depth == 0 {
+                if depth <= 1 {
                     self.bump();
-                    break;
+                    return;
                 }
+                depth -= 1;
             }
             self.bump();
+        }
+    }
+
+    /// Enters one level of expression/type/block nesting.
+    ///
+    /// Returns whether descent may proceed. At the first level past
+    /// [`MAX_NESTING_DEPTH`] this reports `KPAR068` once; deeper refusals are
+    /// silent because the enclosing levels unwind immediately against the
+    /// tokens left unconsumed. Call [`Parser::exit_nesting`] on every path
+    /// after a `true` or `false` result.
+    fn enter_nesting(&mut self) -> bool {
+        if self.nesting == MAX_NESTING_DEPTH {
+            let span = self.current().span;
+            self.error(
+                span,
+                "KPAR068",
+                format!("expression nests more than {MAX_NESTING_DEPTH} levels deep"),
+            );
+        }
+        let allowed = self.nesting < MAX_NESTING_DEPTH;
+        self.nesting += 1;
+        allowed
+    }
+
+    /// Leaves one level of nesting entered by [`Parser::enter_nesting`].
+    fn exit_nesting(&mut self) {
+        self.nesting -= 1;
+    }
+
+    /// Recovers from a refused nesting level: when the cursor sits on a group
+    /// opener, consuming its balanced group lets the enclosing levels find
+    /// their own closers, so one pathological construct yields one diagnostic
+    /// instead of one per enclosing parenthesis.
+    fn recover_refused_nesting(&mut self) {
+        match self.current_kind() {
+            TokenKind::LParen => self.skip_balanced(TokenKind::LParen, TokenKind::RParen),
+            TokenKind::LBracket => self.skip_balanced(TokenKind::LBracket, TokenKind::RBracket),
+            TokenKind::LBrace => self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace),
+            _ => {}
         }
     }
 

@@ -31,10 +31,14 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             let enum_name = format!("Any {name}");
-            let Some(enum_id) = self.program.types.enums_mut().declare(EnumDef {
-                name: enum_name,
-                variants: Vec::new(),
-            }) else {
+            let owner = self.imports.package_of(source);
+            let Some(enum_id) = self.program.types.enums_mut().declare_owned(
+                owner,
+                EnumDef {
+                    name: enum_name,
+                    variants: Vec::new(),
+                },
+            ) else {
                 self.emit(
                     declaration.name_span,
                     "KSEM006",

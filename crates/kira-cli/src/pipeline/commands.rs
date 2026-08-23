@@ -146,7 +146,7 @@ fn quit_after(bound: std::time::Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(bound);
         crate::progress::out!("kira run: --quit-after reached");
-        std::process::exit(EXIT_OK);
+        kira_toolchain::process::exit(EXIT_OK);
     });
 }
 

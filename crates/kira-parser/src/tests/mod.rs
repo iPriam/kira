@@ -23,6 +23,7 @@ mod imports;
 mod native_state;
 mod ownership;
 mod precedence;
+mod recovery;
 
 use crate::*;
 use kira_runtime_abi::Execution;

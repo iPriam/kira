@@ -88,7 +88,15 @@ impl Analyzer<'_> {
                         continue;
                     };
                     let name = self.interner.resolve(declaration.name).to_owned();
-                    let Some(id) = self.program.types.enums().lookup(&name) else {
+                    // The row was declared under this file's package; the
+                    // owner-scoped lookup is what tells same-named enums in
+                    // different packages apart.
+                    let Some(id) = self
+                        .program
+                        .types
+                        .enums()
+                        .lookup_owned(self.imports.package_of(source), &name)
+                    else {
                         continue;
                     };
                     (span, name, Type::Enum(id))

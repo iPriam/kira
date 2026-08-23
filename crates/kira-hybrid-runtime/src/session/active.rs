@@ -150,14 +150,18 @@ unsafe extern "C" fn invoke_runtime(
             // other way. The argument's own handle was consumed by `take_args`,
             // so the slot holds nothing to free.
             for (slot, value) in returned.writebacks {
-                let replacement = marshal::lower_result(&session.library, value);
-                if (slot as usize) < values.len() {
-                    // SAFETY: the slot is within `count`, which the caller
-                    // guarantees is writable — the manifest's parameter list
-                    // and the call's arity are proven equal by bundle
-                    // validation, and the bound is re-checked above regardless.
-                    unsafe { *args.add(slot as usize) = replacement };
+                // The slot is checked before the replacement is lowered:
+                // `lower_result` allocates a fresh handle or node, and an
+                // out-of-range slot would strand it with nobody to free it.
+                if (slot as usize) >= values.len() {
+                    continue;
                 }
+                let replacement = marshal::lower_result(&session.library, value);
+                // SAFETY: the slot is within `count`, which the caller
+                // guarantees is writable — the manifest's parameter list
+                // and the call's arity are proven equal by bundle
+                // validation, and the bound is re-checked above regardless.
+                unsafe { *args.add(slot as usize) = replacement };
             }
             // A returned string is a fresh handle the native caller frees.
             let value = marshal::lower_result(&session.library, returned.result);

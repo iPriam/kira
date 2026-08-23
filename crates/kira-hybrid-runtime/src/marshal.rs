@@ -26,7 +26,7 @@ use kira_runtime_abi::{
     NativeStateValue,
 };
 
-use crate::library::NativeLibrary;
+use crate::library::{NativeLibrary, StrHandle};
 
 /// Why a value that crossed the seam could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,48 +64,83 @@ pub enum MarshalError {
 ///
 /// Every string becomes a fresh handle out of the library's allocator. The
 /// caller must **not** free them: the callee does, at its return.
+///
+/// An argument that fails to lower releases everything the arguments before it
+/// already created — those transfers were made for a call that is now not
+/// happening, and their maker is the only side that knows.
 pub fn lower_args(
     library: &NativeLibrary,
     args: &[NativeArg<'_>],
 ) -> Result<Vec<BridgeValue>, MarshalError> {
-    args.iter()
-        .enumerate()
-        .map(|(index, argument)| {
-            let data = match *argument {
-                NativeArg::Void => BridgeData::Void,
-                NativeArg::Int(value) => BridgeData::Int(value),
-                NativeArg::Float(value) => BridgeData::Float(value),
-                NativeArg::Bool(value) => BridgeData::Bool(value),
-                NativeArg::Str(text) => BridgeData::String(library.new_string(text)),
-                // A handle is one opaque word and copies like a scalar: there
-                // is nothing to allocate and nothing for the callee to free.
-                NativeArg::Handle(handle) => BridgeData::Handle(handle),
-                // A raw pointer is likewise one opaque word that copies like a
-                // scalar; Kira never dereferences or frees it.
-                NativeArg::RawPtr(pointer) => BridgeData::RawPtr(pointer),
-                // A payload-less enum is its variant tag: one word that copies
-                // like a scalar, with nothing allocated here and nothing for
-                // the callee to free.
-                NativeArg::Enum(tag) => BridgeData::Enum(tag),
-                // The tree is built in the native half's own allocator and
-                // handed over; the callee's decode is what frees it. The VM
-                // keeps the value this was copied from, exactly as it keeps
-                // the string behind a `Str` argument.
-                NativeArg::Aggregate(tree) => {
-                    // SAFETY: every node is allocated by this library and
-                    // consumed by the trampoline it is handed to.
-                    let node = unsafe { library.encode_state_value(tree) }
-                        .map_err(|reason| MarshalError::Aggregate { index, reason })?;
-                    if matches!(tree, NativeStateValue::Any { .. }) {
-                        BridgeData::Any(node as u64)
-                    } else {
-                        BridgeData::Node(node as u64)
+    // The transfers each lowered argument created — its pointer, and whether
+    // it is a state node (node free) or a string handle (string free) — so a
+    // later failure can release them in order.
+    let mut transferred: Vec<(*mut c_void, bool)> = Vec::new();
+    let mut lowered = Vec::with_capacity(args.len());
+    for (index, argument) in args.iter().enumerate() {
+        let data = match *argument {
+            NativeArg::Void => BridgeData::Void,
+            NativeArg::Int(value) => BridgeData::Int(value),
+            NativeArg::Float(value) => BridgeData::Float(value),
+            NativeArg::Bool(value) => BridgeData::Bool(value),
+            NativeArg::Str(text) => {
+                let handle = library.new_string(text);
+                transferred.push((handle as *mut c_void, false));
+                BridgeData::String(handle)
+            }
+            // A handle is one opaque word and copies like a scalar: there
+            // is nothing to allocate and nothing for the callee to free.
+            NativeArg::Handle(handle) => BridgeData::Handle(handle),
+            // A raw pointer is likewise one opaque word that copies like a
+            // scalar; Kira never dereferences or frees it.
+            NativeArg::RawPtr(pointer) => BridgeData::RawPtr(pointer),
+            // A payload-less enum is its variant tag: one word that copies
+            // like a scalar, with nothing allocated here and nothing for
+            // the callee to free.
+            NativeArg::Enum(tag) => BridgeData::Enum(tag),
+            // The tree is built in the native half's own allocator and
+            // handed over; the callee's decode is what frees it. The VM
+            // keeps the value this was copied from, exactly as it keeps
+            // the string behind a `Str` argument.
+            NativeArg::Aggregate(tree) => {
+                // SAFETY: every node is allocated by this library and
+                // consumed by the trampoline it is handed to.
+                match unsafe { library.encode_state_value(tree) } {
+                    Ok(node) => {
+                        transferred.push((node, true));
+                        if matches!(tree, NativeStateValue::Any { .. }) {
+                            BridgeData::Any(node as u64)
+                        } else {
+                            BridgeData::Node(node as u64)
+                        }
+                    }
+                    Err(reason) => {
+                        release_failed_transfers(library, &transferred);
+                        return Err(MarshalError::Aggregate { index, reason });
                     }
                 }
-            };
-            Ok(BridgeValue::encode(data))
-        })
-        .collect()
+            }
+        };
+        lowered.push(BridgeValue::encode(data));
+    }
+    Ok(lowered)
+}
+
+/// Releases everything [`lower_args`] created before its failing argument:
+/// strings through the allocator's own free, state nodes through the node
+/// free — each exactly once, since neither has been shared with anyone yet.
+fn release_failed_transfers(library: &NativeLibrary, transferred: &[(*mut c_void, bool)]) {
+    for &(pointer, is_node) in transferred {
+        if is_node {
+            // SAFETY: each node was created by this library above and freed
+            // exactly once here.
+            unsafe { library.free_state_node(pointer) };
+        } else {
+            // SAFETY: each handle was created by this library above and freed
+            // exactly once here.
+            unsafe { library.free_string(pointer as StrHandle) };
+        }
+    }
 }
 
 /// Lifts the final value of every parameter the callee wrote through.

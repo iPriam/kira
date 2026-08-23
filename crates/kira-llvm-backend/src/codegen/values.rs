@@ -663,20 +663,27 @@ impl Codegen<'_> {
     /// stack at the point of execution instead of reserving every arm's
     /// payload in every call frame.  The count is one or two elements and the
     /// second element is intentionally unused.
+    ///
+    /// Returns the slot together with the stack pointer saved just before it,
+    /// which [`Self::release_dynamic_alloca`] gives back. A dynamic alloca
+    /// lowers to a runtime stack adjustment, so one executed in a loop
+    /// reserves its bytes again on every iteration until something restores —
+    /// pairing every allocation with that restore is what keeps a per-frame
+    /// loop from walking the native stack to its limit.
     pub(super) fn dynamic_alloca(
         &self,
         llvm_type: LLVMTypeRef,
         name: &std::ffi::CStr,
-    ) -> LLVMValueRef {
+    ) -> (LLVMValueRef, LLVMValueRef) {
         // SAFETY: the stack-save intrinsic, integer conversions, and alloca
         // use types from this module's context and the builder is on a live
         // block.
         unsafe {
             let mut no_args = [];
-            let stack = self.call(self.runtime.stack_save, &mut no_args, c"temporary.stack");
+            let saved = self.call(self.runtime.stack_save, &mut no_args, c"temporary.stack");
             let bits = LLVMBuildPtrToInt(
                 self.builder,
-                stack,
+                saved,
                 self.types.i64,
                 c"temporary.stack.bits".as_ptr(),
             );
@@ -692,8 +699,19 @@ impl Codegen<'_> {
                 LLVMConstInt(self.types.i64, 1, 0),
                 c"temporary.count".as_ptr(),
             );
-            LLVMBuildArrayAlloca(self.builder, llvm_type, count, name.as_ptr())
+            let slot = LLVMBuildArrayAlloca(self.builder, llvm_type, count, name.as_ptr());
+            (slot, saved)
         }
+    }
+
+    /// Gives back the native stack a [`Self::dynamic_alloca`] reserved.
+    ///
+    /// Ends the slot's lifetime first, then restores the saved pointer. Every
+    /// read of the slot must happen before this runs — the restore makes the
+    /// bytes behind it dead by construction.
+    pub(super) fn release_dynamic_alloca(&mut self, slot: LLVMValueRef, saved: LLVMValueRef) {
+        self.lifetime_end(slot);
+        self.call(self.runtime.stack_restore, &mut [saved], c"");
     }
 
     /// The largest zero a first-class store is still the cheaper way to write.

@@ -79,27 +79,9 @@ impl ForeignLibrary {
         Self::load_with_libffi(path, aggregates, LibffiRuntime::load()?)
     }
 
-    /// Opens `path` with a libffi runtime staged at `runtime_path`.
-    pub fn load_with_runtime_path(
-        path: impl AsRef<Path>,
-        aggregates: ForeignAggregates,
-        runtime_path: impl AsRef<Path>,
-    ) -> Result<Self, ForeignLibraryError> {
-        Self::load_with_libffi(path, aggregates, LibffiRuntime::load_from(runtime_path)?)
-    }
-
-    /// Opens the current process image and loads Kira's bundled libffi runtime.
+    /// Opens the current process image with the libffi linked into it.
     pub fn load_process(aggregates: ForeignAggregates) -> Result<Self, ForeignLibraryError> {
         Self::load_process_with_libffi(aggregates, LibffiRuntime::load()?)
-    }
-
-    /// Opens the current process image with a libffi runtime staged at
-    /// `runtime_path`.
-    pub fn load_process_with_runtime_path(
-        aggregates: ForeignAggregates,
-        runtime_path: impl AsRef<Path>,
-    ) -> Result<Self, ForeignLibraryError> {
-        Self::load_process_with_libffi(aggregates, LibffiRuntime::load_from(runtime_path)?)
     }
 
     fn load_with_libffi(

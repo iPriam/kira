@@ -1,9 +1,9 @@
 //! The interpreter's string primitives.
 //!
 //! `charAt`, `substring`, and `indexOf` all index bytes — the same units
-//! `StringLen` counts — and each drops the strings it read on every path out,
-//! including the failing ones: a popped value is this VM's to own, so a trap
-//! must not strand storage in a heap that outlives the call.
+//! `StringLen` counts — and each drops every operand it read on every path
+//! out, including the failing ones: a popped value is this VM's to own, so a
+//! trap must not strand storage in a heap that outlives the call.
 
 use kira_runtime_abi::StringOp;
 
@@ -14,10 +14,12 @@ use crate::value::Value;
 impl Vm<'_> {
     // ----- string primitives -------------------------------------------
 
-    /// `s.charAt(i)`: the byte at `index`, dropping the string on every path.
+    /// `s.charAt(i)`: the byte at `index`, dropping both operands on every
+    /// path.
     pub(super) fn read_char_at(&mut self, base: Value, index: Value) -> Result<i64, VmError> {
         let read = self.byte_at(base, index);
         self.heap.drop_value(base);
+        self.heap.drop_value(index);
         read
     }
 
@@ -44,8 +46,8 @@ impl Vm<'_> {
             .ok_or(VmError::StringIndexOutOfBounds)
     }
 
-    /// `s.substring(start, end)`: the half-open byte slice, dropping the
-    /// original on every path.
+    /// `s.substring(start, end)`: the half-open byte slice, dropping all
+    /// three operands on every path.
     pub(super) fn carve_substring(
         &mut self,
         base: Value,
@@ -54,6 +56,8 @@ impl Vm<'_> {
     ) -> Result<String, VmError> {
         let carved = self.slice_of(base, start, end);
         self.heap.drop_value(base);
+        self.heap.drop_value(start);
+        self.heap.drop_value(end);
         carved
     }
 

@@ -1,0 +1,75 @@
+import Foundation
+
+// StrxLiteralTests.kira — what a string LITERAL means: the escapes the lexer
+// resolves, and the line continuation a backslash before a newline writes.
+// PREFIX: strx / Strx  (all top-level names use this prefix).
+
+// --- escapes ---------------------------------------------------------------
+
+Test StrxLiteralNewlineEscape {
+    test { return "a\nb".count }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+Test StrxLiteralTabAndQuote {
+    test { return "\t\"".count }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// One character, not the two that were written.
+Test StrxLiteralBackslashIsOneCharacter {
+    test { return "\\".count }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+// --- line continuation -----------------------------------------------------
+
+// A message too long for one line, written across two. The newline and the
+// indentation lining the second line up under the first are layout: neither
+// reaches the string, so this is the same value as the single-line spelling.
+Test StrxLiteralContinuationJoinsTheLines {
+    test {
+        let split = "the compositor offers no wl_compositor or no \
+                     xdg_wm_base, and a window needs both"
+        return split
+    }
+    expect {
+        let e: Result<String, TestFailure> = .Ok("the compositor offers no wl_compositor or no xdg_wm_base, and a window needs both")
+        return e
+    }
+}
+
+// The space belongs to the text BEFORE the backslash, so a continuation
+// written without one joins the halves with nothing between them. This is the
+// case that says the indentation is dropped rather than collapsed to a space.
+Test StrxLiteralContinuationJoinsWithNoSpace {
+    test {
+        let joined = "un\
+                      split"
+        return joined
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("unsplit"); return e }
+}
+
+// Three lines is two continuations, and a continued literal is still one
+// token: it measures like any other string.
+Test StrxLiteralContinuationSpansThreeLines {
+    test {
+        let long = "one \
+                    two \
+                    three"
+        return long.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+}
+
+// A continuation inside a literal that also carries ordinary escapes: the two
+// resolve independently.
+Test StrxLiteralContinuationBesideAnEscape {
+    test {
+        let mixed = "a\nb \
+                     c"
+        return mixed.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}

@@ -49,7 +49,11 @@ impl LineMap {
     }
 
     /// Returns the `[start, end)` byte bounds of a 0-based line, excluding its newline.
+    ///
+    /// Total for any `line_index`: an out-of-range index clamps to the last
+    /// line, so a caller holding a client-supplied line number cannot panic.
     pub fn line_bounds(&self, line_index: usize, text: &str) -> (u32, u32) {
+        let line_index = line_index.min(self.line_starts.len() - 1);
         let start = self.line_starts[line_index];
         let raw_end = self
             .line_starts
@@ -76,5 +80,12 @@ mod tests {
         assert_eq!(map.line_column(4), LineColumn { line: 2, column: 1 });
         assert_eq!(map.line_column(6), LineColumn { line: 2, column: 3 });
         assert_eq!(map.line_bounds(1, "one\ntwo\nthree"), (4, 7));
+    }
+
+    #[test]
+    fn line_bounds_clamps_out_of_range_indices() {
+        let text = "one\ntwo";
+        let map = LineMap::new(text);
+        assert_eq!(map.line_bounds(99, text), (4, 7));
     }
 }

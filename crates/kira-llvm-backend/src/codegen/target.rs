@@ -384,7 +384,7 @@ impl TargetMachine {
             let error = LLVMRunPasses(module, passes.as_ptr(), self.machine, options);
             LLVMDisposePassBuilderOptions(options);
             if !error.is_null() {
-                let detail = take_message(llvm_sys::error::LLVMGetErrorMessage(error));
+                let detail = super::ffi::take_error(error);
                 return Err(LlvmError::Emit(detail));
             }
         }

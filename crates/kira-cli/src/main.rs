@@ -45,10 +45,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("__hybrid-debug-host") => {
-            std::process::exit(debugger::run_hybrid_host(&args[1..]));
+            kira_toolchain::process::exit(debugger::run_hybrid_host(&args[1..]));
         }
         Some("__vm-debug-host") => {
-            std::process::exit(debugger::run_vm_host(&args[1..]));
+            kira_toolchain::process::exit(debugger::run_vm_host(&args[1..]));
         }
         _ => {}
     }
@@ -57,13 +57,13 @@ fn main() {
         // prints the same screen `kira help` does and succeeds the same way.
         // Only an *unknown* verb below is a usage error.
         dispatch::print_usage();
-        std::process::exit(0);
+        kira_toolchain::process::exit(0);
     };
     let Some(parsed) = Command::parse(verb) else {
         eprintln!("kira: unknown command '{verb}'");
         eprintln!();
         dispatch::print_usage();
-        std::process::exit(dispatch::EXIT_UNAVAILABLE);
+        kira_toolchain::process::exit(dispatch::EXIT_UNAVAILABLE);
     };
-    std::process::exit(dispatch::dispatch(parsed, &args[1..]));
+    kira_toolchain::process::exit(dispatch::dispatch(parsed, &args[1..]));
 }

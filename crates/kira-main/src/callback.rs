@@ -23,7 +23,6 @@
 
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
-use std::path::Path;
 use std::pin::Pin;
 use std::ptr;
 use std::sync::{
@@ -91,24 +90,7 @@ impl ForeignSession {
         callbacks: Vec<ForeignSignature>,
         aggregates: ForeignAggregates,
     ) -> Result<ForeignSession, ForeignLibraryError> {
-        Self::load_dynamic_inner(program, imports, callbacks, aggregates, None)
-    }
-
-    /// Opens direct foreign bindings with libffi staged beside a live bundle.
-    pub fn load_dynamic_with_runtime_path(
-        program: Program,
-        imports: Vec<ForeignBinding>,
-        callbacks: Vec<ForeignSignature>,
-        aggregates: ForeignAggregates,
-        runtime_path: impl AsRef<Path>,
-    ) -> Result<ForeignSession, ForeignLibraryError> {
-        Self::load_dynamic_inner(
-            program,
-            imports,
-            callbacks,
-            aggregates,
-            Some(runtime_path.as_ref().to_path_buf()),
-        )
+        Self::load_dynamic_inner(program, imports, callbacks, aggregates)
     }
 
     fn load_dynamic_inner(
@@ -116,7 +98,6 @@ impl ForeignSession {
         imports: Vec<ForeignBinding>,
         callbacks: Vec<ForeignSignature>,
         aggregates: ForeignAggregates,
-        runtime_path: Option<std::path::PathBuf>,
     ) -> Result<ForeignSession, ForeignLibraryError> {
         let mut libraries = Vec::new();
         for binding in &imports {
@@ -127,27 +108,14 @@ impl ForeignSession {
                     }) {
                         continue;
                     }
-                    let library = match runtime_path.as_deref() {
-                        Some(runtime_path) => ForeignLibrary::load_with_runtime_path(
-                            path,
-                            aggregates.clone(),
-                            runtime_path,
-                        ),
-                        None => ForeignLibrary::load(path, aggregates.clone()),
-                    }?;
+                    let library = ForeignLibrary::load(path, aggregates.clone())?;
                     libraries.push(library);
                 }
                 ForeignBindingTarget::Process { .. } => {
                     if libraries.iter().any(ForeignLibrary::is_process) {
                         continue;
                     }
-                    let library = match runtime_path.as_deref() {
-                        Some(runtime_path) => ForeignLibrary::load_process_with_runtime_path(
-                            aggregates.clone(),
-                            runtime_path,
-                        ),
-                        None => ForeignLibrary::load_process(aggregates.clone()),
-                    }?;
+                    let library = ForeignLibrary::load_process(aggregates.clone())?;
                     libraries.push(library);
                 }
                 // Neither of these opens anything: one has no artifact to open
@@ -167,11 +135,7 @@ impl ForeignSession {
                     ForeignBindingTarget::Library { .. } | ForeignBindingTarget::Process { .. }
                 )
             });
-        let libffi = match (needs_libffi, runtime_path.as_deref()) {
-            (false, _) => None,
-            (true, Some(runtime_path)) => Some(LibffiRuntime::load_from(runtime_path)?),
-            (true, None) => Some(LibffiRuntime::load()?),
-        };
+        let libffi = needs_libffi.then(LibffiRuntime::load).transpose()?;
         let callback_closures = (0..callbacks.len()).map(|_| None).collect();
         Ok(ForeignSession {
             program,

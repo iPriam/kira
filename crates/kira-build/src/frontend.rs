@@ -139,9 +139,10 @@ pub enum FrontendError {
         #[source]
         source: std::io::Error,
     },
-    /// More files took part than one source map can hold.
+    /// A source set refused at registration: more files than one source map
+    /// can hold, or one file over the per-file size limit.
     #[error("{message}")]
-    SourceMapFull {
+    SourceLimit {
         /// The source map's own account of the limit it hit.
         message: String,
     },
@@ -332,18 +333,17 @@ fn compile_for_with_session(
     let mut sources = SourceMap::new();
     let id = sources
         .insert(display, expansion.entry.clone())
-        .map_err(|full| FrontendError::SourceMapFull {
-            message: full.to_string(),
+        .map_err(|error| FrontendError::SourceLimit {
+            message: error.to_string(),
         })?;
     debug_assert_eq!(id, FILE_SOURCE_ID);
     for (index, path) in module_paths.into_iter().enumerate() {
         let module_text = expansion.modules.get(index).cloned().unwrap_or_default();
-        let id =
-            sources
-                .insert(path, module_text)
-                .map_err(|full| FrontendError::SourceMapFull {
-                    message: full.to_string(),
-                })?;
+        let id = sources
+            .insert(path, module_text)
+            .map_err(|error| FrontendError::SourceLimit {
+                message: error.to_string(),
+            })?;
         debug_assert_eq!(id, kira_semantics::module_source_id(index));
     }
     // Then the shaders, at the ids their diagnostics were written against, so a
@@ -351,8 +351,8 @@ fn compile_for_with_session(
     for (path, text) in shader_sources {
         sources
             .insert(path, text)
-            .map_err(|full| FrontendError::SourceMapFull {
-                message: full.to_string(),
+            .map_err(|error| FrontendError::SourceLimit {
+                message: error.to_string(),
             })?;
     }
 

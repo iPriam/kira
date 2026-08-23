@@ -691,9 +691,11 @@ mod tests {
     fn foreign_abi_tag_is_pinned() {
         assert_eq!(ForeignAbi::C.tag(), 0);
         assert_eq!(ForeignAbi::LinuxSyscall.tag(), 1);
+        assert_eq!(ForeignAbi::CAddress.tag(), 2);
         assert_eq!(ForeignAbi::from_tag(0), Some(ForeignAbi::C));
         assert_eq!(ForeignAbi::from_tag(1), Some(ForeignAbi::LinuxSyscall));
-        assert_eq!(ForeignAbi::from_tag(2), None);
+        assert_eq!(ForeignAbi::from_tag(2), Some(ForeignAbi::CAddress));
+        assert_eq!(ForeignAbi::from_tag(3), None);
     }
 
     /// A syscall import names no library, and the one question every

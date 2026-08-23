@@ -11,6 +11,16 @@ use super::super::Callable;
 use super::FunctionLowering;
 use crate::LlvmError;
 
+/// One lent argument evaluated into storage of its own.
+struct LentTemporary {
+    /// The slot the callee borrowed.
+    pointer: LLVMValueRef,
+    /// The value's type, for releasing what the slot holds.
+    ty: Type,
+    /// The stack pointer saved before the slot was allocated.
+    saved_stack: LLVMValueRef,
+}
+
 impl FunctionLowering<'_, '_> {
     /// Lowers a call to `print` or a user function.
     ///
@@ -184,17 +194,17 @@ impl FunctionLowering<'_, '_> {
     /// Releases the temporaries a call's lent arguments needed.
     ///
     /// The callee borrowed them and owns none, so the caller that built them
-    /// drops them once the call is over.
-    fn drop_lent_temporaries(
-        &mut self,
-        temporaries: Vec<(LLVMValueRef, Type)>,
-    ) -> Result<(), LlvmError> {
-        for (pointer, ty) in temporaries {
+    /// drops them once the call is over — and gives back the native stack
+    /// each dynamic alloca reserved, which is what keeps a lent argument in a
+    /// loop from walking the stack to its limit.
+    fn drop_lent_temporaries(&mut self, temporaries: Vec<LentTemporary>) -> Result<(), LlvmError> {
+        for temporary in temporaries {
             // Through the temporary's own storage: it is dead after this, so
             // loading it only to hand the value back through memory is work
             // with nobody to read it.
-            self.codegen.release_at(pointer, ty)?;
-            self.codegen.lifetime_end(pointer);
+            self.codegen.release_at(temporary.pointer, temporary.ty)?;
+            self.codegen
+                .release_dynamic_alloca(temporary.pointer, temporary.saved_stack);
         }
         Ok(())
     }
@@ -203,11 +213,12 @@ impl FunctionLowering<'_, '_> {
     ///
     /// A place is lent where it lies. Anything else is evaluated once into a
     /// fresh slot, whose value the caller still owns — so the second element
-    /// names it for the drop that follows the call.
+    /// names it for the drop that follows the call, and the third carries the
+    /// stack pointer saved for its dynamic alloca, restored by that same drop.
     fn lend_argument(
         &mut self,
         argument: IrExprId,
-    ) -> Result<(LLVMValueRef, Option<(LLVMValueRef, Type)>), LlvmError> {
+    ) -> Result<(LLVMValueRef, Option<LentTemporary>), LlvmError> {
         if let Some((pointer, _)) = self.borrowed_place_pointer(argument)? {
             return Ok((pointer, None));
         }
@@ -216,11 +227,18 @@ impl FunctionLowering<'_, '_> {
         let llvm_type = self.codegen.llvm_type(ty)?;
         // SAFETY: the builder is on a live block and `llvm_type` is this
         // module's.
-        let pointer = self.codegen.dynamic_alloca(llvm_type, c"lent.arg");
+        let (pointer, saved) = self.codegen.dynamic_alloca(llvm_type, c"lent.arg");
         self.codegen.lifetime_start(pointer);
         // SAFETY: a fresh alloca of exactly this value's type.
         unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
-        Ok((pointer, Some((pointer, ty))))
+        Ok((
+            pointer,
+            Some(LentTemporary {
+                pointer,
+                ty,
+                saved_stack: saved,
+            }),
+        ))
     }
 
     /// Lowers a call whose callee writes through one or more of its parameters.

@@ -144,11 +144,20 @@ impl BuildLock {
         let locked = Arc::new(LockedFile { file });
 
         let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
-        state
-            .holds
-            .get_mut(&key)
-            .expect("local build lock reservation disappeared")
-            .locked = Some(Arc::clone(&locked));
+        // The reservation was inserted above under this same mutex and only
+        // this function's own error path removes it, so it is here — answered
+        // rather than trusted, because the law of this workspace admits no
+        // panic on that assumption.
+        match state.holds.get_mut(&key) {
+            Some(reservation) => reservation.locked = Some(Arc::clone(&locked)),
+            None => {
+                drop(state);
+                changed.notify_all();
+                return Err(std::io::Error::other(
+                    "the local build lock reservation disappeared while being claimed",
+                ));
+            }
+        }
         changed.notify_all();
         Ok(BuildLock {
             key,

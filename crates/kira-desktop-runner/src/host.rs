@@ -234,7 +234,6 @@ impl RunnerHost for DesktopHost {
             PayloadKind::VmBytecode => Staged::VmLoaded {
                 module: Module::from_bytes(bundle.entry_bytes())?,
                 bindings: foreign_bindings_from_bundle(&self.cache, bundle)?,
-                runtime: foreign_runtime_path(&self.cache, bundle),
             },
             PayloadKind::HybridManifest => Staged::HybridLoaded {
                 // The bundle's payload directory is the hybrid bundle's
@@ -261,8 +260,7 @@ impl RunnerHost for DesktopHost {
             Staged::VmLoaded {
                 module,
                 bindings,
-                runtime,
-            } => link_vm(module, bindings, runtime)?,
+            } => link_vm(module, bindings)?,
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
                 // Loading a hybrid session dlopens the native half and binds
                 // every symbol the manifest names, so a missing symbol fails
@@ -336,7 +334,6 @@ impl RunnerHost for DesktopHost {
             PayloadKind::VmBytecode => link_vm(
                 Module::from_bytes(bundle.entry_bytes())?,
                 foreign_bindings_from_bundle(&self.cache, bundle)?,
-                foreign_runtime_path(&self.cache, bundle),
             )?,
             PayloadKind::HybridManifest => {
                 let manifest = self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name);
@@ -490,22 +487,10 @@ fn is_plain_loader_name(name: &str) -> bool {
         && !Path::new(name).is_absolute()
 }
 
-/// Returns the staged bundled libffi path named by `bundle`, if it has one.
-fn foreign_runtime_path(cache: &Path, bundle: &Bundle) -> Option<PathBuf> {
-    let name = kira_libffi::bundled_file_name();
-    bundle
-        .manifest()
-        .payloads
-        .iter()
-        .find(|payload| payload.kind == PayloadKind::NativeDependency && payload.name == name)
-        .map(|payload| cache.join(kira_live::PAYLOAD_DIR).join(&payload.name))
-}
-
 /// Links a VM module with the ordinary VM foreign-session contract.
 fn link_vm(
     module: Module,
     bindings: Option<Vec<Option<PathBuf>>>,
-    runtime_path: Option<PathBuf>,
 ) -> Result<Staged, DesktopRunnerError> {
     let program = Program::load(module)?;
     if program.module().foreign_imports.is_empty() && program.module().foreign_callbacks.is_empty()
@@ -553,16 +538,7 @@ fn link_vm(
         .map(|callback| callback.signature().clone())
         .collect();
     let aggregates = program.module().foreign_aggregates.clone();
-    let session = match runtime_path {
-        Some(runtime_path) => ForeignSession::load_dynamic_with_runtime_path(
-            program,
-            imports,
-            callbacks,
-            aggregates,
-            runtime_path,
-        )?,
-        None => ForeignSession::load_dynamic(program, imports, callbacks, aggregates)?,
-    };
+    let session = ForeignSession::load_dynamic(program, imports, callbacks, aggregates)?;
     Ok(Staged::VmForeignLinked {
         session: Arc::new(session),
     })

@@ -216,40 +216,101 @@ pub fn archive_static_library(
         })?;
     }
 
-    let script = mri_script(object, runtime_archive, archive);
+    // The script names its inputs bare, so the tool runs from a staging
+    // directory where each input sits under a fixed space-free name and the
+    // archive is written beside them, then moved into place.
+    let staging = match staging_dir(archive) {
+        Ok(staging) => staging,
+        Err(source) => {
+            return Err(LinkError::ArchiveUnwritable {
+                path: archive.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let staged_object = staging.join("object.o");
+    let staged_runtime = staging.join("runtime.a");
+    let staged_archive = staging.join("out.a");
+    if let Err(source) = stage_input(object, &staged_object)
+        .and_then(|()| stage_input(runtime_archive, &staged_runtime))
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(LinkError::ArchiveUnwritable {
+            path: archive.to_path_buf(),
+            source,
+        });
+    }
+
+    let script = mri_script(
+        staged_object
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_ref(),
+        staged_runtime
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_ref(),
+        staged_archive
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_ref(),
+    );
     let mut command = Command::new(&archiver);
     command
         .arg("-M")
+        .current_dir(&staging)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|source| LinkError::DriverUnusable {
-            driver: archiver.clone(),
-            source,
-        })?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write_all(script.as_bytes())
-            .map_err(|source| LinkError::DriverUnusable {
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(source) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(LinkError::DriverUnusable {
                 driver: archiver.clone(),
                 source,
-            })?;
+            });
+        }
+    };
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        if let Err(source) = stdin.write_all(script.as_bytes()) {
+            let _ = child.kill();
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(LinkError::DriverUnusable {
+                driver: archiver.clone(),
+                source,
+            });
+        }
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|source| LinkError::DriverUnusable {
-            driver: archiver.clone(),
-            source,
-        })?;
-    if !output.status.success() {
-        return Err(LinkError::Failed {
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(source) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(LinkError::DriverUnusable {
+                driver: archiver.clone(),
+                source,
+            });
+        }
+    };
+    let result = if !output.status.success() {
+        Err(LinkError::Failed {
             output: archive.to_path_buf(),
             diagnostic: tool_diagnostic(&output),
-        });
-    }
+        })
+    } else {
+        std::fs::copy(&staged_archive, archive)
+            .map(|_| ())
+            .map_err(|source| LinkError::ArchiveUnwritable {
+                path: archive.to_path_buf(),
+                source,
+            })
+    };
+    let _ = std::fs::remove_dir_all(&staging);
+    result?;
     if !archive.is_file() {
         return Err(LinkError::ArchiveMissing {
             path: archive.to_path_buf(),
@@ -258,18 +319,56 @@ pub fn archive_static_library(
     Ok(())
 }
 
+/// A fresh directory beside `archive` to stage space-free input names in.
+fn staging_dir(archive: &Path) -> std::io::Result<PathBuf> {
+    let parent = archive.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let base = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..64u128 {
+        let candidate = parent.join(format!(".kira-archive-{base}-{attempt}"));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no free staging directory name",
+    ))
+}
+
+/// Puts `input` at `staged` under its space-free name.
+///
+/// A link is preferred where the OS supports it — the archiver only reads —
+/// and a copy everywhere else.
+#[cfg(unix)]
+fn stage_input(input: &Path, staged: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(input, staged)
+}
+
+/// Puts `input` at `staged` under its space-free name (copied).
+#[cfg(not(unix))]
+fn stage_input(input: &Path, staged: &Path) -> std::io::Result<()> {
+    std::fs::copy(input, staged).map(|_| ())
+}
+
 /// The MRI script that merges the runtime archive and the library's object.
 ///
 /// Built as its own function so the exact commands are assertable without
 /// running an archiver, which is the only part of this that a machine with no
 /// LLVM can check.
-fn mri_script(object: &Path, runtime_archive: &Path, archive: &Path) -> String {
-    format!(
-        "CREATE {}\nADDLIB {}\nADDMOD {}\nSAVE\nEND\n",
-        archive.display(),
-        runtime_archive.display(),
-        object.display(),
-    )
+///
+/// The names are bare: MRI scripts tokenize on whitespace and support no
+/// quoting, so every path is staged under a space-free name in one directory
+/// ([`archive_static_library`] runs the tool from there). A build directory
+/// with a space in it — several Windows defaults have one — would otherwise
+/// truncate into nonsense tokens.
+fn mri_script(object: &str, runtime_archive: &str, archive: &str) -> String {
+    format!("CREATE {archive}\nADDLIB {runtime_archive}\nADDMOD {object}\nSAVE\nEND\n")
 }
 
 #[cfg(test)]
@@ -280,18 +379,20 @@ mod tests {
     fn the_archive_script_splices_the_runtime_in_rather_than_nesting_it() {
         // `ADDLIB` takes the runtime archive's *members*; `ADDMOD` would nest
         // the archive inside the result, which links as nothing.
-        let script = mri_script(
-            Path::new("/build/uifoundation.o"),
-            Path::new("/build/libkira_native_bridge.a"),
-            Path::new("/build/lib/libuifoundation.a"),
-        );
+        let script = mri_script("object.o", "runtime.a", "out.a");
         assert_eq!(
             script,
-            "CREATE /build/lib/libuifoundation.a\n\
-             ADDLIB /build/libkira_native_bridge.a\n\
-             ADDMOD /build/uifoundation.o\n\
+            "CREATE out.a\n\
+             ADDLIB runtime.a\n\
+             ADDMOD object.o\n\
              SAVE\n\
              END\n"
         );
+    }
+
+    #[test]
+    fn the_script_takes_bare_names_so_spaces_cannot_split_them() {
+        let script = mri_script("My Project.object.o", "lib kira.a", "out put.a");
+        assert!(script.contains("CREATE out put.a"));
     }
 }

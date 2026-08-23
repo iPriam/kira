@@ -1,9 +1,17 @@
 //! The small libffi C surface Kira uses.
+//!
+//! libffi is linked into this crate statically, so these are ordinary `extern`
+//! declarations rather than symbols looked up in a library opened at run time.
+//! That is the difference between a Kira program that carries its engine and
+//! one that has to find it: there is no file to ship beside an artifact, no
+//! search path that could resolve to a different libffi, and no failure mode
+//! where the engine is missing — a program that links is a program that has it.
+//!
+//! `ffi_get_default_abi` and `ffi_get_closure_size` are Kira additions to the
+//! libffi fork (`src/types.c`). Upstream exposes both only as macros, which a
+//! Rust caller cannot reach through the ABI.
 
 use std::ffi::c_void;
-use std::path::{Path, PathBuf};
-
-use libloading::{Library, Symbol};
 
 use crate::LibffiError;
 
@@ -60,9 +68,11 @@ type PrepClosure = unsafe extern "C" fn(
 type ClosureSize = unsafe extern "C" fn() -> usize;
 type DefaultAbi = unsafe extern "C" fn() -> u32;
 
-/// The loaded libffi entry points and standard scalar type descriptors.
+/// The libffi entry points and standard scalar type descriptors.
+///
+/// Kept as a table of pointers rather than called directly, because everything
+/// above it was written against a table and the indirection costs one load.
 pub(crate) struct RawLibffi {
-    _library: Library,
     pub(crate) prep_cif: PrepCif,
     pub(crate) call: Call,
     pub(crate) closure_alloc: ClosureAlloc,
@@ -84,12 +94,11 @@ pub(crate) struct RawLibffi {
     pub(crate) type_pointer: *mut RawFfiType,
 }
 
-// SAFETY: `RawLibffi` owns the loaded library handle and only stores function
-// pointers plus libffi's process-global scalar type descriptors. The function
-// table and descriptors are immutable after loading; every CIF, aggregate
-// graph, and closure allocation that libffi mutates is owned by the caller and
-// never shared through this value. Keeping `_library` in the same object keeps
-// all copied pointers valid until the last `Arc` is dropped.
+// SAFETY: `RawLibffi` stores function pointers plus libffi's process-global
+// scalar type descriptors, all of them linked into this image and therefore
+// valid for its whole life. The descriptors are immutable after startup; every
+// CIF, aggregate graph, and closure allocation that libffi mutates is owned by
+// the caller and never shared through this value.
 unsafe impl Send for RawLibffi {}
 
 // SAFETY: the same invariant as `Send` applies to concurrent readers. Libffi's
@@ -97,102 +106,86 @@ unsafe impl Send for RawLibffi {}
 // state through caller-owned pointers, while this table is read-only.
 unsafe impl Sync for RawLibffi {}
 
+unsafe extern "C" {
+    fn ffi_prep_cif(
+        cif: *mut RawFfiCif,
+        abi: u32,
+        nargs: u32,
+        result_type: *mut RawFfiType,
+        argument_types: *mut *mut RawFfiType,
+    ) -> i32;
+    fn ffi_call(
+        cif: *mut RawFfiCif,
+        function: RawFunction,
+        result: *mut c_void,
+        arguments: *mut *mut c_void,
+    );
+    fn ffi_closure_alloc(size: usize, code: *mut *mut c_void) -> *mut c_void;
+    fn ffi_closure_free(closure: *mut c_void);
+    fn ffi_prep_closure_loc(
+        closure: *mut c_void,
+        cif: *mut RawFfiCif,
+        callback: ClosureCallback,
+        user_data: *mut c_void,
+        code: *mut c_void,
+    ) -> i32;
+    fn ffi_get_closure_size() -> usize;
+    fn ffi_get_default_abi() -> u32;
+
+    static ffi_type_void: RawFfiType;
+    static ffi_type_uint8: RawFfiType;
+    static ffi_type_sint8: RawFfiType;
+    static ffi_type_uint16: RawFfiType;
+    static ffi_type_sint16: RawFfiType;
+    static ffi_type_uint32: RawFfiType;
+    static ffi_type_sint32: RawFfiType;
+    static ffi_type_uint64: RawFfiType;
+    static ffi_type_sint64: RawFfiType;
+    static ffi_type_float: RawFfiType;
+    static ffi_type_double: RawFfiType;
+    static ffi_type_pointer: RawFfiType;
+}
+
 impl RawLibffi {
+    /// The linked engine.
+    ///
+    /// Infallible, and that is the point of linking it: the old form could fail
+    /// because the engine was a file that might not be there. Kept returning a
+    /// `Result` so callers that already handle one are unchanged, and so a
+    /// target Kira publishes no archive for can fail here rather than fail to
+    /// link.
     pub(crate) fn load() -> Result<Self, LibffiError> {
-        Self::load_from(&bundled_path()?)
+        Ok(Self::linked())
     }
 
-    pub(crate) fn load_from(path: &Path) -> Result<Self, LibffiError> {
-        let path = path.to_path_buf();
-        // SAFETY: loading a library is the boundary this type owns; all symbols
-        // are checked immediately and the handle stays alive with the pointers.
-        let library = unsafe { Library::new(&path) }.map_err(|source| LibffiError::Load {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(Self {
-            prep_cif: symbol(&library, b"ffi_prep_cif\0")?,
-            call: symbol(&library, b"ffi_call\0")?,
-            closure_alloc: symbol(&library, b"ffi_closure_alloc\0")?,
-            closure_free: symbol(&library, b"ffi_closure_free\0")?,
-            prep_closure_loc: symbol(&library, b"ffi_prep_closure_loc\0")?,
-            closure_size: symbol(&library, b"ffi_get_closure_size\0")?,
-            default_abi: symbol(&library, b"ffi_get_default_abi\0")?,
-            type_void: symbol(&library, b"ffi_type_void\0")?,
-            type_uint8: symbol(&library, b"ffi_type_uint8\0")?,
-            type_sint8: symbol(&library, b"ffi_type_sint8\0")?,
-            type_uint16: symbol(&library, b"ffi_type_uint16\0")?,
-            type_sint16: symbol(&library, b"ffi_type_sint16\0")?,
-            type_uint32: symbol(&library, b"ffi_type_uint32\0")?,
-            type_sint32: symbol(&library, b"ffi_type_sint32\0")?,
-            type_uint64: symbol(&library, b"ffi_type_uint64\0")?,
-            type_sint64: symbol(&library, b"ffi_type_sint64\0")?,
-            type_float: symbol(&library, b"ffi_type_float\0")?,
-            type_double: symbol(&library, b"ffi_type_double\0")?,
-            type_pointer: symbol(&library, b"ffi_type_pointer\0")?,
-            _library: library,
-        })
-    }
-}
-
-fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, LibffiError> {
-    // SAFETY: the symbol name is NUL-terminated and the returned function/data
-    // pointer is kept valid by `RawLibffi::_library`.
-    let value: Symbol<'_, T> =
-        unsafe { library.get(name) }.map_err(|source| LibffiError::Symbol {
-            name: String::from_utf8_lossy(&name[..name.len() - 1]).into_owned(),
-            source,
-        })?;
-    Ok(*value)
-}
-
-pub(crate) fn bundled_path() -> Result<PathBuf, LibffiError> {
-    let filename = bundled_file_name();
-    let mut candidates = Vec::new();
-    if let Ok(executable) = std::env::current_exe()
-        && let Some(directory) = executable.parent()
-    {
-        candidates.push(directory.join(filename));
-        if let Some(profile) = directory.parent() {
-            candidates.push(profile.join(filename));
+    /// The table, built from the symbols linked into this image.
+    pub(crate) fn linked() -> Self {
+        Self {
+            prep_cif: ffi_prep_cif,
+            call: ffi_call,
+            closure_alloc: ffi_closure_alloc,
+            closure_free: ffi_closure_free,
+            prep_closure_loc: ffi_prep_closure_loc,
+            closure_size: ffi_get_closure_size,
+            default_abi: ffi_get_default_abi,
+            // `&raw const` rather than `&`: these are `extern` statics, and
+            // taking a reference to one asserts an initialised Rust value where
+            // what exists is a C object this code only ever hands back to C.
+            // The casts drop `const` because libffi's own signatures take
+            // `ffi_type *`, not `const ffi_type *`.
+            type_void: (&raw const ffi_type_void).cast_mut(),
+            type_uint8: (&raw const ffi_type_uint8).cast_mut(),
+            type_sint8: (&raw const ffi_type_sint8).cast_mut(),
+            type_uint16: (&raw const ffi_type_uint16).cast_mut(),
+            type_sint16: (&raw const ffi_type_sint16).cast_mut(),
+            type_uint32: (&raw const ffi_type_uint32).cast_mut(),
+            type_sint32: (&raw const ffi_type_sint32).cast_mut(),
+            type_uint64: (&raw const ffi_type_uint64).cast_mut(),
+            type_sint64: (&raw const ffi_type_sint64).cast_mut(),
+            type_float: (&raw const ffi_type_float).cast_mut(),
+            type_double: (&raw const ffi_type_double).cast_mut(),
+            type_pointer: (&raw const ffi_type_pointer).cast_mut(),
         }
     }
-    candidates.push(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("vendor")
-            .join(vendor_target())
-            .join(filename),
-    );
-    if let Some(candidate) = candidates.into_iter().find(|candidate| candidate.is_file()) {
-        return Ok(candidate);
-    }
-    if vendor_target() == "unsupported" {
-        return Err(LibffiError::UnavailableHost {
-            target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-            expected: PathBuf::from(filename),
-        });
-    }
-    Err(LibffiError::MissingBundle {
-        expected: PathBuf::from(filename),
-    })
 }
 
-pub(crate) fn bundled_file_name() -> &'static str {
-    kira_toolchain::bundled_libffi_name()
-}
-
-fn vendor_target() -> &'static str {
-    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        "windows-x86_64"
-    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "macos-aarch64"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "macos-x86_64"
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "linux-aarch64"
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "linux-x86_64"
-    } else {
-        "unsupported"
-    }
-}

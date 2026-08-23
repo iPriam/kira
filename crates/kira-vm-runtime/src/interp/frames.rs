@@ -22,6 +22,15 @@ use crate::value::{Heap, Value};
 use super::place::ResolvedStep;
 use super::{Vm, VmScratch};
 
+/// How many returned frames the per-run cache retains.
+///
+/// A cache as deep as the deepest call ever made would make a long-lived
+/// instance pay for its worst transient forever: one call recursing near the
+/// depth guard would strand ~10⁶ frames. Sixty-four covers the call shapes a
+/// typical program re-enters allocation-free while bounding retention to a
+/// fixed handful of frames.
+const FRAME_CACHE_LIMIT: usize = 64;
+
 /// One call frame: its function, program counter, and local slots.
 pub(super) struct Frame {
     pub(super) func: u64,
@@ -105,6 +114,18 @@ impl<'h> Vm<'h> {
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,
             trap_probe: None,
+        }
+    }
+
+    /// Returns a finished frame to the per-run cache, up to
+    /// [`FRAME_CACHE_LIMIT`].
+    ///
+    /// Past the limit the frame is dropped: retention keyed to the deepest
+    /// call ever made would otherwise grow without bound on a persistent
+    /// [`crate::Instance`].
+    fn cache_frame(&mut self, frame: Frame) {
+        if self.frame_cache.len() < FRAME_CACHE_LIMIT {
+            self.frame_cache.push(frame);
         }
     }
 
@@ -393,7 +414,7 @@ impl<'h> Vm<'h> {
                     self.heap.drop_value(value);
                 }
             }
-            self.frame_cache.push(finished);
+            self.cache_frame(finished);
             if frames.is_empty() {
                 // Structural validation cannot prove operand-stack typing. A
                 // hand-built module may return while leaving an extra value on
@@ -504,7 +525,7 @@ impl<'h> Vm<'h> {
             if reset_locals {
                 finished.locals.fill(Value::Void);
             }
-            self.frame_cache.push(finished);
+            self.cache_frame(finished);
         }
         if frames.is_empty() {
             // Structural validation cannot prove operand-stack typing. A

@@ -64,14 +64,20 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             let name = self.interner.resolve(declaration.name).to_owned();
-            match self.program.types.enums_mut().declare(EnumDef {
-                name: name.clone(),
-                variants: Vec::new(),
-            }) {
+            // Keyed by the declaring package, exactly as a struct is: two
+            // packages may each declare a `Color`, and neither is a duplicate.
+            match self.program.types.enums_mut().declare_owned(
+                self.imports.package_of(source),
+                EnumDef {
+                    name: name.clone(),
+                    variants: Vec::new(),
+                },
+            ) {
                 Some(id) => {
                     // Reserved in id order now and filled by the second pass, so
                     // `enum_defaults` stays indexed by the ids the table minted.
                     self.enum_defaults.push(Vec::new());
+                    self.enum_sources.insert(id, source);
                     headers.push((id, declaration, source));
                 }
                 None => self.emit(
@@ -174,18 +180,23 @@ impl<'a> Analyzer<'a> {
     /// broken struct field becomes `Error`: the program is already rejected, and
     /// what every later walk needs is a shape it can finish.
     pub(crate) fn check_enum_terminates(&mut self) {
-        let names: Vec<String> = self
+        // Walked by id rather than by name: names repeat across packages by
+        // design now, and a name-only lookup would silently skip every
+        // package-owned row.
+        let declared: Vec<(EnumId, String)> = self
             .program
             .types
             .enums()
-            .defs()
-            .iter()
-            .map(|def| def.name.clone())
+            .ids()
+            .filter_map(|id| {
+                self.program
+                    .types
+                    .enums()
+                    .get(id)
+                    .map(|def| (id, def.name.clone()))
+            })
             .collect();
-        for name in names {
-            let Some(id) = self.program.types.enums().lookup(&name) else {
-                continue;
-            };
+        for (id, name) in declared {
             // An enum with no variants at all is uninhabited by declaration
             // rather than by mistake, and a construct family that no declaration
             // backs yet is exactly that shape. Nothing can write a value of one,
@@ -214,7 +225,7 @@ impl<'a> Analyzer<'a> {
                 continue;
             };
             self.program.types.enums_mut().set_variants(id, broken);
-            let span = match self.enum_declaration_site(&name) {
+            let span = match self.enum_declaration_site(id, &name) {
                 Some((source, span)) => {
                     self.source = source;
                     span
@@ -239,12 +250,21 @@ impl<'a> Analyzer<'a> {
     /// A generic instantiation is named for its template and its arguments
     /// (`Result<Int, AppError>`), and the only line there is to point at is the
     /// template's, so the lookup is by the name before the arguments.
-    fn enum_declaration_site(&self, name: &str) -> Option<(SourceId, Span)> {
+    /// The file and span of the `enum` declaration written under `name`.
+    ///
+    /// Matched against the row's owner as well as the name: names repeat
+    /// across packages, so the first tree-order hit by name alone could be the
+    /// other package's declaration.
+    fn enum_declaration_site(&self, id: EnumId, name: &str) -> Option<(SourceId, Span)> {
         let written = name.split_once('<').map_or(name, |(base, _)| base);
+        let owner = self.program.types.enums().owner_of(id);
         self.tree
             .items_with_source()
             .find_map(|(source, item)| match item {
-                Item::Enum(declaration) if self.interner.resolve(declaration.name) == written => {
+                Item::Enum(declaration)
+                    if self.interner.resolve(declaration.name) == written
+                        && self.imports.package_of(source) == owner =>
+                {
                     Some((source, declaration.name_span))
                 }
                 _ => None,
@@ -373,7 +393,10 @@ impl<'a> Analyzer<'a> {
                 None => QualifiedEnum::Unanchored(candidate),
             };
         }
-        match self.program.types.enums().lookup(&candidate) {
+        // Resolved the way a written type name is: owner-keyed, because names
+        // repeat across packages by design and a bare name means this file's
+        // own package's first.
+        match self.visible_enum(&candidate) {
             Some(id) => QualifiedEnum::Enum(id),
             None => QualifiedEnum::NotAnEnum,
         }

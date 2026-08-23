@@ -30,8 +30,6 @@ pub(super) struct DebugBuilder {
     llvm_builder: LLVMBuilderRef,
     context: LLVMContextRef,
     file: LLVMMetadataRef,
-    compile_unit: LLVMMetadataRef,
-    subroutine_type: LLVMMetadataRef,
     scopes: Vec<Option<LLVMMetadataRef>>,
     lines: Vec<u32>,
     finalized: bool,
@@ -178,8 +176,6 @@ impl DebugBuilder {
             llvm_builder,
             context,
             file,
-            compile_unit,
-            subroutine_type,
             scopes,
             lines,
             finalized: false,
@@ -332,24 +328,6 @@ impl DebugBuilder {
         // has not been finalized before.
         unsafe { LLVMDIBuilderFinalize(self.builder) };
         self.finalized = true;
-    }
-
-    /// Returns the compile unit, kept for metadata consumers and diagnostics.
-    #[allow(dead_code)]
-    pub(super) fn compile_unit(&self) -> LLVMMetadataRef {
-        self.compile_unit
-    }
-
-    /// Returns the default subroutine type.
-    #[allow(dead_code)]
-    pub(super) fn subroutine_type(&self) -> LLVMMetadataRef {
-        self.subroutine_type
-    }
-
-    /// Returns the source file node.
-    #[allow(dead_code)]
-    pub(super) fn file(&self) -> LLVMMetadataRef {
-        self.file
     }
 }
 

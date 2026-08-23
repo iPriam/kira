@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# `process::exit` leaves without running the C++ static destructors LLVM
+# registers; that needs `_exit`.
+libc = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }

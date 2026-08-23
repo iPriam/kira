@@ -91,6 +91,15 @@ impl Analyzer<'_> {
             let Some(mark) = callable.function.export else {
                 continue;
             };
+            // A specialization copy shares the original's `@Export` mark and
+            // name — it is the same function registered again with a parameter
+            // narrowed to a subclass. Checking it here would report one legal
+            // export twice: once as a second mapping to the same consumer
+            // name, and once more per copy for a method mark. The original,
+            // which carries the export for real, is what this loop checks.
+            if !callable.specialize.is_empty() {
+                continue;
+            }
             self.source = callable.source;
             let name_span = callable.function.name_span;
             if callable.receiver.is_some() {

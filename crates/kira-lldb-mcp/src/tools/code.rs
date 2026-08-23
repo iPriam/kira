@@ -56,6 +56,10 @@ pub fn descriptors() -> Vec<Value> {
 pub fn disassemble(sessions: &mut Sessions, arguments: &Value) -> Result<Value, String> {
     let count = uint_field(arguments, "count", 32)?;
     let offset = uint_field(arguments, "offset", 0)?;
+    // The DAP field is signed and this tool walks backwards from the frame's
+    // pointer, so the offset is negated — which only fits when it does.
+    let offset = i64::try_from(offset)
+        .map_err(|_| "`offset` is past what a disassembly window can address".to_owned())?;
     let address = arguments["address"].as_str().map(str::to_owned);
     let session = sessions.select(session_field(arguments))?;
     let frame_id = session.top_frame_id()?;
@@ -82,7 +86,7 @@ pub fn disassemble(sessions: &mut Sessions, arguments: &Value) -> Result<Value, 
         "disassemble",
         json!({
             "memoryReference": reference,
-            "instructionOffset": -(offset as i64),
+            "instructionOffset": -offset,
             "instructionCount": count,
             "resolveSymbols": true,
             "frameId": frame_id,

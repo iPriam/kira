@@ -165,6 +165,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR057", "expected a construct name");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the name just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }

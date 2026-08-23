@@ -274,8 +274,9 @@ pub enum IrExpr {
     MathOperation {
         /// Which operation to perform.
         op: kira_runtime_abi::MathOp,
-        /// The value it is performed on.
-        value: IrExprId,
+        /// The values it is performed on, in source order — as many as the
+        /// operation's own `argument_count`.
+        operands: Vec<IrExprId>,
     },
     StringOperation {
         /// Which operation to perform.
@@ -400,11 +401,14 @@ pub enum IrExpr {
     /// A value crossing into the top type, `Any`.
     ///
     /// The two engines answer this very differently, and the difference is the
-    /// design rather than a gap. The VM's `Value` is already a tagged union, so
-    /// the erased form of a value *is* that value: the bytecode compiler emits
-    /// nothing at all here. Native code is statically typed and has nowhere to
-    /// put the tag, so the LLVM backend boxes — a tag, what the payload owns,
-    /// and the payload word — and that box is what an `Any` is on that side.
+    /// design rather than a gap. The VM's `Value` is already a tagged union,
+    /// but its box accounting is not: the bytecode compiler emits an `Erase`
+    /// instruction that boxes the payload under the erased type id, which is
+    /// what lets two erased structs of different declarations compare
+    /// unequal on the VM exactly as they do on native. Native code is
+    /// statically typed and has nowhere to put the tag, so the LLVM backend
+    /// boxes — a tag, what the payload owns, and the payload word — and that
+    /// box is what an `Any` is on that side.
     ///
     /// What both engines guarantee is the same observable behavior: an erased
     /// value copies and drops exactly as the value it erased did, so a program
@@ -418,14 +422,14 @@ pub enum IrExpr {
     /// One generic instantiation carried into another whose type arguments are
     /// `Any`.
     ///
-    /// The two engines split here exactly as they do at [`IrExpr::IntoAny`], and
-    /// for the same reason. A VM `Value` carries its own tag, so `Result<Int,
-    /// E>` and `Result<Any, E>` are bit-identical and the bytecode compiler
-    /// emits nothing. Native code keeps an `Int` payload inline in the box and
-    /// an `Any` payload as a pointer to another box, so the LLVM backend
-    /// *rebuilds*: read the tag, box the payloads that crossed into `Any`, and
-    /// build the destination row's value. Both types are carried because the
-    /// rebuild reads a variant list from each.
+    /// The two engines split here, and for the same reason. A VM `Value`
+    /// carries its own tag, but an `Int` payload sits inline in its box while
+    /// an `Any` payload is a pointer to another box — so the bytecode compiler
+    /// synthesizes per-instantiation rebuild helpers and calls one. Native
+    /// code keeps the same two layouts and the LLVM backend rebuilds inline:
+    /// read the tag, box the payloads that crossed into `Any`, and build the
+    /// destination row's value. Both types are carried because the rebuild
+    /// reads a variant list from each.
     Widen {
         /// The value being widened.
         value: IrExprId,

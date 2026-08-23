@@ -33,6 +33,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR007", "expected a struct name");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the name just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
@@ -157,6 +158,7 @@ impl Parser<'_> {
             self.error(self.current().span, "KPAR030", "expected an enum name");
             (Symbol::ERROR, self.current().span)
         };
+        // Consumes the name just interned above.
         if self.at(TokenKind::Identifier) {
             self.bump();
         }

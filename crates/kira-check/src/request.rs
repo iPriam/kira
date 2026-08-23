@@ -182,9 +182,16 @@ impl<'a, 'p> Walk<'a, 'p> {
     }
 
     /// Queues every import written in one package's files.
+    ///
+    /// Reversed on the way in so the LIFO pop below takes them in source
+    /// order — the same discipline the disk walk's `push_resolves` applies,
+    /// which is what keeps this walk's declaration order (and therefore which
+    /// duplicate "is first" and how order-sensitive diagnostics render)
+    /// identical to a real build's.
     fn seed(&mut self, package: &ReadPackage<'a>) {
         for file in package.files {
-            self.pending.extend(imports_of(&file.text));
+            self.pending
+                .extend(imports_of(&file.text).into_iter().rev());
         }
     }
 
@@ -205,7 +212,8 @@ impl<'a, 'p> Walk<'a, 'p> {
             let package = &self.packages[index];
             modules.extend(package_modules(&package.manifest.name, package.files));
             for file in package.files {
-                self.pending.extend(imports_of(&file.text));
+                self.pending
+                    .extend(imports_of(&file.text).into_iter().rev());
             }
         }
         modules

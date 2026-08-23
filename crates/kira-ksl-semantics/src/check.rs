@@ -377,6 +377,13 @@ impl<'a> Checker<'a> {
             );
             return;
         }
+        // Each shader's option and resource names bind for *its own* bodies
+        // only. The maps are shared across every module this run checks, so an
+        // imported shader checked earlier would otherwise leave its bindings
+        // live while later bodies are checked — and a typo'd name in main
+        // would resolve silently to another shader's group.
+        self.resources.clear();
+        self.options.clear();
         let name = self.name(declared.name);
         let options = self.options(declared);
         let groups = self.groups(declared);
@@ -561,7 +568,12 @@ impl<'a> Checker<'a> {
         let mut helpers = Vec::new();
         for function in &declared.functions {
             let checked = self.function(function);
-            if checked.name == "entry" {
+            // The written name decides, not the checked one: inside an
+            // imported module every function is registered under its
+            // `Alias_entry` spelling, and comparing that against `"entry"`
+            // would make every stage of an imported module look like it had
+            // none.
+            if self.name(function.name) == "entry" {
                 if entry.is_some() {
                     self.reporter.error(
                         function.span,
@@ -605,7 +617,26 @@ impl<'a> Checker<'a> {
         let Some(name) = name else {
             return;
         };
-        let Some(fields) = self.structs.get(name).cloned() else {
+        // The interface is written bare in this module's shader block, but the
+        // struct table keys imported declarations under their qualified
+        // spelling — so the lookup follows `resolve`'s fallback instead of
+        // demanding the raw name.
+        let key = if self.structs.contains_key(name) {
+            name.to_owned()
+        } else {
+            let local = self.qualified(name);
+            if self.structs.contains_key(&local) {
+                local
+            } else {
+                self.reporter.error(
+                    span,
+                    diagnostics::UNKNOWN_TYPE,
+                    format!("`{name}` names no type, so this stage has no interface"),
+                );
+                return;
+            }
+        };
+        let Some(fields) = self.structs.get(&key).cloned() else {
             self.reporter.error(
                 span,
                 diagnostics::UNKNOWN_TYPE,

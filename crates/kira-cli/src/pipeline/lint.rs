@@ -88,8 +88,15 @@ pub fn lint(args: &[String]) -> i32 {
             let reported = lint_summary.errors + lint_summary.warnings + lint_summary.notes;
             if apply {
                 match apply_fixes(&owned, &compiled.sources) {
-                    Ok(0) => out!("ok: {path} — nothing to fix"),
-                    Ok(count) => {
+                    Ok((0, _)) => out!("ok: {path} — nothing to fix"),
+                    Ok((count, skipped)) => {
+                        for file in &skipped {
+                            out!(
+                                "kira lint: {file} — its fixes are measured against \
+                                 macro-expanded text, so they were not written over the \
+                                 source on disk"
+                            );
+                        }
                         out!("ok: {path} — applied {count} fix(es); run again to re-check")
                     }
                     Err(reason) => {
@@ -188,7 +195,16 @@ fn under(root: &str, diagnostic: &Diagnostic, sources: &SourceMap) -> bool {
 /// later one was measured against. Only `MachineApplicable` is written: anything
 /// less is a suggestion for a reader, and applying it unattended is how a tool
 /// silently changes what a program means.
-fn apply_fixes(diagnostics: &[Diagnostic], sources: &SourceMap) -> Result<usize, String> {
+///
+/// The source map holds each file's text *after macro expansion* (and with any
+/// collector output appended), so a fix measured against it is only ever
+/// applied when the on-disk bytes are identical — otherwise the author's hand-
+/// written source would be replaced by compiler-generated expansion output.
+/// Files whose bytes differ are reported and skipped.
+fn apply_fixes(
+    diagnostics: &[Diagnostic],
+    sources: &SourceMap,
+) -> Result<(usize, Vec<String>), String> {
     let mut per_file: std::collections::BTreeMap<usize, Vec<&Suggestion>> =
         std::collections::BTreeMap::new();
     for diagnostic in diagnostics {
@@ -205,12 +221,20 @@ fn apply_fixes(diagnostics: &[Diagnostic], sources: &SourceMap) -> Result<usize,
     }
 
     let mut applied = 0;
+    let mut skipped: Vec<String> = Vec::new();
     for (index, mut fixes) in per_file {
         if index >= sources.len() {
             continue;
         }
         let file = sources.get(SourceId::new(index as u32));
-        let mut text = file.text.clone();
+        let on_disk = std::fs::read_to_string(&file.path).map_err(|error| {
+            format!("`{}` could not be read to apply fixes: {error}", file.path)
+        })?;
+        if on_disk != file.text {
+            skipped.push(file.path.clone());
+            continue;
+        }
+        let mut text = on_disk;
         // Descending by start, so each write leaves every earlier span intact.
         fixes.sort_by_key(|fix| std::cmp::Reverse(fix.span.span.start));
         for fix in fixes {
@@ -228,5 +252,5 @@ fn apply_fixes(diagnostics: &[Diagnostic], sources: &SourceMap) -> Result<usize,
         std::fs::write(&file.path, text)
             .map_err(|error| format!("`{}` could not be written: {error}", file.path))?;
     }
-    Ok(applied)
+    Ok((applied, skipped))
 }

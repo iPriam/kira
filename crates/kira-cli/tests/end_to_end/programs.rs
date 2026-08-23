@@ -245,3 +245,45 @@ fn a_generic_struct_is_refused_by_name() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("KPAR047"));
 }
+
+/// A build that fails takes the previous build's executable with it.
+///
+/// The stale binary is the worst shape a wrong answer can take: the compiler
+/// says the build failed, and the file left in `.kira-build` starts and behaves
+/// exactly like the program did before the edit — so the change that was
+/// rejected looks like a change that did nothing.
+#[test]
+fn a_failed_build_removes_the_executable_the_last_one_left() {
+    let path = crate::write_program("@Main function main() { print(1) return }", &[]);
+    let directory = path.parent().expect("program directory").to_path_buf();
+    let executable =
+        directory
+            .join(".kira-build")
+            .join(if cfg!(windows) { "main.exe" } else { "main" });
+
+    let built = crate::kira(&["build", "--backend", "llvm", path.to_str().unwrap()]);
+    assert!(
+        built.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(
+        executable.is_file(),
+        "the first build should have written {}",
+        executable.display()
+    );
+
+    std::fs::write(&path, "@Main function main() { print(missing) return }").expect("rewrite");
+    let failed = crate::kira(&["build", "--backend", "llvm", path.to_str().unwrap()]);
+    assert!(
+        !failed.status.success(),
+        "the second build should have failed"
+    );
+    assert!(
+        !executable.exists(),
+        "a failed build left the previous binary at {}",
+        executable.display()
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}

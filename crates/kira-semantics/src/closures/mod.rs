@@ -56,7 +56,7 @@ use kira_source::{SourceId, Span};
 
 mod calls;
 pub(crate) mod captures;
-mod lift;
+pub(crate) mod lift;
 
 /// One function type, and everything synthesized for it.
 #[derive(Debug, Clone)]

@@ -256,22 +256,6 @@ pub enum VmError {
     /// invented detail bought at the price of parity.
     #[error("array index is negative")]
     NegativeIndex,
-    /// An array reached the native seam, which has no layout for one *yet*.
-    ///
-    /// Unlike [`VmError::StructAtSeam`], this one is a gap rather than a
-    /// decision: the language does let an array cross. Carrying one needs an
-    /// ownership answer at the boundary — who frees the elements, and what a
-    /// native function growing the array means for the VM's heap — that this
-    /// port has not made. Refusing it is what keeps the alternative (a double
-    /// free or a leak at the boundary) from shipping. See
-    /// `.codex/work/arrays.md`.
-    #[error(
-        "function {function} passes an array across the native seam, which cannot carry one yet"
-    )]
-    ArrayAtSeam {
-        /// The function at the boundary.
-        function: u32,
-    },
     /// A string index was outside the string.
     ///
     /// `charAt` reads one byte and `substring` carves a half-open range; both

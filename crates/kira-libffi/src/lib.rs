@@ -15,53 +15,19 @@ mod types;
 pub use call::{LibffiRuntime, PreparedCall};
 pub use closure::{FfiClosure, FfiClosureCallback};
 pub use native::{
-    FfiAggregateDescriptor, FfiMemberDescriptor, FfiSignatureDescriptor, FfiTypeDescriptor,
     KIRA_FFI_INVALID_DESCRIPTOR, KIRA_FFI_INVALID_RESULT, KIRA_FFI_MISSING_BUNDLE,
-    KIRA_FFI_NULL_FUNCTION, KIRA_FFI_OK, kira_rt_ffi_call, kira_rt_ffi_call_bytes,
-    kira_rt_ffi_closure,
+    KIRA_FFI_NULL_FUNCTION, KIRA_FFI_OK, kira_rt_ffi_call_bytes, kira_rt_ffi_closure,
 };
 pub use raw::RawFfiCif;
 
 use std::path::{Path, PathBuf};
 
-/// Why the bundled libffi runtime could not be loaded or prepared.
+/// Why a libffi call could not be prepared or made.
+///
+/// Nothing here is about *finding* libffi any more: it is linked into this
+/// image, so a program that runs at all has the engine.
 #[derive(Debug, thiserror::Error)]
 pub enum LibffiError {
-    /// No Kira-shipped libffi binary was found beside the executable or in the
-    /// target's bundled vendor directory.
-    #[error("Kira's bundled libffi runtime is missing; expected `{expected}`")]
-    MissingBundle {
-        /// The platform file name that was required.
-        expected: PathBuf,
-    },
-    /// This target has no Kira-provided libffi artifact.
-    #[error(
-        "Kira has no bundled libffi artifact for host `{target}`; build the sibling libffi source for this host and package `{expected}`"
-    )]
-    UnavailableHost {
-        /// The target host that lacks a prebuilt artifact.
-        target: String,
-        /// The file name the package must provide.
-        expected: PathBuf,
-    },
-    /// The bundled binary could not be opened.
-    #[error("cannot load bundled libffi `{path}`: {source}")]
-    Load {
-        /// The binary Kira tried to open.
-        path: PathBuf,
-        /// The loader error.
-        #[source]
-        source: libloading::Error,
-    },
-    /// A required libffi symbol was absent.
-    #[error("bundled libffi does not export `{name}`: {source}")]
-    Symbol {
-        /// The missing symbol.
-        name: String,
-        /// The loader error.
-        #[source]
-        source: libloading::Error,
-    },
     /// libffi rejected a CIF or closure description.
     #[error("libffi rejected the signature with status {status}")]
     Prepare {
@@ -94,48 +60,6 @@ pub enum LibffiError {
         /// The archive name the build expected.
         expected: PathBuf,
     },
-    /// A bundled file could not be staged beside a native artifact.
-    #[error("cannot stage bundled libffi at `{path}`: {source}")]
-    Io {
-        /// The file or directory involved in staging.
-        path: PathBuf,
-        /// The filesystem failure.
-        #[source]
-        source: std::io::Error,
-    },
-}
-
-/// Returns the path of Kira's bundled libffi binary, without consulting a
-/// system library search path or an environment variable.
-pub fn bundled_path() -> Result<PathBuf, LibffiError> {
-    raw::bundled_path()
-}
-
-/// Returns the file name used for the bundled libffi runtime on this target.
-pub fn bundled_file_name() -> &'static str {
-    raw::bundled_file_name()
-}
-
-/// Copies the bundled libffi binary beside a finished native artifact.
-pub fn stage_bundle(destination: &Path) -> Result<PathBuf, LibffiError> {
-    let source = bundled_path()?;
-    std::fs::create_dir_all(destination).map_err(|source| LibffiError::Io {
-        path: destination.to_path_buf(),
-        source,
-    })?;
-    let file_name = source
-        .file_name()
-        .ok_or_else(|| LibffiError::MissingBundle {
-            expected: source.clone(),
-        })?;
-    let target = destination.join(file_name);
-    if source != target {
-        std::fs::copy(&source, &target).map_err(|source| LibffiError::Io {
-            path: target.clone(),
-            source,
-        })?;
-    }
-    Ok(target)
 }
 
 /// Locates the static Rust helper archive linked into native Kira artifacts.

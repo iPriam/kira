@@ -42,6 +42,9 @@ pub enum DiagnosticCode {
     Kpk030UnreadableManifest,
     /// KPK031 — the root a check request named is in no package it listed.
     Kpk031UnknownRootPackage,
+    /// KPK032 — a dependency package's manifest exists but could not be read
+    /// or parsed.
+    Kpk032UnreadableDependencyManifest,
     /// KPK040 — a native library's headers could not be bound.
     Kpk040AutobindFailed,
     /// KPK041 — a binding the package ships was adopted rather than generated.
@@ -69,6 +72,7 @@ impl DiagnosticCode {
             DiagnosticCode::Kpk027LockfileSyncFailed => "KPK027",
             DiagnosticCode::Kpk030UnreadableManifest => "KPK030",
             DiagnosticCode::Kpk031UnknownRootPackage => "KPK031",
+            DiagnosticCode::Kpk032UnreadableDependencyManifest => "KPK032",
             DiagnosticCode::Kpk040AutobindFailed => "KPK040",
             DiagnosticCode::Kpk041AutobindAdopted => "KPK041",
         }
@@ -100,6 +104,7 @@ mod tests {
             (DiagnosticCode::Kpk027LockfileSyncFailed, "KPK027"),
             (DiagnosticCode::Kpk030UnreadableManifest, "KPK030"),
             (DiagnosticCode::Kpk031UnknownRootPackage, "KPK031"),
+            (DiagnosticCode::Kpk032UnreadableDependencyManifest, "KPK032"),
         ];
 
         for (code, expected) in cases {

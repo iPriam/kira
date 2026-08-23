@@ -315,14 +315,18 @@ pub enum HirExpr {
     },
     /// A floating-point operation the hardware already has.
     ///
-    /// `sqrt(x)`, `sin(x)` and the rest. Written as an ordinary call, resolved
-    /// here rather than to a user function, so a program cannot shadow one with
-    /// a series expansion that answers slightly differently.
+    /// `sqrt(x)`, `sin(x)`, `pow(x, y)` and the rest. Written as an ordinary
+    /// call, resolved here rather than to a user function, so a program cannot
+    /// shadow one with a series expansion that answers slightly differently.
     MathOperation {
         /// Which operation to perform.
         op: kira_runtime_abi::MathOp,
-        /// The value it is performed on.
-        value: HirExprId,
+        /// The values it is performed on, in source order. How many there are
+        /// is the operation's own
+        /// [`argument_count`](kira_runtime_abi::MathOp::argument_count) — held
+        /// as a list rather than a variant per arity for the reason
+        /// [`StringOperation`](Self::StringOperation) gives.
+        operands: Vec<HirExprId>,
     },
     /// One of the string operations that share an opcode (`s.contains(n)`,
     /// `s.trim()`, `s.split(sep)`, …).

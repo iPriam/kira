@@ -39,7 +39,13 @@ use self::frames::{Frame, Writeback};
 use self::place::ResolvedStep;
 
 /// Guards against unbounded recursion turning into unbounded memory use.
-const MAX_CALL_DEPTH: usize = 1 << 20;
+///
+/// Frames are heap-allocated, so the bound is a memory budget rather than a
+/// host-stack one: at ~a hundred bytes of frame per level plus each frame's
+/// locals, 65,536 levels is already on the order of tens of megabytes. That
+/// is far past any recursion a program writes on purpose and fails fast
+/// instead of letting a runaway function consume the machine first.
+const MAX_CALL_DEPTH: usize = 1 << 16;
 
 fn debug_function_id(function_id: u64) -> u32 {
     u32::try_from(function_id).unwrap_or(u32::MAX)
@@ -669,6 +675,29 @@ impl Vm<'_> {
     #[inline(always)]
     fn pop(&mut self) -> Result<Value, VmError> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
+    }
+
+    /// Pops `count` operands, returned in pop order (the top of the stack
+    /// first).
+    ///
+    /// On underflow every value already popped is freed before the error
+    /// returns: a popped value is this VM's to own, and validation proves
+    /// structure rather than stack typing, so an ill-typed module must trap
+    /// without stranding storage in a heap that may outlive the call.
+    fn pop_operands(&mut self, count: usize) -> Result<Vec<Value>, VmError> {
+        let mut operands = Vec::with_capacity(count);
+        for _ in 0..count {
+            match self.pop() {
+                Ok(value) => operands.push(value),
+                Err(error) => {
+                    for operand in operands {
+                        self.heap.drop_value(operand);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(operands)
     }
 
     /// Runs a callback with the reusable string-argument buffer removed from

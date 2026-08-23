@@ -10,6 +10,7 @@ use kira_syntax_model::ast::ExprId;
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::closures::ClosureImpl;
+use crate::closures::lift::ClosureShape;
 
 impl Analyzer<'_> {
     /// Type-checks `f(args)` when `f` names a binding of function type.
@@ -259,17 +260,17 @@ impl Analyzer<'_> {
     /// the slot `borrow mut`, then carries out to its caller. That chain is what
     /// makes a mutable borrow survive a call through a function value, where the
     /// callee is not known until the tag is read.
-    #[allow(clippy::too_many_arguments)]
     fn dispatch_arm(
         &mut self,
         target: FuncId,
         env: LocalId,
-        repr: StructId,
+        shape: ClosureShape<'_>,
         param_locals: &[LocalId],
-        params: &[Type],
-        modes: &[OwnershipMode],
-        result: Type,
     ) -> Vec<HirStmtId> {
+        let repr = shape.repr;
+        let params = shape.params;
+        let modes = shape.modes;
+        let result = shape.result;
         let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
             local: env,
             ty: Type::Struct(repr),
@@ -536,11 +537,13 @@ impl Analyzer<'_> {
             let arm = self.dispatch_arm(
                 closure.function,
                 env,
-                repr,
+                ClosureShape {
+                    repr,
+                    params: &params,
+                    modes: &modes,
+                    result,
+                },
                 &param_locals,
-                &params,
-                &modes,
-                result,
             );
             if index + 1 == impls.len() {
                 body.extend(arm);
