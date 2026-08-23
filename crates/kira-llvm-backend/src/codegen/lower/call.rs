@@ -83,6 +83,7 @@ impl FunctionLowering<'_, '_> {
                     Type::RawPtr
                     | Type::ForeignPtr(_)
                     | Type::CString
+                    | Type::CBlock
                     | Type::NativeState(_)
                     | Type::Task(_)
                     | Type::Cell(_) => {

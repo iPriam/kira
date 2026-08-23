@@ -136,7 +136,7 @@ fn word_of(
         ForeignArg::U16(value) => i64::from(value),
         ForeignArg::U32(value) => i64::from(value),
         ForeignArg::U64(value) => value as i64,
-        ForeignArg::RawPtr(value) => value as i64,
+        ForeignArg::RawPtr(value) | ForeignArg::CStringPtr(value) => value as i64,
         ForeignArg::CString(text) => {
             let text = std::ffi::CString::new(text)
                 .map_err(|_| ForeignCallError::InteriorNul { index })?;

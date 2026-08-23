@@ -443,6 +443,7 @@ impl Analyzer<'_> {
             | Type::RawPtr
             | Type::ForeignPtr(_)
             | Type::CString
+            | Type::CBlock
             | Type::Any
             | Type::Task(_)
             | Type::NativeState(_) => HirExpr::Int(0),

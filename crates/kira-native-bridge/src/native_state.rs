@@ -3,8 +3,8 @@
 use std::sync::{Mutex, OnceLock};
 
 use kira_runtime_abi::{
-    NativeCell, NativeStateStatus, NativeStateStore, NativeStateToken, NativeStateTypeId,
-    NativeStateValue, NativeStateValueTag,
+    CBlockOffset, ForeignPointerWidth, NativeCBlock, NativeCell, NativeStateStatus,
+    NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
 };
 
 use crate::array::{
@@ -12,6 +12,17 @@ use crate::array::{
     kira_rt_array_slot, make_array_unique,
 };
 use crate::runtime::{KStr, kira_rt_str_data, kira_rt_str_free, kira_rt_str_len, kira_rt_str_new};
+
+mod cblock;
+mod cell;
+
+pub use cblock::{
+    kira_rt_native_value_cblock, kira_rt_native_value_cblock_child_offset,
+    kira_rt_native_value_cblock_child_width, kira_rt_native_value_cblock_from_handle,
+    kira_rt_native_value_cblock_to_handle, kira_rt_native_value_read_cblock_data,
+    kira_rt_native_value_read_cblock_len, kira_rt_native_value_set_cblock_child,
+};
+pub use cell::{kira_rt_native_value_cell, kira_rt_native_value_read_cell};
 
 /// Encodes one owned array element from its slot.
 pub type NativeStateEncodeElement = unsafe extern "C" fn(*mut u8) -> KNativeStateValue;
@@ -34,6 +45,17 @@ enum NodeValue {
         enum_tag: u32,
         children: Vec<Option<NativeStateValue>>,
     },
+    CBlock {
+        bytes: Box<[u8]>,
+        children: Vec<Option<CBlockBuilderChild>>,
+    },
+}
+
+#[derive(Debug)]
+struct CBlockBuilderChild {
+    offset: CBlockOffset,
+    width: ForeignPointerWidth,
+    block: NativeCBlock,
 }
 
 fn store() -> &'static Mutex<NativeStateStore> {
@@ -80,6 +102,22 @@ fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus
                 _ => return Err(NativeStateStatus::MALFORMED_VALUE),
             })
         }
+        NodeValue::CBlock { bytes, children } => {
+            let children: Option<Vec<_>> = children.into_iter().collect();
+            let Some(children) = children else {
+                return Err(NativeStateStatus::MALFORMED_VALUE);
+            };
+            let mut block = NativeCBlock::new(bytes.into_vec());
+            for child in children {
+                if block
+                    .attach(child.offset, child.width, child.block)
+                    .is_err()
+                {
+                    return Err(NativeStateStatus::MALFORMED_VALUE);
+                }
+            }
+            Ok(NativeStateValue::CBlock(block))
+        }
     }
 }
 
@@ -115,67 +153,6 @@ pub unsafe extern "C" fn kira_rt_native_value_any(
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_native_value_raw_ptr(value: u64) -> KNativeStateValue {
     boxed(NativeStateValue::RawPtr(value))
-}
-
-/// Creates a capture-cell state-value node from a native cell box.
-///
-/// The share is taken here and given back when the node's last clone goes, so
-/// the box outlives the crossing whatever either half does with it afterwards.
-///
-/// # A cell crosses as a handle, and only its own engine reads it
-///
-/// A captured `var` is one box two holders write through, and the two halves of
-/// a hybrid program keep their values in separate storage — so a cell cannot be
-/// *copied* across, the way a struct's fields are. It does not have to be. What
-/// crosses is a closure's representation struct, and the closure's body runs on
-/// the half that declared it: the other half carries the field and hands it
-/// back, exactly as it carries a `RawPtr` whose target means nothing to it.
-///
-/// That is the whole contract. A half that tried to *read* a cell the other one
-/// created would be reading storage it does not own, and nothing generates that:
-/// a `CellGet` is emitted where the binding was declared.
-///
-/// # SAFETY
-///
-/// `cell` is a live cell box this runtime allocated, and the caller keeps its
-/// own share.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_native_value_cell(cell: crate::cells::KCell) -> KNativeStateValue {
-    // SAFETY: the caller's contract is a live box, and a cell box *is* an enum
-    // box — the clone is its share count going up.
-    let shared = unsafe { crate::enums::kira_rt_enum_clone(cell) };
-    boxed(NativeStateValue::Cell(NativeCell::new(
-        shared as u64,
-        |handle| {
-            // SAFETY: the share this releases is the one taken above, and it is
-            // released exactly once — the node counts its own clones.
-            unsafe { crate::cells::kira_rt_cell_free(handle as crate::cells::KCell) };
-        },
-    )))
-}
-
-/// Reads the cell box out of a capture-cell node, keeping the node's share.
-///
-/// # SAFETY
-///
-/// `node` is a live node this runtime allocated.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_native_value_read_cell(
-    node: KNativeStateValue,
-) -> crate::cells::KCell {
-    if node.is_null() {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Cell(cell)) => {
-            // The reader gets a share of its own: the node keeps counting the
-            // one it took, and a decode hands its result to an owner.
-            // SAFETY: the node holds a live box, so cloning it is sound.
-            unsafe { crate::enums::kira_rt_enum_clone(cell.handle() as crate::cells::KCell) }
-        }
-        _ => std::ptr::null_mut(),
-    }
 }
 
 /// Creates a floating-point state-value node.
@@ -355,6 +332,7 @@ pub unsafe extern "C" fn kira_rt_native_value_tag(node: KNativeStateValue) -> u3
     match unsafe { &(*node).value } {
         NodeValue::Ready(value) => value_tag(value).0,
         NodeValue::Aggregate { tag, .. } => tag.0,
+        NodeValue::CBlock { .. } => NativeStateValueTag::C_BLOCK.0,
     }
 }
 
@@ -472,6 +450,8 @@ pub unsafe extern "C" fn kira_rt_native_value_len(node: KNativeStateValue) -> us
         NodeValue::Ready(NativeStateValue::Enum { payload, .. }) => usize::from(payload.is_some()),
         NodeValue::Ready(NativeStateValue::Any { .. }) => 1,
         NodeValue::Aggregate { children, .. } => children.len(),
+        NodeValue::Ready(NativeStateValue::CBlock(block)) => block.children().len(),
+        NodeValue::CBlock { children, .. } => children.len(),
         _ => 0,
     }
 }
@@ -506,19 +486,33 @@ pub unsafe extern "C" fn kira_rt_native_value_child(
         return std::ptr::null_mut();
     }
     // SAFETY: the caller vouches the node is live.
-    let value = match unsafe { &(*node).value } {
+    match unsafe { &(*node).value } {
         NodeValue::Ready(NativeStateValue::Struct(values))
-        | NodeValue::Ready(NativeStateValue::Array(values)) => values.get(index),
-        NodeValue::Ready(NativeStateValue::Enum { payload, .. }) if index == 0 => {
-            payload.as_deref()
-        }
+        | NodeValue::Ready(NativeStateValue::Array(values)) => values
+            .get(index)
+            .map_or(std::ptr::null_mut(), |value| boxed(value.clone())),
+        NodeValue::Ready(NativeStateValue::Enum { payload, .. }) if index == 0 => payload
+            .as_deref()
+            .map_or(std::ptr::null_mut(), |value| boxed(value.clone())),
         NodeValue::Ready(NativeStateValue::Any { payload, .. }) if index == 0 => {
-            Some(payload.as_ref())
+            boxed(payload.as_ref().clone())
         }
-        NodeValue::Aggregate { children, .. } => children.get(index).and_then(Option::as_ref),
-        _ => None,
-    };
-    value.map_or(std::ptr::null_mut(), |value| boxed(value.clone()))
+        NodeValue::Ready(NativeStateValue::CBlock(block)) => block
+            .children()
+            .get(index)
+            .map(|child| NativeStateValue::CBlock(child.block().clone()))
+            .map_or(std::ptr::null_mut(), boxed),
+        NodeValue::Aggregate { children, .. } => children
+            .get(index)
+            .and_then(Option::as_ref)
+            .map_or(std::ptr::null_mut(), |value| boxed(value.clone())),
+        NodeValue::CBlock { children, .. } => children
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|child| NativeStateValue::CBlock(child.block.clone()))
+            .map_or(std::ptr::null_mut(), boxed),
+        _ => std::ptr::null_mut(),
+    }
 }
 
 /// Releases one temporary value node. Null is a no-op.
@@ -671,160 +665,9 @@ fn value_tag(value: &NativeStateValue) -> NativeStateValueTag {
         NativeStateValue::RawPtr(_) => NativeStateValueTag::RAW_PTR,
         NativeStateValue::Cell(_) => NativeStateValueTag::CELL,
         NativeStateValue::Any { .. } => NativeStateValueTag::ANY,
+        NativeStateValue::CBlock(_) => NativeStateValueTag::C_BLOCK,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::enums::PAYLOAD_INERT;
-
-    #[test]
-    fn native_store_mutates_and_rejects_invalid_tokens() {
-        let node = kira_rt_native_value_aggregate(NativeStateValueTag::STRUCT.0, 0, 1);
-        let child = kira_rt_native_value_int(4);
-        // SAFETY: both nodes are live and slot zero exists.
-        assert_eq!(unsafe { kira_rt_native_value_set_child(node, 0, child) }, 0);
-        let mut token = 0;
-        // SAFETY: `node` is live and `token` is writable.
-        assert_eq!(unsafe { kira_rt_native_state_new(7, node, &mut token) }, 0);
-        assert_ne!(token, 0);
-
-        let mut recovered = std::ptr::null_mut();
-        // SAFETY: `recovered` is writable.
-        let recovered_status = unsafe { kira_rt_native_state_recover(token, 7, &mut recovered) };
-        assert_eq!(recovered_status, 0);
-        // SAFETY: `recovered` is a live struct node.
-        let child = unsafe { kira_rt_native_value_child(recovered, 0) };
-        // SAFETY: `child` is a live integer node.
-        assert_eq!(unsafe { kira_rt_native_value_read_int(child) }, 4);
-        // SAFETY: both temporary nodes are live and uniquely owned.
-        unsafe {
-            kira_rt_native_value_free(child);
-            kira_rt_native_value_free(recovered);
-        }
-
-        assert_eq!(kira_rt_native_state_free(token), 0);
-        assert_eq!(
-            kira_rt_native_state_free(token),
-            NativeStateStatus::UNKNOWN_TOKEN.0
-        );
-        let mut out = std::ptr::null_mut();
-        // SAFETY: `out` is writable.
-        let null_status = unsafe { kira_rt_native_state_recover(0, 7, &mut out) };
-        assert_eq!(null_status, NativeStateStatus::NULL_TOKEN.0);
-        // SAFETY: `out` is writable.
-        let unknown_status = unsafe { kira_rt_native_state_recover(999_999, 7, &mut out) };
-        assert_eq!(unknown_status, NativeStateStatus::UNKNOWN_TOKEN.0);
-    }
-
-    #[test]
-    fn native_store_rejects_wrong_type() {
-        let node = kira_rt_native_value_int(1);
-        let mut token = 0;
-        // SAFETY: `node` is live and `token` is writable.
-        assert_eq!(unsafe { kira_rt_native_state_new(11, node, &mut token) }, 0);
-        let mut out = std::ptr::null_mut();
-        // SAFETY: `out` is writable.
-        let status = unsafe { kira_rt_native_state_recover(token, 12, &mut out) };
-        assert_eq!(status, NativeStateStatus::WRONG_TYPE.0);
-        assert_eq!(kira_rt_native_state_free(token), 0);
-    }
-
-    #[test]
-    fn any_and_cell_nodes_keep_their_recursive_value_and_share() {
-        let child = kira_rt_native_value_int(7);
-        // SAFETY: `child` is live and ownership moves into the Any node.
-        let any = unsafe { kira_rt_native_value_any(0x0500_0000_0000_0001, child) };
-        // SAFETY: `any` is the live node built above.
-        let (tag, type_id, len) = unsafe {
-            (
-                kira_rt_native_value_tag(any),
-                kira_rt_native_value_read_any_type(any),
-                kira_rt_native_value_len(any),
-            )
-        };
-        assert_eq!(tag, NativeStateValueTag::ANY.0);
-        assert_eq!(type_id, 0x0500_0000_0000_0001);
-        assert_eq!(len, 1);
-        // SAFETY: `any` is live and its child is returned as a fresh node.
-        let child = unsafe { kira_rt_native_value_child(any, 0) };
-        // SAFETY: `child` is that node, which carries the integer read here.
-        let value = unsafe { kira_rt_native_value_read_int(child) };
-        assert_eq!(value, 7);
-        // SAFETY: both nodes are live and released once.
-        unsafe {
-            kira_rt_native_value_free(child);
-            kira_rt_native_value_free(any);
-        }
-
-        let cell = crate::cells::kira_rt_cell_new(PAYLOAD_INERT, 9);
-        // SAFETY: the cell is live, and the node takes one additional share.
-        let node = unsafe { kira_rt_native_value_cell(cell) };
-        // SAFETY: `node` is that live cell node.
-        let tag = unsafe { kira_rt_native_value_tag(node) };
-        assert_eq!(tag, NativeStateValueTag::CELL.0);
-        // SAFETY: `node` holds a live cell share and the read takes another.
-        let read = unsafe { kira_rt_native_value_read_cell(node) };
-        assert_eq!(read, cell);
-        // SAFETY: every cell share and the node are live and released once.
-        unsafe {
-            crate::cells::kira_rt_cell_free(read);
-            crate::cells::kira_rt_cell_free(cell);
-            kira_rt_native_value_free(node);
-        }
-    }
-
-    #[test]
-    fn callback_state_teardown_releases_a_nested_enum_cell_once() {
-        let before = crate::accounting::kira_rt_heap_live();
-        let cell = crate::cells::kira_rt_cell_new(PAYLOAD_INERT, 23);
-        // SAFETY: every node is live, and ownership moves into its parent on
-        // each successful child write.
-        let cell_node = unsafe { kira_rt_native_value_cell(cell) };
-        let enum_node = kira_rt_native_value_aggregate(NativeStateValueTag::ENUM.0, 3, 1);
-        // SAFETY: both nodes are live and the child moves into its parent.
-        let status = unsafe { kira_rt_native_value_set_child(enum_node, 0, cell_node) };
-        assert_eq!(status, NativeStateStatus::OK.0);
-        let root = kira_rt_native_value_aggregate(NativeStateValueTag::STRUCT.0, 0, 1);
-        // SAFETY: as above, for the root and the enum node it takes.
-        let status = unsafe { kira_rt_native_value_set_child(root, 0, enum_node) };
-        assert_eq!(status, NativeStateStatus::OK.0);
-
-        let mut token = 0;
-        // SAFETY: `root` is consumed and `token` is writable.
-        let status = unsafe { kira_rt_native_state_new(19, root, &mut token) };
-        assert_eq!(status, NativeStateStatus::OK.0);
-        // The state node retained its own cell share.
-        // SAFETY: this releases only the share this test created.
-        unsafe { crate::cells::kira_rt_cell_free(cell) };
-
-        let mut recovered = std::ptr::null_mut();
-        // SAFETY: `recovered` is writable and `token` names the live state.
-        let status = unsafe { kira_rt_native_state_recover(token, 19, &mut recovered) };
-        assert_eq!(status, NativeStateStatus::OK.0);
-        // SAFETY: the recovered tree is owned by this test, and each child is
-        // returned as a fresh node whose cell read takes its own share.
-        let (recovered_enum, recovered_cell, read, value) = unsafe {
-            let recovered_enum = kira_rt_native_value_child(recovered, 0);
-            let recovered_cell = kira_rt_native_value_child(recovered_enum, 0);
-            let read = kira_rt_native_value_read_cell(recovered_cell);
-            let value = crate::cells::kira_rt_cell_get(read);
-            (recovered_enum, recovered_cell, read, value)
-        };
-        assert_eq!(value, 23);
-        // SAFETY: the read and all recovered nodes are owned by this test.
-        unsafe {
-            crate::cells::kira_rt_cell_free(read);
-            kira_rt_native_value_free(recovered_cell);
-            kira_rt_native_value_free(recovered_enum);
-            kira_rt_native_value_free(recovered);
-        }
-        assert_eq!(kira_rt_native_state_free(token), NativeStateStatus::OK.0);
-        assert_eq!(
-            crate::accounting::kira_rt_heap_live(),
-            before,
-            "state recovery and final teardown release the enum cell"
-        );
-    }
-}
+mod tests;

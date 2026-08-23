@@ -245,6 +245,16 @@ void ffi_desc_keep(const struct ffi_desc *d) {
     ffi_kept_tag = d->tag;
 }
 
+void ffi_desc_keep_value(struct ffi_desc d) {
+    ffi_kept_title = d.title;
+    ffi_kept_tag = d.tag;
+}
+
+void ffi_cstr_keep(const char *text) {
+    ffi_kept_title = text;
+    ffi_kept_tag = 3;
+}
+
 int ffi_desc_recall(void) {
     return ffi_classify_title(ffi_kept_title) * 10 + ffi_kept_tag;
 }

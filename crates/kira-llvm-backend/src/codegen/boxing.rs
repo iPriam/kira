@@ -275,6 +275,7 @@ mod tests {
             .declare(StructDef {
                 name: "Payload".to_owned(),
                 fields: Vec::new(),
+                c_layout: false,
             })
             .expect("a fresh table accepts the first struct");
         assert_eq!(

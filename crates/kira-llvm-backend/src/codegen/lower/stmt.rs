@@ -187,6 +187,7 @@ impl FunctionLowering<'_, '_> {
                 (pointer, ty) = self.walk_place_step(pointer, ty, step)?;
             }
             let value = self.lower_expr(expr)?;
+            let value = self.prepare_store_value(ty, expr, value);
             self.store_through(pointer, ty, value)?;
             if write_back {
                 return self.write_back_native_state(place.local, type_id, root_ty, root);
@@ -201,6 +202,7 @@ impl FunctionLowering<'_, '_> {
         }
         let (slot, ty) = self.walk_place(place.local, &place.path)?;
         let value = self.lower_expr(expr)?;
+        let value = self.prepare_store_value(ty, expr, value);
         self.store_through(slot, ty, value)
     }
 
@@ -254,15 +256,20 @@ impl FunctionLowering<'_, '_> {
                         name.as_ptr(),
                     )
                 };
-                let field_ty = self
+                let def = self
                     .codegen
                     .program
                     .types
                     .structs()
                     .get(id)
-                    .and_then(|def| def.field(*index))
-                    .map(|field| field.ty)
                     .ok_or(LlvmError::internal("a field the struct never declared"))?;
+                let field_ty = if def.owns_c_storage_at(*index) {
+                    Type::CBlock
+                } else {
+                    def.field(*index)
+                        .map(|field| field.ty)
+                        .ok_or(LlvmError::internal("a field the struct never declared"))?
+                };
                 Ok((field_ptr, field_ty))
             }
             IrPlaceStep::Index(index) => {
@@ -306,6 +313,23 @@ impl FunctionLowering<'_, '_> {
         // SAFETY: `pointer` points at a value of `ty` and `value` has its type.
         unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
         Ok(())
+    }
+
+    /// Converts a foreign word into the owning representation a C slot stores.
+    fn prepare_store_value(
+        &mut self,
+        storage_ty: Type,
+        expr: IrExprId,
+        value: LLVMValueRef,
+    ) -> LLVMValueRef {
+        if storage_ty != Type::CBlock || self.type_of(expr) == Type::CBlock {
+            return value;
+        }
+        self.call(
+            self.codegen.runtime.cblock_alien,
+            &mut [value],
+            c"store.cblock.alien",
+        )
     }
 
     /// Returns from the function, first reclaiming every string this frame owns.

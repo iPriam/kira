@@ -141,18 +141,28 @@ impl<'a> Analyzer<'a> {
             // Filed under the package that wrote it, so two packages may each
             // declare the name and only a repeat *within* one is a duplicate.
             let owner = self.imports.package_of(source).map(str::to_owned);
+            let classification = crate::ffi_types::classify(declaration);
             match self.program.types.structs_mut().declare_owned(
                 owner.as_deref(),
                 StructDef {
                     name: name.clone(),
                     fields: Vec::new(),
+                    // Recorded on the table row, not only in this analyzer's
+                    // side map: the backends read the table, and a C-layout
+                    // struct's owning slots are what their clone and free
+                    // walks key on.
+                    c_layout: matches!(
+                        classification,
+                        Some(crate::ffi_types::FfiClassification::Struct(
+                            crate::ffi_types::FfiStructKind::CLayout
+                        ))
+                    ),
                 },
             ) {
                 Some(id) => {
                     // A `@FFI.Struct`/`Array`/`Callback` mints a nominal id; the
                     // kind decides zero-fill construction and use-site refusals.
-                    if let Some(crate::ffi_types::FfiClassification::Struct(kind)) =
-                        crate::ffi_types::classify(declaration)
+                    if let Some(crate::ffi_types::FfiClassification::Struct(kind)) = classification
                     {
                         self.ffi_structs.insert(id, kind);
                     }
@@ -491,7 +501,17 @@ impl<'a> Analyzer<'a> {
             );
         }
         self.in_foreign_signature = outer_foreign;
-        (StructDef { name, fields }, defaults)
+        // `c_layout` lives on the row `declare_owned` minted; this definition
+        // only carries the resolved fields into `set_fields`, which preserves
+        // the flag.
+        (
+            StructDef {
+                name,
+                fields,
+                c_layout: false,
+            },
+            defaults,
+        )
     }
 
     /// The default initializer recorded for field `index` of `id`, if any.

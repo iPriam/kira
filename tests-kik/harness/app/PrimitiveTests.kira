@@ -98,14 +98,23 @@ Test PrimitiveLogOfOneIsZero {
 
 // Each undoes the other, which a pair of independent approximations would only
 // nearly do.
-// Each undoes the other to within a last-bit rounding, and `prmScaled` folds
-// toward zero — so the round trip lands one unit below where the arithmetic
-// says. The assertion is what IEEE-754 gives, for the reason the tangent above
-// gives: rounding it up to 37000000 here would also pass against an
-// implementation that is wrong by more.
+// Each undoes the other to within a last-bit rounding. Where the round trip
+// lands is the host libm's last-bit choice — one library answers exactly 37,
+// another one ulp below — and both engines on one host share that library, so
+// the parity fact is the band, not a single value. The band is one scaled
+// unit wide: anything outside it is an implementation wrong by more than a
+// last bit, which is what this test exists to catch.
 Test PrimitiveExpAndLogInvertEachOther {
-    test { return prmScaled(exp(log(37.0)), 6) }
-    expect { let e: Result<Int, TestFailure> = .Ok(36999999); return e }
+    test {
+        let scaled = prmScaled(exp(log(37.0)), 6)
+        if scaled >= 36999999 {
+            if scaled <= 37000000 {
+                return 1
+            }
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
 Test PrimitiveLog2AndExp2OnAPowerOfTwo {

@@ -74,6 +74,29 @@ function main() {
     );
 }
 
+/// C-layout storage made in a frame loop is owned and released per iteration.
+#[test]
+fn c_layout_blocks_made_in_a_loop_balance() {
+    assert_balances(
+        r#"
+@FFI.Struct { layout: c; }
+struct FrameDesc {
+    let label: CString
+}
+
+@Main
+function main() {
+    var i = 0
+    while i < 500 {
+        let desc = FrameDesc { label: "frame" }
+        i = i + 1
+    }
+    return
+}
+"#,
+    );
+}
+
 /// A struct holding a string, copied and overwritten, balances.
 ///
 /// Copying is where a shallow copy would double-free and a missing copy would

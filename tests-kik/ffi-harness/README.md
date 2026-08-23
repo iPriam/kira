@@ -3,11 +3,13 @@
 A monolithic Kira suite of harness-owned `Test` declarations that stress the
 `@Native` and `@Runtime` bridge in depth. It covers struct, scalar, enum, and
 array returns and arguments, native-to-VM closures, native-to-VM-to-native
-re-entry, borrow and move across the bridge, and allocation churn. 267 tests
+re-entry, borrow and move across the bridge, C-layout block churn and transport,
+and allocation churn. 270 tests
 across `app/<purpose>/`:
 
 - `structs/`: native struct return-by-value, struct-borrow into `@Runtime`,
-  scalar round-trips, native-to-VM callback (prefix `fsb`/`Fsb`).
+  scalar round-trips, native-to-VM callback, and C-layout storage loops
+  (prefix `fsb`/`Fsb` and `flt`/`Flt`).
 - `enums/`: enums returned to native, enum fields in native structs,
   payload/payload-less variants, state machines (`fen`/`Fen`).
 - `collections/`: `[Int]` / arrays-of-structs across the bridge, `borrow mut`
@@ -29,7 +31,7 @@ selected backend's bridge and the verdict is backend-independent:
 | LLVM | `kira test --backend llvm tests-kik/ffi-harness` |
 | Hybrid | `kira test --backend hybrid tests-kik/ffi-harness` |
 
-The driver reports 267 declared tests, with the same 267 passed and zero failed
+The driver reports 270 declared tests, with the same 270 passed and zero failed
 or skipped on all three backends.
 
 Every test reduces a bridge exercise to a scalar and asserts it with

@@ -16,6 +16,7 @@
 pub mod accounting;
 pub mod array;
 pub mod boxes;
+pub mod cblock;
 pub mod cells;
 pub mod dynamic_call;
 pub mod dynamic_library;
@@ -42,7 +43,7 @@ pub use cells::{
     kira_rt_cell_new_aggregate, kira_rt_cell_set, kira_rt_cell_set_aggregate,
 };
 pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
-pub use foreign::{kira_foreign_adapter_abi_version_2, kira_rt_cstring_free, kira_rt_cstring_new};
+pub use foreign::{kira_foreign_adapter_abi_version_3, kira_rt_cstring_free, kira_rt_cstring_new};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
 pub use runtime::{KStr, KiraString};
 

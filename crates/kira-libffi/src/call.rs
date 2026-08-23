@@ -301,6 +301,14 @@ fn write_argument(
             strings.push(string);
             destination.write(&pointer.to_ne_bytes())
         }
+        ForeignArg::CStringPtr(value) => {
+            if (value as usize) as u64 != value {
+                return Err(LibffiError::Call(ForeignCallError::RawPointerOutOfRange {
+                    value,
+                }));
+            }
+            destination.write(&(value as usize).to_ne_bytes())
+        }
         ForeignArg::Aggregate { id, bytes } => {
             let expected = aggregates
                 .layout_of(id, kira_runtime_abi::ForeignPointerWidth::HOST)?

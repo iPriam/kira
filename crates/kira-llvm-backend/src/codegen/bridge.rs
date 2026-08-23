@@ -82,7 +82,7 @@ fn bridge_tag_of(
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
-        Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+        Type::CString | Type::CBlock | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
             return Err(LlvmError::internal(
                 "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
             ));
@@ -163,7 +163,11 @@ impl Codegen<'_> {
                     self.decode_native_state_value(node, ty)?
                 }
                 Type::RawPtr | Type::ForeignPtr(_) => payload,
-                Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+                Type::CString
+                | Type::CBlock
+                | Type::NativeState(_)
+                | Type::Task(_)
+                | Type::Cell(_) => {
                     return Err(LlvmError::internal(
                         "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
                     ));

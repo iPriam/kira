@@ -21,9 +21,10 @@ function add(a: I32, b: I32) -> I32;
 @Main function main() { print(add(20, 22)) return }
 ```
 
-The three fields are all required, exactly once each; `abi` must be `c`. A
-foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or
-`@Export`. Each rule is a stable diagnostic, not a silent acceptance.
+The three fields are required exactly once; `abi` must be `c`. Repeatable
+`retains: <parameter>;` fields mark parameters whose C callee keeps pointers
+after the call. A foreign declaration may not also be `@Main`, `@Runtime`,
+`@Native`, or `@Export`.
 
 ## The supported type surface
 
@@ -42,16 +43,47 @@ ordinary Kira local or function parameter. An extern result may be `CString`:
 the seam copies the returned `const char*` into an owned Kira `String` while the
 pointer is valid, so no C storage crosses the result boundary.
 
-As a **member of a C-layout struct** it is a pointer word, and its storage is
-never released because C may retain the descriptor after the call and the seam
-cannot know when it is safe to free it. This leaks one allocation per distinct
-string; building one per frame grows memory. A member left out of the literal
-zero-fills to `NULL`, which is different from a pointer to `""`.
+As a **member of a C-layout struct**, it is an owning C-block slot. The block is
+cloned when the value is copied, moved when the value is bound, and freed when
+the value dies. A member left out of the literal zero-fills to `NULL`, which is
+different from a pointer to `""`.
 
 `RawPtr` is an opaque target-width word. Kira may store it, return it, and pass
 it back to C, but never dereferences it, does arithmetic on it, or frees it — a
 library that allocates must expose an explicit free extern. A null pointer is
 just data and round-trips like any other word.
+
+## Foreign lifetimes
+
+Foreign parameters borrow by default. Storage materialized for a `CString`, a
+C-layout image, or an array buffer stays live through the call and is freed
+when its owning value dies. A per-frame descriptor therefore releases its C
+blocks every frame.
+
+Use `retains:` only when C keeps pointers after return:
+
+```kira
+@FFI.Extern {
+    library: sokol;
+    symbol: sapp_run;
+    abi: c;
+    retains: desc;
+}
+function sappRun(desc: SappDescPtr): Void;
+
+let desc = SappDesc { windowTitle: "Kira" }
+sappRun(move desc)
+```
+
+A retained named argument requires `move`. The call transfers its complete
+C-block ownership tree to the engine registry. VM storage is released with the
+instance; hybrid storage is released when the native session closes; a
+whole-process native program leaves it to process teardown. Retained roots and
+their child blocks are reported by native heap accounting.
+
+C blocks are uniquely owned. They have no share count. C-layout values move on
+binding, while an explicit copy builds independent blocks and rewrites every
+embedded child address.
 
 ## How one declaration serves every backend
 
@@ -186,10 +218,9 @@ see above for their storage rules.
 ### A struct passed by address
 
 A parameter written as an `@FFI.Pointer` to a C-layout struct also accepts that
-struct itself, which is what `sapp_run(move desc)` means: the seam writes the
-struct's C-layout image and passes its address. The image gets the same storage
-a `CString` member does, and for the same reason — the callee may keep the
-pointer, and nothing on this side knows whether it did.
+struct itself. The seam writes the C-layout image and passes its address. An
+ordinary call borrows the image. A declaration with `retains:` consumes it and
+transfers the image plus every block whose address it embeds.
 
 The same position accepts an **`@FFI.Array` of that struct**, which is the same
 image with an extent: a C array is its elements laid out end to end, so one row
@@ -364,10 +395,9 @@ Kira holds a `[F32]` as `double`s and C reads four bytes each, so handing over
 the array's own storage would give C wrong *numbers* rather than a wrong
 pointer — a rendering bug rather than a crash. An empty array is a null pointer.
 
-The buffer gets the storage a `CString` member gets, and is never reclaimed, for
-the same reason: `sg_make_buffer` reads it during the call but `sg_range` handed
-to `sg_apply_uniforms` may be kept, and nothing this side knows which kind of
-callee it has.
+The buffer is an owned C block. It is freed with its argument after an ordinary
+call. A `retains:` parameter transfers it to the retained registry when the C
+API keeps the pointer.
 
 The member position is what makes a graphics API reachable at all. Almost none
 of them take a pointer and a count as two arguments; they take a descriptor

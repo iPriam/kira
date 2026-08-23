@@ -51,9 +51,42 @@ pub struct StructDef {
     pub name: String,
     /// The stored fields, in declaration order. Field order is layout order.
     pub fields: Vec<FieldDef>,
+    /// Whether this is an `@FFI.Struct { layout: c; }` declaration.
+    ///
+    /// The fact the ownership machinery keys on: a C-layout struct's
+    /// `CString` and pointer members are **owning slots** — they hold the C
+    /// blocks Kira materialized for the seam — so the struct clones and frees
+    /// them where an ordinary struct's pointer words copy as bits. See
+    /// [`StructDef::owning_c_slots`].
+    pub c_layout: bool,
 }
 
 impl StructDef {
+    /// The field indices that hold seam-owned C storage, in declaration order.
+    ///
+    /// Empty for an ordinary struct. For a C-layout struct these are its
+    /// `CString` and pointer members: the slots a construction fills with an
+    /// owned block (or a wrapped foreign word, on the native engine), a copy
+    /// clones, and a drop frees.
+    pub fn owning_c_slots(&self) -> impl Iterator<Item = u32> + '_ {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter(move |(_, field)| {
+                self.c_layout
+                    && matches!(
+                        field.ty,
+                        Type::CString | Type::RawPtr | Type::ForeignPtr(_) | Type::CBlock
+                    )
+            })
+            .map(|(index, _)| index as u32)
+    }
+
+    /// Whether field `index` uniquely owns a C block.
+    pub fn owns_c_storage_at(&self, index: u32) -> bool {
+        self.owning_c_slots().any(|slot| slot == index)
+    }
+
     /// The index of the field named `name`, or `None` when there is no such
     /// field.
     pub fn field_index(&self, name: &str) -> Option<u32> {
@@ -281,6 +314,7 @@ mod tests {
                         mutable: false,
                     },
                 ],
+                c_layout: false,
             })
             .expect("a fresh name declares");
         (table, id)
@@ -292,6 +326,7 @@ mod tests {
         let again = table.declare(StructDef {
             name: "Point".to_owned(),
             fields: Vec::new(),
+            c_layout: false,
         });
         assert_eq!(again, None);
         // The first declaration still owns the name and the row.
@@ -307,6 +342,7 @@ mod tests {
             .declare(StructDef {
                 name: "World".to_owned(),
                 fields: Vec::new(),
+                c_layout: false,
             })
             .expect("a fresh name declares");
         assert!(table.get(id).expect("the id resolves").fields.is_empty());

@@ -14,9 +14,9 @@ use kira_toolchain::{TargetBundle, is_llvm_home};
 
 use crate::digest::{Sha256, checksum_file_name};
 use crate::github;
-use crate::unpack::{self, UnpackError};
 use crate::install::{InstallError, Staging};
 use crate::source::{ReleaseSourceError, read_published_checksum};
+use crate::unpack::{self, UnpackError};
 
 /// Why an LLVM bundle could not be provisioned.
 #[derive(Debug, thiserror::Error)]

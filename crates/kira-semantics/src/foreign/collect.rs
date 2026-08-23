@@ -5,6 +5,13 @@
 
 use super::*;
 
+/// Parsed fields of one callable foreign declaration.
+struct ForeignFields {
+    library: String,
+    symbol: String,
+    retains: Vec<(String, Span)>,
+}
+
 impl<'a> Analyzer<'a> {
     /// Walks every `@FFI.Extern` declaration, validates it, and records the
     /// ones that pass in [`HirProgram::foreign`].
@@ -86,17 +93,21 @@ impl<'a> Analyzer<'a> {
         if mark.kind == ForeignKind::Address && !self.check_address_signature(function) {
             return None;
         }
+        let retained = fields
+            .as_ref()
+            .map(|fields| self.check_retained_params(function, &fields.retains))
+            .unwrap_or_default();
         let signature = self.map_foreign_signature(function);
         match (annotations_ok, fields, signature) {
-            (true, Some((library, symbol)), Some(mapped)) => Some(HirForeign {
+            (true, Some(fields), Some(mapped)) => Some(HirForeign {
                 kira_name: name.to_owned(),
-                library,
-                symbol,
+                library: fields.library,
+                symbol: fields.symbol,
                 abi: match mark.kind {
                     ForeignKind::Address => ForeignAbi::CAddress,
                     _ => ForeignAbi::C,
                 },
-                signature: mapped.signature,
+                signature: mapped.signature.with_retained(retained),
                 param_wrappers: mapped.param_wrappers,
                 param_pointees: mapped.param_pointees,
                 result_pointee: mapped.result_pointee,
@@ -163,13 +174,15 @@ impl<'a> Analyzer<'a> {
         ok
     }
 
-    /// Reads the `library`, `symbol`, and `abi` fields out of an `@FFI.Extern`
-    /// block, returning the library and symbol names when every field is
-    /// present, unique, known, and (for `abi`) `c`.
-    pub(super) fn parse_foreign_fields(&mut self, mark: &ForeignMark) -> Option<(String, String)> {
+    /// Reads the `library`, `symbol`, `abi`, and `retains` fields out of an
+    /// `@FFI.Extern` block, returning the library and symbol names plus the
+    /// parameters `retains:` named when every field is present, unique, known,
+    /// and (for `abi`) `c`.
+    fn parse_foreign_fields(&mut self, mark: &ForeignMark) -> Option<ForeignFields> {
         let mut library: Option<String> = None;
         let mut symbol: Option<String> = None;
         let mut abi: Option<(String, Span)> = None;
+        let mut retains: Vec<(String, Span)> = Vec::new();
         let mut ok = true;
         for field in &mark.fields {
             let key = self.interner.resolve(field.key).to_owned();
@@ -190,13 +203,21 @@ impl<'a> Analyzer<'a> {
                     }
                     continue;
                 }
+                // Repeatable by design: each occurrence names one parameter
+                // the callee keeps pointers from past the call. Which names
+                // exist is the declaration's business and checked against its
+                // signature, not here.
+                "retains" => {
+                    retains.push((value, field.value_span));
+                    continue;
+                }
                 _ => {
                     self.emit(
                         field.key_span,
                         "KSEM178",
                         format!(
                             "unknown `@FFI.Extern` field `{key}` (expected `library`, \
-                             `symbol`, or `abi`)"
+                             `symbol`, `abi`, or `retains`)"
                         ),
                     );
                     ok = false;
@@ -240,9 +261,54 @@ impl<'a> Analyzer<'a> {
             Some(_) => {}
         }
         match (ok, library, symbol) {
-            (true, Some(library), Some(symbol)) => Some((library, symbol)),
+            (true, Some(library), Some(symbol)) => Some(ForeignFields {
+                library,
+                symbol,
+                retains,
+            }),
             _ => None,
         }
+    }
+
+    /// Resolves the parameters `retains:` named to per-position flags.
+    ///
+    /// A name that matches no parameter is `KSEM285` and a parameter named
+    /// twice is `KSEM286`; both report and drop the entry rather than guessing
+    /// a position, because a wrong lifetime here is a use-after-free or a leak
+    /// at the seam, not a style problem.
+    fn check_retained_params(
+        &mut self,
+        function: &Function,
+        retains: &[(String, Span)],
+    ) -> Vec<bool> {
+        let mut flags = vec![false; function.params.len()];
+        for (name, span) in retains {
+            let position = function
+                .params
+                .iter()
+                .position(|param| self.interner.resolve(param.name) == name);
+            match position {
+                Some(index) if flags[index] => {
+                    self.emit(
+                        *span,
+                        "KSEM286",
+                        format!("`retains` names parameter `{name}` twice"),
+                    );
+                }
+                Some(index) => flags[index] = true,
+                None => {
+                    self.emit(
+                        *span,
+                        "KSEM285",
+                        format!(
+                            "`retains` names `{name}`, which is not a parameter of `{}`",
+                            self.interner.resolve(function.name)
+                        ),
+                    );
+                }
+            }
+        }
+        flags
     }
 
     /// An `@FFI.Address` function answers the address and takes nothing.

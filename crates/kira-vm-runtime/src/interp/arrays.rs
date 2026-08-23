@@ -203,10 +203,16 @@ impl Vm<'_> {
             }
         };
         result?;
-        self.stack
-            .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
-                &bytes,
-            )));
+        // An owned block: the flattened elements live as long as the value
+        // holding them — a struct's pointer member, or a call argument dropped
+        // when the call returns. An empty array crosses as C's null, which no
+        // element row has an address for.
+        self.stack.push(if bytes.is_empty() {
+            Value::RawPtr(0)
+        } else {
+            let block = self.heap.cblock_bytes(bytes);
+            Value::CBlock(block)
+        });
         Ok(())
     }
 

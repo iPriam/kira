@@ -105,6 +105,17 @@ impl SnapshotId {
     }
 }
 
+/// A handle to a heap-owned block of C storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CBlockId(u32);
+
+impl CBlockId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
+
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -159,8 +170,29 @@ pub enum Value {
     /// most reads never need it — a walk over a UI tree reads scalars out of the
     /// leaves and never asks for an object at all.
     NativeSnapshot(SnapshotId),
+    /// A uniquely owned block of C storage: a NUL-terminated string, a
+    /// C-layout image, or an array flattened to C widths, built for the
+    /// foreign seam.
+    ///
+    /// The block's payload address is what C reads; the block lives exactly as
+    /// long as the Kira value holding this handle. A true copy deep-clones the
+    /// bytes ([`Heap::copy_value`]), dropping the value frees them, and a
+    /// `retains:` parameter transfers them to the heap's retained registry —
+    /// so no reference count exists and no storage outlives its owner.
+    CBlock(CBlockId),
     /// The unit value.
     Void,
+}
+
+/// One child block owned by a C-layout image in the VM heap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VmCBlockChild {
+    /// Byte offset of the child pointer in the parent's payload.
+    offset: kira_runtime_abi::CBlockOffset,
+    /// Width of that pointer in the target C layout.
+    width: kira_runtime_abi::ForeignPointerWidth,
+    /// The uniquely owned child block.
+    block: CBlockId,
 }
 
 /// What a heap slot holds.
@@ -244,6 +276,19 @@ enum Object {
         /// How many values hold this object.
         shares: u32,
     },
+    /// A uniquely owned block of C storage; see [`Value::CBlock`].
+    ///
+    /// The bytes are boxed so the payload address a foreign callee was handed
+    /// stays put while the slot table grows. Unlike every shared kind above,
+    /// this one is never counted: exactly one value owns it, a copy clones the
+    /// bytes, and the drop frees them — the seam contract in
+    /// [`kira_runtime_abi::c_storage`].
+    CBlock {
+        /// The bytes C reads, at a stable address.
+        bytes: Box<[u8]>,
+        /// Child blocks whose addresses are embedded in this payload.
+        children: Vec<VmCBlockChild>,
+    },
 }
 
 /// A snapshot of heap allocation counters.
@@ -255,6 +300,12 @@ pub struct HeapStats {
     pub freed: u64,
     /// Live strings right now (`allocated - freed`).
     pub current: u64,
+    /// Values a `retains:` foreign parameter transferred to the heap.
+    ///
+    /// Counted apart from `current` because they are alive by contract — C
+    /// holds their pointers until instance teardown — so a program that exits
+    /// with `current == retained` balanced everything it still owned.
+    pub retained: u64,
 }
 
 /// The object heap: owns every live string and struct, and counts allocations
@@ -269,6 +320,12 @@ pub struct Heap {
     allocated: u64,
     freed: u64,
     released_cells: Arc<ReleasedCells>,
+    /// Values a `retains:` foreign parameter transferred here.
+    ///
+    /// C holds pointers into their C blocks, so they stay alive — and their
+    /// heap slots stay occupied — until the whole heap drops at instance
+    /// teardown, which never overlaps a foreign call in flight.
+    retained: Vec<Value>,
 }
 
 /// Cells a callback-state tree gave up its last share of.

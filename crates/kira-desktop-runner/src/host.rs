@@ -257,10 +257,7 @@ impl RunnerHost for DesktopHost {
 
     fn link(&mut self) -> Result<(), DesktopRunnerError> {
         self.staged = match std::mem::replace(&mut self.staged, Staged::Empty) {
-            Staged::VmLoaded {
-                module,
-                bindings,
-            } => link_vm(module, bindings)?,
+            Staged::VmLoaded { module, bindings } => link_vm(module, bindings)?,
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
                 // Loading a hybrid session dlopens the native half and binds
                 // every symbol the manifest names, so a missing symbol fails

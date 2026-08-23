@@ -93,6 +93,7 @@ impl ErasedTypeId {
             Type::Void
             | Type::Error
             | Type::CString
+            | Type::CBlock
             | Type::Cell(_)
             | Type::Task(_)
             | Type::NativeState(_)

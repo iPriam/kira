@@ -187,6 +187,7 @@ impl<'a> Analyzer<'a> {
                 StructDef {
                     name: name.clone(),
                     fields: Vec::new(),
+                    c_layout: false,
                 },
             ) {
                 Some(id) => {

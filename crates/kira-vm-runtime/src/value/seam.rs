@@ -59,7 +59,8 @@ impl Heap {
             | Value::NativeState(_)
             | Value::Cell(_)
             | Value::NativeView { .. }
-            | Value::NativeSnapshot(_) => {
+            | Value::NativeSnapshot(_)
+            | Value::CBlock(_) => {
                 self.drop_value(value);
                 return None;
             }
@@ -177,6 +178,11 @@ impl Heap {
             // itself, exactly as it does for the string case above.
             Value::Struct(_) | Value::Array(_) => NativeResult::Aggregate(self.seam_tree(value)?),
             Value::Erased(_) => NativeResult::Aggregate(self.seam_tree(value)?),
+            // A C block crosses as a tree node carrying its bytes, exactly as
+            // a struct's fields do: the receiving engine materializes a block
+            // it owns, so the pointer C reads is always inside the engine
+            // holding the value.
+            Value::CBlock(_) => NativeResult::Aggregate(self.seam_tree(value)?),
             Value::NativeState(_)
             | Value::Cell(_)
             | Value::NativeView { .. }
@@ -223,7 +229,15 @@ impl Heap {
             (ForeignType::F32, Value::Float(v)) => ForeignArg::F32(v as f32),
             (ForeignType::F64, Value::Float(v)) => ForeignArg::F64(v),
             (ForeignType::RawPtr, Value::RawPtr(w)) => ForeignArg::RawPtr(w),
+            // A C block built for this argument — a struct's image or an
+            // array's flattened elements — crosses as its payload address. The
+            // block sits on the operand stack until the call returns, so the
+            // callee reads live storage for exactly the call's duration.
+            (ForeignType::RawPtr, Value::CBlock(id)) => ForeignArg::RawPtr(self.cblock_address(id)),
             (ForeignType::CString, Value::Str(id)) => ForeignArg::CString(self.get(id)),
+            (ForeignType::CString, Value::CBlock(id)) => {
+                ForeignArg::CStringPtr(self.cblock_address(id))
+            }
             _ => return None,
         })
     }

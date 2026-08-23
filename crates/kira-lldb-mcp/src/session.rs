@@ -665,7 +665,12 @@ mod tests {
         let second = kira_breakpoint(2, 3, None);
         assert_eq!(
             probe_condition(&[&first, &second], &target).as_deref(),
-            Some(format!("{} || {}", condition_for(4, 0), condition_for(4, 3))).as_deref()
+            Some(format!(
+                "{} || {}",
+                condition_for(4, 0),
+                condition_for(4, 3)
+            ))
+            .as_deref()
         );
     }
 

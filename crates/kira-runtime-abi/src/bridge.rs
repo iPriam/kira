@@ -158,6 +158,13 @@ impl BridgeValueTag {
     /// decodes against the static type its signature already promised; the tag
     /// only has to say "this payload is a node pointer, not a value".
     pub const NODE: BridgeValueTag = BridgeValueTag(12);
+
+    /// A borrowed pointer to already NUL-terminated C-string storage.
+    ///
+    /// Used only by foreign adapters when `retains:` makes the caller own the
+    /// C storage. The adapter passes the pointer through unchanged and never
+    /// frees it.
+    pub const CSTRING_PTR: BridgeValueTag = BridgeValueTag(13);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -209,6 +216,8 @@ pub enum BridgeData {
     /// Every bit pattern, including null, is data. The receiving side never
     /// dereferences or frees it.
     RawPtr(u64),
+    /// A borrowed pointer to NUL-terminated C-block storage.
+    CStringPtr(u64),
     /// A payload-less enum's variant tag.
     ///
     /// The number is the variant's declaration index, which is what `==`
@@ -262,6 +271,7 @@ impl BridgeValue {
             BridgeData::String(handle) => (BridgeValueTag::STRING, handle),
             BridgeData::Handle(handle) => (BridgeValueTag::HANDLE, handle),
             BridgeData::RawPtr(pointer) => (BridgeValueTag::RAW_PTR, pointer),
+            BridgeData::CStringPtr(pointer) => (BridgeValueTag::CSTRING_PTR, pointer),
             BridgeData::Enum(tag) => (BridgeValueTag::ENUM, tag as u64),
             BridgeData::Node(node) => (BridgeValueTag::NODE, node),
             BridgeData::Any(node) => (BridgeValueTag::ANY, node),
@@ -293,6 +303,7 @@ impl BridgeValue {
             // Pointer bits are opaque and null is valid. Width checking belongs
             // to the native caller, which knows the target pointer width.
             BridgeValueTag::RAW_PTR => BridgeData::RawPtr(self.payload),
+            BridgeValueTag::CSTRING_PTR => BridgeData::CStringPtr(self.payload),
             BridgeValueTag::ENUM => BridgeData::Enum(self.payload as i64),
             BridgeValueTag::NODE => BridgeData::Node(self.payload),
             BridgeValueTag::ANY => BridgeData::Any(self.payload),
@@ -341,6 +352,8 @@ mod tests {
             BridgeData::Handle(u64::MAX),
             BridgeData::RawPtr(0),
             BridgeData::RawPtr(0x0123_4567_89ab_cdef),
+            BridgeData::CStringPtr(0),
+            BridgeData::CStringPtr(0x0123_4567_89ab_cdef),
             // A variant tag is a declaration index, so zero is the common case
             // and never a sentinel. The wide values are here because the
             // payload is signed on the way out and unsigned on the wire.
@@ -413,7 +426,10 @@ mod tests {
         assert_eq!(BridgeValueTag::ENUM.0, 7);
         assert_eq!(BridgeValueTag::HANDLE.0, 8);
         assert_eq!(BridgeValueTag::RAW_PTR.0, 9);
+        assert_eq!(BridgeValueTag::AGGREGATE.0, 10);
         assert_eq!(BridgeValueTag::ANY.0, 11);
+        assert_eq!(BridgeValueTag::NODE.0, 12);
+        assert_eq!(BridgeValueTag::CSTRING_PTR.0, 13);
     }
 
     /// A handle is written as tag 8 with the producer's word in the payload,
@@ -452,15 +468,23 @@ mod tests {
         assert_eq!(value.decode(), Some(BridgeData::RawPtr(value.payload)));
     }
 
-    /// The tag after `RAW_PTR` remains unknown and must be rejected.
+    /// An aggregate pointer needs its static layout and never decodes alone.
     #[test]
-    fn tag_ten_is_rejected() {
+    fn an_aggregate_pointer_is_rejected_without_its_layout() {
         let value = BridgeValue {
-            tag: BridgeValueTag(10),
+            tag: BridgeValueTag::AGGREGATE,
             reserved: [0; 7],
             payload: 1,
         };
         assert_eq!(value.decode(), None);
+    }
+
+    #[test]
+    fn a_cstring_pointer_uses_the_appended_tag() {
+        let value = BridgeValue::encode(BridgeData::CStringPtr(0x1234));
+        assert_eq!(value.tag, BridgeValueTag::CSTRING_PTR);
+        assert_eq!(value.payload, 0x1234);
+        assert_eq!(value.decode(), Some(BridgeData::CStringPtr(0x1234)));
     }
 
     #[test]

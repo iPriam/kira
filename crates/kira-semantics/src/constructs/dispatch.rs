@@ -10,6 +10,12 @@ use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
 use super::ConstructVariant;
 use crate::analyze::{Analyzer, FnCtx, InitContent};
 
+/// Written argument and child lists of one construct-family call.
+pub(crate) struct ConstructCallContent<'a> {
+    pub(crate) args: &'a [CallArg],
+    pub(crate) children: &'a [ExprId],
+}
+
 /// The dispatch-facing signature of one construct-family method.
 struct FamilyMethodShape {
     params: Vec<Type>,
@@ -126,10 +132,10 @@ impl Analyzer<'_> {
         receiver: HirExprId,
         family_id: EnumId,
         method: &str,
-        args: &[CallArg],
-        children: &[ExprId],
+        content: ConstructCallContent<'_>,
         span: Span,
     ) -> HirExprId {
+        let ConstructCallContent { args, children } = content;
         let Some(shape) = self.family_method_shape(family_id, method) else {
             self.emit(
                 span,
@@ -287,7 +293,17 @@ impl Analyzer<'_> {
         method: &str,
         span: Span,
     ) -> HirExprId {
-        self.analyze_construct_family_call(ctx, receiver, family_id, method, &[], &[], span)
+        self.analyze_construct_family_call(
+            ctx,
+            receiver,
+            family_id,
+            method,
+            ConstructCallContent {
+                args: &[],
+                children: &[],
+            },
+            span,
+        )
     }
 
     /// The content parameter of a family method, when its last parameter is one.
@@ -316,7 +332,11 @@ impl Analyzer<'_> {
         self.source = source;
         let element = self.resolve_type_ref(element_ref);
         self.source = previous;
-        Some(InitContent { slot, list, element })
+        Some(InitContent {
+            slot,
+            list,
+            element,
+        })
     }
 
     fn family_method_shape(&self, family_id: EnumId, method: &str) -> Option<FamilyMethodShape> {

@@ -378,6 +378,7 @@ mod tests {
             .declare(StructDef {
                 name: "Target".to_owned(),
                 fields: Vec::new(),
+                c_layout: false,
             })
             .expect("the pointer target declaration succeeds");
         let pointer = program.types.foreign_ptr_to(target);

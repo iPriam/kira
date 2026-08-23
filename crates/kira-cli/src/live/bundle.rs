@@ -212,7 +212,6 @@ fn build_hybrid_bundle(
     Ok(Bundle::build(runner, BuildProfile::Debug, payloads, 0)?)
 }
 
-
 /// Reads `path` into a payload named by its file name.
 fn named_payload(
     path: &Path,

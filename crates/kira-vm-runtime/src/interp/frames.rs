@@ -603,5 +603,6 @@ fn is_heap_value(value: &Value) -> bool {
             | Value::Erased(_)
             | Value::Cell(_)
             | Value::NativeSnapshot(_)
+            | Value::CBlock(_)
     )
 }

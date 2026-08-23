@@ -20,6 +20,12 @@ use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
 use crate::typeck::overloads::OverloadFailure;
 
+/// Written argument and child lists of one method call.
+pub(super) struct MethodCallContent<'a> {
+    pub(super) args: &'a [CallArg],
+    pub(super) children: &'a [ExprId],
+}
+
 /// What a written call name resolved to.
 enum CallTarget {
     /// The declaration the call means, and the parameter types its arguments
@@ -129,10 +135,10 @@ impl Analyzer<'_> {
         receiver: ExprId,
         method: kira_core::Symbol,
         method_span: kira_source::Span,
-        args: &[CallArg],
-        children: &[ExprId],
+        content: MethodCallContent<'_>,
         expected: Option<Type>,
     ) -> HirExprId {
+        let MethodCallContent { args, children } = content;
         // `Support.hello()` is a *module-qualified free call*, not a method
         // call, and it is recognized here because the parser cannot tell the
         // two apart: both are `<expr> . name ( args )`. What separates them is
@@ -215,8 +221,7 @@ impl Analyzer<'_> {
                 receiver_hir,
                 family_id,
                 &name,
-                args,
-                children,
+                crate::constructs::ConstructCallContent { args, children },
                 method_span,
             );
         }
@@ -284,8 +289,7 @@ impl Analyzer<'_> {
                     upcast,
                     family_id,
                     &name,
-                    args,
-                    children,
+                    crate::constructs::ConstructCallContent { args, children },
                     method_span,
                 );
             }

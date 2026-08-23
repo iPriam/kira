@@ -27,6 +27,16 @@ impl Codegen<'_> {
         self.program.types.owns_heap(ty)
     }
 
+    /// Whether a copied value must replace unique C-block handles in the copy.
+    pub(super) fn owns_unique_c_storage(&self, ty: Type) -> bool {
+        self.program.types.owns_unique_c_storage(ty)
+    }
+
+    /// Whether `ty` can reach C storage a retained call must transfer.
+    pub(super) fn contains_c_storage(&self, ty: Type) -> bool {
+        self.program.types.contains_c_storage(ty)
+    }
+
     /// The element type of an array type.
     pub(super) fn element_of(&self, ty: Type) -> Result<Type, crate::LlvmError> {
         self.program
@@ -67,6 +77,7 @@ impl Codegen<'_> {
             return Ok(());
         }
         match ty {
+            Type::CBlock => self.clone_cblock_at(at),
             Type::String => {
                 let handle = self.load_handle(at, "str");
                 self.copy_shared(handle, self.types.string_box, "str");
@@ -74,11 +85,24 @@ impl Codegen<'_> {
             }
             Type::Struct(id) => {
                 let struct_type = self.llvm_type(ty)?;
-                for (index, field_ty) in self.field_types(id)?.into_iter().enumerate() {
+                let def = self
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .ok_or(crate::LlvmError::internal(
+                        "a struct the module never declared",
+                    ))?
+                    .clone();
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
+                    let field = self.field_pointer(struct_type, at, index as u32);
+                    if def.owns_c_storage_at(index as u32) {
+                        self.clone_cblock_at(field)?;
+                        continue;
+                    }
                     if !self.owns_heap(field_ty) {
                         continue;
                     }
-                    let field = self.field_pointer(struct_type, at, index as u32);
                     self.retain_at(field, field_ty)?;
                 }
                 Ok(())
@@ -131,6 +155,17 @@ impl Codegen<'_> {
         // SAFETY: `at` addresses storage holding a handle, which is a `ptr`,
         // and the builder is on a live block.
         unsafe { LLVMBuildLoad2(self.builder, self.types.ptr, at, name.as_ptr()) }
+    }
+
+    /// Replaces the C-block handle at `at` with an independent deep clone.
+    fn clone_cblock_at(&mut self, at: LLVMValueRef) -> Result<(), crate::LlvmError> {
+        // SAFETY: `at` addresses one live i64 C-block handle.
+        let handle =
+            unsafe { LLVMBuildLoad2(self.builder, self.types.i64, at, c"cblock".as_ptr()) };
+        let clone = self.call(self.runtime.cblock_clone, &mut [handle], c"cblock.clone");
+        // SAFETY: `at` is the destination slot and `clone` is its new handle.
+        unsafe { LLVMBuildStore(self.builder, clone, at) };
+        Ok(())
     }
 
     /// The address of field `index` inside the struct at `at`.
@@ -308,6 +343,13 @@ impl Codegen<'_> {
             return Ok(());
         }
         match ty {
+            Type::CBlock => {
+                // SAFETY: `at` addresses one live i64 C-block handle.
+                let handle =
+                    unsafe { LLVMBuildLoad2(self.builder, self.types.i64, at, c"cblock".as_ptr()) };
+                self.call(self.runtime.cblock_free, &mut [handle], c"");
+                Ok(())
+            }
             Type::String => {
                 let last = self.runtime.str_free;
                 let handle = self.load_handle(at, "str");
@@ -316,11 +358,29 @@ impl Codegen<'_> {
             }
             Type::Struct(id) => {
                 let struct_type = self.llvm_type(ty)?;
-                for (index, field_ty) in self.field_types(id)?.into_iter().enumerate() {
+                let def = self
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .ok_or(crate::LlvmError::internal(
+                        "a struct the module never declared",
+                    ))?
+                    .clone();
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
+                    let field = self.field_pointer(struct_type, at, index as u32);
+                    if def.owns_c_storage_at(index as u32) {
+                        // SAFETY: an owning C-layout slot contains one live or
+                        // null C-block handle.
+                        let handle = unsafe {
+                            LLVMBuildLoad2(self.builder, self.types.i64, field, c"cblock".as_ptr())
+                        };
+                        self.call(self.runtime.cblock_free, &mut [handle], c"");
+                        continue;
+                    }
                     if !self.owns_heap(field_ty) {
                         continue;
                     }
-                    let field = self.field_pointer(struct_type, at, index as u32);
                     self.release_at(field, field_ty)?;
                 }
                 Ok(())

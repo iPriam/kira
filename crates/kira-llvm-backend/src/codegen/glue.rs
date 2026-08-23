@@ -79,10 +79,9 @@ impl Codegen<'_> {
     /// Produces an independent copy of `value`, mirroring the VM's
     /// `Heap::copy_value`.
     ///
-    /// **The copy is `value` itself.** A copy raises share counts and changes
-    /// no bits (see [`Codegen::retain_at_walk`]), so what a caller gets back is
-    /// what it passed in — with one more hold on everything the value reaches.
-    /// The spill is only there to give the retain an address to walk.
+    /// Shared objects keep the same bits after their share count rises. Unique
+    /// C blocks are replaced in the scratch copy with deep-cloned handles, so a
+    /// value containing them is loaded back from the walked scratch slot.
     ///
     /// A site that already holds the value in memory should call
     /// [`Codegen::retain_at`] instead: a large struct spills field by field at
@@ -102,7 +101,11 @@ impl Codegen<'_> {
         // type; the builder is on a live block.
         unsafe { LLVMBuildStore(self.builder, value, source) };
         self.retain_at(source, ty)?;
-        Ok(value)
+        if !self.owns_unique_c_storage(ty) {
+            return Ok(value);
+        }
+        // SAFETY: `source` still holds the walked copy of `llvm_type`.
+        Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_type, source, c"glue.copy".as_ptr()) })
     }
 
     /// Releases whatever heap storage `value` owns.

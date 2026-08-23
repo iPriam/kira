@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 use crate::collect::{CollectError, CollectOptions, Launch};
-use crate::model::{Frame, FrameKind, Nanos, Profile, Sample, ThreadId, ThreadRecord, View};
+use crate::model::{Frame, Nanos, Profile, Sample, ThreadId, ThreadRecord, View};
 use crate::symbols::KiraSymbols;
 
 /// The longest a recording runs before `sample` stops on its own, in seconds.
@@ -328,7 +328,10 @@ Total number in stack: 100
             .count();
         assert_eq!(step, 80);
         let leaf = profile.samples[0].leaf().expect("a leaf");
-        assert_eq!(profile.frames.frame(leaf).kind, FrameKind::Kira);
+        assert_eq!(
+            profile.frames.frame(leaf).kind,
+            crate::model::FrameKind::Kira
+        );
         assert_eq!(profile.thread_name(ThreadId::new(0)), "Thread_1001");
     }
 

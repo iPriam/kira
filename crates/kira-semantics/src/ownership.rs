@@ -382,7 +382,7 @@ impl Analyzer<'_> {
     /// why it exists now rather than arriving with them.
     pub(crate) fn apply_binding_move(&mut self, ctx: &mut FnCtx, init: ExprId, value: HirExprId) {
         let bound_ty = self.program.expr(value).type_of();
-        if !bound_ty.moves_on_bind() {
+        if !self.program.types.moves_on_bind(bound_ty) {
             return;
         }
         let Some(local) = self.named_local(ctx, init) else {
@@ -431,7 +431,9 @@ impl Analyzer<'_> {
         };
         let refusal = match ownership {
             OwnershipMode::Owned | OwnershipMode::Move => return ownership,
-            OwnershipMode::BorrowRead | OwnershipMode::Copy if !bound_ty.moves_on_bind() => {
+            OwnershipMode::BorrowRead | OwnershipMode::Copy
+                if !self.program.types.moves_on_bind(bound_ty) =>
+            {
                 return ownership;
             }
             OwnershipMode::BorrowRead | OwnershipMode::Copy => format!(
@@ -563,6 +565,33 @@ impl Analyzer<'_> {
         }
     }
 
+    /// Requires `move` on the argument a `retains:` foreign parameter consumes
+    /// (`KSEM287`).
+    ///
+    /// The callee keeps pointers into the argument's C storage past the call,
+    /// so the caller must give the value up. A written `move` was already
+    /// consumed by the generic move path; a temporary is consumed by the call
+    /// itself and has nothing to spell. What is refused is a *named* binding
+    /// passed bare — silently losing one to C would make the use-after-move
+    /// checker blind to exactly the reads it exists to stop.
+    pub(crate) fn require_retained_move(&mut self, ctx: &mut FnCtx, arg: ExprId, callee: &str) {
+        let span = self.tree.expr(arg).span();
+        if written_op(self.tree.expr(arg)) == Some(OwnershipOp::Move) {
+            return;
+        }
+        if let Some(local) = self.named_local(ctx, arg) {
+            let name = ctx.local_name(local);
+            self.emit(
+                span,
+                "KSEM287",
+                format!(
+                    "`{callee}` retains this argument — the callee keeps its C storage past \
+                     the call — so write `move {name}`."
+                ),
+            );
+        }
+    }
+
     /// Rejects giving a binding a second state box while it still holds the
     /// first (`KSEM117`).
     ///
@@ -575,12 +604,7 @@ impl Analyzer<'_> {
     /// Freeing first and assigning after is the correct shape and stays quiet,
     /// because the free consumed the handle and the binding is no longer live —
     /// which is exactly how a render pass replaces its encoder.
-    pub(crate) fn check_native_state_overwrite(
-        &mut self,
-        ctx: &FnCtx,
-        local: LocalId,
-        span: Span,
-    ) {
+    pub(crate) fn check_native_state_overwrite(&mut self, ctx: &FnCtx, local: LocalId, span: Span) {
         let state = ctx.ownership_of(local);
         if !state.is_live() || state.handed_out {
             return;

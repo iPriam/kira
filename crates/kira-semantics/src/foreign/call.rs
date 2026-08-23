@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// Borrowed signature context for lowering one foreign call's arguments.
+struct ForeignArgShape<'a> {
+    params: &'a [ForeignTypeSpec],
+    wrappers: &'a [Option<StructId>],
+    pointees: &'a [Option<kira_semantics_model::hir::ForeignPointee>],
+    retained: &'a [bool],
+    name: &'a str,
+    span: Span,
+}
+
 impl<'a> Analyzer<'a> {
     /// Whether `name` is a recorded foreign callable, for call resolution.
     pub(crate) fn foreign_named(&self, name: &str) -> Option<ForeignId> {
@@ -44,6 +54,13 @@ impl<'a> Analyzer<'a> {
                 foreign.kira_name.clone(),
             )
         };
+        let retained: Vec<bool> = (0..params.len())
+            .map(|index| {
+                self.program.foreign[id.0 as usize]
+                    .signature
+                    .is_retained(index)
+            })
+            .collect();
         // Each argument is analyzed against the Kira type its position expects,
         // so a bare function name lands where a `@FFI.Callback` parameter can
         // recognize it. Every other position ignores the expectation, exactly as
@@ -57,7 +74,16 @@ impl<'a> Analyzer<'a> {
                     .copied()
                     .flatten()
                     .map(Type::Struct);
-                self.analyze_expr_expecting(ctx, arg, expected)
+                let value = self.analyze_expr_expecting(ctx, arg, expected);
+                // A `retains:` parameter consumes: the callee keeps pointers
+                // into the argument's C storage past the call, so the caller
+                // must give the value up — `move` written at the call site is
+                // what makes the transfer visible, and the use-after-move
+                // checker is what makes it safe.
+                if retained.get(index).copied().unwrap_or(false) {
+                    self.require_retained_move(ctx, arg, &name);
+                }
+                value
             })
             .collect();
         let seam_args = if arg_hirs.len() != params.len() {
@@ -74,11 +100,14 @@ impl<'a> Analyzer<'a> {
         } else {
             self.check_and_lower_foreign_args(
                 &arg_hirs,
-                &params,
-                &param_wrappers,
-                &param_pointees,
-                &name,
-                span,
+                ForeignArgShape {
+                    params: &params,
+                    wrappers: &param_wrappers,
+                    pointees: &param_pointees,
+                    retained: &retained,
+                    name: &name,
+                    span,
+                },
             )
         };
         // An aggregate result *is* the struct on the Kira side — the seam carries
@@ -114,15 +143,19 @@ impl<'a> Analyzer<'a> {
     /// Type-checks each foreign argument against its parameter and returns the
     /// values to hand the seam: an ordinary argument unchanged, and a
     /// single-scalar-field handle argument replaced by a read of its one field.
-    pub(super) fn check_and_lower_foreign_args(
+    fn check_and_lower_foreign_args(
         &mut self,
         arg_hirs: &[HirExprId],
-        params: &[ForeignTypeSpec],
-        param_wrappers: &[Option<StructId>],
-        param_pointees: &[Option<kira_semantics_model::hir::ForeignPointee>],
-        name: &str,
-        span: Span,
+        shape: ForeignArgShape<'_>,
     ) -> Vec<HirExprId> {
+        let ForeignArgShape {
+            params,
+            wrappers: param_wrappers,
+            pointees: param_pointees,
+            retained,
+            name,
+            span,
+        } = shape;
         let mut seam_args = Vec::with_capacity(arg_hirs.len());
         for (index, &arg) in arg_hirs.iter().enumerate() {
             let actual = self.program.expr(arg).type_of();
@@ -198,6 +231,17 @@ impl<'a> Analyzer<'a> {
                         && let Some(elements) = self.array_elements_address(arg)
                     {
                         seam_args.push(elements);
+                        continue;
+                    }
+                    // A retained C string is owned storage rather than the
+                    // ordinary call-scoped conversion. The foreign call moves
+                    // this block into the retained registry after C receives
+                    // its payload address.
+                    if retained.get(index).copied().unwrap_or(false)
+                        && params[index].scalar() == Some(ForeignType::CString)
+                        && actual == Type::String
+                    {
+                        seam_args.push(self.program.exprs.alloc(HirExpr::CStringNew { text: arg }));
                         continue;
                     }
                     let param = params[index];

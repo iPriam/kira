@@ -206,6 +206,12 @@ pub unsafe fn lift_result(
         BridgeData::Handle(handle) => NativeResult::Handle(handle),
         // An opaque pointer word, carried through with no allocation or free.
         BridgeData::RawPtr(pointer) => NativeResult::RawPtr(pointer),
+        BridgeData::CStringPtr(_) => {
+            return Err(MarshalError::UnknownTag {
+                index: 0,
+                tag: BridgeValueTag::CSTRING_PTR.0,
+            });
+        }
         // Nothing was allocated for it, so nothing is freed: the tag is the
         // whole value and the VM rebuilds its own enum from it.
         BridgeData::Enum(tag) => NativeResult::Enum(tag),
@@ -320,6 +326,13 @@ pub unsafe fn take_args(
             BridgeData::Handle(handle) => OwnedArg::Handle(handle),
             // An opaque pointer word: nothing to take ownership of.
             BridgeData::RawPtr(pointer) => OwnedArg::RawPtr(pointer),
+            BridgeData::CStringPtr(_) => {
+                failure.get_or_insert(MarshalError::UnknownTag {
+                    index,
+                    tag: BridgeValueTag::CSTRING_PTR.0,
+                });
+                continue;
+            }
             // Nothing to take: the tag is the whole value.
             BridgeData::Enum(tag) => OwnedArg::Enum(tag),
             // Taken like a string handle: decoding consumes the tree.

@@ -34,6 +34,8 @@ mod slots;
 mod updates;
 mod value_members;
 
+pub(crate) use dispatch::ConstructCallContent;
+
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
 #[derive(Debug, Clone, Default)]

@@ -114,7 +114,11 @@ impl FunctionLowering<'_, '_> {
             }
             IrExpr::CStringNew { text } => {
                 let value = self.lower_expr(text)?;
-                Ok(self.call(self.codegen.runtime.cstring_retain, &mut [value], c"cstr"))
+                Ok(self.call(
+                    self.codegen.runtime.cblock_text,
+                    &mut [value],
+                    c"cblock.text",
+                ))
             }
             IrExpr::FileSystem { op, args, ty } => self.lower_file_system(op, &args, ty),
             IrExpr::Compiler { op, args, ty } => self.lower_compiler(op, &args, ty),
@@ -216,6 +220,19 @@ impl FunctionLowering<'_, '_> {
     /// Retaining first is what keeps a large struct to a single load — spilling
     /// the loaded value back into a scratch slot for the walk would double it.
     fn read_owned(&mut self, slot: LLVMValueRef, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        if self.codegen.owns_unique_c_storage(ty) {
+            let llvm_type = self.codegen.llvm_type(ty)?;
+            // SAFETY: `slot` addresses a live value of `llvm_type`.
+            let value = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    slot,
+                    c"owned.source".as_ptr(),
+                )
+            };
+            return self.copy_value(value, ty);
+        }
         self.codegen.retain_at(slot, ty)?;
         let llvm_type = self.codegen.llvm_type(ty)?;
         // SAFETY: `slot` addresses a live value of `llvm_type` and the builder
@@ -599,7 +616,14 @@ impl FunctionLowering<'_, '_> {
         // SAFETY: `llvm_type` is this struct's type in this live context.
         let mut value = unsafe { LLVMGetUndef(llvm_type) };
         for (index, &field) in fields.iter().enumerate() {
-            let lowered = self.lower_expr(field)?;
+            let mut lowered = self.lower_expr(field)?;
+            if self.c_storage_slot(ty, index)? && self.type_of(field) != Type::CBlock {
+                lowered = self.call(
+                    self.codegen.runtime.cblock_alien,
+                    &mut [lowered],
+                    c"struct.cblock.alien",
+                );
+            }
             value = self.insert_field(value, lowered, index as u32)?;
         }
         Ok(value)
@@ -631,10 +655,36 @@ impl FunctionLowering<'_, '_> {
         {
             let struct_type = self.codegen.llvm_type(base_ty)?;
             let field = self.codegen.field_pointer(struct_type, pointer, index);
+            if self.c_storage_slot(base_ty, index as usize)? {
+                // SAFETY: an owning C-layout slot contains one live or null
+                // i64 C-block handle.
+                let handle = unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.i64,
+                        field,
+                        c"field.cblock".as_ptr(),
+                    )
+                };
+                return Ok(self.call(
+                    self.codegen.runtime.cblock_word,
+                    &mut [handle],
+                    c"field.cblock.word",
+                ));
+            }
             return self.read_owned(field, ty);
         }
         let base_value = self.lower_expr(base)?;
         let field = self.extract_field(base_value, index)?;
+        if self.c_storage_slot(base_ty, index as usize)? {
+            let word = self.call(
+                self.codegen.runtime.cblock_word,
+                &mut [field],
+                c"field.cblock.word",
+            );
+            self.drop_value(base_value, base_ty)?;
+            return Ok(word);
+        }
         let copy = self.copy_value(field, ty)?;
         self.drop_value(base_value, base_ty)?;
         Ok(copy)

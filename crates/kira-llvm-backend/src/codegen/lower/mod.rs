@@ -237,9 +237,11 @@ impl<'a> Codegen<'a> {
                 // A fresh `RawPtr` slot holds the null pointer word (zero), the
                 // same value the VM initializes a `Value::RawPtr` slot to. It
                 // owns nothing, so no first-store special case is needed.
-                Type::RawPtr | Type::ForeignPtr(_) | Type::NativeState(_) | Type::Task(_) => {
-                    LLVMConstInt(llvm_type, 0, 0)
-                }
+                Type::RawPtr
+                | Type::ForeignPtr(_)
+                | Type::NativeState(_)
+                | Type::Task(_)
+                | Type::CBlock => LLVMConstInt(llvm_type, 0, 0),
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
                     return Err(LlvmError::internal(

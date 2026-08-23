@@ -235,6 +235,7 @@ fn export_type(
         | Type::RawPtr
         | Type::ForeignPtr(_)
         | Type::CString
+        | Type::CBlock
         | Type::Any
         | Type::NativeState(_)
         | Type::Task(_)

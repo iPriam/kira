@@ -144,11 +144,11 @@ pub fn ensure_archive_current(
     // finds neither the frameworks (`<CoreFoundation/CoreFoundation.h>`) nor the
     // C library headers unless `-isysroot` names the active SDK. Apple's own `cc`
     // embeds that path; a portable LLVM clang has to be told it.
-    if matches!(target.os(), "macos" | "ios" | "tvos" | "xros") {
-        if let Some(sdk) = apple_sdk_root() {
-            flags.push("-isysroot".into());
-            flags.push(sdk);
-        }
+    if matches!(target.os(), "macos" | "ios" | "tvos" | "xros")
+        && let Some(sdk) = apple_sdk_root()
+    {
+        flags.push("-isysroot".into());
+        flags.push(sdk);
     }
     if let Some(headers) = spec.headers() {
         for directory in &headers.include_dirs {
@@ -284,7 +284,10 @@ fn tool(variable: &str, managed: Option<PathBuf>, fallback: &str) -> PathBuf {
 /// compile falls back to whatever default the compiler carries — correct for
 /// Apple's `cc`, and no worse than before for a managed clang.
 fn apple_sdk_root() -> Option<String> {
-    let output = Command::new("xcrun").args(["--show-sdk-path"]).output().ok()?;
+    let output = Command::new("xcrun")
+        .args(["--show-sdk-path"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }

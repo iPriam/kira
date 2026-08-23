@@ -126,6 +126,10 @@ impl Heap {
             // them a box each. So the tree takes over this value's hold and
             // gives it back when its last node goes.
             Value::Cell(id) => NativeStateValue::Cell(self.cell_into_native_state(id)),
+            // The block's bytes move with the node; the engine that absorbs
+            // the tree materializes a block it owns, so the pointer C reads is
+            // always inside the engine holding the value.
+            Value::CBlock(id) => NativeStateValue::CBlock(self.take_cblock_tree(id)?),
             Value::Void => return Err("a void value"),
             Value::NativeState(_) => return Err("callback state inside callback state"),
             Value::NativeView { .. } => {
@@ -186,6 +190,9 @@ impl Heap {
                 self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
             }
             NativeStateValue::Cell(cell) => Value::RawPtr(cell.handle()),
+            // The bytes come back as a block this heap owns; the node keeps
+            // its own copy, exactly as a string's text does above.
+            NativeStateValue::CBlock(block) => Value::CBlock(self.copy_native_cblock(block)),
         }
     }
 
@@ -207,6 +214,34 @@ impl Heap {
             }
         }
         Ok(converted)
+    }
+
+    /// Moves one VM C-block tree into its backend-neutral representation.
+    fn take_cblock_tree(
+        &mut self,
+        id: super::CBlockId,
+    ) -> Result<kira_runtime_abi::NativeCBlock, &'static str> {
+        let Some(Object::CBlock { bytes, children }) = self.take_object(id.0) else {
+            return Err("a C block whose storage was already taken");
+        };
+        let mut block = kira_runtime_abi::NativeCBlock::new(bytes.into_vec());
+        for child in children {
+            let nested = self.take_cblock_tree(child.block)?;
+            block
+                .attach(child.offset, child.width, nested)
+                .map_err(|_| "a C block with a child outside its payload")?;
+        }
+        Ok(block)
+    }
+
+    /// Copies one backend-neutral C-block tree into this heap.
+    fn copy_native_cblock(&mut self, block: &kira_runtime_abi::NativeCBlock) -> super::CBlockId {
+        let root = self.cblock_bytes(block.bytes().to_vec());
+        for child in block.children() {
+            let nested = self.copy_native_cblock(child.block());
+            let _ = self.cblock_attach(root, child.offset(), child.width(), nested);
+        }
+        root
     }
 
     fn take_object(&mut self, index: u32) -> Option<Object> {

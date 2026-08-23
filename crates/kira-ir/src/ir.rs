@@ -142,7 +142,7 @@ impl IrProgram {
             IrExpr::RawPtrNull | IrExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
             IrExpr::MathOperation { .. } => Type::FLOAT,
             IrExpr::ScalarText { .. } => Type::String,
-            IrExpr::ArrayElements { .. } => Type::RawPtr,
+            IrExpr::ArrayElements { .. } => Type::CBlock,
             IrExpr::Local(slot) => function
                 .locals
                 .get(*slot as usize)
@@ -182,8 +182,7 @@ impl IrProgram {
             | IrExpr::StringIndexOf { .. }
             | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::StringSubstring { .. } | IrExpr::StringOf { .. } => Type::String,
-            IrExpr::CStringNew { .. } => Type::CString,
-            IrExpr::CLayoutAddress { .. } => Type::RawPtr,
+            IrExpr::CStringNew { .. } | IrExpr::CLayoutAddress { .. } => Type::CBlock,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::IntoAny { .. } => Type::Any,
             IrExpr::Widen { to, .. } => *to,

@@ -163,6 +163,8 @@ struct ffi_desc {
 int ffi_desc_by_value(struct ffi_desc d);
 int ffi_desc_by_pointer(const struct ffi_desc *d);
 void ffi_desc_keep(const struct ffi_desc *d);
+void ffi_desc_keep_value(struct ffi_desc d);
+void ffi_cstr_keep(const char *text);
 int ffi_desc_recall(void);
 
 /* An event struct C owns and hands over by address, the shape a windowing

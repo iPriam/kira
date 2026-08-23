@@ -21,7 +21,12 @@ struct FfiRangePtr {}
 function ffiRangeSumFloats(range: FfiRangePtr): F32;
 @FFI.Extern { library: ffifixture; symbol: ffi_range_sum_ints; abi: c; }
 function ffiRangeSumInts(range: FfiRange): I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_range_keep; abi: c; }
+@FFI.Extern {
+    library: ffifixture;
+    symbol: ffi_range_keep;
+    abi: c;
+    retains: range;
+}
 function ffiRangeKeep(range: FfiRangePtr): Void;
 @FFI.Extern { library: ffifixture; symbol: ffi_range_recall; abi: c; }
 function ffiRangeRecall(): I32;

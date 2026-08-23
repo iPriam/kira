@@ -1,56 +1,48 @@
-//! C storage that outlives the call it is handed to.
+//! The rules for storage Kira hands to C.
 //!
-//! A `CString` **parameter** is transient: C reads it during the call and Kira
-//! frees it after. A `CString` **member of a C-layout struct** cannot be, and
-//! the difference is not a preference. A struct like sokol's `sapp_desc` is
-//! handed over once and read for the rest of the program's life, so a pointer
-//! valid only for the call that passed it would be read after free — a
-//! use-after-free with no Kira-visible cause, which is the worst failure this
-//! seam can produce.
+//! Every pointer Kira materializes for a foreign callee — a NUL-terminated
+//! string, a C-layout struct image, an array flattened to C widths — is backed
+//! by a **uniquely owned block**. The block belongs to exactly one Kira value:
+//! the struct whose member it fills, or the call-argument temporary built at
+//! the seam. It lives exactly as long as that value, is deep-cloned on the rare
+//! true copy, and is freed when the value drops. There is no reference count
+//! and no process-lifetime leak; the ownership checker's move rules are what
+//! make the single owner real.
 //!
-//! So the storage here is **never released**. That is a deliberate leak, and it
-//! is the only answer that makes the pointer safe: nothing else in the process
-//! knows when C stops reading. Leaking is safe in Rust — it produces no
-//! dangling pointer and no undefined behaviour — where freeing on any schedule
-//! this side can guess is not.
+//! Two lifetimes exist at a call, decided by the extern declaration:
 //!
-//! The cost is bounded by how many distinct strings a program hands to C, which
-//! for the descriptor structs this exists for is a handful at startup. A program
-//! that builds one per frame would grow without bound; that is worth knowing and
-//! is why the refusal it replaces was there.
+//! * **Borrowed** (the default): C reads the pointer during the call and never
+//!   keeps it. The storage stays with its Kira owner and is freed when that
+//!   owner dies.
+//! * **Retained** (`retains: <param>` in the `@FFI.Extern` block): the callee
+//!   keeps the pointer. The argument is a consuming parameter — the call site
+//!   writes `move` — and ownership of every reachable block transfers to the
+//!   engine's retained registry. The VM releases it with the instance, hybrid
+//!   with the native session, and a whole-process native program at process
+//!   teardown. No release overlaps a foreign call in flight.
+//!
+//! Each engine owns its blocks in its native idiom: the VM as a heap object
+//! kind accounted by `HeapStats`, generated native code through the
+//! `kira_rt_cblock_*` family in `kira-native-bridge`. What this module owns is
+//! the vocabulary both share: the NUL rule for text crossing the seam, and the
+//! one safe read out of storage C owns.
 
-use std::ffi::CString;
-
-/// Copies `text` into NUL-terminated storage that lives as long as the process,
-/// returning its address as a pointer word.
+/// Copies `text` into a NUL-terminated byte image for the C side of the seam.
 ///
-/// Zero — a C `NULL` — when `text` contains an interior NUL, because the bytes
-/// C would read then are not the bytes Kira holds, and handing over a truncated
-/// string silently is worse than handing over nothing. This matches what the
-/// transient parameter path does with the same input.
-pub fn retain_text(text: &str) -> u64 {
-    let Ok(owned) = CString::new(text) else {
-        return 0;
-    };
-    // The allocation is deliberately never reclaimed; see the module docs.
-    CString::into_raw(owned) as usize as u64
-}
-
-/// Copies `bytes` into storage that lives as long as the process, returning its
-/// address as a pointer word.
-///
-/// The C-layout image of a struct handed to C **by pointer**. The same rule as
-/// [`retain_text`] and for the same reason: nothing on this side knows whether
-/// the callee kept the pointer, and a buffer freed when the call returns is a
-/// dangling pointer for every callee that did. Zero for an empty image, which
-/// no C-layout struct has.
-pub fn retain_bytes(bytes: &[u8]) -> u64 {
-    if bytes.is_empty() {
-        return 0;
+/// `None` when `text` contains an interior NUL: the bytes C would read then
+/// are not the bytes Kira holds, and handing over a truncated string silently
+/// is worse than handing over nothing. Every path that builds a C string —
+/// transient argument, struct member, either engine — goes through this one
+/// rule so the refusal is identical everywhere.
+#[must_use]
+pub fn nul_terminated(text: &str) -> Option<Vec<u8>> {
+    if text.as_bytes().contains(&0) {
+        return None;
     }
-    // Deliberately never reclaimed; see the module docs.
-    let leaked: &'static mut [u8] = Box::leak(bytes.to_vec().into_boxed_slice());
-    leaked.as_mut_ptr() as usize as u64
+    let mut bytes = Vec::with_capacity(text.len() + 1);
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.push(0);
+    Some(bytes)
 }
 
 /// Reads `size` bytes at `address + offset` out of storage C owns.
@@ -88,53 +80,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retained_storage_holds_the_text_and_a_terminator() {
-        let word = retain_text("abc");
-        assert_ne!(word, 0);
-        // SAFETY: `retain` just produced this pointer from a live `CString` it
-        // leaked, so it addresses a NUL-terminated buffer for the rest of the
-        // process.
-        let read = unsafe { std::ffi::CStr::from_ptr(word as usize as *const std::ffi::c_char) };
-        assert_eq!(read.to_bytes(), b"abc");
+    fn nul_terminated_appends_exactly_one_terminator() {
+        assert_eq!(nul_terminated("abc").as_deref(), Some(&b"abc\0"[..]));
+        assert_eq!(nul_terminated("").as_deref(), Some(&b"\0"[..]));
     }
 
     #[test]
-    fn two_retains_are_two_independent_buffers() {
-        let left = retain_text("alpha");
-        let right = retain_text("bravo");
-        assert_ne!(left, right);
-        // SAFETY: both words came from `retain` and address live storage.
-        unsafe {
-            let left = std::ffi::CStr::from_ptr(left as usize as *const std::ffi::c_char);
-            let right = std::ffi::CStr::from_ptr(right as usize as *const std::ffi::c_char);
-            assert_eq!(left.to_bytes(), b"alpha");
-            assert_eq!(right.to_bytes(), b"bravo");
-        }
+    fn an_interior_nul_is_refused_rather_than_truncated() {
+        assert_eq!(nul_terminated("a\0b"), None);
     }
 
     #[test]
-    fn an_interior_nul_is_refused_as_null_rather_than_truncated() {
-        assert_eq!(retain_text("a\0b"), 0);
+    fn read_bytes_refuses_a_null_base() {
+        // SAFETY: a null base is the refused case and is never dereferenced.
+        assert_eq!(unsafe { read_bytes(0, 4, 4) }, None);
     }
 
     #[test]
-    fn retained_bytes_hold_the_image_they_were_given() {
-        let word = retain_bytes(&[1, 2, 3, 4]);
-        assert_ne!(word, 0);
-        // SAFETY: `retain_bytes` just leaked this buffer, so it addresses four
-        // initialized bytes for the rest of the process.
-        let read = unsafe { std::slice::from_raw_parts(word as usize as *const u8, 4) };
-        assert_eq!(read, &[1, 2, 3, 4]);
-        assert_eq!(retain_bytes(&[]), 0);
-    }
-
-    #[test]
-    fn the_empty_string_is_a_real_pointer_not_null() {
-        // `""` and "no string" are different values, and C tells them apart.
-        let word = retain_text("");
-        assert_ne!(word, 0);
-        // SAFETY: as above.
-        let read = unsafe { std::ffi::CStr::from_ptr(word as usize as *const std::ffi::c_char) };
-        assert!(read.to_bytes().is_empty());
+    fn read_bytes_copies_the_addressed_scalar() {
+        let storage: [u8; 12] = [0, 0, 0, 0, 1, 2, 3, 4, 0, 0, 0, 0];
+        // SAFETY: `storage` is a live local with 12 readable bytes and the
+        // read covers bytes 4..8.
+        let word = unsafe { read_bytes(storage.as_ptr() as usize as u64, 4, 4) };
+        assert_eq!(word, Some([1, 2, 3, 4, 0, 0, 0, 0]));
     }
 }

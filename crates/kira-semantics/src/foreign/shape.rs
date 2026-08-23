@@ -47,7 +47,10 @@ impl<'a> Analyzer<'a> {
                 );
                 None
             }
-            Type::RawPtr | Type::ForeignPtr(_) => Some(ForeignType::RawPtr),
+            // A C block reads at the seam as the pointer word its payload sits
+            // at, which is what a materialized image or flattened array *is*
+            // to the callee.
+            Type::RawPtr | Type::ForeignPtr(_) | Type::CBlock => Some(ForeignType::RawPtr),
             // A task handle names a row in the running program's own task table,
             // so it means nothing outside it and never crosses the C seam.
             Type::Task(_) => {
