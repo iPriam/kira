@@ -85,6 +85,17 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
+        // Handing the token out is where the compiler loses the thread. The
+        // raw word can be stored in a slot, returned inside a struct, or given
+        // to a C callback as its user data, and any of those owners may free
+        // it — so this body is no longer the one that must. It is NOT a move:
+        // the handle is still usable here, and the ordinary idiom hands the
+        // token out and then frees the handle on its way out of the function.
+        if let Some(arg) = args.first()
+            && let Some(local) = self.named_local(ctx, arg.value)
+        {
+            ctx.mark_handed_out(local);
+        }
         self.program.exprs.alloc(HirExpr::NativeUserData { state })
     }
 
@@ -185,6 +196,17 @@ impl Analyzer<'_> {
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // Freeing CONSUMES the handle. The binding still holds the same bits,
+        // but they now name a box the runtime has torn down, and reading them
+        // again is a use-after-free the box's magic word would catch at run
+        // time. Marking it moved is what makes the existing `KSEM107` say so at
+        // compile time instead, and it is what tells the end-of-body check this
+        // handle was accounted for.
+        if let Some(arg) = args.first()
+            && let Some(local) = self.named_local(ctx, arg.value)
+        {
+            ctx.mark_moved(local, span);
         }
         self.program.exprs.alloc(HirExpr::NativeStateFree { token })
     }

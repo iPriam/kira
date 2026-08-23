@@ -119,6 +119,7 @@ impl<'a> Analyzer<'a> {
         }
         let param_count = function.params.len() as u32 + u32::from(callable.receiver.is_some());
         let body = self.analyze_block(&mut ctx, &function.body);
+        self.check_native_state_handles(&ctx);
         // Definite-return check: a non-Void function must return on every
         // control path (the reference rejects this too). `Error` returns are
         // skipped to avoid cascading on an already-broken signature.

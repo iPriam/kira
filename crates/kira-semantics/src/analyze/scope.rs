@@ -239,6 +239,7 @@ impl FnCtx {
             mode: ownership,
             moved: None,
             loop_reported: false,
+            handed_out: false,
         });
         self.binding_spans.push(None);
         if let Some(scope) = self.scopes.last_mut() {
@@ -272,6 +273,40 @@ impl FnCtx {
     }
 
     /// Records that `local`'s value was moved out at `span`.
+    /// Records that a native-state handle in `local` has been handed out, so
+    /// the end-of-body check stops holding this body responsible for it.
+    pub(crate) fn mark_handed_out(&mut self, local: LocalId) {
+        if let Some(state) = self.ownership.get_mut(local.0 as usize) {
+            state.handed_out = true;
+        }
+    }
+
+    /// Every owned native-state handle this body still holds, with where it was
+    /// bound.
+    ///
+    /// Owned only: a `borrow`/`borrow mut` parameter names somebody else's
+    /// handle, and freeing it is not this body's business. Handles already
+    /// moved out, or handed out with `nativeUserData`, are somebody else's too.
+    pub(crate) fn unfreed_native_state_handles(&self) -> Vec<(LocalId, Option<Span>)> {
+        let mut found = Vec::new();
+        for (slot, state) in self.ownership.iter().enumerate() {
+            if state.mode != OwnershipMode::Owned || !state.is_live() || state.handed_out {
+                continue;
+            }
+            let Some(local) = self.locals.get(slot) else {
+                continue;
+            };
+            if !matches!(local.ty, Type::NativeState(_)) {
+                continue;
+            }
+            found.push((
+                LocalId(slot as u32),
+                self.binding_spans.get(slot).copied().flatten(),
+            ));
+        }
+        found
+    }
+
     pub(crate) fn mark_moved(&mut self, local: LocalId, span: Span) {
         self.ownership[local.0 as usize].moved = Some(span);
     }
