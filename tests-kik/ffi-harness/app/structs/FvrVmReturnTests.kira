@@ -58,7 +58,7 @@ function fvrNativeWrapFrame(seed: Int) -> FvrFrame {
     return FvrFrame { id: seed, box: fvrMakeBox(seed + 10) }
 }
 
-Test FvrNativeReturnsRuntimeStructLoop {
+construct FvrNativeReturnsRuntimeStructLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -72,7 +72,7 @@ Test FvrNativeReturnsRuntimeStructLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(210); return e }
 }
 
-Test FvrNativeReturnsRuntimeClassLoop {
+construct FvrNativeReturnsRuntimeClassLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -86,7 +86,7 @@ Test FvrNativeReturnsRuntimeClassLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(230); return e }
 }
 
-Test FvrNativeReturnsRuntimeArrayLoop {
+construct FvrNativeReturnsRuntimeArrayLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -100,7 +100,7 @@ Test FvrNativeReturnsRuntimeArrayLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(630); return e }
 }
 
-Test FvrNativeEmbedsRuntimeStructFieldLoop {
+construct FvrNativeEmbedsRuntimeStructFieldLoop() extends Test {
     test {
         var total = 0
         var i = 0

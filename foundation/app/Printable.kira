@@ -3,7 +3,7 @@
 // A declaration backed by `Printable` implements `onPrint`, and callers reach
 // that text through it:
 //
-//     Printable Temperature(celsius: Float) {
+//     construct Temperature(celsius: Float) extends Printable {
 //         function onPrint() -> String {
 //             return "…"
 //         }

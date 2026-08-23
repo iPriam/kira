@@ -10,7 +10,7 @@ user-facing conformance machinery on top of it.
 
 - **Slice 1 — trait declarations, conformance, static dispatch.** Landed.
 - **Slice 2 — user `Drop`.** Landed.
-- **Slice 3 — backed-declaration respelling.** Not started.
+- **Slice 3 — backed-declaration respelling.** Landed.
 
 ## Design decisions taken here
 
@@ -72,6 +72,18 @@ A copy of a value that runs a body is a second value with the same body to run.
 that question differently: native always lends one by pointer, and the VM copies
 it the way it copies everything else, because there the copy is a share.
 
+### The parameter list tells a family from a declaration
+
+`construct Name(params) extends Family { … }` replaces the bare
+`Family Name(params) { … }` head, and the old head is gone: no identifier begins
+a declaration any more, so every declaration form opens with a keyword. The
+parameter list is what separates the two forms, and `extends` means one thing in
+both — the declaration this one is written against.
+
+The macro scanner reads the same rule: `DeclarationKind::Form` is a `construct`
+whose name is followed by `(`, and its `family` comes off the `extends` clause
+rather than off the token before the name.
+
 ### An impl block on a class goes through the class machinery
 
 `extend <Class> { … }` already joins a class's own methods while it is
@@ -91,6 +103,8 @@ Parser:
 | `KPAR074` | A `self` receiver where no declaration can have one. |
 | `KPAR075` | A bare `self` receiver. |
 | `KPAR076` | An impl block naming more than one trait. |
+| `KPAR077` | A construct with a parameter list and no `extends` clause. |
+| `KPAR078` | A backed declaration naming more than one family. |
 
 Semantics:
 
@@ -118,5 +132,34 @@ pin lives in `crates/kira-cli/tests/kik_harness.rs`.
 
 ## Sibling repositories
 
-Nothing yet. Slice 3 changes the backed-declaration head, and the list of what
-siblings must migrate is recorded here when it lands.
+Slice 3 replaced the bare `Family Name(params) { … }` declaration head with
+`construct Name(params) extends Family { … }`. This repository is migrated;
+siblings are not, and their `.kira` sources will not parse until they are.
+
+Every sibling repository holding `.kira` sources — `../kira-ui` and any other
+checkout outside this one — must rewrite each backed declaration:
+
+```kira
+Widget Text(content: String) { … }                     // before
+construct Text(content: String) extends Widget { … }   // after
+
+Test SumsToTen { … }                                   // before
+construct SumsToTen() extends Test { … }               // after
+```
+
+The rule is mechanical, and both spellings of the old head are covered by it:
+
+- `Family Name(params) { … }` becomes
+  `construct Name(params) extends Family { … }`.
+- `Family Name { … }` becomes `construct Name() extends Family { … }` — the
+  parentheses are what marks a backed declaration now, so a head without them
+  is read as a family.
+
+Nothing else about the body changes, and `construct Family { … }` and
+`construct Child extends Parent { … }` are untouched. A `package.kira`
+manifest's `Package Name { … }` head is not a construct and is untouched too.
+
+The rewrite is one head per file-scope line, from column zero to the `{` that
+opens the body, and the parameter list may span lines. Kira source embedded in
+Rust test strings needs the same rewrite; this repository had 169 of those
+beside the 1614 in `.kira` files.

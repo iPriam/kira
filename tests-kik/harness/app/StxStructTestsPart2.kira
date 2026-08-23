@@ -10,7 +10,7 @@ import Foundation
 // Group 4: Value-copy independence
 // ---------------------------------------------------------------------------
 
-Test StxCopyXIndep {
+construct StxCopyXIndep() extends Test {
     // copy struct, mutate copy.x, original.x unchanged
     test {
         let p = StxPoint { x: 5, y: 3 }
@@ -21,7 +21,7 @@ Test StxCopyXIndep {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StxCopyYIndep {
+construct StxCopyYIndep() extends Test {
     test {
         let p = StxPoint { x: 5, y: 3 }
         var q = p
@@ -31,7 +31,7 @@ Test StxCopyYIndep {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxCopyBothUnchanged {
+construct StxCopyBothUnchanged() extends Test {
     // copy, mutate both fields of copy, original sum unchanged
     test {
         let p = StxPoint { x: 5, y: 3 }
@@ -43,7 +43,7 @@ Test StxCopyBothUnchanged {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test StxCopyNestedOriginX {
+construct StxCopyNestedOriginX() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -57,7 +57,7 @@ Test StxCopyNestedOriginX {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxCopyNestedSizeY {
+construct StxCopyNestedSizeY() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -71,7 +71,7 @@ Test StxCopyNestedSizeY {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StxCopyMutateCopy {
+construct StxCopyMutateCopy() extends Test {
     // original 5, copy gets 100; copy.x + original.x = 105
     test {
         let p = StxPoint { x: 5, y: 5 }
@@ -82,7 +82,7 @@ Test StxCopyMutateCopy {
     expect { let e: Result<Int, TestFailure> = .Ok(105); return e }
 }
 
-Test StxCopyBorrowMutNoEffect {
+construct StxCopyBorrowMutNoEffect() extends Test {
     // borrow mut on copy; original.x unchanged
     test {
         let p = StxPoint { x: 3, y: 4 }
@@ -93,7 +93,7 @@ Test StxCopyBorrowMutNoEffect {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxCopyLoopIndependence {
+construct StxCopyLoopIndependence() extends Test {
     // i=0..4: copy p={i,i}, zero copy.x, acc += p.x = i; sum=0+1+2+3+4=10
     test {
         var acc = 0
@@ -110,7 +110,7 @@ Test StxCopyLoopIndependence {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxCopyScaleOriginalUnchanged {
+construct StxCopyScaleOriginalUnchanged() extends Test {
     // scale returns new struct; original p.x unchanged
     test {
         let p = StxPoint { x: 3, y: 5 }
@@ -120,7 +120,7 @@ Test StxCopyScaleOriginalUnchanged {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxCopyCubeDepth {
+construct StxCopyCubeDepth() extends Test {
     test {
         let c = StxCube {
             lo: StxPoint { x: 1, y: 2 },
@@ -138,7 +138,7 @@ Test StxCopyCubeDepth {
 // Group 5: Arrays of structs
 // ---------------------------------------------------------------------------
 
-Test StxArrRead1X {
+construct StxArrRead1X() extends Test {
     // pts[1].x=3
     test {
         var pts: [StxPoint] = []
@@ -150,7 +150,7 @@ Test StxArrRead1X {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxArrRead2Y {
+construct StxArrRead2Y() extends Test {
     // pts[2].y=6
     test {
         var pts: [StxPoint] = []
@@ -162,7 +162,7 @@ Test StxArrRead2Y {
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test StxArrSumX {
+construct StxArrSumX() extends Test {
     // sum pts[i].x for i=0..2 = 1+3+5=9
     test {
         var pts: [StxPoint] = []
@@ -180,7 +180,7 @@ Test StxArrSumX {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test StxArrForInSumY {
+construct StxArrForInSumY() extends Test {
     // for-in: sum pts[i].y for i=0..2 = 2+4+6=12
     test {
         var pts: [StxPoint] = []
@@ -196,7 +196,7 @@ Test StxArrForInSumY {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test StxArrWriteX {
+construct StxArrWriteX() extends Test {
     test {
         var pts: [StxPoint] = []
         pts.append(StxPoint { x: 10, y: 20 })
@@ -206,7 +206,7 @@ Test StxArrWriteX {
     expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
 }
 
-Test StxArrWriteY {
+construct StxArrWriteY() extends Test {
     test {
         var pts: [StxPoint] = []
         pts.append(StxPoint { x: 10, y: 20 })
@@ -216,7 +216,7 @@ Test StxArrWriteY {
     expect { let e: Result<Int, TestFailure> = .Ok(88); return e }
 }
 
-Test StxArrDeepWriteRectOriginX {
+construct StxArrDeepWriteRectOriginX() extends Test {
     test {
         var rects: [StxRect] = []
         rects.append(StxRect {
@@ -230,7 +230,7 @@ Test StxArrDeepWriteRectOriginX {
     expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
 }
 
-Test StxArrDeepWriteRectSizeY {
+construct StxArrDeepWriteRectSizeY() extends Test {
     test {
         var rects: [StxRect] = []
         rects.append(StxRect {
@@ -249,7 +249,7 @@ Test StxArrDeepWriteRectSizeY {
     expect { let e: Result<Int, TestFailure> = .Ok(44); return e }
 }
 
-Test StxArrMixedWrites {
+construct StxArrMixedWrites() extends Test {
     // 4 pts, write to specific fields, sum=10+20+30+40=100
     test {
         var pts: [StxPoint] = []
@@ -266,7 +266,7 @@ Test StxArrMixedWrites {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test StxArrLoop100 {
+construct StxArrLoop100() extends Test {
     // 100 pts where x=i, y=100-i; sum of p.sum()=100 each; total=10000
     test {
         var pts: [StxPoint] = []
@@ -286,7 +286,7 @@ Test StxArrLoop100 {
     expect { let e: Result<Int, TestFailure> = .Ok(10000); return e }
 }
 
-Test StxArrCount {
+construct StxArrCount() extends Test {
     // append 7 pts, count=7
     test {
         var pts: [StxPoint] = []
@@ -300,7 +300,7 @@ Test StxArrCount {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StxArrForInMethodSum {
+construct StxArrForInMethodSum() extends Test {
     // i=0..4: p={x:i, y:i*2}, p.sum()=3i; total=0+3+6+9+12=30
     test {
         var pts: [StxPoint] = []
@@ -318,7 +318,7 @@ Test StxArrForInMethodSum {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test StxArrAfterDeepWrite {
+construct StxArrAfterDeepWrite() extends Test {
     // pts=[{x:1},{x:2},{x:3}], set pts[1].x=50, sum x = 1+50+3=54
     test {
         var pts: [StxPoint] = []
@@ -337,7 +337,7 @@ Test StxArrAfterDeepWrite {
     expect { let e: Result<Int, TestFailure> = .Ok(54); return e }
 }
 
-Test StxArrTrapEmpty {
+construct StxArrTrapEmpty() extends Test {
     test {
         var pts: [StxPoint] = []
         return pts[0].x
@@ -345,7 +345,7 @@ Test StxArrTrapEmpty {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxArrTrapOOB {
+construct StxArrTrapOOB() extends Test {
     test {
         var pts: [StxPoint] = []
         pts.append(StxPoint { x: 1, y: 2 })
@@ -358,7 +358,7 @@ Test StxArrTrapOOB {
 // Group 6: StxBag (struct with array field)
 // ---------------------------------------------------------------------------
 
-Test StxBagTotal5 {
+construct StxBagTotal5() extends Test {
     // stxMakeBag(5): tag=5, items=[1,2,3,4,5], total=5+15=20
     test {
         var b = stxMakeBag(5)
@@ -367,7 +367,7 @@ Test StxBagTotal5 {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StxBagTotal0 {
+construct StxBagTotal0() extends Test {
     // stxMakeBag(0): tag=0, items=[], total=0
     test {
         var b = stxMakeBag(0)
@@ -376,7 +376,7 @@ Test StxBagTotal0 {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StxBagCount10 {
+construct StxBagCount10() extends Test {
     test {
         var b = stxMakeBag(10)
         return b.count()
@@ -384,7 +384,7 @@ Test StxBagCount10 {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxBagItems2 {
+construct StxBagItems2() extends Test {
     // stxMakeBag(5).items=[1,2,3,4,5], items[2]=3
     test {
         var b = stxMakeBag(5)
@@ -393,7 +393,7 @@ Test StxBagItems2 {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxBagTag {
+construct StxBagTag() extends Test {
     test {
         var b = stxMakeBag(5)
         return b.tag
@@ -401,7 +401,7 @@ Test StxBagTag {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StxBagTotal1 {
+construct StxBagTotal1() extends Test {
     // stxMakeBag(1): tag=1, items=[1], total=2
     test {
         var b = stxMakeBag(1)
@@ -410,7 +410,7 @@ Test StxBagTotal1 {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StxBagTotal3 {
+construct StxBagTotal3() extends Test {
     // stxMakeBag(3): tag=3, items=[1,2,3], total=9
     test {
         var b = stxMakeBag(3)
@@ -419,7 +419,7 @@ Test StxBagTotal3 {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test StxBagLoopTotal {
+construct StxBagLoopTotal() extends Test {
     // n=1..5: total(n)=n+n*(n+1)/2 → 2+5+9+14+20=50
     test {
         var acc = 0
@@ -434,7 +434,7 @@ Test StxBagLoopTotal {
     expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
 }
 
-Test StxBagItems0 {
+construct StxBagItems0() extends Test {
     // stxMakeBag(3).items[0]=1
     test {
         var b = stxMakeBag(3)
@@ -443,7 +443,7 @@ Test StxBagItems0 {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StxBagItems1 {
+construct StxBagItems1() extends Test {
     // stxMakeBag(3).items[1]=2
     test {
         var b = stxMakeBag(3)
@@ -456,7 +456,7 @@ Test StxBagItems1 {
 // Group 7: Trap tests
 // ---------------------------------------------------------------------------
 
-Test StxTrapDivZeroField {
+construct StxTrapDivZeroField() extends Test {
     // p.x / p.y where p.y=0 → trap
     test {
         let p = StxPoint { x: 5, y: 0 }
@@ -465,17 +465,17 @@ Test StxTrapDivZeroField {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapModZero {
+construct StxTrapModZero() extends Test {
     test { return 7 % 0 }
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapDivZeroConst {
+construct StxTrapDivZeroConst() extends Test {
     test { return 1 / 0 }
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapArrLargeIndex {
+construct StxTrapArrLargeIndex() extends Test {
     test {
         var pts: [StxPoint] = []
         pts.append(StxPoint { x: 1, y: 2 })
@@ -485,7 +485,7 @@ Test StxTrapArrLargeIndex {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapDeepWriteOOB {
+construct StxTrapDeepWriteOOB() extends Test {
     test {
         var rects: [StxRect] = []
         rects.append(StxRect {
@@ -498,7 +498,7 @@ Test StxTrapDeepWriteOOB {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapBagOOB {
+construct StxTrapBagOOB() extends Test {
     test {
         var b = stxMakeBag(3)
         return b.items[99]
@@ -506,7 +506,7 @@ Test StxTrapBagOOB {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StxTrapModZeroField {
+construct StxTrapModZeroField() extends Test {
     test {
         let p = StxPoint { x: 5, y: 0 }
         return p.x % p.y

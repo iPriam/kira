@@ -50,7 +50,7 @@ function fesNativeCallbackRewritesEnumOwned(seed: Int) -> Int {
     return frame.count + fesModeScore(frame.mode)
 }
 
-Test FesBorrowMutStructEnumWritebackLoop {
+construct FesBorrowMutStructEnumWritebackLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -64,7 +64,7 @@ Test FesBorrowMutStructEnumWritebackLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
 }
 
-Test FesBorrowMutStructEnumRewriteLoop {
+construct FesBorrowMutStructEnumRewriteLoop() extends Test {
     test {
         var total = 0
         var i = 0

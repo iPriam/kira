@@ -15,7 +15,7 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function area() -> Int {
         return side * side
     }
@@ -43,7 +43,7 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let width: Int = 0
 }
 "#,
@@ -63,7 +63,7 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function area() -> String {
         return "big"
     }
@@ -85,7 +85,7 @@ construct Shape {
     @Required function scaled(factor: Int)
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function scaled() -> Int {
         return side
     }
@@ -108,13 +108,13 @@ construct Case {
     @Required function outcome()
 }
 
-Case Counted(number: Int) {
+construct Counted(number: Int) extends Case {
     function outcome() -> Int {
         return number
     }
 }
 
-Case Named(text: String) {
+construct Named(text: String) extends Case {
     function outcome() -> String {
         return text
     }
@@ -136,7 +136,7 @@ construct Case {
     @Required function outcome()
 }
 
-Case Counted(number: Int) {
+construct Counted(number: Int) extends Case {
     function outcome() -> Int {
         return number
     }
@@ -165,13 +165,13 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function area() -> Int {
         return side * side
     }
 }
 
-Shape Strip(length: Int) {
+construct Strip(length: Int) extends Shape {
     function area() -> Int {
         return length
     }
@@ -199,7 +199,7 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     @Required function area() -> Int
 }
 "#,
@@ -222,7 +222,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     let base: Int = 7
     function draw() -> Int { return base }
 }
@@ -252,7 +252,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     let base: Int = 7
 }
 
@@ -282,7 +282,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     requires {
         function extra() -> Int
     }

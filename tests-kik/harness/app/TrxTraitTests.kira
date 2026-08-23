@@ -86,7 +86,7 @@ construct TrxShape {
     @Required function sides() -> Int
 }
 
-TrxShape TrxSquare(edge: Int): TrxScored {
+construct TrxSquare(edge: Int): TrxScored extends TrxShape {
     function sides() -> Int {
         return 4
     }
@@ -109,7 +109,7 @@ function trxSum(value: borrow TrxLeaf) -> Int {
     return value.score() + value.doubled()
 }
 
-Test TrxARequirementIsCalledDirectly {
+construct TrxARequirementIsCalledDirectly() extends Test {
     test {
         let leaf = TrxLeaf(n: 6)
         return leaf.score()
@@ -117,7 +117,7 @@ Test TrxARequirementIsCalledDirectly {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test TrxADefaultIsInheritedAndCallsTheRequirement {
+construct TrxADefaultIsInheritedAndCallsTheRequirement() extends Test {
     test {
         let leaf = TrxLeaf(n: 6)
         return leaf.doubled()
@@ -125,7 +125,7 @@ Test TrxADefaultIsInheritedAndCallsTheRequirement {
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
 }
 
-Test TrxADefaultTheTypeWroteWins {
+construct TrxADefaultTheTypeWroteWins() extends Test {
     test {
         let triple = TrxTriple(n: 5)
         return triple.doubled()
@@ -133,7 +133,7 @@ Test TrxADefaultTheTypeWroteWins {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test TrxADefaultReturningTextIsInherited {
+construct TrxADefaultReturningTextIsInherited() extends Test {
     test {
         let triple = TrxTriple(n: 5)
         return triple.label()
@@ -141,7 +141,7 @@ Test TrxADefaultReturningTextIsInherited {
     expect { let e: Result<String, TestFailure> = .Ok("scored"); return e }
 }
 
-Test TrxARetroactiveImplementationIsAnOrdinaryMethod {
+construct TrxARetroactiveImplementationIsAnOrdinaryMethod() extends Test {
     test {
         let late = TrxLate(base: 3)
         return late.score() + late.doubled()
@@ -149,7 +149,7 @@ Test TrxARetroactiveImplementationIsAnOrdinaryMethod {
     expect { let e: Result<Int, TestFailure> = .Ok(90); return e }
 }
 
-Test TrxAMarkerTraitAddsNoMembers {
+construct TrxAMarkerTraitAddsNoMembers() extends Test {
     test {
         let leaf = TrxLeaf(n: 1)
         return leaf.score()
@@ -157,7 +157,7 @@ Test TrxAMarkerTraitAddsNoMembers {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test TrxAClassKeepsThePromise {
+construct TrxAClassKeepsThePromise() extends Test {
     test {
         let base = TrxBase()
         return base.score() + base.doubled()
@@ -165,7 +165,7 @@ Test TrxAClassKeepsThePromise {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test TrxASubclassOverrideWinsThroughTheDefault {
+construct TrxASubclassOverrideWinsThroughTheDefault() extends Test {
     test {
         let derived = TrxDerived()
         return derived.doubled()
@@ -173,7 +173,7 @@ Test TrxASubclassOverrideWinsThroughTheDefault {
     expect { let e: Result<Int, TestFailure> = .Ok(800); return e }
 }
 
-Test TrxAConstructBackedDeclarationKeepsThePromise {
+construct TrxAConstructBackedDeclarationKeepsThePromise() extends Test {
     test {
         let square = TrxSquare(edge: 3)
         return square.doubled() + square.sides()
@@ -181,7 +181,7 @@ Test TrxAConstructBackedDeclarationKeepsThePromise {
     expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
 }
 
-Test TrxACopyableClaimLeavesTheTypeCopying {
+construct TrxACopyableClaimLeavesTheTypeCopying() extends Test {
     test {
         let a = TrxPoint(x: 2, y: 3)
         let b = a
@@ -190,7 +190,7 @@ Test TrxACopyableClaimLeavesTheTypeCopying {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test TrxABorrowedReceiverLeavesTheValueUsable {
+construct TrxABorrowedReceiverLeavesTheValueUsable() extends Test {
     test {
         let leaf = TrxLeaf(n: 2)
         return trxSum(leaf) + leaf.score()
@@ -198,7 +198,7 @@ Test TrxABorrowedReceiverLeavesTheValueUsable {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test TrxAMutableReceiverWritesBackToTheCaller {
+construct TrxAMutableReceiverWritesBackToTheCaller() extends Test {
     test {
         var counter = TrxCounter(ticks: 1)
         counter.bump(by: 5)
@@ -217,7 +217,7 @@ struct TrxNamed: TrxScored {
     }
 }
 
-Test TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean {
+construct TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean() extends Test {
     test {
         var total = 0
         var i = 0

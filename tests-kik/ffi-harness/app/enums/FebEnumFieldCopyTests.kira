@@ -53,7 +53,7 @@ function febCode(c: borrow FebCtx) -> Int {
 
 // ── Group A: method copying self.<enum> into a new aggregate ──────────────────
 
-Test FebMethodEnumCopyMetal {
+construct FebMethodEnumCopyMetal() extends Test {
     test {
         let g = FebGfx { backend: .Metal, seed: 10 }
         let f = g.frame()
@@ -63,7 +63,7 @@ Test FebMethodEnumCopyMetal {
     expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
 }
 
-Test FebMethodEnumCopyVulkan {
+construct FebMethodEnumCopyVulkan() extends Test {
     test {
         let g = FebGfx { backend: .Vulkan, seed: 4 }
         let f = g.frame()
@@ -75,7 +75,7 @@ Test FebMethodEnumCopyVulkan {
 
 // ── Group B: free function copying a borrowed struct's enum field ─────────────
 
-Test FebFreeEnumCopySokol {
+construct FebFreeEnumCopySokol() extends Test {
     test {
         let a = FebCtx { backend: .Sokol, tag: 7 }
         let b = febCopy(a)
@@ -87,7 +87,7 @@ Test FebFreeEnumCopySokol {
 
 // ── Group C: repeated copy/free churn — stresses the clone+drop pairing ───────
 
-Test FebMethodEnumCopyLoop {
+construct FebMethodEnumCopyLoop() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -103,7 +103,7 @@ Test FebMethodEnumCopyLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(2500); return e }
 }
 
-Test FebFreeEnumCopyChain {
+construct FebFreeEnumCopyChain() extends Test {
     test {
         // Copy three times in sequence; each copy reads the previous (borrowed)
         // struct's enum field. A missing clone double-frees on the second copy.

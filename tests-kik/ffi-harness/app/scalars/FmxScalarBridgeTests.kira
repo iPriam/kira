@@ -16,7 +16,7 @@ import Foundation
 // Tests: Callbacks / closures
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxCallbackSquare {
+construct FmxCallbackSquare() extends Test {
     // closure -> @Native square: 6^2 = 36
     test {
         let cb: (Int) -> Int = { x in
@@ -27,7 +27,7 @@ Test FmxCallbackSquare {
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test FmxCallbackInvokeTwice {
+construct FmxCallbackInvokeTwice() extends Test {
     // cb(cb(10)) = cb(13) = 16
     test {
         let cb: (Int) -> Int = { x in
@@ -38,7 +38,7 @@ Test FmxCallbackInvokeTwice {
     expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
 }
 
-Test FmxCallbackInvokeSum {
+construct FmxCallbackInvokeSum() extends Test {
     // cb(5)+cb(7) = 10+14 = 24
     test {
         let cb: (Int) -> Int = { x in
@@ -49,7 +49,7 @@ Test FmxCallbackInvokeSum {
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test FmxCallbackNativeInside {
+construct FmxCallbackNativeInside() extends Test {
     // closure calls @Native, then passed to @Native: 32+10 = 42
     test {
         let cb: (Int) -> Int = { x in
@@ -60,7 +60,7 @@ Test FmxCallbackNativeInside {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxCallbackNRNInside {
+construct FmxCallbackNRNInside() extends Test {
     // closure calls N->R bridge (fmxNativeCallDouble), passed to @Native
     // fmxNativeCallDouble(21) = fmxRuntimeDouble(21) = 42
     test {
@@ -72,7 +72,7 @@ Test FmxCallbackNRNInside {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxCallbackLoop {
+construct FmxCallbackLoop() extends Test {
     // Each iteration creates a fresh closure, moves to @Native, invokes once
     // sum of squares: 1^2+2^2+3^2+4^2+5^2 = 1+4+9+16+25 = 55
     test {
@@ -94,7 +94,7 @@ Test FmxCallbackLoop {
 // Tests: Loop churning
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxLoopSum100 {
+construct FmxLoopSum100() extends Test {
     // sum of fmxNativeAdd(i, 1) for i=0..99 = sum 1..100 = 5050
     test {
         var acc = 0
@@ -108,7 +108,7 @@ Test FmxLoopSum100 {
     expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
 }
 
-Test FmxLoopDouble10 {
+construct FmxLoopDouble10() extends Test {
     // acc *= 2 ten times: 2^10 = 1024
     test {
         var acc = 1
@@ -122,7 +122,7 @@ Test FmxLoopDouble10 {
     expect { let e: Result<Int, TestFailure> = .Ok(1024); return e }
 }
 
-Test FmxLoopNRDouble {
+construct FmxLoopNRDouble() extends Test {
     // acc = fmxNativeCallDouble(acc) five times: 1->2->4->8->16->32
     test {
         var acc = 1
@@ -136,7 +136,7 @@ Test FmxLoopNRDouble {
     expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
 }
 
-Test FmxLoopSquareSum {
+construct FmxLoopSquareSum() extends Test {
     // 1^2+2^2+3^2+4^2+5^2 = 55
     test {
         var acc = 0
@@ -150,7 +150,7 @@ Test FmxLoopSquareSum {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test FmxLoop1000 {
+construct FmxLoop1000() extends Test {
     // 1000 calls to fmxNativeAdd(acc, 1) -> 1000
     test {
         var acc = 0
@@ -164,7 +164,7 @@ Test FmxLoop1000 {
     expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
 }
 
-Test FmxLoopNRNAccum {
+construct FmxLoopNRNAccum() extends Test {
     // i=0..4: fmxHopNRNAdd(i, i^2) = i+i^2
     // 0+0=0, 1+1=2, 2+4=6, 3+9=12, 4+16=20 -> sum=40
     test {
@@ -183,7 +183,7 @@ Test FmxLoopNRNAccum {
 // Tests: String bridge (try; remove + record on crash)
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxStringLenPure {
+construct FmxStringLenPure() extends Test {
     // Pure @Runtime — no bridge, baseline sanity
     test {
         let s = "hello"
@@ -192,7 +192,7 @@ Test FmxStringLenPure {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test FmxStringNativeBorrowCount {
+construct FmxStringNativeBorrowCount() extends Test {
     // borrow String across the bridge into @Native
     test {
         let s = "hello world"
@@ -201,7 +201,7 @@ Test FmxStringNativeBorrowCount {
     expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
 }
 
-Test FmxStringNativeBorrowEmpty {
+construct FmxStringNativeBorrowEmpty() extends Test {
     // empty string borrow into @Native
     test {
         let s = ""
@@ -210,7 +210,7 @@ Test FmxStringNativeBorrowEmpty {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test FmxStringNativeBorrowMulti {
+construct FmxStringNativeBorrowMulti() extends Test {
     // multiple borrow-String calls to @Native
     test {
         let w1 = "one"
@@ -231,7 +231,7 @@ Test FmxStringNativeBorrowMulti {
 // Tests: Combined / catch-all
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxCombinedAddMulDiv {
+construct FmxCombinedAddMulDiv() extends Test {
     // 10+5=15, 15*3=45, 45/5=9
     test {
         let a = fmxNativeAdd(10, 5)
@@ -241,7 +241,7 @@ Test FmxCombinedAddMulDiv {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test FmxCombinedNRChain {
+construct FmxCombinedNRChain() extends Test {
     // N->R: double(10)=20, triple(20)=60, 60+2=62
     test {
         let x = fmxNativeCallDouble(10)
@@ -251,7 +251,7 @@ Test FmxCombinedNRChain {
     expect { let e: Result<Int, TestFailure> = .Ok(62); return e }
 }
 
-Test FmxCombinedNRNChain {
+construct FmxCombinedNRNChain() extends Test {
     // NRN mul(3,4)=12, NRN add(12,12)=24, div(24,4)=6, square(6)=36
     test {
         let a = fmxHopNRNMul(3, 4)
@@ -262,7 +262,7 @@ Test FmxCombinedNRNChain {
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test FmxCombinedBoolInt {
+construct FmxCombinedBoolInt() extends Test {
     // boolTrue -> +15, boolFalse -> +0, boolId(true) -> +12 = 27
     test {
         var acc = 0
@@ -274,7 +274,7 @@ Test FmxCombinedBoolInt {
     expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
 }
 
-Test FmxCombinedLoopNRN {
+construct FmxCombinedLoopNRN() extends Test {
     // i=0..9: fmxHopNRNAdd(i, i^2) = i+i^2; sum=330
     // 0+2+6+12+20+30+42+56+72+90 = 330
     test {
@@ -290,7 +290,7 @@ Test FmxCombinedLoopNRN {
     expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
 }
 
-Test FmxCombinedCallback {
+construct FmxCombinedCallback() extends Test {
     // Two sequential closures: mul(7,3)=21; then 21+21=42
     test {
         let cb1: (Int) -> Int = { x in
@@ -305,7 +305,7 @@ Test FmxCombinedCallback {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxCombinedFloatBoolInt {
+construct FmxCombinedFloatBoolInt() extends Test {
     // Float checks -> Bool -> gated Int additions
     // floatEq(1+2, 3) -> +10; floatEq(3*4, 12) -> +20; boolTrue -> square(3)=+9 = 39
     test {
@@ -318,7 +318,7 @@ Test FmxCombinedFloatBoolInt {
     expect { let e: Result<Int, TestFailure> = .Ok(39); return e }
 }
 
-Test FmxUltimateStress {
+construct FmxUltimateStress() extends Test {
     // i=0..19: a=i+1, b=N->R:double(a)=2(i+1), c=NRN:add(a,b)=3(i+1), d=c%7
     // Cycle [3,6,2,5,1,4,0] repeats; 20 iters = 3 full cycles (21 each) = 63
     test {
@@ -337,7 +337,7 @@ Test FmxUltimateStress {
     expect { let e: Result<Int, TestFailure> = .Ok(63); return e }
 }
 
-Test FmxManyHopsStress {
+construct FmxManyHopsStress() extends Test {
     // 4-hop sequence: R->N->R, R->N, N->R->N, N->R
     // x=5, a=N->R:double(5)=10, b=R->N:add(10,3)=13, c=N->R->N:square(13)=169, N->R:addFive(169)=174
     test {
@@ -357,7 +357,7 @@ Test FmxManyHopsStress {
 // could not resolve, so the expected message would be lost. The runtime now runs
 // `__expect()` through the bridge (runFunctionForValue), so the substring is
 // computed and matched against the real divide-by-zero trap raised by `test()`.
-Test FmxTrapExpectBridgesNative {
+construct FmxTrapExpectBridgesNative() extends Test {
     test { return 1 / 0 }
     expect {
         let probe = fmxNativeAdd(40, 2)

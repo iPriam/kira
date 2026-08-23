@@ -19,7 +19,7 @@ construct Style {
     let score: Int { additionalEffect + (liquidGlass.material == .XHigh ? 10 : 0) }
 }
 
-Style Base {
+construct Base() extends Style {
     let additionalEffect = 3
     let liquidGlass = Glass {}
 }
@@ -50,7 +50,7 @@ construct Theme {
     let value: Int = 0
 }
 
-Theme Concrete {
+construct Concrete() extends Theme {
     let value = 3
     let doubled = value + 1
 }
@@ -72,7 +72,7 @@ fn forward_construct_member_references_are_rejected() {
         r#"
 construct Theme {}
 
-Theme Broken {
+construct Broken() extends Theme {
     let later = earlier
     let earlier = 1
 }
@@ -90,7 +90,7 @@ fn inferred_construct_value_cycles_are_rejected_before_lowering() {
         r#"
 construct Theme {}
 
-Theme Loop {
+construct Loop() extends Theme {
     let next = Loop {}
 }
 "#,
@@ -110,7 +110,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf(value: Int) {
+construct Leaf(value: Int) extends Child {
     let result: Int { value }
 }
 
@@ -119,7 +119,7 @@ construct Stack {
     let result: Int { child.value }
 }
 
-Stack Wrap {
+construct Wrap() extends Stack {
     let child: some Child
 }
 
@@ -144,7 +144,7 @@ construct Style {
     let value: Int { 0 }
 }
 
-Style Broken {
+construct Broken() extends Style {
     let missing
 }
 "#,
@@ -166,7 +166,7 @@ construct Style {
     let glass: Glass = Glass {}
 }
 
-Style Base {
+construct Base() extends Style {
     let value: Int = 0
     let glass: Glass = Glass {}
 }
@@ -199,7 +199,7 @@ construct Style {
     let value: Int { 0 }
 }
 
-Style Broken {
+construct Broken() extends Style {
     let values = []
 }
 "#,
@@ -223,7 +223,7 @@ construct Style {
     let appearance: Int = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 
@@ -254,7 +254,7 @@ construct Style {
     let appearance = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 

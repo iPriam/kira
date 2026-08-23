@@ -10,28 +10,28 @@ import Foundation
 // Single-payload + payload-less enum tests — EnxEvent
 // ---------------------------------------------------------------------------
 
-Test EnxEventClickDirect {
+construct EnxEventClickDirect() extends Test {
     test { return enxEventScore(.Click(7)) }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test EnxEventKeyDirect {
+construct EnxEventKeyDirect() extends Test {
     test { return enxEventScore(.Key(3)) }
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test EnxEventScrollDirect {
+construct EnxEventScrollDirect() extends Test {
     test { return enxEventScore(.Scroll(2)) }
     expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
 }
 
-Test EnxEventIdleDirect {
+construct EnxEventIdleDirect() extends Test {
     test { return enxEventScore(.Idle) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
 // [Click(3),Key(2),Scroll(1),Idle,Click(5),Key(1)] -> 3+20+100+0+5+10=138
-Test EnxEventArrayFold {
+construct EnxEventArrayFold() extends Test {
     test {
         let es: [EnxEvent] = [.Click(3), .Key(2), .Scroll(1), .Idle, .Click(5), .Key(1)]
         var s = 0
@@ -46,7 +46,7 @@ Test EnxEventArrayFold {
 // Indexed access via borrow helper
 // events[j] via enxEventScore(events[j])
 // [Click(10), Idle, Key(3), Scroll(1)] -> 10+0+30+100=140
-Test EnxEventIndexedFold {
+construct EnxEventIndexedFold() extends Test {
     test {
         var events: [EnxEvent] = []
         events.append(.Click(10))
@@ -65,7 +65,7 @@ Test EnxEventIndexedFold {
 }
 
 // Count non-Idle events in [Click(1),Idle,Key(2),Scroll(3),Idle,Click(4)] -> 4
-Test EnxEventCountNonIdle {
+construct EnxEventCountNonIdle() extends Test {
     test {
         let es: [EnxEvent] = [.Click(1), .Idle, .Key(2), .Scroll(3), .Idle, .Click(4)]
         var count = 0
@@ -79,7 +79,7 @@ Test EnxEventCountNonIdle {
 }
 
 // Sum only Click payloads in [Click(5),Key(2),Click(8),Idle,Click(1)]: 5+8+1=14
-Test EnxEventSumClicksOnly {
+construct EnxEventSumClicksOnly() extends Test {
     test {
         let es: [EnxEvent] = [.Click(5), .Key(2), .Click(8), .Idle, .Click(1)]
         var acc = 0
@@ -95,24 +95,24 @@ Test EnxEventSumClicksOnly {
 // Mixed payload/payload-less enum tests — EnxStatus
 // ---------------------------------------------------------------------------
 
-Test EnxStatusDormantDirect {
+construct EnxStatusDormantDirect() extends Test {
     test { return enxStatusCode(.Dormant) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test EnxStatusRunningDirect {
+construct EnxStatusRunningDirect() extends Test {
     test { return enxStatusCode(.Running(42)) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
 // Done(15) -> 15+100=115
-Test EnxStatusDoneDirect {
+construct EnxStatusDoneDirect() extends Test {
     test { return enxStatusCode(.Done(15)) }
     expect { let e: Result<Int, TestFailure> = .Ok(115); return e }
 }
 
 // Failed(8) -> 0-8 = -8
-Test EnxStatusFailedDirect {
+construct EnxStatusFailedDirect() extends Test {
     test { return enxStatusCode(.Failed(8)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 8); return e }
 }
@@ -123,7 +123,7 @@ Test EnxStatusFailedDirect {
 // Done: i=2,6,10 -> codes 102,106,110 = 318
 // Failed: i=3,7,11 -> codes -3,-7,-11 = -21
 // total = 0+15+318-21 = 312
-Test EnxStatusFold12 {
+construct EnxStatusFold12() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -138,7 +138,7 @@ Test EnxStatusFold12 {
 }
 
 // Count Running+Done (active) in i=0..11: Running=3, Done=3 -> 6
-Test EnxStatusCountActive {
+construct EnxStatusCountActive() extends Test {
     test {
         var count = 0
         var i = 0
@@ -160,7 +160,7 @@ Test EnxStatusCountActive {
 }
 
 // Sum Running payload values in i=0..11: Running at i=1,5,9 -> 1+5+9=15
-Test EnxStatusRunningSum {
+construct EnxStatusRunningSum() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -184,7 +184,7 @@ Test EnxStatusRunningSum {
 // Indexed access via borrow helper: statusFor is called, result passed to enxStatusCode(statuses[j])
 // Build [Dormant, Running(10), Done(5), Failed(3), Running(20)]
 // codes: 0+10+105-3+20=132
-Test EnxStatusIndexedFold {
+construct EnxStatusIndexedFold() extends Test {
     test {
         var statuses: [EnxStatus] = []
         statuses.append(.Dormant)
@@ -207,23 +207,23 @@ Test EnxStatusIndexedFold {
 // EnxNode — mixed payload/payload-less (Leaf, Tagged, Empty)
 // ---------------------------------------------------------------------------
 
-Test EnxNodeLeafDirect {
+construct EnxNodeLeafDirect() extends Test {
     test { return enxNodeVal(.Leaf(7)) }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test EnxNodeTaggedDirect {
+construct EnxNodeTaggedDirect() extends Test {
     test { return enxNodeVal(.Tagged(4)) }
     expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
 }
 
-Test EnxNodeEmptyDirect {
+construct EnxNodeEmptyDirect() extends Test {
     test { return enxNodeVal(.Empty) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
 // [Leaf(5),Tagged(3),Empty,Leaf(7),Tagged(1),Empty,Leaf(2)] -> 5+30+0+7+10+0+2=54
-Test EnxNodeArrayFold {
+construct EnxNodeArrayFold() extends Test {
     test {
         let ns: [EnxNode] = [.Leaf(5), .Tagged(3), .Empty, .Leaf(7), .Tagged(1), .Empty, .Leaf(2)]
         var s = 0
@@ -238,7 +238,7 @@ Test EnxNodeArrayFold {
 // Indexed access via borrow helper
 // [Leaf(3), Tagged(2), Empty, Leaf(10)] via enxNodeVal(nodes[j])
 // 3+20+0+10=33
-Test EnxNodeIndexedFold {
+construct EnxNodeIndexedFold() extends Test {
     test {
         var nodes: [EnxNode] = []
         nodes.append(.Leaf(3))
@@ -257,7 +257,7 @@ Test EnxNodeIndexedFold {
 }
 
 // Count Leaf nodes in [Leaf(1),Empty,Leaf(2),Tagged(3),Leaf(4),Empty] -> 3
-Test EnxNodeCountLeaves {
+construct EnxNodeCountLeaves() extends Test {
     test {
         let ns: [EnxNode] = [.Leaf(1), .Empty, .Leaf(2), .Tagged(3), .Leaf(4), .Empty]
         var count = 0
@@ -274,7 +274,7 @@ Test EnxNodeCountLeaves {
 // ---------------------------------------------------------------------------
 
 // EnxItem{Low, 4} -> 4
-Test EnxItemScoreLow {
+construct EnxItemScoreLow() extends Test {
     test {
         let item = EnxItem { priority: .Low, value: 4 }
         return enxItemScore(item)
@@ -283,7 +283,7 @@ Test EnxItemScoreLow {
 }
 
 // EnxItem{Medium, 3} -> 15
-Test EnxItemScoreMedium {
+construct EnxItemScoreMedium() extends Test {
     test {
         let item = EnxItem { priority: .Medium, value: 3 }
         return enxItemScore(item)
@@ -292,7 +292,7 @@ Test EnxItemScoreMedium {
 }
 
 // EnxItem{High, 2} -> 20
-Test EnxItemScoreHigh {
+construct EnxItemScoreHigh() extends Test {
     test {
         let item = EnxItem { priority: .High, value: 2 }
         return enxItemScore(item)
@@ -301,7 +301,7 @@ Test EnxItemScoreHigh {
 }
 
 // [L(2),M(3),H(1),L(4),H(2),M(1)] -> 2+15+10+4+20+5=56
-Test EnxItemLiteralArrayFold {
+construct EnxItemLiteralArrayFold() extends Test {
     test {
         let items: [EnxItem] = [
             EnxItem { priority: .Low,    value: 2 },
@@ -323,7 +323,7 @@ Test EnxItemLiteralArrayFold {
 // Dynamic build: i=0..5, item{priorityFor(i%3), value: i+1}
 // i=0:L,v=1->1; i=1:M,v=2->10; i=2:H,v=3->30; i=3:L,v=4->4; i=4:M,v=5->25; i=5:H,v=6->60
 // sum=130
-Test EnxItemDynFold {
+construct EnxItemDynFold() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -345,7 +345,7 @@ Test EnxItemDynFold {
 // i=0: N(1)+Spr(10)=11, i=1: S(2)+Sum(20)=22, i=2: E(3)+Aut(30)=33, i=3: W(4)+Win(40)=44
 // i=4: N(1)+Spr(10)=11, i=5: S(2)+Sum(20)=22, i=6: E(3)+Aut(30)=33, i=7: W(4)+Win(40)=44
 // sum=220
-Test EnxDirSeasonCombinedFold {
+construct EnxDirSeasonCombinedFold() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -368,7 +368,7 @@ Test EnxDirSeasonCombinedFold {
 // i=4:Paren(4)->8+Med->5=13
 // i=5:Op(5)->15+High->10=25
 // sum=66
-Test EnxTokenPriorityPairFold {
+construct EnxTokenPriorityPairFold() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -385,7 +385,7 @@ Test EnxTokenPriorityPairFold {
 
 // Dirs 0..11 + Seasons 0..11:
 // dirs: 3*(1+2+3+4)=30, seasons: 3*(10+20+30+40)=300 -> 330
-Test EnxDirPlusSeasonFolds {
+construct EnxDirPlusSeasonFolds() extends Test {
     test {
         var dirAcc = 0
         var seaAcc = 0
@@ -406,7 +406,7 @@ Test EnxDirPlusSeasonFolds {
 // i=3:Num(3)*L(1)=3, i=4:Paren(4)*M(5)=40, i=5:Op(5)*H(10)=150
 // i=6:Num(6)*L(1)=6, i=7:Paren(7)*M(5)=70, i=8:Op(8)*H(10)=240
 // sum=0+10+60+3+40+150+6+70+240=579
-Test EnxTokenPriorityMultiplyFold {
+construct EnxTokenPriorityMultiplyFold() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -426,7 +426,7 @@ Test EnxTokenPriorityMultiplyFold {
 // Let me just do [Click(1),Key(1),Scroll(1),Idle,Click(2),Key(2)] scores=1+10+100+0+2+20=133
 // plus Dir 0..5 weights: 1+2+3+4+1+2=13
 // total=146
-Test EnxEventPlusDirFold {
+construct EnxEventPlusDirFold() extends Test {
     test {
         let es: [EnxEvent] = [.Click(1), .Key(1), .Scroll(1), .Idle, .Click(2), .Key(2)]
         var eAcc = 0
@@ -450,7 +450,7 @@ Test EnxEventPlusDirFold {
 
 // Simulate: 3 steps of Running(n) advancing n by 5 each step, check final code
 // n0=7, n1=12, n2=17: code of Running(17)=17
-Test EnxStatusRunningProgress {
+construct EnxStatusRunningProgress() extends Test {
     test {
         var n = 7
         var steps = 0
@@ -466,7 +466,7 @@ Test EnxStatusRunningProgress {
 // Status code sum for a specific sequence:
 // [Dormant, Running(3), Running(6), Done(3), Failed(1), Done(10)]
 // codes: 0+3+6+103+(-1)+110=221
-Test EnxStatusSequenceFold {
+construct EnxStatusSequenceFold() extends Test {
     test {
         let ss: [EnxStatus] = [
             .Dormant,
@@ -487,7 +487,7 @@ Test EnxStatusSequenceFold {
 
 // Max status code in [Running(5), Done(2), Running(8), Failed(3)]:
 // codes: 5, 102, 8, -3 -> max=102
-Test EnxStatusMaxCode {
+construct EnxStatusMaxCode() extends Test {
     test {
         let ss: [EnxStatus] = [.Running(5), .Done(2), .Running(8), .Failed(3)]
         var mx = 0 - 99999
@@ -506,7 +506,7 @@ Test EnxStatusMaxCode {
 // ---------------------------------------------------------------------------
 
 // OOB on array of EnxDir
-Test EnxTrapDirArrayOOB {
+construct EnxTrapDirArrayOOB() extends Test {
     test {
         let ds: [EnxDir] = [.North, .South, .East]
         let _ = enxDirWeight(ds[10])
@@ -516,7 +516,7 @@ Test EnxTrapDirArrayOOB {
 }
 
 // OOB on array of EnxToken
-Test EnxTrapTokenArrayOOB {
+construct EnxTrapTokenArrayOOB() extends Test {
     test {
         let ts: [EnxToken] = [.Num(1), .Paren(2)]
         let _ = enxTokenVal(ts[5])
@@ -526,7 +526,7 @@ Test EnxTrapTokenArrayOOB {
 }
 
 // OOB on array of EnxStatus
-Test EnxTrapStatusArrayOOB {
+construct EnxTrapStatusArrayOOB() extends Test {
     test {
         var ss: [EnxStatus] = []
         ss.append(.Dormant)
@@ -538,7 +538,7 @@ Test EnxTrapStatusArrayOOB {
 }
 
 // Div by zero derived from enum payload: Token.Num(0) -> val=0, then 10/val
-Test EnxTrapDivByTokenPayload {
+construct EnxTrapDivByTokenPayload() extends Test {
     test {
         let t: EnxToken = .Num(0)
         let val = enxTokenVal(t)
@@ -548,7 +548,7 @@ Test EnxTrapDivByTokenPayload {
 }
 
 // Mod by zero derived from enum payload
-Test EnxTrapModByTokenPayload {
+construct EnxTrapModByTokenPayload() extends Test {
     test {
         let t: EnxToken = .Op(0)
         let val = enxTokenVal(t)
@@ -558,7 +558,7 @@ Test EnxTrapModByTokenPayload {
 }
 
 // OOB on empty EnxNode array
-Test EnxTrapNodeEmptyArrayOOB {
+construct EnxTrapNodeEmptyArrayOOB() extends Test {
     test {
         let ns: [EnxNode] = []
         let _ = enxNodeVal(ns[0])
@@ -568,7 +568,7 @@ Test EnxTrapNodeEmptyArrayOOB {
 }
 
 // Div zero via status payload: Failed(0) -> code = 0-0 = 0, then 5/0
-Test EnxTrapDivByStatusCode {
+construct EnxTrapDivByStatusCode() extends Test {
     test {
         let s: EnxStatus = .Failed(0)
         let code = enxStatusCode(s)
@@ -578,7 +578,7 @@ Test EnxTrapDivByStatusCode {
 }
 
 // OOB via computed index from enum: Leaf(100) -> val=100, index into 3-elem array
-Test EnxTrapOOBFromLeafPayload {
+construct EnxTrapOOBFromLeafPayload() extends Test {
     test {
         let n: EnxNode = .Leaf(100)
         let idx = enxNodeVal(n)
@@ -590,7 +590,7 @@ Test EnxTrapOOBFromLeafPayload {
 }
 
 // OOB in loop that scans an array of EnxEvent with wrong count
-Test EnxTrapEventOOBInLoop {
+construct EnxTrapEventOOBInLoop() extends Test {
     test {
         let events: [EnxEvent] = [.Click(1), .Idle]
         var acc = 0
@@ -605,7 +605,7 @@ Test EnxTrapEventOOBInLoop {
 }
 
 // Div zero from direction weight difference: North(1)-North(1)=0, then 7/(w1-w2)
-Test EnxTrapDivByDirDiff {
+construct EnxTrapDivByDirDiff() extends Test {
     test {
         let d1: EnxDir = .North
         let d2: EnxDir = .North

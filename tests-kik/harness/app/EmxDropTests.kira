@@ -44,7 +44,7 @@ function emxCountNamed(bag: borrow EmxBag) -> Int {
     return n
 }
 
-Test EmxArrayEnumStringPayloadFree {
+construct EmxArrayEnumStringPayloadFree() extends Test {
     test {
         var total = 0
         var i = 0
@@ -97,7 +97,7 @@ function emxPaintScore(p: borrow EmxPaint) -> Int {
     return 0
 }
 
-Test EmxStructPayloadEnumDefaultsFree {
+construct EmxStructPayloadEnumDefaultsFree() extends Test {
     test {
         var total = 0
         var i = 0
@@ -121,7 +121,7 @@ Test EmxStructPayloadEnumDefaultsFree {
 // KIR002 move-only guarantee): loops the enum_kind_split_cache_parity shape so
 // a per-iteration shell leak scales. The clone arm for the Filled variant is
 // unreachable-by-checker (contains-any enums are move-only) and traps.
-Test EmxConstructAnyPayloadEnumChurn {
+construct EmxConstructAnyPayloadEnumChurn() extends Test {
     test {
         var total = 0
         var i = 0
@@ -176,7 +176,7 @@ function emxSumRange(r: borrow EmxRangeResult) -> Int {
     return 0
 }
 
-Test EmxArrayPayloadEnumFree {
+construct EmxArrayPayloadEnumFree() extends Test {
     test {
         var total = 0
         var i = 0

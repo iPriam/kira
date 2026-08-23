@@ -12,7 +12,7 @@ import Foundation
 // H4 Tests
 // ---------------------------------------------------------------------------
 
-Test StrxClsVehicleCost5 {
+construct StrxClsVehicleCost5() extends Test {
     test {
         let v = StrxCVehicle()
         return v.cost(5)
@@ -21,7 +21,7 @@ Test StrxClsVehicleCost5 {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxClsCarCost5 {
+construct StrxClsCarCost5() extends Test {
     test {
         let c = StrxCCar()
         return c.cost(5)
@@ -30,7 +30,7 @@ Test StrxClsCarCost5 {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StrxClsTruckCost5 {
+construct StrxClsTruckCost5() extends Test {
     test {
         let t = StrxCTruck()
         return t.cost(5)
@@ -39,7 +39,7 @@ Test StrxClsTruckCost5 {
     expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
 }
 
-Test StrxClsVehicleLoop {
+construct StrxClsVehicleLoop() extends Test {
     test {
         let v = StrxCVehicle()
         var acc = 0
@@ -54,7 +54,7 @@ Test StrxClsVehicleLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
 }
 
-Test StrxClsCarLoop {
+construct StrxClsCarLoop() extends Test {
     test {
         let c = StrxCCar()
         var acc = 0
@@ -69,7 +69,7 @@ Test StrxClsCarLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(70); return e }
 }
 
-Test StrxClsTruckLoop {
+construct StrxClsTruckLoop() extends Test {
     test {
         let t = StrxCTruck()
         var acc = 0
@@ -84,7 +84,7 @@ Test StrxClsTruckLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(110); return e }
 }
 
-Test StrxClsVehicleBase {
+construct StrxClsVehicleBase() extends Test {
     test {
         let v = StrxCVehicle()
         return v.base
@@ -92,7 +92,7 @@ Test StrxClsVehicleBase {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxClsCarBase {
+construct StrxClsCarBase() extends Test {
     test {
         let c = StrxCCar()
         return c.base
@@ -100,7 +100,7 @@ Test StrxClsCarBase {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxClsTruckBase {
+construct StrxClsTruckBase() extends Test {
     test {
         let t = StrxCTruck()
         return t.base
@@ -108,7 +108,7 @@ Test StrxClsTruckBase {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StrxClsVehicleCost10 {
+construct StrxClsVehicleCost10() extends Test {
     test {
         let v = StrxCVehicle()
         return v.cost(10)
@@ -117,7 +117,7 @@ Test StrxClsVehicleCost10 {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StrxClsCarCost10 {
+construct StrxClsCarCost10() extends Test {
     test {
         let c = StrxCCar()
         return c.cost(10)
@@ -126,7 +126,7 @@ Test StrxClsCarCost10 {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test StrxClsTruckCost10 {
+construct StrxClsTruckCost10() extends Test {
     test {
         let t = StrxCTruck()
         return t.cost(10)
@@ -135,7 +135,7 @@ Test StrxClsTruckCost10 {
     expect { let e: Result<Int, TestFailure> = .Ok(38); return e }
 }
 
-Test StrxClsBaseFieldSum {
+construct StrxClsBaseFieldSum() extends Test {
     test {
         let v = StrxCVehicle()
         let c = StrxCCar()
@@ -150,7 +150,7 @@ Test StrxClsBaseFieldSum {
 // H5 Tests
 // ---------------------------------------------------------------------------
 
-Test StrxClsCounterInc {
+construct StrxClsCounterInc() extends Test {
     test {
         var c = StrxCCounter()
         let _ = c.increment()
@@ -159,7 +159,7 @@ Test StrxClsCounterInc {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StrxClsCounterLoop {
+construct StrxClsCounterLoop() extends Test {
     test {
         var c = StrxCCounter()
         var i = 0
@@ -172,7 +172,7 @@ Test StrxClsCounterLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxClsCounterReset {
+construct StrxClsCounterReset() extends Test {
     test {
         var c = StrxCCounter()
         var i = 0
@@ -186,7 +186,7 @@ Test StrxClsCounterReset {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxClsSmartInc {
+construct StrxClsSmartInc() extends Test {
     test {
         var sc = StrxCSmartCounter()
         let _ = sc.incrementBy(7)
@@ -195,7 +195,7 @@ Test StrxClsSmartInc {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StrxClsSmartStep {
+construct StrxClsSmartStep() extends Test {
     test {
         var sc = StrxCSmartCounter()
         let _ = sc.addStep()
@@ -205,7 +205,7 @@ Test StrxClsSmartStep {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StrxClsSmartLoop5 {
+construct StrxClsSmartLoop5() extends Test {
     test {
         var sc = StrxCSmartCounter()
         var i = 0
@@ -219,7 +219,7 @@ Test StrxClsSmartLoop5 {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxClsSmartCustomStep {
+construct StrxClsSmartCustomStep() extends Test {
     test {
         var sc = StrxCSmartCounter()
         sc.step = 5
@@ -234,7 +234,7 @@ Test StrxClsSmartCustomStep {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StrxClsSmartMixedOps {
+construct StrxClsSmartMixedOps() extends Test {
     test {
         var sc = StrxCSmartCounter()
         let _ = sc.increment()
@@ -247,7 +247,7 @@ Test StrxClsSmartMixedOps {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StrxClsCounterMultiple {
+construct StrxClsCounterMultiple() extends Test {
     test {
         var total = 0
         var k = 0
@@ -265,7 +265,7 @@ Test StrxClsCounterMultiple {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StrxClsCounterResetLoop {
+construct StrxClsCounterResetLoop() extends Test {
     test {
         var c = StrxCCounter()
         var i = 0
@@ -286,7 +286,7 @@ Test StrxClsCounterResetLoop {
 // H6 Tests
 // ---------------------------------------------------------------------------
 
-Test StrxClsNodeDesc {
+construct StrxClsNodeDesc() extends Test {
     test {
         var n = StrxCNode()
         n.value = 5
@@ -296,7 +296,7 @@ Test StrxClsNodeDesc {
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test StrxClsLeafDesc {
+construct StrxClsLeafDesc() extends Test {
     test {
         var l = StrxCLeaf()
         l.value = 5
@@ -306,7 +306,7 @@ Test StrxClsLeafDesc {
     expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
 }
 
-Test StrxClsDeepLeafDesc {
+construct StrxClsDeepLeafDesc() extends Test {
     test {
         var d = StrxCDeepLeaf()
         d.value = 5
@@ -316,7 +316,7 @@ Test StrxClsDeepLeafDesc {
     expect { let e: Result<Int, TestFailure> = .Ok(600); return e }
 }
 
-Test StrxClsLeafArr {
+construct StrxClsLeafArr() extends Test {
     test {
         var leaves: [StrxCLeaf] = []
         var i = 0
@@ -338,7 +338,7 @@ Test StrxClsLeafArr {
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test StrxClsLabelNode {
+construct StrxClsLabelNode() extends Test {
     test {
         let n = StrxCNode()
         return n.label
@@ -346,7 +346,7 @@ Test StrxClsLabelNode {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StrxClsLabelLeaf {
+construct StrxClsLabelLeaf() extends Test {
     test {
         let l = StrxCLeaf()
         return l.label
@@ -354,7 +354,7 @@ Test StrxClsLabelLeaf {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxClsLabelDeep {
+construct StrxClsLabelDeep() extends Test {
     test {
         let d = StrxCDeepLeaf()
         return d.label
@@ -362,7 +362,7 @@ Test StrxClsLabelDeep {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test StrxClsDeepArr {
+construct StrxClsDeepArr() extends Test {
     test {
         var ds: [StrxCDeepLeaf] = []
         var i = 0
@@ -384,7 +384,7 @@ Test StrxClsDeepArr {
     expect { let e: Result<Int, TestFailure> = .Ok(900); return e }
 }
 
-Test StrxClsLabelSum {
+construct StrxClsLabelSum() extends Test {
     test {
         let n = StrxCNode()
         let l = StrxCLeaf()
@@ -395,7 +395,7 @@ Test StrxClsLabelSum {
     expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
 }
 
-Test StrxClsLeafMutDesc {
+construct StrxClsLeafMutDesc() extends Test {
     test {
         var l = StrxCLeaf()
         l.value = 7
@@ -405,7 +405,7 @@ Test StrxClsLeafMutDesc {
     expect { let e: Result<Int, TestFailure> = .Ok(70); return e }
 }
 
-Test StrxClsDeepMutDesc {
+construct StrxClsDeepMutDesc() extends Test {
     test {
         var d = StrxCDeepLeaf()
         d.value = 3
@@ -415,7 +415,7 @@ Test StrxClsDeepMutDesc {
     expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
 }
 
-Test StrxClsNodeDescLoop {
+construct StrxClsNodeDescLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -435,7 +435,7 @@ Test StrxClsNodeDescLoop {
 // Trap tests
 // ---------------------------------------------------------------------------
 
-Test StrxClsTrapArrOob {
+construct StrxClsTrapArrOob() extends Test {
     test {
         var tris: [StrxCTriangle] = []
         tris.append(StrxCTriangle())
@@ -446,7 +446,7 @@ Test StrxClsTrapArrOob {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClsTrapDivZero {
+construct StrxClsTrapDivZero() extends Test {
     test {
         let a = 5
         let b = 0
@@ -455,7 +455,7 @@ Test StrxClsTrapDivZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClsTrapModZero {
+construct StrxClsTrapModZero() extends Test {
     test {
         let a = 10
         let b = 0
@@ -464,7 +464,7 @@ Test StrxClsTrapModZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClsTrapLeafArrOob {
+construct StrxClsTrapLeafArrOob() extends Test {
     test {
         var leaves: [StrxCLeaf] = []
         var i = 0

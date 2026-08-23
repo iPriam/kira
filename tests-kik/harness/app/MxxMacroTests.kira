@@ -24,17 +24,17 @@ macro mxSwap(a: place, b: place) {
     }
 }
 
-Test MxxSquare {
+construct MxxSquare() extends Test {
     test { return mxSquare!(6) }
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test MxxAdd3 {
+construct MxxAdd3() extends Test {
     test { return mxAdd3!(1, 2, 3) }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test MxxSwapAndHygiene {
+construct MxxSwapAndHygiene() extends Test {
     test {
         var x = 10
         var y = 20
@@ -46,7 +46,7 @@ Test MxxSwapAndHygiene {
     expect { let e: Result<Int, TestFailure> = .Ok(130); return e }
 }
 
-Test MxxNestedExprSingleEval {
+construct MxxNestedExprSingleEval() extends Test {
     test {
         // square used in a larger expression -> hoisted single-eval, then used.
         let r = mxSquare!(3) + mxSquare!(4)
@@ -99,12 +99,12 @@ struct MxVec3 {
     var z: Int
 }
 
-Test MxxDeriveFieldCount {
+construct MxxDeriveFieldCount() extends Test {
     test { return mxVecFieldCount() }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test MxxDeriveSum {
+construct MxxDeriveSum() extends Test {
     test {
         let v = MxVec3 { x: 4, y: 5, z: 6 }
         return mxSumVec(v)
@@ -136,7 +136,7 @@ struct MxTagHolder {
     var b: Int
 }
 
-Test MxxAttributeMacro {
+construct MxxAttributeMacro() extends Test {
     test { return mxTaggedFieldCount() }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
@@ -165,7 +165,7 @@ comptime macro mxBits {
 
 mxBits!(MxRead, MxWrite, MxExec)
 
-Test MxxFunctionMacro {
+construct MxxFunctionMacro() extends Test {
     test { return MxRead() + MxWrite() + MxExec() }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
@@ -180,7 +180,7 @@ comptime macro mxConst {
     }
 }
 
-Test MxxFuncMacroExpr {
+construct MxxFuncMacroExpr() extends Test {
     test { return mxConst!() }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
@@ -197,7 +197,7 @@ comptime macro mxAssignTen {
     }
 }
 
-Test MxxFuncMacroStmt {
+construct MxxFuncMacroStmt() extends Test {
     test {
         var r = 0
         mxAssignTen!()
@@ -228,7 +228,7 @@ comptime macro mxPrefixed {
 
 mxPrefixed!(Foo, Bar)
 
-Test MxxSpliceGlue {
+construct MxxSpliceGlue() extends Test {
     test { return mxp_Foo() + mxp_Bar() }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
@@ -259,7 +259,7 @@ enum MxColor {
     Blue
 }
 
-Test MxxEnumDerive {
+construct MxxEnumDerive() extends Test {
     test { return mxEnumVariantCount() }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
@@ -312,17 +312,17 @@ struct MxPlainWrapper {
     var wrappedValue: Int
 }
 
-Test MxxPropertyWrapperConformance {
+construct MxxPropertyWrapperConformance() extends Test {
     test { return is_MxStateWrapper_propertyWrapper() }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test MxxPropertyWrapperHasProjected {
+construct MxxPropertyWrapperHasProjected() extends Test {
     test { return has_MxStateWrapper_projectedValue() }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test MxxPropertyWrapperNoProjected {
+construct MxxPropertyWrapperNoProjected() extends Test {
     test { return has_MxPlainWrapper_projectedValue() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
@@ -403,7 +403,7 @@ function mxAddOne(count: Int) -> Int {
     return count + 1
 }
 
-MxCounter MxLabelledCall() {
+construct MxLabelledCall() extends MxCounter {
     @MxSeed var count: Int = 7
 
     function total() -> Int {
@@ -411,7 +411,7 @@ MxCounter MxLabelledCall() {
     }
 }
 
-Test MxxWrappedPropertyIsANamedArgumentLabel {
+construct MxxWrappedPropertyIsANamedArgumentLabel() extends Test {
     test { return MxLabelledCall().total() }
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }

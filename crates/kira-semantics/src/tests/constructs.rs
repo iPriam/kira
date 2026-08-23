@@ -25,7 +25,7 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side * side }
 }
 
@@ -51,7 +51,7 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side * side }
 }
 
@@ -73,7 +73,7 @@ fn a_construct_uses_defaults_for_omitted_inputs_and_members() {
             r#"
 construct Family { }
 
-Family StrictExample(name: String, title: String = "default title") {
+construct StrictExample(name: String, title: String = "default title") extends Family {
     let content: String = "default content"
     let value: String { name + title + content }
 }
@@ -95,7 +95,7 @@ fn a_backed_declaration_of_an_unknown_family_is_refused() {
     assert_eq!(
         library_codes(
             r#"
-Widget Text(content: Int) {
+construct Text(content: Int) extends Widget {
     let node: Int { content }
 }
 "#,
@@ -116,7 +116,7 @@ construct Widget {
     let node: Int { body }
 }
 
-Widget Composite(tag: Int) {
+construct Composite(tag: Int) extends Widget {
     function unrelated() -> Int {
         return tag
     }
@@ -142,7 +142,7 @@ construct Widget {
     let node: Int { body }
 }
 
-Widget Leaf(text: Int) {
+construct Leaf(text: Int) extends Widget {
     let node: Int { text }
 }
 "#,
@@ -160,7 +160,7 @@ construct Family {
     let node: Int { 0 }
 }
 
-Family Thing(value: Int) {
+construct Thing(value: Int) extends Family {
     let value: Int = 1
     let node: Int { value }
 }
@@ -203,13 +203,13 @@ construct Widget {
     }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function value() -> Int {
         return number
     }
 }
 
-Widget Wrapper() {
+construct Wrapper() extends Widget {
     body {
         Leaf(number = 7)
     }
@@ -234,7 +234,7 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side }
 }
 
@@ -261,7 +261,7 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side }
 }
 
@@ -287,11 +287,11 @@ construct Widget {
     let tag: Int { 0 }
 }
 
-Widget Leaf(id: Int) {
+construct Leaf(id: Int) extends Widget {
     let tag: Int { id }
 }
 
-Widget Padding(length: Int) {
+construct Padding(length: Int) extends Widget {
     let child: some Widget
     let tag: Int { 0 }
 }
@@ -346,7 +346,7 @@ construct Widget {
     let tag: Int { 0 }
 }
 
-Widget Leaf(id: Int) {
+construct Leaf(id: Int) extends Widget {
     let tag: Int { id }
 }
 
@@ -447,7 +447,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     let base: Int = 7
     function draw() -> Int { return base + Sprite.offset() }
     function offset() -> Int { return 3 }
@@ -475,7 +475,7 @@ construct Boxed {
     @Required let size: Int
 }
 
-Boxed Boxy {
+construct Boxy() extends Boxed {
     let size: Int = 4
     let scale: Int
     function area() -> Int { return size * scale }
@@ -506,7 +506,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     function draw() -> Int { return 1 }
 }
 

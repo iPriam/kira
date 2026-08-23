@@ -36,34 +36,34 @@ function skxValue(answer: borrow Result<Int, LinuxError>) -> Int {
 
 // ─── The `-errno` decode ────────────────────────────────────────────────────
 
-Test SkxDecodeTreatsZeroAsSuccess {
+construct SkxDecodeTreatsZeroAsSuccess() extends Test {
     test { return skxValue(linuxDecode(0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test SkxDecodeKeepsAPositiveCount {
+construct SkxDecodeKeepsAPositiveCount() extends Test {
     test { return skxValue(linuxDecode(4096)) }
     expect { let e: Result<Int, TestFailure> = .Ok(4096); return e }
 }
 
-Test SkxDecodeReadsASmallNegativeAsErrno {
+construct SkxDecodeReadsASmallNegativeAsErrno() extends Test {
     test { return skxErrno(linuxDecode(-2)) }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test SkxDecodeReadsTheLargestErrno {
+construct SkxDecodeReadsTheLargestErrno() extends Test {
     test { return skxErrno(linuxDecode(-4095)) }
     expect { let e: Result<Int, TestFailure> = .Ok(4095); return e }
 }
 
 // One past the boundary is a value, not a failure. This is the case a plain
 // `answer < 0` test gets wrong, and it is why the decode has an upper bound.
-Test SkxDecodeKeepsALargeNegativeValue {
+construct SkxDecodeKeepsALargeNegativeValue() extends Test {
     test { return skxValue(linuxDecode(-4096)) }
     expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
 }
 
-Test SkxErrorNamesAreTheKernelsOwn {
+construct SkxErrorNamesAreTheKernelsOwn() extends Test {
     test {
         let failure = LinuxError { errno: 2 }
         return linuxErrorName(failure)
@@ -71,7 +71,7 @@ Test SkxErrorNamesAreTheKernelsOwn {
     expect { let e: Result<String, TestFailure> = .Ok("ENOENT"); return e }
 }
 
-Test SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess {
+construct SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess() extends Test {
     test {
         let failure = LinuxError { errno: 4094 }
         return linuxErrorName(failure)
@@ -84,24 +84,24 @@ Test SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess {
 // The success path with nothing to show for it: `write` of no bytes takes no
 // bytes and says so, which is a real round trip through `svc`/`syscall` without
 // output landing in the driver's report.
-Test SkxWriteOfNoBytesTakesNone {
+construct SkxWriteOfNoBytesTakesNone() extends Test {
     test { return skxValue(linuxWrite(linuxStdout(), "")) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test SkxWriteToABadDescriptorIsEbadf {
+construct SkxWriteToABadDescriptorIsEbadf() extends Test {
     test { return skxErrno(linuxWrite(-1, "x")) }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test SkxReadFromABadDescriptorIsEbadf {
+construct SkxReadFromABadDescriptorIsEbadf() extends Test {
     test { return skxErrno(linuxRead(-1, RawPtr(0), 0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
 // The `errno` name of a real kernel failure, end to end: the register answered
 // -9, the decode made it 9, and the table made it `EBADF`.
-Test SkxARealFailureNamesItself {
+construct SkxARealFailureNamesItself() extends Test {
     test {
         let answer = linuxWrite(-1, "x")
         match answer {
@@ -115,7 +115,7 @@ Test SkxARealFailureNamesItself {
 // ─── No arguments: `sync` ───────────────────────────────────────────────────
 
 // The arity-0 entry sequence, which names only its output and the call number.
-Test SkxSyncTakesNoArgumentsAndSucceeds {
+construct SkxSyncTakesNoArgumentsAndSucceeds() extends Test {
     test { return skxValue(linuxSync()) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
@@ -126,7 +126,7 @@ Test SkxSyncTakesNoArgumentsAndSucceeds {
 // the path — so the *number* here depends on who ran the suite (`EPERM` without
 // the capability, `ENOENT` with it) while the failure does not. Asserting one of
 // the two would make this pass as root and fail in CI, or the reverse.
-Test SkxUnmountingAPathThatIsNotThereFails {
+construct SkxUnmountingAPathThatIsNotThereFails() extends Test {
     test {
         let errno = skxErrno(linuxUmount("/kira-syscall-harness-no-such-path", 0))
         return errno == 1 || errno == 2
@@ -139,7 +139,7 @@ Test SkxUnmountingAPathThatIsNotThereFails {
 // `execve` is the call whose success means this process is gone, so the only
 // answer a test can assert is its failure — and that failure is exactly what an
 // init has to be able to report.
-Test SkxExecvingAProgramThatIsNotThereIsEnoent {
+construct SkxExecvingAProgramThatIsNotThereIsEnoent() extends Test {
     test {
         return skxErrno(linuxExecve("/kira-syscall-harness-no-such-program", RawPtr(0), RawPtr(0)))
     }
@@ -149,7 +149,7 @@ Test SkxExecvingAProgramThatIsNotThereIsEnoent {
 // ─── Four arguments: `wait4` ────────────────────────────────────────────────
 
 // A process with no children answers `ECHILD`, whoever runs it.
-Test SkxWaitingWithNoChildrenIsEchild {
+construct SkxWaitingWithNoChildrenIsEchild() extends Test {
     test { return skxErrno(linuxWait(-1, RawPtr(0), 0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
@@ -160,7 +160,7 @@ Test SkxWaitingWithNoChildrenIsEchild {
 // errno depends on privilege for the same reason `umount2`'s does — `EPERM`
 // without `CAP_SYS_ADMIN`, `ENOENT` with it — and what is asserted is what does
 // not: the call reached the kernel and the kernel refused it.
-Test SkxMountingASourceThatIsNotThereFails {
+construct SkxMountingASourceThatIsNotThereFails() extends Test {
     test {
         let errno = skxErrno(linuxMount(
             "/kira-syscall-harness-no-such-device",
@@ -193,7 +193,7 @@ function skxNarrowDescriptorErrno() -> Int {
     return -skxSysWriteNarrowFd(-1, "x", U64(1))
 }
 
-Test SkxANarrowDescriptorIsSignExtendedIntoItsRegister {
+construct SkxANarrowDescriptorIsSignExtendedIntoItsRegister() extends Test {
     test { return skxNarrowDescriptorErrno() }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
@@ -209,7 +209,7 @@ function skxRawWriteAnswer() -> Int {
     return skxSysWrite(-1, "x", U64(1))
 }
 
-Test SkxTheRawEntryPointAnswersNegativeErrno {
+construct SkxTheRawEntryPointAnswersNegativeErrno() extends Test {
     test { return skxRawWriteAnswer() }
     expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
 }
@@ -223,7 +223,7 @@ function skxPpollFaultAnswer() -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysPpoll(RawPtr(1), U64(1), RawPtr(0), RawPtr(0)))
 }
 
-Test SkxPpollOverAnUnreadableArrayIsEfault {
+construct SkxPpollOverAnUnreadableArrayIsEfault() extends Test {
     test { return skxErrno(skxPpollFaultAnswer()) }
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
 }

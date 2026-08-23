@@ -234,7 +234,7 @@ struct OwxSlotField {
 
 // From ownership_array_field_readback_parity: `var x = obj.arr; x[i] = ...;
 // obj.arr = x` self-store readback must be a no-op, not a leak/clone.
-Test OwxArrayFieldReadbackParity {
+construct OwxArrayFieldReadbackParity() extends Test {
     test {
         var frame = 0
         var total = 0
@@ -254,7 +254,7 @@ Test OwxArrayFieldReadbackParity {
 
 // From ownership_array_struct_elements_parity: an empty typed-element array
 // literal must carry its element type so struct elements drop correctly.
-Test OwxArrayStructElementsParity {
+construct OwxArrayStructElementsParity() extends Test {
     test {
         var frame = 0
         var total = 0
@@ -274,7 +274,7 @@ Test OwxArrayStructElementsParity {
 
 // From ownership_borrow_mut_struct_field_parity: `borrow mut` struct params
 // mutate the caller's struct in place.
-Test OwxBorrowMutStructFieldParity {
+construct OwxBorrowMutStructFieldParity() extends Test {
     test {
         var box = OwxBox { n: 5 }
         owxBump(box, 10)
@@ -290,7 +290,7 @@ Test OwxBorrowMutStructFieldParity {
 
 // From ownership_borrow_param_parity: a plain `borrow` param can be read
 // repeatedly without consuming the source.
-Test OwxBorrowParamParity {
+construct OwxBorrowParamParity() extends Test {
     test {
         let mesh = OwxMesh { id: 1 }
         let a = owxInspect(mesh)
@@ -302,7 +302,7 @@ Test OwxBorrowParamParity {
 
 // From ownership_closure_array_elements_parity: closures stored in an array
 // (append, overwrite, read-call) must not double-free.
-Test OwxClosureArrayElementsParity {
+construct OwxClosureArrayElementsParity() extends Test {
     test {
         var cbs: [(Int) -> Int] = []
         var i = 0
@@ -329,7 +329,7 @@ Test OwxClosureArrayElementsParity {
 
 // From ownership_closure_block_churn_parity: every closure block is freed
 // at its drop point across a churn loop.
-Test OwxClosureBlockChurnParity {
+construct OwxClosureBlockChurnParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -345,7 +345,7 @@ Test OwxClosureBlockChurnParity {
 
 // From ownership_closure_body_recursive_tree_parity: recursive closure-rich
 // trees built inside a closure body must still drop every local.
-Test OwxClosureBodyRecursiveTreeParity {
+construct OwxClosureBodyRecursiveTreeParity() extends Test {
     test {
         let builder: (Int) -> Int = { seed in
             let tree = owxMakeTree(seed)
@@ -358,7 +358,7 @@ Test OwxClosureBodyRecursiveTreeParity {
 
 // From ownership_closure_branch_local_parity: a var closure local reassigned
 // across branches drops the dead value and keeps the live one.
-Test OwxClosureBranchLocalParity {
+construct OwxClosureBranchLocalParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -380,7 +380,7 @@ Test OwxClosureBranchLocalParity {
 // From ownership_closure_capture_copy_parity: a by-value capture must be
 // readable after the source local that produced it is gone. (Original
 // printed inside the closure body; reduced here to a returned scalar.)
-Test OwxClosureCaptureCopyParity {
+construct OwxClosureCaptureCopyParity() extends Test {
     test {
         let printer = owxMakeValue(5)
         return printer()
@@ -390,7 +390,7 @@ Test OwxClosureCaptureCopyParity {
 
 // From ownership_closure_field_reassign_parity: overwriting a closure field
 // drops the replaced block, and a self-store must not double-free.
-Test OwxClosureFieldReassignParity {
+construct OwxClosureFieldReassignParity() extends Test {
     test {
         var slot = OwxSlotReassign { tag: 0, cb: owxMakeAdder(10) }
         var total = 0
@@ -411,7 +411,7 @@ Test OwxClosureFieldReassignParity {
 
 // From ownership_closure_mixed_aggregate_churn_parity: strings and closures
 // inside the same struct/array, rebuilt repeatedly, must not interfere.
-Test OwxClosureMixedAggregateChurnParity {
+construct OwxClosureMixedAggregateChurnParity() extends Test {
     test {
         var total = 0
         var round = 0
@@ -438,7 +438,7 @@ Test OwxClosureMixedAggregateChurnParity {
 
 // From ownership_closure_multi_capture_churn_parity: closures with several
 // by-value captures must all be readable after the source locals are gone.
-Test OwxClosureMultiCaptureChurnParity {
+construct OwxClosureMultiCaptureChurnParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -455,7 +455,7 @@ Test OwxClosureMultiCaptureChurnParity {
 
 // From ownership_closure_nested_capture_parity: a closure captured inside
 // another closure is deep-cloned and recursively torn down.
-Test OwxClosureNestedCaptureParity {
+construct OwxClosureNestedCaptureParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -474,7 +474,7 @@ Test OwxClosureNestedCaptureParity {
 
 // From ownership_closure_owned_param_parity: an owned/move closure param is
 // dropped by the callee at scope exit.
-Test OwxClosureOwnedParamParity {
+construct OwxClosureOwnedParamParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -490,7 +490,7 @@ Test OwxClosureOwnedParamParity {
 
 // From ownership_closure_returned_parity: returning a borrowed closure
 // source must deep-clone it, not hand back the caller-owned block.
-Test OwxClosureReturnedParity {
+construct OwxClosureReturnedParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -507,7 +507,7 @@ Test OwxClosureReturnedParity {
 
 // From ownership_closure_struct_array_parity: structs with closure fields
 // collected into an array, rebuilt every iteration, must fully reclaim.
-Test OwxClosureStructArrayParity {
+construct OwxClosureStructArrayParity() extends Test {
     test {
         var total = 0
         var rebuild = 0
@@ -529,7 +529,7 @@ Test OwxClosureStructArrayParity {
 
 // From ownership_closure_struct_copy_parity: struct copies deep-clone
 // closure fields so both copies own independent blocks.
-Test OwxClosureStructCopyParity {
+construct OwxClosureStructCopyParity() extends Test {
     test {
         var total = 0
         var i = 0
@@ -548,7 +548,7 @@ Test OwxClosureStructCopyParity {
 
 // From ownership_closure_struct_field_parity: a closure stored in a struct
 // field is a deep value owning an independent clone.
-Test OwxClosureStructFieldParity {
+construct OwxClosureStructFieldParity() extends Test {
     test {
         var total = 0
         var i = 0

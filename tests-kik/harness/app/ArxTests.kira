@@ -99,7 +99,7 @@ function arxMakeValues(): [Int] {
 // From array_append_loop_no_stack_growth: regression for scratch-alloca
 // hoisting into the entry block (avoids unbounded native stack growth in a
 // 60000-iteration loop that rebuilds an array each pass).
-Test ArxAppendLoopNoStackGrowth {
+construct ArxAppendLoopNoStackGrowth() extends Test {
     test {
         var i = 0
         var acc = 0
@@ -115,7 +115,7 @@ Test ArxAppendLoopNoStackGrowth {
 }
 
 // From array_append_parity: [4, 5] built via append, order preserved.
-Test ArxAppendParity {
+construct ArxAppendParity() extends Test {
     test {
         var values: [Int] = []
         values.append(4)
@@ -126,7 +126,7 @@ Test ArxAppendParity {
 }
 
 // From array_call_parity: array threaded through function calls/returns.
-Test ArxCallParity {
+construct ArxCallParity() extends Test {
     test {
         let values: [Int] = arxMakeValues()
         return values[0] * 100 + values[1] * 10 + values[2]
@@ -135,7 +135,7 @@ Test ArxCallParity {
 }
 
 // From array_local_parity: plain array literal local.
-Test ArxLocalParity {
+construct ArxLocalParity() extends Test {
     test {
         let values = [1, 2, 3]
         return values[0] * 100 + values[1] * 10 + values[2]
@@ -145,7 +145,7 @@ Test ArxLocalParity {
 
 // From array_element_borrow_mut_writeback_parity: mutation through
 // `arr[i]` passed to a `borrow mut` param must write back into the array.
-Test ArxElementBorrowMutWritebackParity {
+construct ArxElementBorrowMutWritebackParity() extends Test {
     test {
         var arr: [ArxRow] = []
         arr.append(ArxRow { v: 5 })
@@ -158,7 +158,7 @@ Test ArxElementBorrowMutWritebackParity {
 
 // From array_element_deep_field_store_parity: store through a place nested
 // 2+ projections below the array index must write back.
-Test ArxElementDeepFieldStoreParity {
+construct ArxElementDeepFieldStoreParity() extends Test {
     test {
         var arr: [ArxOuter] = []
         arr.append(ArxOuter { inner: ArxInner { x: 1 } })
@@ -170,7 +170,7 @@ Test ArxElementDeepFieldStoreParity {
 
 // From array_element_mixed_projection_parity: 3-deep field chain rooted at
 // an array index, plus a nested-array-of-array element index write.
-Test ArxElementMixedProjectionParity {
+construct ArxElementMixedProjectionParity() extends Test {
     test {
         var deep: [ArxC] = []
         deep.append(ArxC { b: ArxB { a: ArxA { c: 1 } } })
@@ -190,7 +190,7 @@ Test ArxElementMixedProjectionParity {
 
 // From array_element_nested_append_parity: `arr[i].xs.append(v)` must grow
 // the nested array in place (write back), not a discarded transient copy.
-Test ArxElementNestedAppendParity {
+construct ArxElementNestedAppendParity() extends Test {
     test {
         var arr: [ArxRowXs] = []
         arr.append(ArxRowXs { xs: [] })
@@ -207,7 +207,7 @@ Test ArxElementNestedAppendParity {
 // returned from one `if` branch, empty array from the other; owned
 // temporaries of a returning block must not be cleaned up by a sibling
 // block's return path.
-Test ArxConditionalArrayReturnParity {
+construct ArxConditionalArrayReturnParity() extends Test {
     test {
         var out = arxGlowCount(true) * 100 + arxGlowCount(false) * 10 + arxGlowCount(true)
         return out

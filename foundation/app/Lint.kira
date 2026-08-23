@@ -5,7 +5,7 @@
 // goes in `linter.kira` at the package root, and every member carries a written
 // type because a construct-backed form requires them:
 //
-//     Lint QualifiedVariant {
+//     construct QualifiedVariant() extends Lint {
 //         let code: String = "KLINT001"
 //         let severity: String = "warning"
 //         let enabled: Bool = true

@@ -191,53 +191,53 @@ function fmxNativeInvokeSum(callback: (Int) -> Int, a: Int, b: Int) -> Int {
 // Tests: Int @Native basics
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxAddBasic {
+construct FmxAddBasic() extends Test {
     test { return fmxNativeAdd(7, 13) }
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test FmxSubBasic {
+construct FmxSubBasic() extends Test {
     test { return fmxNativeSub(50, 8) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxMulBasic {
+construct FmxMulBasic() extends Test {
     test { return fmxNativeMul(6, 7) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxDivBasic {
+construct FmxDivBasic() extends Test {
     test { return fmxNativeDiv(100, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
 }
 
-Test FmxModBasic {
+construct FmxModBasic() extends Test {
     test { return fmxNativeMod(17, 5) }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test FmxSquareBasic {
+construct FmxSquareBasic() extends Test {
     test { return fmxNativeSquare(9) }
     expect { let e: Result<Int, TestFailure> = .Ok(81); return e }
 }
 
-Test FmxCubeBasic {
+construct FmxCubeBasic() extends Test {
     test { return fmxNativeCube(4) }
     expect { let e: Result<Int, TestFailure> = .Ok(64); return e }
 }
 
-Test FmxFiveArgsSum {
+construct FmxFiveArgsSum() extends Test {
     test { return fmxNativeFiveArgs(1, 2, 3, 4, 5) }
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test FmxSixArgsDot {
+construct FmxSixArgsDot() extends Test {
     // 2*3 + 4*5 + 6*7 = 6 + 20 + 42 = 68
     test { return fmxNativeSixArgs(2, 3, 4, 5, 6, 7) }
     expect { let e: Result<Int, TestFailure> = .Ok(68); return e }
 }
 
-Test FmxChainNative {
+construct FmxChainNative() extends Test {
     // fmxNativeAdd(30, 12) = 42
     test {
         let a = fmxNativeAdd(10, 20)
@@ -247,12 +247,12 @@ Test FmxChainNative {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxLargeInt {
+construct FmxLargeInt() extends Test {
     test { return fmxNativeMul(1000, 999) }
     expect { let e: Result<Int, TestFailure> = .Ok(999000); return e }
 }
 
-Test FmxMultiOp {
+construct FmxMultiOp() extends Test {
     // 13*7=91, 91%10=1
     test {
         let product = fmxNativeMul(13, 7)
@@ -261,7 +261,7 @@ Test FmxMultiOp {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test FmxSquareDiff {
+construct FmxSquareDiff() extends Test {
     // 10^2 - 8^2 = 100 - 64 = 36
     test {
         let a = fmxNativeSquare(10)
@@ -271,7 +271,7 @@ Test FmxSquareDiff {
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test FmxAddChain3 {
+construct FmxAddChain3() extends Test {
     // 1+2=3, 3+3=6, 6+4=10
     test {
         let x = fmxNativeAdd(1, 2)
@@ -285,27 +285,27 @@ Test FmxAddChain3 {
 // Tests: Bool bridge
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxBoolIdTrue {
+construct FmxBoolIdTrue() extends Test {
     test { return fmxNativeBoolId(true) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxBoolIdFalse {
+construct FmxBoolIdFalse() extends Test {
     test { return fmxNativeBoolId(false) }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test FmxBoolConstTrue {
+construct FmxBoolConstTrue() extends Test {
     test { return fmxNativeBoolTrue() }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxBoolConstFalse {
+construct FmxBoolConstFalse() extends Test {
     test { return fmxNativeBoolFalse() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test FmxBoolToIntTrue {
+construct FmxBoolToIntTrue() extends Test {
     test {
         var out = 0
         if fmxNativeBoolId(true) { out = 1 }
@@ -314,7 +314,7 @@ Test FmxBoolToIntTrue {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test FmxBoolToIntFalse {
+construct FmxBoolToIntFalse() extends Test {
     test {
         var out = 0
         if fmxNativeBoolId(false) { out = 1 }
@@ -323,7 +323,7 @@ Test FmxBoolToIntFalse {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test FmxBoolCountInLoop {
+construct FmxBoolCountInLoop() extends Test {
     // Bool from @Native used as if condition 7 times -> count 7
     test {
         var count = 0
@@ -337,7 +337,7 @@ Test FmxBoolCountInLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test FmxBoolFalseCountInLoop {
+construct FmxBoolFalseCountInLoop() extends Test {
     // Bool=false never increments -> 0
     test {
         var count = 0
@@ -355,31 +355,31 @@ Test FmxBoolFalseCountInLoop {
 // Tests: Float bridge
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxFloatAdd {
+construct FmxFloatAdd() extends Test {
     // 2.0 + 3.0 == 5.0
     test { return fmxNativeFloatEq(fmxNativeFloatAdd(2.0, 3.0), 5.0) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxFloatMul {
+construct FmxFloatMul() extends Test {
     // 4.0 * 5.0 == 20.0
     test { return fmxNativeFloatEq(fmxNativeFloatMul(4.0, 5.0), 20.0) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxFloatSub {
+construct FmxFloatSub() extends Test {
     // 10.0 - 3.0 == 7.0
     test { return fmxNativeFloatEq(fmxNativeFloatSub(10.0, 3.0), 7.0) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxFloatDiv {
+construct FmxFloatDiv() extends Test {
     // 12.0 / 4.0 == 3.0
     test { return fmxNativeFloatEq(fmxNativeFloatDiv(12.0, 4.0), 3.0) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxFloatChain {
+construct FmxFloatChain() extends Test {
     // (1.0 + 2.0) * 4.0 == 12.0
     test {
         let a = fmxNativeFloatAdd(1.0, 2.0)
@@ -389,7 +389,7 @@ Test FmxFloatChain {
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test FmxFloatMulAdd {
+construct FmxFloatMulAdd() extends Test {
     // 2.0 * 3.0 + 4.0 == 10.0
     test {
         let x = fmxNativeFloatMul(2.0, 3.0)
@@ -403,31 +403,31 @@ Test FmxFloatMulAdd {
 // Tests: @Native calling @Runtime (N->R single hop)
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxNRDouble {
+construct FmxNRDouble() extends Test {
     // N->R: 21*2 = 42
     test { return fmxNativeCallDouble(21) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxNRTriple {
+construct FmxNRTriple() extends Test {
     // N->R: 14*3 = 42
     test { return fmxNativeCallTriple(14) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxNRAddFive {
+construct FmxNRAddFive() extends Test {
     // N->R: 37+5 = 42
     test { return fmxNativeCallAddFive(37) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxNRChain {
+construct FmxNRChain() extends Test {
     // N->R->R: fmxNativeCallDouble(fmxNativeCallDouble(10)) = double(20) = 40
     test { return fmxNativeCallDouble(fmxNativeCallDouble(10)) }
     expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
 }
 
-Test FmxNRMixed {
+construct FmxNRMixed() extends Test {
     // double(5)=10, triple(4)=12, 10+12=22
     test {
         let a = fmxNativeCallDouble(5)
@@ -441,25 +441,25 @@ Test FmxNRMixed {
 // Tests: NRN multi-hop (@Native -> @Runtime -> @Native)
 // ════════════════════════════════════════════════════════════════════════════
 
-Test FmxHopNRNAdd {
+construct FmxHopNRNAdd() extends Test {
     // N->R->N: 20+22 = 42
     test { return fmxHopNRNAdd(20, 22) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxHopNRNMul {
+construct FmxHopNRNMul() extends Test {
     // N->R->N: 6*7 = 42
     test { return fmxHopNRNMul(6, 7) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FmxHopNRNSquare {
+construct FmxHopNRNSquare() extends Test {
     // N->R->N: 7^2 = 49
     test { return fmxHopNRNSquare(7) }
     expect { let e: Result<Int, TestFailure> = .Ok(49); return e }
 }
 
-Test FmxHopNRNChain {
+construct FmxHopNRNChain() extends Test {
     // fmxNativeAdd(3,4)=7, fmxNativeAdd(5,6)=11, NRN(7,11)=18
     test {
         let a = fmxNativeAdd(3, 4)
@@ -469,7 +469,7 @@ Test FmxHopNRNChain {
     expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
 }
 
-Test FmxDeepHopNRNR {
+construct FmxDeepHopNRNR() extends Test {
     // R->N->R->N->R: NRNSquare(5)=25, NativeCallDouble(25)=50
     test {
         let a = fmxHopNRNSquare(5)

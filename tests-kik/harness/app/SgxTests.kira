@@ -41,7 +41,7 @@ function sgxEchoFlag(value: Bool): Bool {
 // string_array_overwrite_no_leak
 // ---------------------------------------------------------------------------
 
-Test SgxArrayOverwriteNoLeak {
+construct SgxArrayOverwriteNoLeak() extends Test {
     test {
         let head = "item"
         let sep = "-"
@@ -67,27 +67,27 @@ Test SgxArrayOverwriteNoLeak {
 // string_concat_parity
 // ---------------------------------------------------------------------------
 
-Test SgxConcatSimple {
+construct SgxConcatSimple() extends Test {
     test { return "a" + "b" }
     expect { let e: Result<String, TestFailure> = .Ok("ab"); return e }
 }
 
-Test SgxConcatEmptyLeft {
+construct SgxConcatEmptyLeft() extends Test {
     test { return "" + "x" }
     expect { let e: Result<String, TestFailure> = .Ok("x"); return e }
 }
 
-Test SgxConcatEmptyRight {
+construct SgxConcatEmptyRight() extends Test {
     test { return "y" + "" }
     expect { let e: Result<String, TestFailure> = .Ok("y"); return e }
 }
 
-Test SgxConcatGreet {
+construct SgxConcatGreet() extends Test {
     test { return sgxGreet("kira") }
     expect { let e: Result<String, TestFailure> = .Ok("hello, kira"); return e }
 }
 
-Test SgxConcatLoopAccum {
+construct SgxConcatLoopAccum() extends Test {
     test {
         var s = ""
         var i = 0
@@ -100,7 +100,7 @@ Test SgxConcatLoopAccum {
     expect { let e: Result<String, TestFailure> = .Ok("abababab"); return e }
 }
 
-Test SgxConcatLoopEquality {
+construct SgxConcatLoopEquality() extends Test {
     test {
         var s = ""
         var i = 0
@@ -113,7 +113,7 @@ Test SgxConcatLoopEquality {
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxConcatNested {
+construct SgxConcatNested() extends Test {
     test { return ("p" + "q") + ("r" + "s") }
     expect { let e: Result<String, TestFailure> = .Ok("pqrs"); return e }
 }
@@ -122,7 +122,7 @@ Test SgxConcatNested {
 // string_count_parity
 // ---------------------------------------------------------------------------
 
-Test SgxCountTitle {
+construct SgxCountTitle() extends Test {
     test {
         let title = "KIRA"
         return title.count
@@ -130,7 +130,7 @@ Test SgxCountTitle {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test SgxCountSubtitle {
+construct SgxCountSubtitle() extends Test {
     test {
         let subtitle = "UI FOUNDATION"
         return subtitle.count
@@ -142,37 +142,37 @@ Test SgxCountSubtitle {
 // string_equality_parity
 // ---------------------------------------------------------------------------
 
-Test SgxEqAlphaAlpha {
+construct SgxEqAlphaAlpha() extends Test {
     test { return "alpha" == "alpha" }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxEqAlphaBeta {
+construct SgxEqAlphaBeta() extends Test {
     test { return "alpha" == "beta" }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test SgxNeqAlphaBeta {
+construct SgxNeqAlphaBeta() extends Test {
     test { return "alpha" != "beta" }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxEqEmptyEmpty {
+construct SgxEqEmptyEmpty() extends Test {
     test { return "" == "" }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxEqPrefixMismatch {
+construct SgxEqPrefixMismatch() extends Test {
     test { return "a" == "ab" }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test SgxEqPickComputed {
+construct SgxEqPickComputed() extends Test {
     test { return sgxPick(0) == "alpha" }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxEqPickPick {
+construct SgxEqPickPick() extends Test {
     test { return sgxPick(1) == sgxPick(1) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
@@ -181,12 +181,12 @@ Test SgxEqPickPick {
 // call_temp_string_count_parity
 // ---------------------------------------------------------------------------
 
-Test SgxCallTempCountHello {
+construct SgxCallTempCountHello() extends Test {
     test { return sgxPickWord(0).count }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test SgxCallTempCountWorldwide {
+construct SgxCallTempCountWorldwide() extends Test {
     test { return sgxPickWord(1).count }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
@@ -195,22 +195,22 @@ Test SgxCallTempCountWorldwide {
 // call_value_parity
 // ---------------------------------------------------------------------------
 
-Test SgxCallEchoText {
+construct SgxCallEchoText() extends Test {
     test { return sgxEchoText("hello parity") }
     expect { let e: Result<String, TestFailure> = .Ok("hello parity"); return e }
 }
 
-Test SgxCallAddPair {
+construct SgxCallAddPair() extends Test {
     test { return sgxAddPair(20, 22) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test SgxCallEchoFlagTrue {
+construct SgxCallEchoFlagTrue() extends Test {
     test { return sgxEchoFlag(true) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test SgxCallEchoFlagFalse {
+construct SgxCallEchoFlagFalse() extends Test {
     test { return sgxEchoFlag(false) }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }

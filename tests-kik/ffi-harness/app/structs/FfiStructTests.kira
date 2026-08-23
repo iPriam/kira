@@ -33,7 +33,7 @@ function fsbInvoke(callback: (Int) -> Int, seed: Int) -> Int {
     return callback(seed)
 }
 
-Test FsbStructReturnByValue {
+construct FsbStructReturnByValue() extends Test {
     test {
         let s = fsbRootSize()
         return s.width + s.height
@@ -41,7 +41,7 @@ Test FsbStructReturnByValue {
     expect { let e: Result<Int, TestFailure> = .Ok(560); return e }
 }
 
-Test FsbStructBorrowIntoRuntime {
+construct FsbStructBorrowIntoRuntime() extends Test {
     test {
         let s = fsbRootSize()
         return fsbArea(s)
@@ -49,7 +49,7 @@ Test FsbStructBorrowIntoRuntime {
     expect { let e: Result<Int, TestFailure> = .Ok(76800); return e }
 }
 
-Test FsbScalarRoundTripLoop {
+construct FsbScalarRoundTripLoop() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -63,7 +63,7 @@ Test FsbScalarRoundTripLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(5000); return e }
 }
 
-Test FsbNativeCallbackBridge {
+construct FsbNativeCallbackBridge() extends Test {
     test {
         let cb: (Int) -> Int = { seed in
             let inner = fsbRootSize()

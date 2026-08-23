@@ -79,11 +79,11 @@ fn a_normal_foundation_app_checks_and_runs_without_test_runner_expansion() {
 fn harness_owned_test_declarations_compile_and_run_in_test_mode() {
     let path = package(
         "import Foundation\n\
-         Test SumsToTen {\n\
+         construct SumsToTen() extends Test {\n\
              test { return 4 + 6 }\n\
              expect { let e: Result<Int, TestFailure> = .Ok(10) return e }\n\
          }\n\
-         Test DoesNot {\n\
+         construct DoesNot() extends Test {\n\
              test { return 1 }\n\
              expect { let e: Result<Int, TestFailure> = .Ok(2) return e }\n\
          }\n",
@@ -107,7 +107,7 @@ fn harness_owned_test_declarations_compile_and_run_in_test_mode() {
 fn harness_owned_dispatch_selects_one_test_in_test_mode() {
     let path = package(
         "import Foundation\n\
-         Test SumsToTen {\n\
+         construct SumsToTen() extends Test {\n\
              test { return 4 + 6 }\n\
              expect { let e: Result<Int, TestFailure> = .Ok(10) return e }\n\
          }\n",

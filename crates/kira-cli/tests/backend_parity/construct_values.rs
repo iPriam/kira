@@ -19,7 +19,7 @@ construct Style {
     let score: Int { additionalEffect + (liquidGlass.material == .XHigh ? 10 : 0) }
 }
 
-Style Base {
+construct Base() extends Style {
     let additionalEffect = 3
     let liquidGlass = Glass {}
 }
@@ -48,7 +48,7 @@ construct Theme {
     let value: Int = 0
 }
 
-Theme Concrete {
+construct Concrete() extends Theme {
     let value = 3
     let doubled = value + 1
 }
@@ -71,7 +71,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf(value: Int) {
+construct Leaf(value: Int) extends Child {
     let result: Int { value }
 }
 
@@ -80,7 +80,7 @@ construct Stack {
     let result: Int { child.value }
 }
 
-Stack Wrap {
+construct Wrap() extends Stack {
     let child: some Child
 }
 
@@ -107,11 +107,11 @@ construct Style {
     let appearance: Int = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 
-Style Light {
+construct Light() extends Style {
     let colors = 9
     let appearance = 5
 }
@@ -142,7 +142,7 @@ construct Style {
     let appearance: Int = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 
@@ -174,7 +174,7 @@ construct Style {
     let appearance: Int = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 
@@ -208,7 +208,7 @@ construct Widget {
     @Required let body: Int
 }
 
-Widget Sliding(value: Float, onChange: (Float) -> Void) {
+construct Sliding(value: Float, onChange: (Float) -> Void) extends Widget {
     let body: Int = 1
 }
 
@@ -217,7 +217,7 @@ construct Style {
     let appearance: Int = 2
 }
 
-Style Base {
+construct Base() extends Style {
     let colors = 7
 }
 

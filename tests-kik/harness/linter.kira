@@ -10,7 +10,7 @@ import Foundation
 // 700 lines is the hard ceiling for every `.kira` and `.ksl` file. A suite that
 // outgrows it splits at a section banner, which is where its cases already
 // group.
-Lint FileLength {
+construct FileLength() extends Lint {
     let code: String = "KLINT003"
     let severity: String = "warning"
     let enabled: Bool = true
@@ -24,7 +24,7 @@ Lint FileLength {
 // Off here, unlike in the library packages: a test corpus deliberately writes
 // the long spelling in places, because the qualified form is itself one of the
 // things the compiler has to keep accepting.
-Lint QualifiedVariant {
+construct QualifiedVariant() extends Lint {
     let code: String = "KLINT001"
     let severity: String = "warning"
     let enabled: Bool = false
@@ -32,7 +32,7 @@ Lint QualifiedVariant {
 
 // A `while` counting an index by hand, where a `for` does it for you. Off for
 // the same reason: the corpus tests both spellings on purpose.
-Lint ManualIndexLoop {
+construct ManualIndexLoop() extends Lint {
     let code: String = "KLINT002"
     let severity: String = "warning"
     let enabled: Bool = false

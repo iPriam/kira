@@ -509,7 +509,7 @@ expand(declarations: [Declaration]) -> Syntax {
 }
 }
 
-Lint QualifiedVariant {
+construct QualifiedVariant() extends Lint {
 let enabled = true
 }
 

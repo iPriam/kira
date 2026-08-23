@@ -64,7 +64,7 @@ function faxReadBank(seed: Int) -> Int {
     return total
 }
 
-Test FaxInlineArrayCrossesBackFromNative {
+construct FaxInlineArrayCrossesBackFromNative() extends Test {
     // 3 + 30 + 0 + 6000
     test { return faxReadBank(3) }
     expect { let e: Result<Int, TestFailure> = .Ok(6033); return e }
@@ -91,7 +91,7 @@ function faxDriveTwice(state: RawPtr) -> Int {
     return first * 10 + second
 }
 
-Test FaxCallbackStateSurvivesNativeReentry {
+construct FaxCallbackStateSurvivesNativeReentry() extends Test {
     test {
         var total = 0
         let boxed = nativeState(FaxCounter { label: "kept" })
@@ -117,7 +117,7 @@ function faxCallEach(f: (Int) -> Int, a: Int, b: Int) -> Int {
     return f(a) + f(b)
 }
 
-Test FaxCaptureCellIsOneBoxAcrossTheSeam {
+construct FaxCaptureCellIsOneBoxAcrossTheSeam() extends Test {
     test {
         var running = 0
         // The closure writes the frame's `var`, and native code calls it twice.
@@ -151,7 +151,7 @@ function faxDescribe(shape: FaxShape) -> Int {
     }
 }
 
-Test FaxNestedPayloadCrossesIntoNative {
+construct FaxNestedPayloadCrossesIntoNative() extends Test {
     test {
         var nest = FaxNest {}
         nest.rows.append([1, 2])
@@ -173,7 +173,7 @@ function faxRoundTrip(nest: FaxNest) -> FaxNest {
     return move out
 }
 
-Test FaxAggregateSurvivesTwoCrossingsInOneExpression {
+construct FaxAggregateSurvivesTwoCrossingsInOneExpression() extends Test {
     test {
         var seed = FaxNest {}
         seed.rows.append([1])
@@ -204,7 +204,7 @@ function faxScaleRow(row: borrow mut [Int], by: Int) {
     return
 }
 
-Test FaxBorrowMutArraySurvivesRepeatedCrossings {
+construct FaxBorrowMutArraySurvivesRepeatedCrossings() extends Test {
     test {
         var row = [1, 2, 3]
         faxScaleRow(row, 2)
@@ -236,7 +236,7 @@ function faxInner(state: RawPtr, depth: Int) -> Int {
     return faxMiddle(state, depth)
 }
 
-Test FaxStateWrittenAtEveryLevelOfASandwich {
+construct FaxStateWrittenAtEveryLevelOfASandwich() extends Test {
     test {
         let boxed = nativeState(FaxCounter { label: "deep" })
         let handle = nativeUserData(boxed)

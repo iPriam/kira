@@ -114,11 +114,6 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
             | TokenKind::Enum
             | TokenKind::Construct
             | TokenKind::Function => {}
-            // A construct-backed declaration, in both spellings: `Family
-            // Name(params) {` and the parameterless `Family Name {`.
-            TokenKind::Identifier
-                if file.is_ident(index + 1)
-                    && matches!(file.kind(index + 2), TokenKind::LParen | TokenKind::LBrace) => {}
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 match file.match_close(index) {
                     Some(close) => index = close + 1,

@@ -235,11 +235,11 @@ construct Measure {
     @Required function reading() -> Any
 }
 
-Measure Depth {
+construct Depth() extends Measure {
     reading { 12 }
 }
 
-Measure Label {
+construct Label() extends Measure {
     reading { "deep" }
 }
 
@@ -273,13 +273,13 @@ construct Node {
     }
 }
 
-Node Leaf() {
+construct Leaf() extends Node {
     function depth() -> Int {
         return 1
     }
 }
 
-Node Branch() {
+construct Branch() extends Node {
     tree {
         Leaf()
     }

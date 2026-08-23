@@ -27,7 +27,8 @@ pub(crate) enum DeclarationKind {
     Enum,
     /// `construct Family { … }`
     Construct,
-    /// A construct-backed declaration: `Family Name(params) { … }`.
+    /// A construct-backed declaration: `construct Name(params) extends Family
+    /// { … }`.
     Form,
     /// `function name(…) { … }`
     Function,
@@ -211,18 +212,14 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         TokenKind::Struct => (DeclarationKind::Struct, head + 1),
         TokenKind::Class => (DeclarationKind::Class, head + 1),
         TokenKind::Enum => (DeclarationKind::Enum, head + 1),
-        TokenKind::Construct => (DeclarationKind::Construct, head + 1),
+        // One keyword, two forms: a parameter list makes it a declaration
+        // backed by the family its `extends` clause names, and its absence
+        // makes it the family template.
+        TokenKind::Construct => match file.kind(head + 2) {
+            TokenKind::LParen => (DeclarationKind::Form, head + 1),
+            _ => (DeclarationKind::Construct, head + 1),
+        },
         TokenKind::Function => (DeclarationKind::Function, head + 1),
-        // A construct-backed declaration: `Family Name(params) { … }`, and the
-        // parameterless `Family Name { … }` a family with no construction
-        // inputs is written with. Both are two identifiers where every other
-        // declaration form opens with a keyword.
-        TokenKind::Identifier
-            if file.is_ident(head + 1)
-                && matches!(file.kind(head + 2), TokenKind::LParen | TokenKind::LBrace) =>
-        {
-            (DeclarationKind::Form, head + 1)
-        }
         _ => (DeclarationKind::Other, head),
     };
     let name = if file.is_ident(name_index) {
@@ -230,11 +227,11 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
     } else {
         String::new()
     };
-    // The family sits where every other form has its keyword.
-    let family = if kind == DeclarationKind::Form {
-        file.text_at(head).to_owned()
-    } else {
-        String::new()
+    // The family a backed declaration is written against, read off its
+    // `extends` clause.
+    let family = match kind {
+        DeclarationKind::Form => backing_family(file, name_index),
+        _ => String::new(),
     };
 
     // Where the declaration ends: at its `{ … }` body, or at the `;` a bodyless
@@ -386,6 +383,23 @@ fn scan_annotations(file: &Lexed<'_>, start: usize) -> (Vec<Annotation>, usize) 
         index = last + 1;
     }
     (annotations, index)
+}
+
+/// The family named by the `extends` clause of the declaration whose name sits
+/// at `name_index`.
+///
+/// Empty when the header names none, which is a declaration the parser has
+/// already refused; the scan answers rather than failing, so a macro run over a
+/// file with one mistake in it still sees every other declaration.
+fn backing_family(file: &Lexed<'_>, name_index: usize) -> String {
+    let mut index = name_index + 1;
+    while !matches!(file.kind(index), TokenKind::LBrace | TokenKind::Eof) {
+        if file.kind(index) == TokenKind::Extends && file.is_ident(index + 1) {
+            return file.text_at(index + 1).to_owned();
+        }
+        index += 1;
+    }
+    String::new()
 }
 
 /// Scans a construct family's `lifecycle { … }` section, if it has one.
@@ -875,7 +889,7 @@ mod tests {
     #[test]
     fn a_field_annotation_is_preserved() {
         let declaration = scan_text(
-            "MfxPanel Demo() {\n    @Tracked var count: Int = 7\n    let body: Int = 1\n}\n",
+            "construct Demo() extends MfxPanel {\n    @Tracked var count: Int = 7\n    let body: Int = 1\n}\n",
         );
         assert_eq!(declaration.kind, DeclarationKind::Form);
         assert_eq!(declaration.name, "Demo");
@@ -888,7 +902,7 @@ mod tests {
     #[test]
     fn a_form_field_stops_before_a_named_rule_body() {
         let declaration = scan_text(
-            "Widget DashboardShell() {\n                @State var status: String = \"ready\"\n\n                body {\n                    Text(status)\n                }\n            }",
+            "construct DashboardShell() extends Widget {\n                @State var status: String = \"ready\"\n\n                body {\n                    Text(status)\n                }\n            }",
         );
 
         assert_eq!(declaration.fields.len(), 1);
@@ -903,7 +917,7 @@ mod tests {
     #[test]
     fn a_form_field_keeps_a_braced_initializer_before_a_named_rule() {
         let declaration = scan_text(
-            "Widget DashboardShell() {\n                @State var model: Model = Model { value: 1 }\n\n                body {\n                    Text(\"ready\")\n                }\n            }",
+            "construct DashboardShell() extends Widget {\n                @State var model: Model = Model { value: 1 }\n\n                body {\n                    Text(\"ready\")\n                }\n            }",
         );
 
         assert_eq!(declaration.fields.len(), 1);
@@ -947,8 +961,9 @@ mod tests {
         // `let enabled = true` has no written type, so the `=` is the first
         // token after the name — and the initializer is what follows it, not
         // the assignment itself.
-        let declaration =
-            scan_text("Lint Entry {\n    let enabled = true\n    let code = \"K1\"\n}\n");
+        let declaration = scan_text(
+            "construct Entry() extends Lint {\n    let enabled = true\n    let code = \"K1\"\n}\n",
+        );
         assert_eq!(declaration.fields[0].type_text, "");
         assert_eq!(declaration.fields[0].initializer, "true");
         assert_eq!(declaration.fields[1].initializer, "\"K1\"");

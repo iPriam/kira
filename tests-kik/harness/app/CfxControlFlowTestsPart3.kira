@@ -9,7 +9,7 @@ import Foundation
 // Combined control-flow folds
 // ---------------------------------------------------------------------------
 
-Test CfxCombinedFibSwitch {
+construct CfxCombinedFibSwitch() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -36,7 +36,7 @@ Test CfxCombinedFibSwitch {
     expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
 }
 
-Test CfxCombinedForIfRecurse {
+construct CfxCombinedForIfRecurse() extends Test {
     test {
         var acc = 0
         let ns: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -52,7 +52,7 @@ Test CfxCombinedForIfRecurse {
     expect { let e: Result<Int, TestFailure> = .Ok(125); return e }
 }
 
-Test CfxCombinedWhileForMatch {
+construct CfxCombinedWhileForMatch() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -74,7 +74,7 @@ Test CfxCombinedWhileForMatch {
     expect { let e: Result<Int, TestFailure> = .Ok(165); return e }
 }
 
-Test CfxCombinedNestedWhileSwitch {
+construct CfxCombinedNestedWhileSwitch() extends Test {
     test {
         var acc = 0
         var r = 0
@@ -114,7 +114,7 @@ Test CfxCombinedNestedWhileSwitch {
     expect { let e: Result<Int, TestFailure> = .Ok(91); return e }
 }
 
-Test CfxCombinedGaussCheck {
+construct CfxCombinedGaussCheck() extends Test {
     test {
         let n = 50
         let loop_sum = cfxSumRange(1, n)
@@ -124,7 +124,7 @@ Test CfxCombinedGaussCheck {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxCombinedFactorialVsLoop {
+construct CfxCombinedFactorialVsLoop() extends Test {
     test {
         let rec_val = cfxFactorial(8)
         var loop_val = 1
@@ -138,7 +138,7 @@ Test CfxCombinedFactorialVsLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxForInColorFold {
+construct CfxForInColorFold() extends Test {
     test {
         var acc = 0
         let cs: [CfxColor] = [.Red, .Blue, .Green, .Blue, .Red]
@@ -151,7 +151,7 @@ Test CfxForInColorFold {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test CfxNestedIfEarlyReturn {
+construct CfxNestedIfEarlyReturn() extends Test {
     test {
         var i = 1
         while i <= 100 {
@@ -170,7 +170,7 @@ Test CfxNestedIfEarlyReturn {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxLoopBuildAndScanArray {
+construct CfxLoopBuildAndScanArray() extends Test {
     test {
         var xs: [Int] = []
         var i = 0
@@ -191,7 +191,7 @@ Test CfxLoopBuildAndScanArray {
     expect { let e: Result<Int, TestFailure> = .Ok(127); return e }
 }
 
-Test CfxSwitchInsideFor {
+construct CfxSwitchInsideFor() extends Test {
     test {
         var acc = 0
         for x in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
@@ -220,7 +220,7 @@ Test CfxSwitchInsideFor {
 // TRAP tests
 // ---------------------------------------------------------------------------
 
-Test CfxTrapArrayOOB {
+construct CfxTrapArrayOOB() extends Test {
     test {
         let xs: [Int] = [1, 2, 3]
         let _ = xs[10]
@@ -229,7 +229,7 @@ Test CfxTrapArrayOOB {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapDivZero {
+construct CfxTrapDivZero() extends Test {
     test {
         let a = 42
         let b = 0
@@ -238,7 +238,7 @@ Test CfxTrapDivZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapModZero {
+construct CfxTrapModZero() extends Test {
     test {
         let a = 100
         let b = 0
@@ -247,7 +247,7 @@ Test CfxTrapModZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBEmptyArray {
+construct CfxTrapOOBEmptyArray() extends Test {
     test {
         let xs: [Int] = []
         let _ = xs[0]
@@ -256,7 +256,7 @@ Test CfxTrapOOBEmptyArray {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBNegativeIndex {
+construct CfxTrapOOBNegativeIndex() extends Test {
     test {
         let xs: [Int] = [1, 2, 3]
         let _ = xs[0 - 1]
@@ -265,7 +265,7 @@ Test CfxTrapOOBNegativeIndex {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBExactEnd {
+construct CfxTrapOOBExactEnd() extends Test {
     test {
         let xs: [Int] = [10, 20, 30]
         let _ = xs[3]
@@ -274,7 +274,7 @@ Test CfxTrapOOBExactEnd {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapDivZeroInLoop {
+construct CfxTrapDivZeroInLoop() extends Test {
     test {
         var i = 5
         while i >= 0 {
@@ -286,7 +286,7 @@ Test CfxTrapDivZeroInLoop {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapModZeroInLoop {
+construct CfxTrapModZeroInLoop() extends Test {
     test {
         var i = 3
         while i >= 0 {
@@ -298,7 +298,7 @@ Test CfxTrapModZeroInLoop {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBInLoop {
+construct CfxTrapOOBInLoop() extends Test {
     test {
         let xs: [Int] = [1, 2, 3, 4, 5]
         var i = 0
@@ -311,7 +311,7 @@ Test CfxTrapOOBInLoop {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBAfterAppend {
+construct CfxTrapOOBAfterAppend() extends Test {
     test {
         var xs: [Int] = []
         xs.append(1)
@@ -322,7 +322,7 @@ Test CfxTrapOOBAfterAppend {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapDivZeroAfterBranch {
+construct CfxTrapDivZeroAfterBranch() extends Test {
     test {
         var x = 10
         if x > 5 {
@@ -332,7 +332,7 @@ Test CfxTrapDivZeroAfterBranch {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBFromFor {
+construct CfxTrapOOBFromFor() extends Test {
     test {
         let xs: [Int] = [1, 2, 3]
         let idx: [Int] = [0, 1, 2, 5]
@@ -344,7 +344,7 @@ Test CfxTrapOOBFromFor {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapModZeroSwitch {
+construct CfxTrapModZeroSwitch() extends Test {
     test {
         var d = 1
         var i = 0
@@ -362,7 +362,7 @@ Test CfxTrapModZeroSwitch {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapDivZeroRecursive {
+construct CfxTrapDivZeroRecursive() extends Test {
     test {
         let n = cfxFactorial(0) - 1
         return 10 / n
@@ -371,7 +371,7 @@ Test CfxTrapDivZeroRecursive {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test CfxTrapOOBLargeIndex {
+construct CfxTrapOOBLargeIndex() extends Test {
     test {
         let xs: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         let _ = xs[1000000]
@@ -384,7 +384,7 @@ Test CfxTrapOOBLargeIndex {
 // Additional edge/misc tests
 // ---------------------------------------------------------------------------
 
-Test CfxWhileNoIterations {
+construct CfxWhileNoIterations() extends Test {
     test {
         var acc = 99
         var i = 10
@@ -397,7 +397,7 @@ Test CfxWhileNoIterations {
     expect { let e: Result<Int, TestFailure> = .Ok(99); return e }
 }
 
-Test CfxForInEmpty {
+construct CfxForInEmpty() extends Test {
     test {
         var acc = 77
         let empty: [Int] = []
@@ -409,7 +409,7 @@ Test CfxForInEmpty {
     expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
 }
 
-Test CfxIfOnlyThen {
+construct CfxIfOnlyThen() extends Test {
     test {
         var x = 0
         if true {
@@ -419,7 +419,7 @@ Test CfxIfOnlyThen {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test CfxIfFalseSkipsThen {
+construct CfxIfFalseSkipsThen() extends Test {
     test {
         var x = 7
         if false {
@@ -429,13 +429,13 @@ Test CfxIfFalseSkipsThen {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test CfxRecursionPow2_20 {
+construct CfxRecursionPow2_20() extends Test {
     test { return cfxPow(2, 20) }
     // 1048576
     expect { let e: Result<Int, TestFailure> = .Ok(1048576); return e }
 }
 
-Test CfxMatchDrivenBySwitchResult {
+construct CfxMatchDrivenBySwitchResult() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -461,7 +461,7 @@ Test CfxMatchDrivenBySwitchResult {
     expect { let e: Result<Int, TestFailure> = .Ok(75); return e }
 }
 
-Test CfxDoubleForInCount {
+construct CfxDoubleForInCount() extends Test {
     test {
         let xs: [Int] = [2, 4, 6, 8, 10]
         let ys: [Int] = [1, 3, 5, 7, 9]
@@ -480,7 +480,7 @@ Test CfxDoubleForInCount {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxSumOfFibs {
+construct CfxSumOfFibs() extends Test {
     test {
         var s = 0
         var i = 0
@@ -495,7 +495,7 @@ Test CfxSumOfFibs {
     expect { let e: Result<Int, TestFailure> = .Ok(1596); return e }
 }
 
-Test CfxGcdArray {
+construct CfxGcdArray() extends Test {
     test {
         var g = cfxGcd(120, 168)
         g = cfxGcd(g, 252)
@@ -505,7 +505,7 @@ Test CfxGcdArray {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test CfxRangeForSum {
+construct CfxRangeForSum() extends Test {
     test {
         var s = 0
         for i in 0..5 {
@@ -517,7 +517,7 @@ Test CfxRangeForSum {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test CfxRangeForOffsetStart {
+construct CfxRangeForOffsetStart() extends Test {
     test {
         var s = 0
         for i in 2..6 {
@@ -529,7 +529,7 @@ Test CfxRangeForOffsetStart {
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
 }
 
-Test CfxRangeForEmptyHalfOpen {
+construct CfxRangeForEmptyHalfOpen() extends Test {
     test {
         var count = 0
         for i in 5..5 {
@@ -541,7 +541,7 @@ Test CfxRangeForEmptyHalfOpen {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxRangeForComputedBounds {
+construct CfxRangeForComputedBounds() extends Test {
     test {
         let lo = 3
         let hi = lo + 4
@@ -555,7 +555,7 @@ Test CfxRangeForComputedBounds {
     expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
 }
 
-Test CfxRangeForNested {
+construct CfxRangeForNested() extends Test {
     test {
         var s = 0
         for i in 0..3 {
@@ -569,7 +569,7 @@ Test CfxRangeForNested {
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test CfxRangeForMatchesWhile {
+construct CfxRangeForMatchesWhile() extends Test {
     test {
         let n = 7
         var fromFor = 0
@@ -588,7 +588,7 @@ Test CfxRangeForMatchesWhile {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxRangeForBreak {
+construct CfxRangeForBreak() extends Test {
     test {
         var s = 0
         for i in 0..10 {

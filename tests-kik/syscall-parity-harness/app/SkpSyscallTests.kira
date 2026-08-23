@@ -106,14 +106,14 @@ function skpPpollFault() -> Result<Int, SkpError> {
 
 // ─── The decode ─────────────────────────────────────────────────────────────
 
-Test SkpDecodeReadsASmallNegativeAsErrno {
+construct SkpDecodeReadsASmallNegativeAsErrno() extends Test {
     test { return skpErrno(skpDecode(-2)) }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
 // One past the boundary is a value, not a failure — the case a plain
 // `answer < 0` test gets wrong.
-Test SkpDecodeKeepsALargeNegativeValue {
+construct SkpDecodeKeepsALargeNegativeValue() extends Test {
     test { return skpValue(skpDecode(-4096)) }
     expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
 }
@@ -123,12 +123,12 @@ Test SkpDecodeKeepsALargeNegativeValue {
 // The success path with nothing to show for it: a `write` of no bytes takes
 // none and says so, which is a real round trip into the kernel without output
 // landing in the middle of the driver's report.
-Test SkpWriteOfNoBytesTakesNone {
+construct SkpWriteOfNoBytesTakesNone() extends Test {
     test { return skpValue(skpWrite(skpStdout(), "")) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test SkpWriteToABadDescriptorIsEbadf {
+construct SkpWriteToABadDescriptorIsEbadf() extends Test {
     test { return skpErrno(skpWrite(-1, "x")) }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
@@ -137,7 +137,7 @@ Test SkpWriteToABadDescriptorIsEbadf {
 // way. Worth asserting once on every engine: a host that decoded the answer
 // itself would make the interpreted call disagree with the emitted one here and
 // nowhere else.
-Test SkpTheRawEntryPointAnswersNegativeErrno {
+construct SkpTheRawEntryPointAnswersNegativeErrno() extends Test {
     test { return skpSysWrite(-1, "x", U64(1)) }
     expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
 }
@@ -147,7 +147,7 @@ Test SkpTheRawEntryPointAnswersNegativeErrno {
 // kernel reads as an enormous descriptor and answers `EBADF` for anyway, so the
 // number that tells the two apart is the count, and the count is why this
 // asserts the whole answer.
-Test SkpANarrowDescriptorIsSignExtendedIntoItsRegister {
+construct SkpANarrowDescriptorIsSignExtendedIntoItsRegister() extends Test {
     test { return skpSysWriteNarrowFd(-1, "x", U64(1)) }
     expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
 }
@@ -157,7 +157,7 @@ Test SkpANarrowDescriptorIsSignExtendedIntoItsRegister {
 // A real count and a null buffer, which the kernel never gets as far as
 // reading: the descriptor is checked first, so the answer is `EBADF` and not
 // the `EFAULT` a valid descriptor would have produced.
-Test SkpReadFromABadDescriptorIsEbadf {
+construct SkpReadFromABadDescriptorIsEbadf() extends Test {
     test { return skpErrno(skpRead(-1, RawPtr(0), 8)) }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
@@ -165,7 +165,7 @@ Test SkpReadFromABadDescriptorIsEbadf {
 // A zero count still reaches the kernel rather than being answered here: a
 // wrapper that shortcut it would report success for a descriptor that is not
 // open, which is the one answer a caller must not get.
-Test SkpReadOfNoBytesStillChecksTheDescriptor {
+construct SkpReadOfNoBytesStillChecksTheDescriptor() extends Test {
     test { return skpErrno(skpRead(-1, RawPtr(0), 0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
@@ -179,7 +179,7 @@ Test SkpReadOfNoBytesStillChecksTheDescriptor {
 
 // ─── Four arguments: `ppoll` ────────────────────────────────────────────────
 
-Test SkpPpollOverAnUnreadableArrayIsEfault {
+construct SkpPpollOverAnUnreadableArrayIsEfault() extends Test {
     test { return skpErrno(skpPpollFault()) }
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
 }

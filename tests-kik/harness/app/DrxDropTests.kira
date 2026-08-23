@@ -81,14 +81,14 @@ function drxChurn(rounds: Int) -> Int {
     return total
 }
 
-Test DrxAScopedValueIsStillOrdinaryToUse {
+construct DrxAScopedValueIsStillOrdinaryToUse() extends Test {
     test {
         return drxScoped(21)
     }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test DrxABorrowLeavesTheValueUsable {
+construct DrxABorrowLeavesTheValueUsable() extends Test {
     test {
         let held = DrxTrace(tag: 3)
         return drxRead(held) + held.tag
@@ -96,7 +96,7 @@ Test DrxABorrowLeavesTheValueUsable {
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
-Test DrxAMovedValueReachesTheCalleeWhole {
+construct DrxAMovedValueReachesTheCalleeWhole() extends Test {
     test {
         let held = DrxTrace(tag: 8)
         return drxConsume(move held)
@@ -104,7 +104,7 @@ Test DrxAMovedValueReachesTheCalleeWhole {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test DrxARetroactiveDropIsAnOrdinaryConformance {
+construct DrxARetroactiveDropIsAnOrdinaryConformance() extends Test {
     test {
         let held = DrxLate(tag: 4)
         return held.tag * 5
@@ -112,7 +112,7 @@ Test DrxARetroactiveDropIsAnOrdinaryConformance {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test DrxAContainerReleasesEveryDropItHolds {
+construct DrxAContainerReleasesEveryDropItHolds() extends Test {
     test {
         let pair = DrxPair(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
         return pair.first.tag + pair.second.tag
@@ -123,7 +123,7 @@ Test DrxAContainerReleasesEveryDropItHolds {
 // Churn: a heap-owning `Drop` type built and released 500 times, so a body that
 // leaked its members — or a release that ran none — scales into the harness
 // leak run.
-Test DrxChurningADropTypeLeaksNothing {
+construct DrxChurningADropTypeLeaksNothing() extends Test {
     test {
         return drxChurn(500)
     }

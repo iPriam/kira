@@ -105,7 +105,7 @@ impl Parser<'_> {
                 }
             }
             TokenKind::Construct => {
-                if let Some(declaration) = self.parse_construct_family() {
+                if let Some(declaration) = self.parse_construct() {
                     self.items.push(Item::Construct(declaration));
                 }
             }
@@ -115,20 +115,11 @@ impl Parser<'_> {
                 }
             }
             // `extend Family { ... }` leads with the contextual keyword
-            // `extend`, whose second token is an identifier and third a brace —
-            // the same shape a construct-backed declaration wears, so it is
-            // matched first.
+            // `extend`: an ordinary identifier everywhere else, and a
+            // declaration only when a name and then a `{` or a `:` follow it.
             TokenKind::Identifier if self.at_extend_block() => {
                 if let Some(declaration) = self.parse_extend() {
                     self.items.push(Item::Extend(declaration));
-                }
-            }
-            // `Family Name(params) { ... }` — a construct-backed declaration —
-            // is the one identifier-led top-level form. Anything else that
-            // starts with an identifier is still parse-don't-crash.
-            TokenKind::Identifier if self.at_construct_backed() => {
-                if let Some(declaration) = self.parse_construct_backed() {
-                    self.items.push(Item::Construct(declaration));
                 }
             }
             TokenKind::Identifier => self.parse_unsupported_item(),
@@ -647,13 +638,11 @@ fn unsupported_keyword(kind: TokenKind, text: &str) -> &'static str {
         TokenKind::Class => "class",
         TokenKind::Import => "import",
         // `Package` is a real declaration form this parser has not built.
-        // Every other identifier-led form is either a construct-backed
-        // declaration, matched before this, or an ordinary name — including
-        // `Test`, which is a construct family Foundation declares in Kira and
-        // this parser knows nothing about.
+        // Every other identifier-led form is an ordinary name: a declaration
+        // backed by a family is written `construct Name(…) extends Family`, so
+        // no identifier begins one.
         TokenKind::Identifier => match text {
             "Package" => "Package",
-            "construct" => "construct",
             _ => "declaration",
         },
         _ => "declaration",

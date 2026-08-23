@@ -13,7 +13,7 @@ class CkxCallbackApp {
     }
 }
 
-Test CkxCallbackBuilderStyleParity {
+construct CkxCallbackBuilderStyleParity() extends Test {
     test {
         var out: Int = 0
         let app = CkxCallbackApp()
@@ -27,7 +27,7 @@ Test CkxCallbackBuilderStyleParity {
 
 // ── callback_mutable_value_capture ────────────────────────────────────────────
 
-Test CkxCallbackMutableValueCapture {
+construct CkxCallbackMutableValueCapture() extends Test {
     test {
         var offset: Int = 1
         let printer: (Int) -> Void = { value in
@@ -49,7 +49,7 @@ function ckxMakePrinter(): (Int) -> Int {
     }
 }
 
-Test CkxCallbackReturnValueParity {
+construct CkxCallbackReturnValueParity() extends Test {
     test {
         let printer = ckxMakePrinter()
         return printer(5)
@@ -59,7 +59,7 @@ Test CkxCallbackReturnValueParity {
 
 // ── callback_value_capture ────────────────────────────────────────────────────
 
-Test CkxCallbackValueCapture {
+construct CkxCallbackValueCapture() extends Test {
     test {
         let offset: Int = 1
         let printer: (Int) -> Int = { value in
@@ -88,7 +88,7 @@ function ckxTrigger(box: borrow CkxHandlerBox) {
     return
 }
 
-Test CkxCallbackValueParity {
+construct CkxCallbackValueParity() extends Test {
     test {
         var out: Int = 0
         let callback: () -> Void = { in
@@ -147,7 +147,7 @@ function ckxRegister0(handler: () -> Void) {
     return
 }
 
-Test CkxTrailingCallbackCaptures {
+construct CkxTrailingCallbackCaptures() extends Test {
     test {
         var out: Int = 0
         let graphics = CkxGraphics()
@@ -193,7 +193,7 @@ function ckxRegisterMut(handler: (Int) -> Void) {
     return
 }
 
-Test CkxTrailingCallbackMutableCapture {
+construct CkxTrailingCallbackMutableCapture() extends Test {
     test {
         var offset: Int = 1
         ckxRegisterMut { value in
@@ -221,7 +221,7 @@ function ckxInvokeTwo(f1: (Int) -> Int, f2: (Int) -> Int, a: Int, b: Int) -> Int
     return f1(a) + f2(b)
 }
 
-Test CkxClosureExportDistinctDispatchSequential {
+construct CkxClosureExportDistinctDispatchSequential() extends Test {
     test {
         let a = 10
         let cbA: (Int) -> Int = { v in return v + a }
@@ -235,7 +235,7 @@ Test CkxClosureExportDistinctDispatchSequential {
     expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
 }
 
-Test CkxClosureExportDistinctDispatchTwo {
+construct CkxClosureExportDistinctDispatchTwo() extends Test {
     test {
         let p = 10
         let cbA: (Int) -> Int = { x in return x + p }

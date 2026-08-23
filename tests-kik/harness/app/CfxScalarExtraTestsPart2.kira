@@ -10,7 +10,7 @@ import Foundation
 // Boolean truth-table folds
 // ---------------------------------------------------------------------------
 
-Test CfxSBoolAndTable {
+construct CfxSBoolAndTable() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -31,7 +31,7 @@ Test CfxSBoolAndTable {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSBoolOrTable {
+construct CfxSBoolOrTable() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -52,7 +52,7 @@ Test CfxSBoolOrTable {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test CfxSBoolXorTable {
+construct CfxSBoolXorTable() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -73,7 +73,7 @@ Test CfxSBoolXorTable {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test CfxSBoolNandTable {
+construct CfxSBoolNandTable() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -94,7 +94,7 @@ Test CfxSBoolNandTable {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test CfxSBoolNorTable {
+construct CfxSBoolNorTable() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -115,7 +115,7 @@ Test CfxSBoolNorTable {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSBoolThreeVar {
+construct CfxSBoolThreeVar() extends Test {
     test {
         var trues = 0
         var a = 0
@@ -143,7 +143,7 @@ Test CfxSBoolThreeVar {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test CfxSBoolShortCircuit {
+construct CfxSBoolShortCircuit() extends Test {
     test {
         var sideEffect = 0
         let alwaysFalse = false
@@ -155,7 +155,7 @@ Test CfxSBoolShortCircuit {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxSBoolDeMorgan1 {
+construct CfxSBoolDeMorgan1() extends Test {
     test {
         var ok = 0
         var a = 0
@@ -178,7 +178,7 @@ Test CfxSBoolDeMorgan1 {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test CfxSBoolDeMorgan2 {
+construct CfxSBoolDeMorgan2() extends Test {
     test {
         var ok = 0
         var a = 0
@@ -204,17 +204,17 @@ Test CfxSBoolDeMorgan2 {
 // Ternary chains
 // ---------------------------------------------------------------------------
 
-Test CfxSTernarySimple {
+construct CfxSTernarySimple() extends Test {
     test { return 5 > 3 ? 100 : 200 }
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test CfxSTernaryFalse {
+construct CfxSTernaryFalse() extends Test {
     test { return 2 > 3 ? 100 : 200 }
     expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
 }
 
-Test CfxSTernaryNested {
+construct CfxSTernaryNested() extends Test {
     test {
         let x = 55
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
@@ -223,7 +223,7 @@ Test CfxSTernaryNested {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test CfxSTernaryNestedLow {
+construct CfxSTernaryNestedLow() extends Test {
     test {
         let x = 5
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
@@ -232,7 +232,7 @@ Test CfxSTernaryNestedLow {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSTernaryZeroPath {
+construct CfxSTernaryZeroPath() extends Test {
     test {
         let x = 0
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
@@ -241,7 +241,7 @@ Test CfxSTernaryZeroPath {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxSTernaryFoldLoop {
+construct CfxSTernaryFoldLoop() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -256,7 +256,7 @@ Test CfxSTernaryFoldLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxSTernaryBoolResult {
+construct CfxSTernaryBoolResult() extends Test {
     test {
         let x = 7
         let isLarge = x > 5 ? true : false
@@ -265,7 +265,7 @@ Test CfxSTernaryBoolResult {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSTernaryChainModulo {
+construct CfxSTernaryChainModulo() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -287,18 +287,18 @@ Test CfxSTernaryChainModulo {
 // Bit-ish arithmetic via % and /
 // ---------------------------------------------------------------------------
 
-Test CfxSModPow2 {
+construct CfxSModPow2() extends Test {
     test { return 255 % 16 }
     // 255 = 15*16 + 15 => 15
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxSDivPow2 {
+construct CfxSDivPow2() extends Test {
     test { return 256 / 16 }
     expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
 }
 
-Test CfxSDigitExtract {
+construct CfxSDigitExtract() extends Test {
     test {
         let n = 98765
         let d0 = n % 10
@@ -310,7 +310,7 @@ Test CfxSDigitExtract {
     expect { let e: Result<Int, TestFailure> = .Ok(567); return e }
 }
 
-Test CfxSDigitSumLoop {
+construct CfxSDigitSumLoop() extends Test {
     test {
         var n = 9999
         var s = 0
@@ -324,7 +324,7 @@ Test CfxSDigitSumLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
 }
 
-Test CfxSBitwiseMirrorDiv {
+construct CfxSBitwiseMirrorDiv() extends Test {
     test {
         var acc = 0
         var i = 1
@@ -338,7 +338,7 @@ Test CfxSBitwiseMirrorDiv {
     expect { let e: Result<Int, TestFailure> = .Ok(255); return e }
 }
 
-Test CfxSPow2Mod {
+construct CfxSPow2Mod() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -357,7 +357,7 @@ Test CfxSPow2Mod {
 // Float accumulation to Int checksums
 // ---------------------------------------------------------------------------
 
-Test CfxSFloatExactSum {
+construct CfxSFloatExactSum() extends Test {
     test {
         var f = 0.0
         var i = 0
@@ -371,7 +371,7 @@ Test CfxSFloatExactSum {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSFloatExactProduct {
+construct CfxSFloatExactProduct() extends Test {
     test {
         var f = 1.0
         var i = 0
@@ -385,7 +385,7 @@ Test CfxSFloatExactProduct {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSFloatCompareLoop {
+construct CfxSFloatCompareLoop() extends Test {
     test {
         var above = 0
         var f = 0.0
@@ -402,7 +402,7 @@ Test CfxSFloatCompareLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test CfxSFloatNegArith {
+construct CfxSFloatNegArith() extends Test {
     test {
         let a = (-3.5) + 1.5
         return a == (-2.0) ? 1 : 0
@@ -410,7 +410,7 @@ Test CfxSFloatNegArith {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSFloatDiv {
+construct CfxSFloatDiv() extends Test {
     test {
         let q = 9.0 / 4.0
         return q == 2.25 ? 1 : 0
@@ -418,7 +418,7 @@ Test CfxSFloatDiv {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSFloatMod {
+construct CfxSFloatMod() extends Test {
     test {
         let r = 9.0 % 4.0
         return r == 1.0 ? 1 : 0
@@ -426,7 +426,7 @@ Test CfxSFloatMod {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSFloatAccumChecksum {
+construct CfxSFloatAccumChecksum() extends Test {
     test {
         var f = 0.0
         var k = 0
@@ -447,7 +447,7 @@ Test CfxSFloatAccumChecksum {
 // Gauss / triangular / square-number cross-checks
 // ---------------------------------------------------------------------------
 
-Test CfxSGaussFormula10 {
+construct CfxSGaussFormula10() extends Test {
     test {
         let n = 10
         let loop_sum = cfxsSumTo(n)
@@ -457,7 +457,7 @@ Test CfxSGaussFormula10 {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSGaussFormula100 {
+construct CfxSGaussFormula100() extends Test {
     test {
         let n = 100
         let loop_sum = cfxsSumTo(n)
@@ -467,7 +467,7 @@ Test CfxSGaussFormula100 {
     expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
 }
 
-Test CfxSGaussFormula200 {
+construct CfxSGaussFormula200() extends Test {
     test {
         let n = 200
         return n * (n + 1) / 2
@@ -475,7 +475,7 @@ Test CfxSGaussFormula200 {
     expect { let e: Result<Int, TestFailure> = .Ok(20100); return e }
 }
 
-Test CfxSSquareSumFormula {
+construct CfxSSquareSumFormula() extends Test {
     test {
         let n = 10
         let loop_val = cfxsSquareSum(n)
@@ -485,7 +485,7 @@ Test CfxSSquareSumFormula {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSSquareSumValue {
+construct CfxSSquareSumValue() extends Test {
     test {
         return cfxsSquareSum(10)
     }
@@ -493,7 +493,7 @@ Test CfxSSquareSumValue {
     expect { let e: Result<Int, TestFailure> = .Ok(385); return e }
 }
 
-Test CfxSCubeSum {
+construct CfxSCubeSum() extends Test {
     test {
         var s = 0
         var i = 1
@@ -507,7 +507,7 @@ Test CfxSCubeSum {
     expect { let e: Result<Int, TestFailure> = .Ok(225); return e }
 }
 
-Test CfxSCubeSumEqualsSquareGauss {
+construct CfxSCubeSumEqualsSquareGauss() extends Test {
     test {
         // sum of cubes 1..n = (n*(n+1)/2)^2
         let n = 8
@@ -524,7 +524,7 @@ Test CfxSCubeSumEqualsSquareGauss {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxSTriangularNumbers {
+construct CfxSTriangularNumbers() extends Test {
     test {
         var s = 0
         var i = 1
@@ -539,7 +539,7 @@ Test CfxSTriangularNumbers {
     expect { let e: Result<Int, TestFailure> = .Ok(220); return e }
 }
 
-Test CfxSOblong {
+construct CfxSOblong() extends Test {
     test {
         var s = 0
         var i = 1
@@ -553,7 +553,7 @@ Test CfxSOblong {
     expect { let e: Result<Int, TestFailure> = .Ok(240); return e }
 }
 
-Test CfxSPentagonal {
+construct CfxSPentagonal() extends Test {
     test {
         // Pentagonal(n) = n*(3n-1)/2
         var s = 0
@@ -568,7 +568,7 @@ Test CfxSPentagonal {
     expect { let e: Result<Int, TestFailure> = .Ok(126); return e }
 }
 
-Test CfxSPerfectSquareCount {
+construct CfxSPerfectSquareCount() extends Test {
     test {
         var count = 0
         var i = 1

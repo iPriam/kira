@@ -66,7 +66,7 @@ fn a_construct_declaration_compiles_and_runs() {
     // reading its computed bridge member runs the member.
     let output = run_source(
         "construct Shape { let area: Int { 0 } }\n\
-         Shape Square(side: Int) { let area: Int { side * side } }\n\
+         construct Square(side: Int) extends Shape { let area: Int { side * side } }\n\
          @Main function main() { print(Square(side: 6).area) return }",
     );
     assert!(
@@ -85,7 +85,7 @@ fn inferred_construct_members_and_updates_run_through_the_binary() {
          construct Style { let additionalEffect: Int = 0\n\
              let liquidGlass: Glass = Glass {}\n\
              let score: Int { additionalEffect + (liquidGlass.material == .XHigh ? 10 : 0) } }\n\
-         Style Base { let additionalEffect = 3\n\
+         construct Base() extends Style { let additionalEffect = 3\n\
              let liquidGlass = Glass {} }\n\
          @Main function main() {\n\
              let StyleImplementation = Base {}\n\

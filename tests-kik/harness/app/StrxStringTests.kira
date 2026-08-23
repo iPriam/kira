@@ -96,37 +96,37 @@ function strxLblFor(i: Int) -> StrxLbl {
 // Literal .count tests
 // ---------------------------------------------------------------------------
 
-Test StrxLitA {
+construct StrxLitA() extends Test {
     test { return "a".count }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StrxLitHello {
+construct StrxLitHello() extends Test {
     test { return "hello".count }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxLitEmpty {
+construct StrxLitEmpty() extends Test {
     test { return "".count }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxLitTen {
+construct StrxLitTen() extends Test {
     test { return "abcdefghij".count }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxLitKira {
+construct StrxLitKira() extends Test {
     test { return "kira".count }
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test StrxLitSpace {
+construct StrxLitSpace() extends Test {
     test { return "hello world".count }
     expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
 }
 
-Test StrxLitTwelve {
+construct StrxLitTwelve() extends Test {
     test { return "123456789012".count }
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
@@ -135,17 +135,17 @@ Test StrxLitTwelve {
 // Borrow-len helper tests
 // ---------------------------------------------------------------------------
 
-Test StrxBorLitXyz {
+construct StrxBorLitXyz() extends Test {
     test { return strxBorLen("xyz") }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxBorLitEmpty {
+construct StrxBorLitEmpty() extends Test {
     test { return strxBorLen("") }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxBorVar {
+construct StrxBorVar() extends Test {
     test {
         let s = "reuse"
         return strxBorLen(s)
@@ -153,7 +153,7 @@ Test StrxBorVar {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxBorVarTwice {
+construct StrxBorVarTwice() extends Test {
     test {
         let s = "ab"
         var out = strxBorLen(s)
@@ -164,12 +164,12 @@ Test StrxBorVarTwice {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test StrxBorSix {
+construct StrxBorSix() extends Test {
     test { return strxBorLen("abcdef") }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test StrxBorMixed {
+construct StrxBorMixed() extends Test {
     test {
         var out = strxBorLen("xy")
         out = out + strxBorLen("abc")
@@ -183,12 +183,12 @@ Test StrxBorMixed {
 // Move-len helper tests
 // ---------------------------------------------------------------------------
 
-Test StrxMvLit {
+construct StrxMvLit() extends Test {
     test { return strxMvLen(move "consume") }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StrxMvVar {
+construct StrxMvVar() extends Test {
     test {
         let s = "transfer"
         return strxMvLen(move s)
@@ -200,7 +200,7 @@ Test StrxMvVar {
 // String-returning function tests (bind result before .count)
 // ---------------------------------------------------------------------------
 
-Test StrxPkApple {
+construct StrxPkApple() extends Test {
     test {
         let s = strxPk(0)
         return s.count
@@ -209,7 +209,7 @@ Test StrxPkApple {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxPkGo {
+construct StrxPkGo() extends Test {
     test {
         let s = strxPk(1)
         return s.count
@@ -218,7 +218,7 @@ Test StrxPkGo {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StrxPkThreeStr {
+construct StrxPkThreeStr() extends Test {
     test {
         let s = strxPk(2)
         return s.count
@@ -227,7 +227,7 @@ Test StrxPkThreeStr {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxPkBy {
+construct StrxPkBy() extends Test {
     test {
         let s = strxPk(3)
         return s.count
@@ -236,7 +236,7 @@ Test StrxPkBy {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StrxPkX {
+construct StrxPkX() extends Test {
     test {
         let s = strxPk(4)
         return s.count
@@ -245,7 +245,7 @@ Test StrxPkX {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StrxPkWrap {
+construct StrxPkWrap() extends Test {
     test {
         let s = strxPk(5)
         return s.count
@@ -254,7 +254,7 @@ Test StrxPkWrap {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxPkBorBound {
+construct StrxPkBorBound() extends Test {
     test {
         let s = strxPk(2)
         return strxBorLen(s)
@@ -263,7 +263,7 @@ Test StrxPkBorBound {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxPkLoop20 {
+construct StrxPkLoop20() extends Test {
     test {
         var total = 0
         var i = 0
@@ -278,7 +278,7 @@ Test StrxPkLoop20 {
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test StrxPkLoop40 {
+construct StrxPkLoop40() extends Test {
     test {
         var total = 0
         var i = 0
@@ -294,12 +294,12 @@ Test StrxPkLoop40 {
 }
 
 // Return a String from the test block directly
-Test StrxRetHello {
+construct StrxRetHello() extends Test {
     test { return "hello" }
     expect { let e: Result<String, TestFailure> = .Ok("hello"); return e }
 }
 
-Test StrxRetPk0 {
+construct StrxRetPk0() extends Test {
     test {
         let s = strxPk(0)
         return s
@@ -307,7 +307,7 @@ Test StrxRetPk0 {
     expect { let e: Result<String, TestFailure> = .Ok("apple"); return e }
 }
 
-Test StrxRetPk3 {
+construct StrxRetPk3() extends Test {
     test {
         let s = strxPk(3)
         return s
@@ -319,7 +319,7 @@ Test StrxRetPk3 {
 // Struct with String field
 // ---------------------------------------------------------------------------
 
-Test StrxBoxNameLen {
+construct StrxBoxNameLen() extends Test {
     test {
         let b = StrxBox { name: "test", code: 0 }
         return b.name.count
@@ -328,7 +328,7 @@ Test StrxBoxNameLen {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test StrxBoxMethod {
+construct StrxBoxMethod() extends Test {
     test {
         let b = StrxBox { name: "hello", code: 0 }
         return b.nameLen()
@@ -337,7 +337,7 @@ Test StrxBoxMethod {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxBoxCoded {
+construct StrxBoxCoded() extends Test {
     test {
         let b = StrxBox { name: "", code: 99 }
         return b.coded()
@@ -346,7 +346,7 @@ Test StrxBoxCoded {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test StrxBoxBorFn {
+construct StrxBoxBorFn() extends Test {
     test {
         let b = StrxBox { name: "abc", code: 7 }
         return strxBoxBor(b)
@@ -355,7 +355,7 @@ Test StrxBoxBorFn {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxBoxMutCode {
+construct StrxBoxMutCode() extends Test {
     test {
         var b = StrxBox { name: "x", code: 0 }
         var i = 0
@@ -369,7 +369,7 @@ Test StrxBoxMutCode {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxBoxNamePersist {
+construct StrxBoxNamePersist() extends Test {
     test {
         var b = StrxBox { name: "hello", code: 0 }
         b.code = 999
@@ -379,7 +379,7 @@ Test StrxBoxNamePersist {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxBoxCopyIndep {
+construct StrxBoxCopyIndep() extends Test {
     test {
         let b = StrxBox { name: "abc", code: 5 }
         var c = b
@@ -390,7 +390,7 @@ Test StrxBoxCopyIndep {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxBoxLoopBuild {
+construct StrxBoxLoopBuild() extends Test {
     test {
         var total = 0
         var i = 0
@@ -406,7 +406,7 @@ Test StrxBoxLoopBuild {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StrxBoxLoopAcc {
+construct StrxBoxLoopAcc() extends Test {
     test {
         var acc = 0
         var i = 0

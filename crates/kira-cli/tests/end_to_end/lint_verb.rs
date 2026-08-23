@@ -91,7 +91,7 @@ fn filler_functions(count: usize, prefix: &str) -> String {
 }
 
 const FILE_LENGTH_AT_40: &str = "import Foundation\n\n\
-     Lint FileLength {\n\
+     construct FileLength() extends Lint {\n\
      \x20   let code: String = \"KLINT003\"\n\
      \x20   let severity: String = \"warning\"\n\
      \x20   let enabled: Bool = true\n\

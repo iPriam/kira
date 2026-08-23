@@ -148,7 +148,7 @@ function colxaDot(xs: borrow [Int], ys: borrow [Int]) -> Int {
 // GROUP 1 – Running statistics with ColxAStat
 // ---------------------------------------------------------------------------
 
-Test ColxAStatSumRange10 {
+construct ColxAStatSumRange10() extends Test {
     test {
         let xs = colxBuildRange(10)
         let st = colxaStatFrom(xs)
@@ -158,7 +158,7 @@ Test ColxAStatSumRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test ColxAStatCountRange10 {
+construct ColxAStatCountRange10() extends Test {
     test {
         let xs = colxBuildRange(10)
         let st = colxaStatFrom(xs)
@@ -167,7 +167,7 @@ Test ColxAStatCountRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test ColxAStatMinRange10 {
+construct ColxAStatMinRange10() extends Test {
     test {
         let xs = colxBuildRange(10)
         let st = colxaStatFrom(xs)
@@ -176,7 +176,7 @@ Test ColxAStatMinRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test ColxAStatMaxRange10 {
+construct ColxAStatMaxRange10() extends Test {
     test {
         let xs = colxBuildRange(10)
         let st = colxaStatFrom(xs)
@@ -185,7 +185,7 @@ Test ColxAStatMaxRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test ColxAStatSumPlusCountPlusMax {
+construct ColxAStatSumPlusCountPlusMax() extends Test {
     test {
         let xs = colxBuildRange(10)
         let st = colxaStatFrom(xs)
@@ -195,7 +195,7 @@ Test ColxAStatSumPlusCountPlusMax {
     expect { let e: Result<Int, TestFailure> = .Ok(64); return e }
 }
 
-Test ColxAStatFromLiteral {
+construct ColxAStatFromLiteral() extends Test {
     test {
         var xs: [Int] = []
         xs.append(3)
@@ -215,7 +215,7 @@ Test ColxAStatFromLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test ColxAStatSumLiteral {
+construct ColxAStatSumLiteral() extends Test {
     test {
         var xs: [Int] = []
         xs.append(3)
@@ -235,7 +235,7 @@ Test ColxAStatSumLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(39); return e }
 }
 
-Test ColxAStatSingle {
+construct ColxAStatSingle() extends Test {
     test {
         var xs: [Int] = []
         xs.append(42)
@@ -246,7 +246,7 @@ Test ColxAStatSingle {
     expect { let e: Result<Int, TestFailure> = .Ok(127); return e }
 }
 
-Test ColxAStatRange20Sum {
+construct ColxAStatRange20Sum() extends Test {
     test {
         let xs = colxBuildRange(20)
         let st = colxaStatFrom(xs)
@@ -256,7 +256,7 @@ Test ColxAStatRange20Sum {
     expect { let e: Result<Int, TestFailure> = .Ok(170); return e }
 }
 
-Test ColxAStatEvenOnly {
+construct ColxAStatEvenOnly() extends Test {
     test {
         var xs: [Int] = []
         xs.append(2)
@@ -271,7 +271,7 @@ Test ColxAStatEvenOnly {
     expect { let e: Result<Int, TestFailure> = .Ok(43); return e }
 }
 
-Test ColxAStatAccumLoop {
+construct ColxAStatAccumLoop() extends Test {
     test {
         var stat = ColxAStat { count: 0, sum: 0, minVal: 0, maxVal: 0 }
         var i = 0
@@ -285,7 +285,7 @@ Test ColxAStatAccumLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
 }
 
-Test ColxAStatAccumMin {
+construct ColxAStatAccumMin() extends Test {
     test {
         var stat = ColxAStat { count: 0, sum: 0, minVal: 0, maxVal: 0 }
         colxaAccumStat(stat, 10)
@@ -298,7 +298,7 @@ Test ColxAStatAccumMin {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test ColxAStatAccumMax {
+construct ColxAStatAccumMax() extends Test {
     test {
         var stat = ColxAStat { count: 0, sum: 0, minVal: 0, maxVal: 0 }
         colxaAccumStat(stat, 10)
@@ -311,7 +311,7 @@ Test ColxAStatAccumMax {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test ColxAStatFromSquares {
+construct ColxAStatFromSquares() extends Test {
     test {
         let xs = colxBuildSquares(6)
         let st = colxaStatFrom(xs)
@@ -321,7 +321,7 @@ Test ColxAStatFromSquares {
     expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
 }
 
-Test ColxAStatChurn50 {
+construct ColxAStatChurn50() extends Test {
     test {
         var grandSum = 0
         var r = 0
@@ -346,7 +346,7 @@ Test ColxAStatChurn50 {
 // GROUP 2 – ColxARow
 // ---------------------------------------------------------------------------
 
-Test ColxARowSum5 {
+construct ColxARowSum5() extends Test {
     test {
         var vals: [Int] = []
         vals.append(1)
@@ -360,7 +360,7 @@ Test ColxARowSum5 {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test ColxARowCount5 {
+construct ColxARowCount5() extends Test {
     test {
         var vals: [Int] = []
         vals.append(1)
@@ -374,7 +374,7 @@ Test ColxARowCount5 {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test ColxARowSumRange10 {
+construct ColxARowSumRange10() extends Test {
     test {
         let vals = colxBuildRange(10)
         let row = ColxARow { vals: move vals }
@@ -383,7 +383,7 @@ Test ColxARowSumRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test ColxARowCountRange10 {
+construct ColxARowCountRange10() extends Test {
     test {
         let vals = colxBuildRange(10)
         let row = ColxARow { vals: move vals }
@@ -392,7 +392,7 @@ Test ColxARowCountRange10 {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test ColxARowEmpty {
+construct ColxARowEmpty() extends Test {
     test {
         let vals: [Int] = []
         let row = ColxARow { vals: move vals }
@@ -401,7 +401,7 @@ Test ColxARowEmpty {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test ColxARowMatrixTotalSum {
+construct ColxARowMatrixTotalSum() extends Test {
     test {
         // 5 rows of 4 cells: row r has cells r*4, r*4+1, r*4+2, r*4+3
         var total = 0
@@ -423,7 +423,7 @@ Test ColxARowMatrixTotalSum {
     expect { let e: Result<Int, TestFailure> = .Ok(190); return e }
 }
 
-Test ColxARowMatrixRowCounts {
+construct ColxARowMatrixRowCounts() extends Test {
     test {
         var totalCells = 0
         var r = 0
@@ -444,7 +444,7 @@ Test ColxARowMatrixRowCounts {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test ColxARowSquaresSum {
+construct ColxARowSquaresSum() extends Test {
     test {
         let vals = colxBuildSquares(5)
         let row = ColxARow { vals: move vals }
@@ -454,7 +454,7 @@ Test ColxARowSquaresSum {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test ColxARowFibSum {
+construct ColxARowFibSum() extends Test {
     test {
         let vals = colxBuildFib(8)
         let row = ColxARow { vals: move vals }
@@ -464,7 +464,7 @@ Test ColxARowFibSum {
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
-Test ColxARowChurn30 {
+construct ColxARowChurn30() extends Test {
     test {
         var total = 0
         var r = 0
@@ -484,7 +484,7 @@ Test ColxARowChurn30 {
 // GROUP 3 – Sorted arrays
 // ---------------------------------------------------------------------------
 
-Test ColxASortedFirst {
+construct ColxASortedFirst() extends Test {
     test {
         var xs: [Int] = []
         xs.append(5)
@@ -502,7 +502,7 @@ Test ColxASortedFirst {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test ColxASortedLast {
+construct ColxASortedLast() extends Test {
     test {
         var xs: [Int] = []
         xs.append(5)
@@ -520,7 +520,7 @@ Test ColxASortedLast {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test ColxASortedSum {
+construct ColxASortedSum() extends Test {
     test {
         var xs: [Int] = []
         xs.append(5)
@@ -539,7 +539,7 @@ Test ColxASortedSum {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test ColxASortedDuplicates {
+construct ColxASortedDuplicates() extends Test {
     test {
         var xs: [Int] = []
         xs.append(7)
@@ -555,7 +555,7 @@ Test ColxASortedDuplicates {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test ColxASortedDuplicatesSum {
+construct ColxASortedDuplicatesSum() extends Test {
     test {
         var xs: [Int] = []
         xs.append(7)
@@ -571,7 +571,7 @@ Test ColxASortedDuplicatesSum {
     expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
 }
 
-Test ColxASortedTwo {
+construct ColxASortedTwo() extends Test {
     test {
         var xs: [Int] = []
         xs.append(100)
@@ -583,7 +583,7 @@ Test ColxASortedTwo {
     expect { let e: Result<Int, TestFailure> = .Ok(1100); return e }
 }
 
-Test ColxASortedSingle {
+construct ColxASortedSingle() extends Test {
     test {
         var xs: [Int] = []
         xs.append(42)
@@ -593,7 +593,7 @@ Test ColxASortedSingle {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test ColxASortedAlreadySorted {
+construct ColxASortedAlreadySorted() extends Test {
     test {
         let xs = colxBuildRange(8)
         let s = colxaSorted(xs)
@@ -603,7 +603,7 @@ Test ColxASortedAlreadySorted {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test ColxASortedReverseInput {
+construct ColxASortedReverseInput() extends Test {
     test {
         // Build [9,8,7,6,5,4,3,2,1,0]
         var xs: [Int] = []
@@ -619,7 +619,7 @@ Test ColxASortedReverseInput {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test ColxASortedCount {
+construct ColxASortedCount() extends Test {
     test {
         var xs: [Int] = []
         xs.append(3)

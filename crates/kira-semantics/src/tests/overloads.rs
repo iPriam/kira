@@ -78,7 +78,7 @@ fn a_call_fitting_two_overloads_equally_is_ambiguous() {
         codes(
             r#"
 construct Family { @Required function value() -> Int }
-Family Leaf(number: Int) { function value() -> Int { return number } }
+construct Leaf(number: Int) extends Family { function value() -> Int { return number } }
 
 function pick(a: Any Family, b: Leaf) -> Int { return 1 }
 function pick(a: Leaf, b: Any Family) -> Int { return 2 }
@@ -102,7 +102,7 @@ fn a_concrete_argument_prefers_the_concrete_overload() {
         library_codes(
             r#"
 construct Family { @Required function value() -> Int }
-Family Leaf(number: Int) { function value() -> Int { return number } }
+construct Leaf(number: Int) extends Family { function value() -> Int { return number } }
 
 function size(v: Any Family) -> Int { return v.value() }
 function size(v: Leaf) -> Int { return v.value() * 1000 }
@@ -170,7 +170,7 @@ fn construct_backed_members_overload() {
             r#"
 construct Widget { @Required function total() -> Int }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
     function scaled(by: Int) -> Int { return number * by }
     function scaled(by: Int, plus: Int) -> Int { return number * by + plus }
@@ -246,15 +246,15 @@ fn a_construction_reaches_the_header_or_an_init() {
             r#"
 construct Widget { @Required function total() -> Int }
 
-Widget Text(text: String) {
+construct Text(text: String) extends Widget {
     function total() -> Int { return text.count }
 }
 
-Widget Destination(value: Int) {
+construct Destination(value: Int) extends Widget {
     function total() -> Int { return value }
 }
 
-Widget NavigationLink(destination: Any Widget, label: Any Widget) {
+construct NavigationLink(destination: Any Widget, label: Any Widget) extends Widget {
     init(title: String, value: Int) {
         return NavigationLink(
             destination: Destination(value: value),
@@ -285,11 +285,11 @@ fn an_init_content_parameter_takes_the_trailing_block() {
             r#"
 construct Widget { @Required function total() -> Int }
 
-Widget Text(text: String) {
+construct Text(text: String) extends Widget {
     function total() -> Int { return text.count }
 }
 
-Widget Link(destination: Int, label: Any Widget) {
+construct Link(destination: Int, label: Any Widget) extends Widget {
     init(value: Int, label: some Widget) {
         return Link(destination: value, label: label)
     }
@@ -315,11 +315,11 @@ fn a_content_parameter_before_a_written_one_is_refused() {
             r#"
 construct Widget { @Required function total() -> Int }
 
-Widget Text(text: String) {
+construct Text(text: String) extends Widget {
     function total() -> Int { return text.count }
 }
 
-Widget Link(destination: Int, label: Any Widget) {
+construct Link(destination: Int, label: Any Widget) extends Widget {
     init(label: some Widget, value: Int) {
         return Link(destination: value, label: label)
     }
@@ -341,7 +341,7 @@ fn an_init_shadowing_the_header_is_refused() {
             r#"
 construct Widget { @Required function total() -> Int }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     init(other: Int) {
         return Leaf(number: other)
     }
@@ -370,8 +370,8 @@ function doThing(first: () -> Void, second: () -> Void, third: () -> Void) {
 }
 
 construct Widget { @Required function total() -> Int }
-Widget Text(text: String) { function total() -> Int { return text.count } }
-Widget Row() {
+construct Text(text: String) extends Widget { function total() -> Int { return text.count } }
+construct Row() extends Widget {
     @Content let children: [Any Widget]
     function total() -> Int {
         var sum = 0
@@ -433,8 +433,8 @@ function pick(n: Int, ok: () -> Int, other: () -> Int) -> Int {
 }
 
 construct Widget { @Required function total() -> Int }
-Widget Text(text: String) { function total() -> Int { return text.count } }
-Widget Split() {
+construct Text(text: String) extends Widget { function total() -> Int { return text.count } }
+construct Split() extends Widget {
     let sidebar: some Widget
     let detail: some Widget
     function total() -> Int { return sidebar.total() * 10 + detail.total() }

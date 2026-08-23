@@ -37,7 +37,7 @@ construct Widget {
     let tag: Int { 0 }
 }
 
-Widget Leaf(id: Int) {
+construct Leaf(id: Int) extends Widget {
     let tag: Int { id }
 }
 

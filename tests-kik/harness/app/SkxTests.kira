@@ -220,7 +220,7 @@ construct SkxDrawable7 {
     }
 }
 
-SkxDrawable7 SkxSprite7 {
+construct SkxSprite7() extends SkxDrawable7 {
     let base: Int = 7
 
     function draw() -> Int {
@@ -266,7 +266,7 @@ construct SkxNode9 {
     @Required let label: String
 }
 
-SkxNode9 SkxLeaf9 {
+construct SkxLeaf9() extends SkxNode9 {
     let text: String = ""
 
     let label: String {
@@ -287,7 +287,7 @@ function skxGood9(node: some SkxNode9) -> Int {
 // Tests
 // ---------------------------------------------------------------------------
 
-Test SkxStructStateParity {
+construct SkxStructStateParity() extends Test {
     test {
         var seed: SkxPair1 = SkxPair1(4, 8)
         var state: SkxState1 = SkxState1(seed, SkxPair1(1, 2), 0)
@@ -307,7 +307,7 @@ Test SkxStructStateParity {
     }
 }
 
-Test SkxBorrowMutStructWriteback {
+construct SkxBorrowMutStructWriteback() extends Test {
     test {
         var p = SkxPair2 { w: 0, h: 0 }
         skxMutScalar2(p)
@@ -331,7 +331,7 @@ Test SkxBorrowMutStructWriteback {
     }
 }
 
-Test SkxInstanceMethodParity {
+construct SkxInstanceMethodParity() extends Test {
     test {
         let counter: SkxCounter3 = SkxCounter3(42)
         return counter.emit()
@@ -343,7 +343,7 @@ Test SkxInstanceMethodParity {
     }
 }
 
-Test SkxWhileIndexStructMethods {
+construct SkxWhileIndexStructMethods() extends Test {
     test {
         var values = [1, 2, 3, 4];
         var index = 0;
@@ -372,7 +372,7 @@ Test SkxWhileIndexStructMethods {
     }
 }
 
-Test SkxRetainedTreeAggregateDefaultsParity {
+construct SkxRetainedTreeAggregateDefaultsParity() extends Test {
     test {
         let blank = SkxRetainedNode5 {}
         let bucket = SkxClassBucket5()
@@ -396,7 +396,7 @@ Test SkxRetainedTreeAggregateDefaultsParity {
     }
 }
 
-Test SkxPrintableDispatchParity {
+construct SkxPrintableDispatchParity() extends Test {
     test {
         let person = SkxPerson6(name: "Ada")
         return person.onPrint()
@@ -408,7 +408,7 @@ Test SkxPrintableDispatchParity {
     }
 }
 
-Test SkxConstructDeclarationFunctions {
+construct SkxConstructDeclarationFunctions() extends Test {
     test {
         return SkxSprite7.draw()
     }
@@ -419,7 +419,7 @@ Test SkxConstructDeclarationFunctions {
     }
 }
 
-Test SkxConstructArrayFieldOwnedValue {
+construct SkxConstructArrayFieldOwnedValue() extends Test {
     test {
         let local = [SkxItem8 { v: 1 }, SkxItem8 { v: 2 }, SkxItem8 { v: 3 }]
         let moved = SkxBag8 { items: move local }
@@ -434,7 +434,7 @@ Test SkxConstructArrayFieldOwnedValue {
     }
 }
 
-Test SkxConstructAnyBindingMoveParity {
+construct SkxConstructAnyBindingMoveParity() extends Test {
     test {
         return skxGood9(SkxLeaf9(text: "leaf"))
     }

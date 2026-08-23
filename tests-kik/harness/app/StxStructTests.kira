@@ -117,32 +117,32 @@ function stxPointSum(p: borrow StxPoint) -> Int {
 // Group 1: Basic construction + field access
 // ---------------------------------------------------------------------------
 
-Test StxConstX {
+construct StxConstX() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; return p.x }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxConstY {
+construct StxConstY() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; return p.y }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StxFieldAdd {
+construct StxFieldAdd() extends Test {
     test { let p = StxPoint { x: 5, y: 8 }; return p.x + p.y }
     expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
 }
 
-Test StxFieldMul {
+construct StxFieldMul() extends Test {
     test { let p = StxPoint { x: 4, y: 6 }; return p.x * p.y }
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test StxFieldSub {
+construct StxFieldSub() extends Test {
     test { let p = StxPoint { x: 10, y: 3 }; return p.x - p.y }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StxMutateX {
+construct StxMutateX() extends Test {
     test {
         var p = StxPoint { x: 1, y: 2 }
         p.x = 99
@@ -151,7 +151,7 @@ Test StxMutateX {
     expect { let e: Result<Int, TestFailure> = .Ok(99); return e }
 }
 
-Test StxMutateY {
+construct StxMutateY() extends Test {
     test {
         var p = StxPoint { x: 1, y: 2 }
         p.y = 77
@@ -160,7 +160,7 @@ Test StxMutateY {
     expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
 }
 
-Test StxRectOriginX {
+construct StxRectOriginX() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -172,7 +172,7 @@ Test StxRectOriginX {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxRectOriginY {
+construct StxRectOriginY() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -184,7 +184,7 @@ Test StxRectOriginY {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StxRectSizeY {
+construct StxRectSizeY() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -196,7 +196,7 @@ Test StxRectSizeY {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test StxRectLabel {
+construct StxRectLabel() extends Test {
     test {
         let r = StxRect {
             origin: StxPoint { x: 10, y: 20 },
@@ -208,7 +208,7 @@ Test StxRectLabel {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxCubeLoX {
+construct StxCubeLoX() extends Test {
     test {
         let c = StxCube {
             lo: StxPoint { x: 1, y: 2 },
@@ -220,7 +220,7 @@ Test StxCubeLoX {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test StxCubeHiY {
+construct StxCubeHiY() extends Test {
     test {
         let c = StxCube {
             lo: StxPoint { x: 1, y: 2 },
@@ -232,7 +232,7 @@ Test StxCubeHiY {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StxCubeDepth {
+construct StxCubeDepth() extends Test {
     test {
         let c = StxCube {
             lo: StxPoint { x: 1, y: 2 },
@@ -244,7 +244,7 @@ Test StxCubeDepth {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StxZeroStruct {
+construct StxZeroStruct() extends Test {
     test { let p = StxPoint { x: 0, y: 0 }; return p.sum() }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
@@ -253,43 +253,43 @@ Test StxZeroStruct {
 // Group 2: Methods
 // ---------------------------------------------------------------------------
 
-Test StxMethodSum {
+construct StxMethodSum() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; return p.sum() }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxMethodProduct {
+construct StxMethodProduct() extends Test {
     test { let p = StxPoint { x: 4, y: 6 }; return p.product() }
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test StxMethodMax {
+construct StxMethodMax() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; return p.max() }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StxMethodMin {
+construct StxMethodMin() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; return p.min() }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxMethodScaleX {
+construct StxMethodScaleX() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(2); return q.x }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test StxMethodScaleY {
+construct StxMethodScaleY() extends Test {
     test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(3); return q.y }
     expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
 }
 
-Test StxMethodScaleSum {
+construct StxMethodScaleSum() extends Test {
     // p={3,7}, scale(2) → {6,14}, sum=20
     test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(2); return q.sum() }
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StxMethodScaleChain {
+construct StxMethodScaleChain() extends Test {
     // p={2,3}, scale(3)→{6,9}, scale(4)→{24,36}, x=24
     test {
         let p = StxPoint { x: 2, y: 3 }
@@ -300,7 +300,7 @@ Test StxMethodScaleChain {
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test StxRectArea {
+construct StxRectArea() extends Test {
     // size={6,7}, area=42
     test {
         let r = StxRect {
@@ -313,7 +313,7 @@ Test StxRectArea {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test StxRectPerimeter {
+construct StxRectPerimeter() extends Test {
     // size={6,7}, perimeter=2*(6+7)=26
     test {
         let r = StxRect {
@@ -326,7 +326,7 @@ Test StxRectPerimeter {
     expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
 }
 
-Test StxRectLabelPlusArea {
+construct StxRectLabelPlusArea() extends Test {
     // label=5, size={4,5}, area=20, labelPlusArea=25
     test {
         let r = StxRect {
@@ -339,7 +339,7 @@ Test StxRectLabelPlusArea {
     expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
 }
 
-Test StxCubeVolume {
+construct StxCubeVolume() extends Test {
     // lo={0,0}, hi={4,5}, depth=3, volume=4*5*3=60
     test {
         let c = StxCube {
@@ -352,7 +352,7 @@ Test StxCubeVolume {
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test StxCubeSpan {
+construct StxCubeSpan() extends Test {
     // lo={0,0}, hi={4,5}, depth=3, span=(4-0)+(5-0)+3=12
     test {
         let c = StxCube {
@@ -365,7 +365,7 @@ Test StxCubeSpan {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test StxMethodLoop {
+construct StxMethodLoop() extends Test {
     // i=0..9: p={x:i, y:i+1}, p.sum()=2i+1; sum=1+3+5+7+9+11+13+15+17+19=100
     test {
         var acc = 0
@@ -380,7 +380,7 @@ Test StxMethodLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test StxMethodArith {
+construct StxMethodArith() extends Test {
     // p={5,3}, sum=8, max=5, min=3, 8*5-3=37
     test {
         let p = StxPoint { x: 5, y: 3 }
@@ -389,24 +389,24 @@ Test StxMethodArith {
     expect { let e: Result<Int, TestFailure> = .Ok(37); return e }
 }
 
-Test StxPointSumHelper {
+construct StxPointSumHelper() extends Test {
     test { let p = StxPoint { x: 4, y: 6 }; return stxPointSum(p) }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxMethodMaxMin {
+construct StxMethodMaxMin() extends Test {
     // p={7,4}, max=7, min=4, diff=3
     test { let p = StxPoint { x: 7, y: 4 }; return p.max() - p.min() }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StxScaleMaxMin {
+construct StxScaleMaxMin() extends Test {
     // p={3,2}, scale(5)={15,10}, max=15, min=10, diff=5
     test { let p = StxPoint { x: 3, y: 2 }; let q = p.scale(5); return q.max() - q.min() }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StxAreaPerimeterSum {
+construct StxAreaPerimeterSum() extends Test {
     // size={3,4}, area=12, perimeter=2*(3+4)=14, total=26
     test {
         let r = StxRect {
@@ -419,7 +419,7 @@ Test StxAreaPerimeterSum {
     expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
 }
 
-Test StxCubeVolumeSpan {
+construct StxCubeVolumeSpan() extends Test {
     // lo={1,2}, hi={5,6}, depth=2; volume=(4)*(4)*2=32; span=4+4+2=10; total=42
     test {
         let c = StxCube {
@@ -432,7 +432,7 @@ Test StxCubeVolumeSpan {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test StxScaleLoopAcc {
+construct StxScaleLoopAcc() extends Test {
     // i=0..4: p={x:i+1, y:i+1}, q=p.scale(i+1), q.sum()=2*(i+1)^2
     // i=0: 2*1=2; i=1: 2*4=8; i=2: 2*9=18; i=3: 2*16=32; i=4: 2*25=50 → total=110
     test {
@@ -453,7 +453,7 @@ Test StxScaleLoopAcc {
 // Group 3: borrow mut writeback
 // ---------------------------------------------------------------------------
 
-Test StxBorrowBumpX {
+construct StxBorrowBumpX() extends Test {
     test {
         var p = StxPoint { x: 5, y: 3 }
         stxBumpX(p)
@@ -462,7 +462,7 @@ Test StxBorrowBumpX {
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test StxBorrowBumpBoth {
+construct StxBorrowBumpBoth() extends Test {
     // p={5,3}, bumpBoth → {6,4}, sum=10
     test {
         var p = StxPoint { x: 5, y: 3 }
@@ -472,7 +472,7 @@ Test StxBorrowBumpBoth {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxBorrowBumpLoop {
+construct StxBorrowBumpLoop() extends Test {
     // p={0,0}, 10x bumpBoth → {10,10}, return p.x=10
     test {
         var p = StxPoint { x: 0, y: 0 }
@@ -486,7 +486,7 @@ Test StxBorrowBumpLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxBorrowBumpYSum {
+construct StxBorrowBumpYSum() extends Test {
     // p={5,3}, 5x bumpY → y=8
     test {
         var p = StxPoint { x: 5, y: 3 }
@@ -500,7 +500,7 @@ Test StxBorrowBumpYSum {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test StxBorrowAddN {
+construct StxBorrowAddN() extends Test {
     // p={1,2}, addN(7) → {8,9}, sum=17
     test {
         var p = StxPoint { x: 1, y: 2 }
@@ -510,7 +510,7 @@ Test StxBorrowAddN {
     expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
 }
 
-Test StxBorrowAddNLoop {
+construct StxBorrowAddNLoop() extends Test {
     // p={0,0}, 5x addN(3) → x=15
     test {
         var p = StxPoint { x: 0, y: 0 }
@@ -524,7 +524,7 @@ Test StxBorrowAddNLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StxBorrowRectLabel {
+construct StxBorrowRectLabel() extends Test {
     // r.label=1, bumpRect → label=2
     test {
         var r = StxRect {
@@ -538,7 +538,7 @@ Test StxBorrowRectLabel {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StxBorrowRectOriginX {
+construct StxBorrowRectOriginX() extends Test {
     // r.origin.x=10, bumpRect → origin.x=12
     test {
         var r = StxRect {
@@ -552,7 +552,7 @@ Test StxBorrowRectOriginX {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test StxBorrowRectSizeY {
+construct StxBorrowRectSizeY() extends Test {
     // r.size.y=7, bumpRect → size.y=10
     test {
         var r = StxRect {
@@ -566,7 +566,7 @@ Test StxBorrowRectSizeY {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxBorrowRectLoop {
+construct StxBorrowRectLoop() extends Test {
     // r.label=0, origin.x=0, size.y=3, 10x bumpRect → label=10, origin.x=20, size.y=33
     test {
         var r = StxRect {
@@ -584,7 +584,7 @@ Test StxBorrowRectLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StxBorrowRectLoopSizeY {
+construct StxBorrowRectLoopSizeY() extends Test {
     // r.size.y=3, 10x bumpRect → size.y=3+30=33
     test {
         var r = StxRect {
@@ -602,7 +602,7 @@ Test StxBorrowRectLoopSizeY {
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
-Test StxBorrowCubeDepth {
+construct StxBorrowCubeDepth() extends Test {
     // c.depth=10, bumpCube → depth=15
     test {
         var c = StxCube {
@@ -616,7 +616,7 @@ Test StxBorrowCubeDepth {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test StxBorrowCubeLoX {
+construct StxBorrowCubeLoX() extends Test {
     // c.lo.x=1, bumpCube → lo.x=2
     test {
         var c = StxCube {
@@ -630,7 +630,7 @@ Test StxBorrowCubeLoX {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StxBorrowCubeLoop {
+construct StxBorrowCubeLoop() extends Test {
     // c.depth=0, lo.x=0, 20x bumpCube → depth=100
     test {
         var c = StxCube {
@@ -648,7 +648,7 @@ Test StxBorrowCubeLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test StxBorrowBumpBothLoop25 {
+construct StxBorrowBumpBothLoop25() extends Test {
     // p={0,0}, 25x bumpBoth → y=25
     test {
         var p = StxPoint { x: 0, y: 0 }
