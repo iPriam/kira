@@ -219,17 +219,23 @@ impl Analyzer<'_> {
             };
             self.source = source;
             let trait_name = self.interner.resolve(claimed.name).to_owned();
-            if crate::traits::is_builtin_trait(&trait_name) {
-                continue;
-            }
-            let Some(declared) = self.traits.get(&trait_name) else {
-                continue;
+            // A compiler-known trait declares its members here rather than in
+            // source, and the rule is the same one: a block carries the trait's
+            // members and nothing else.
+            let members: HashSet<String> = match trait_name.as_str() {
+                crate::traits::DROP => HashSet::from([crate::traits::drop::DROP_MEMBER.to_owned()]),
+                crate::traits::COPYABLE => HashSet::new(),
+                _ => {
+                    let Some(declared) = self.traits.get(&trait_name) else {
+                        continue;
+                    };
+                    declared
+                        .members
+                        .iter()
+                        .map(|member| member.name.clone())
+                        .collect()
+                }
             };
-            let members: HashSet<String> = declared
-                .members
-                .iter()
-                .map(|member| member.name.clone())
-                .collect();
             for method in &declaration.methods {
                 let name = self.interner.resolve(method.name).to_owned();
                 if !members.contains(&name) {

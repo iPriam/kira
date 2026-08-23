@@ -1,6 +1,6 @@
 //! Statement, control-flow, place, and jump lowering.
 
-use kira_ir::{IrAttempt, IrExprId, IrPlace, IrPlaceStep, IrStmt};
+use kira_ir::{IrAttempt, IrCallee, IrExpr, IrExprId, IrPlace, IrPlaceStep, IrStmt};
 
 use crate::op::{FieldPath, Instruction, PathStep, PlacePath};
 
@@ -201,6 +201,51 @@ impl FnCompiler<'_> {
     /// Converts an IR local index to the wide bytecode slot representation.
     pub(super) fn local_slot(&self, slot: u32) -> Result<u64, CompileError> {
         Ok(u64::from(slot))
+    }
+
+    /// Whether parameter `position` of `callee` borrows its argument.
+    ///
+    /// A borrowed argument leaves the caller holding the value, so a local
+    /// reaching one is read rather than taken. Every other callee — a builtin,
+    /// a native half, a foreign symbol — takes what it is given.
+    pub(super) fn argument_is_borrowed(&self, callee: IrCallee, position: usize) -> bool {
+        let IrCallee::User(index) = callee else {
+            return false;
+        };
+        let Some(function) = self.program.functions.get(index as usize) else {
+            return false;
+        };
+        let slot = position as u32;
+        function.by_pointer_params.contains(&slot) || function.by_reference_params.contains(&slot)
+    }
+
+    /// Compiles `expr` in a position that does not consume it.
+    ///
+    /// Only a local read differs: everywhere else the value is a temporary the
+    /// position owns either way.
+    pub(super) fn compile_borrowed_expr(&mut self, expr: IrExprId) -> Result<(), CompileError> {
+        let IrExpr::Local(slot) = *self.program.expr(expr) else {
+            return self.compile_expr(expr);
+        };
+        let slot = self.local_slot(slot)?;
+        self.code.push(Instruction::LoadLocal(slot));
+        Ok(())
+    }
+
+    /// Whether reading local `slot` takes it rather than copying it.
+    ///
+    /// A value that runs a user `Drop` is never copied, so a read moves it out
+    /// — the same rule the native backend follows, and the reason the two
+    /// engines agree on *when* a body runs. A borrowed parameter is excluded:
+    /// it does not own the value, its body may read it more than once, and the
+    /// copy it holds is a share whose release runs nothing.
+    pub(super) fn local_is_taken(&self, slot: u32) -> bool {
+        self.function
+            .locals
+            .get(slot as usize)
+            .is_some_and(|&ty| self.program.types.runs_user_drop(ty))
+            && !self.function.by_pointer_params.contains(&slot)
+            && !self.function.by_reference_params.contains(&slot)
     }
 
     /// Converts an IR field index to the wide bytecode operand.

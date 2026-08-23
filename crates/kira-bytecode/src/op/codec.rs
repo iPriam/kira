@@ -124,6 +124,15 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::NEW_STRUCT);
             out.extend_from_slice(&fields.to_le_bytes());
         }
+        Instruction::TakeLocal(slot) => {
+            out.push(o::TAKE_LOCAL);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
+        Instruction::NewStructDropping { fields, glue } => {
+            out.push(o::NEW_STRUCT_DROPPING);
+            out.extend_from_slice(&fields.to_le_bytes());
+            out.extend_from_slice(&glue.to_le_bytes());
+        }
         Instruction::GetField(index) => {
             out.push(o::GET_FIELD);
             out.extend_from_slice(&index.to_le_bytes());
@@ -415,6 +424,14 @@ impl Cursor<'_> {
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
             o::NEW_STRUCT => Instruction::NewStruct(self.read_slot(legacy)?),
+            o::TAKE_LOCAL => Instruction::TakeLocal(self.read_slot(legacy)?),
+            o::NEW_STRUCT_DROPPING => {
+                let fields = self.read_slot(legacy)?;
+                Instruction::NewStructDropping {
+                    fields,
+                    glue: u32::from_le_bytes(self.take()?),
+                }
+            }
             o::GET_FIELD => Instruction::GetField(self.read_slot(legacy)?),
             o::FOREIGN_OFFSET => Instruction::ForeignOffset(u32::from_le_bytes(self.take()?)),
             o::FOREIGN_INDEX => Instruction::ForeignIndex(u32::from_le_bytes(self.take()?)),

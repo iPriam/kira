@@ -59,6 +59,15 @@ pub struct StructDef {
     /// them where an ordinary struct's pointer words copy as bits. See
     /// [`StructDef::owning_c_slots`].
     pub c_layout: bool,
+    /// The function running this type's user `Drop` body, by index into the
+    /// program's function order, or `None` when the type declares none.
+    ///
+    /// On the type rather than beside it because every engine that releases a
+    /// value reads the type table to decide what the release has to do, and a
+    /// user drop is one more thing it has to do. The same numbering
+    /// [`crate::hir::FuncId`] uses, which lowering carries into the IR
+    /// unchanged.
+    pub drop_glue: Option<u32>,
 }
 
 impl StructDef {
@@ -255,6 +264,21 @@ impl StructTable {
         Some(index)
     }
 
+    /// Records the function that runs `id`'s user `Drop` body.
+    ///
+    /// Written once, after signatures exist: a drop body is a method, so it
+    /// has no id while the row is being declared. Returns `false` when `id`
+    /// names no row.
+    pub fn set_drop_glue(&mut self, id: StructId, glue: u32) -> bool {
+        match self.defs.get_mut(id.0 as usize) {
+            Some(def) => {
+                def.drop_glue = Some(glue);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Fills the fields of a struct declared as an empty header.
     ///
     /// The frontend's type collection runs in two passes: it declares every
@@ -315,6 +339,7 @@ mod tests {
                     },
                 ],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("a fresh name declares");
         (table, id)
@@ -327,6 +352,7 @@ mod tests {
             name: "Point".to_owned(),
             fields: Vec::new(),
             c_layout: false,
+            drop_glue: None,
         });
         assert_eq!(again, None);
         // The first declaration still owns the name and the row.
@@ -343,6 +369,7 @@ mod tests {
                 name: "World".to_owned(),
                 fields: Vec::new(),
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("a fresh name declares");
         assert!(table.get(id).expect("the id resolves").fields.is_empty());

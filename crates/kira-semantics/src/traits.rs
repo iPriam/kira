@@ -30,6 +30,7 @@
 
 mod check;
 mod conformance;
+pub(crate) mod drop;
 
 use std::collections::{BTreeMap, HashSet};
 

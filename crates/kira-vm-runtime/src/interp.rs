@@ -131,6 +131,14 @@ pub(crate) struct Vm<'h> {
     native_writebacks: Vec<Writeback>,
     /// Temporary buffers used to marshal the next native crossing.
     native_scratch: NativeCallScratch,
+    /// The user `Drop` bodies running right now, with the frame depth each was
+    /// entered at.
+    ///
+    /// A parked object is released once the frame running its body is gone, so
+    /// this is what the dispatch loop compares the frame count against. Empty
+    /// for every program that declares no `Drop`, which is why the loop tests
+    /// it before doing anything else with it.
+    running_drops: Vec<(usize, crate::value::StructId)>,
     trap_probe: Option<TrapProbe>,
 }
 
@@ -301,6 +309,64 @@ impl Vm<'_> {
         result
     }
 
+    /// Runs one step the heap owes a parked struct object.
+    ///
+    /// Entering a body pushes an ordinary frame, so the body is dispatched by
+    /// the same loop everything else is and may itself release, call, and park.
+    /// The object stays whole until that frame returns, which is what puts the
+    /// body *before* the release of everything it holds.
+    fn run_pending_drop(
+        &mut self,
+        module: &Module,
+        frames: &mut Vec<Frame>,
+    ) -> Result<(), VmError> {
+        let Some(pending) = self.heap.take_pending_drop() else {
+            return Ok(());
+        };
+        if frames.len() >= MAX_CALL_DEPTH {
+            return Err(VmError::CallDepthExceeded);
+        }
+        let index = u64::from(pending.glue);
+        let mut callee = self.take_frame(module, index)?;
+        // The receiver is the parked handle itself, not a copy: the body reads
+        // the value that is going away. The body's release plan excludes this
+        // slot, so the frame it returns from leaves the object for the release
+        // below.
+        self.stack.push(Value::Struct(pending.id));
+        if let Err(error) = self.fill_params(module, index, &mut callee) {
+            self.discard(callee.locals);
+            return Err(error);
+        }
+        frames.push(callee);
+        // Released once this frame is gone, which is what puts the body before
+        // everything the value holds.
+        self.running_drops.push((frames.len(), pending.id));
+        Ok(())
+    }
+
+    /// Releases every parked object whose `Drop` body has finished running.
+    ///
+    /// A body answers `Void` and nobody asked, so the frame's result is taken
+    /// back off the operand stack — the release is not a call any instruction
+    /// made, and leaving the unit behind would shift the value the interrupted
+    /// instruction was about to read.
+    fn finish_returned_drops(&mut self, frames: &[Frame]) {
+        while let Some(&(depth, id)) = self.running_drops.last() {
+            if frames.len() >= depth {
+                return;
+            }
+            self.running_drops.pop();
+            // A frame entered above the outermost one pushed its result; the
+            // outermost returns its answer instead of pushing it.
+            if depth > 1
+                && let Some(unit) = self.stack.pop()
+            {
+                self.heap.drop_value(unit);
+            }
+            self.heap.finish_pending_drop(id);
+        }
+    }
+
     /// Frees every local of every live frame and everything left on the operand
     /// stack.
     fn unwind(&mut self, frames: &mut Vec<Frame>) {
@@ -313,6 +379,9 @@ impl Vm<'_> {
         for value in self.stack.drain(..) {
             self.heap.drop_value(value);
         }
+        // The run is over, so there is nothing left to call a body with. The
+        // storage still has to go back.
+        self.heap.abandon_pending_drops();
     }
 
     fn dispatch_inner<const DEBUG: bool, const PROFILE: bool>(
@@ -336,7 +405,31 @@ impl Vm<'_> {
         // other instruction costs one store.
         let shadow = PROFILE.then(crate::profile::ShadowScope::open);
         let mut published = u32::MAX;
+        // The run's answer, held rather than returned: the last frame's release
+        // can park a `Drop` body, and that body is dispatched by this same loop
+        // — so the run is over when nothing is left to dispatch *and* nothing is
+        // owed.
+        let mut completed: Option<Value> = None;
         loop {
+            // A user `Drop` body the last release parked, before anything else:
+            // the object is still whole, and the body has to run before what it
+            // holds is released. Nothing is parked unless the program declares
+            // a `Drop`, so this is one length test on every other instruction.
+            if !self.running_drops.is_empty() {
+                self.finish_returned_drops(frames);
+            }
+            if self.heap.owes_drops() {
+                self.run_pending_drop(module, frames)?;
+                continue;
+            }
+            // Only once nothing is left to dispatch: a `Drop` body entered
+            // after the entry function returned is still a frame, and it has
+            // not run yet.
+            if let Some(value) = completed
+                && frames.is_empty()
+            {
+                return Ok(value);
+            }
             let depth = frames.len() - 1;
             let function_id = frames[depth].func;
             let pc = frames[depth].pc;
@@ -449,13 +542,15 @@ impl Vm<'_> {
                 Instruction::Return => {
                     let result = self.pop()?;
                     if let Some(value) = self.finish_frame(module, frames, result)? {
-                        return Ok(value);
+                        // The entry function's answer is the run's; a `Drop`
+                        // body dispatched after it answers only for itself.
+                        completed.get_or_insert(value);
                     }
                 }
                 Instruction::ReturnVoid => {
                     let result = Value::Void;
                     if let Some(value) = self.finish_frame(module, frames, result)? {
-                        return Ok(value);
+                        completed.get_or_insert(value);
                     }
                 }
                 Instruction::Call(index) => {

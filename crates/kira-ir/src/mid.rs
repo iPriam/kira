@@ -112,6 +112,15 @@ pub struct Lending {
     pub read_only: BorrowLending,
     /// How a `borrow mut` parameter arrives.
     pub write_through: BorrowLending,
+    /// How a `borrow` of a type that runs a user `Drop` arrives.
+    ///
+    /// Its own field because the two engines answer differently for a reason
+    /// neither of the others carries. A VM copy is a share of one object, so a
+    /// borrowed copy releases a share and runs no body; a native copy is a
+    /// second value, and releasing it would run the body while the caller still
+    /// holds what it was told about. So native lends one however it lends
+    /// everything else, and the VM copies it however it copies everything else.
+    pub user_drop: BorrowLending,
 }
 
 impl Lending {
@@ -120,14 +129,21 @@ impl Lending {
     pub const BY_VALUE: Lending = Lending {
         read_only: BorrowLending::ByValue,
         write_through: BorrowLending::ByValue,
+        user_drop: BorrowLending::ByValue,
     };
 }
 
 /// Builds the release plan for one function.
+///
+/// `drop_glue` says this function is the body of a type's user `Drop`. Its
+/// receiver is then excluded: the storage belongs to whatever is releasing the
+/// value, which releases the members itself once the body has run. Releasing it
+/// here would re-enter the same body on the same value.
 pub fn plan_function(
     function: &IrFunction,
     types: &TypeTable,
     lending: Lending,
+    drop_glue: bool,
 ) -> Result<ReleasePlan, MidError> {
     let local_count = function.locals.len();
     for &slot in &function.by_reference_params {
@@ -143,8 +159,10 @@ pub fn plan_function(
     for (index, &ty) in function.locals.iter().enumerate() {
         let slot = index as u32;
         let written_through = function.by_reference_params.contains(&slot);
+        let borrowed_drop = types.runs_user_drop(ty);
         let lent = match (written_through, function.by_pointer_params.contains(&slot)) {
             (true, _) => lending.write_through == BorrowLending::ByPointer,
+            (false, true) if borrowed_drop => lending.user_drop == BorrowLending::ByPointer,
             (false, read_only) => read_only && lending.read_only == BorrowLending::ByPointer,
         };
         let state_local = function
@@ -165,6 +183,9 @@ pub fn plan_function(
         if lent || state_local || !types.owns_heap(ty) {
             continue;
         }
+        if drop_glue && slot == 0 {
+            continue;
+        }
         slots.push(slot);
     }
     Ok(ReleasePlan { slots })
@@ -172,10 +193,25 @@ pub fn plan_function(
 
 /// Builds a release plan for every function in `program`, in function order.
 pub fn plan(program: &IrProgram, lending: Lending) -> Result<Vec<ReleasePlan>, MidError> {
+    let glue: std::collections::BTreeSet<u32> = program
+        .types
+        .structs()
+        .defs()
+        .iter()
+        .filter_map(|def| def.drop_glue)
+        .collect();
     program
         .functions
         .iter()
-        .map(|function| plan_function(function, &program.types, lending))
+        .enumerate()
+        .map(|(index, function)| {
+            plan_function(
+                function,
+                &program.types,
+                lending,
+                glue.contains(&(index as u32)),
+            )
+        })
         .collect()
 }
 
@@ -206,6 +242,7 @@ mod tests {
     const BY_POINTER: Lending = Lending {
         read_only: BorrowLending::ByPointer,
         write_through: BorrowLending::ByPointer,
+        user_drop: BorrowLending::ByPointer,
     };
 
     /// An empty type table: every type these tests use answers `owns_heap`
@@ -217,7 +254,7 @@ mod tests {
     #[test]
     fn only_the_slots_that_own_storage_are_released() {
         let function = function(vec![Type::INT, Type::String, Type::Bool, Type::String]);
-        let plan = plan_function(&function, &types(), BY_VALUE).expect("a plan");
+        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
         assert_eq!(plan.slots(), &[1, 3]);
         assert!(plan.releases(1));
         assert!(!plan.releases(0), "an integer has nothing to release");
@@ -231,7 +268,7 @@ mod tests {
         let mut function = function(vec![Type::String, Type::String]);
         function.param_count = 1;
         function.by_reference_params = vec![0];
-        let plan = plan_function(&function, &types(), BY_POINTER).expect("a plan");
+        let plan = plan_function(&function, &types(), BY_POINTER, false).expect("a plan");
         assert_eq!(plan.slots(), &[1]);
     }
 
@@ -243,7 +280,7 @@ mod tests {
         let mut function = function(vec![Type::String, Type::String]);
         function.param_count = 1;
         function.by_reference_params = vec![0];
-        let plan = plan_function(&function, &types(), BY_VALUE).expect("a plan");
+        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
         assert_eq!(plan.slots(), &[0, 1]);
     }
 
@@ -260,8 +297,9 @@ mod tests {
         let mixed = Lending {
             read_only: BorrowLending::ByPointer,
             write_through: BorrowLending::ByValue,
+            user_drop: BorrowLending::ByPointer,
         };
-        let plan = plan_function(&function, &types(), mixed).expect("a plan");
+        let plan = plan_function(&function, &types(), mixed, false).expect("a plan");
         assert_eq!(plan.slots(), &[0, 2]);
     }
 
@@ -271,7 +309,7 @@ mod tests {
         let mut function = function(vec![Type::String, Type::String]);
         function.native_state_locals =
             vec![None, Some(kira_runtime_abi::NativeStateTypeId::new(0))];
-        let plan = plan_function(&function, &types(), BY_VALUE).expect("a plan");
+        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
         assert_eq!(plan.slots(), &[0]);
     }
 
@@ -283,7 +321,7 @@ mod tests {
         function.by_reference_params = vec![0];
         function.native_state_locals = vec![Some(kira_runtime_abi::NativeStateTypeId::new(0))];
         assert!(matches!(
-            plan_function(&function, &types(), BY_VALUE),
+            plan_function(&function, &types(), BY_VALUE, false),
             Err(MidError::ConflictingSlotRole { slot: 0, .. })
         ));
     }
@@ -295,7 +333,7 @@ mod tests {
         let mut function = function(vec![Type::String]);
         function.by_reference_params = vec![7];
         assert!(matches!(
-            plan_function(&function, &types(), BY_VALUE),
+            plan_function(&function, &types(), BY_VALUE, false),
             Err(MidError::UnknownParameter { slot: 7, .. })
         ));
     }
@@ -305,7 +343,7 @@ mod tests {
     #[test]
     fn the_plan_is_in_slot_order() {
         let function = function(vec![Type::String; 5]);
-        let plan = plan_function(&function, &types(), BY_VALUE).expect("a plan");
+        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
         assert_eq!(plan.slots(), &[0, 1, 2, 3, 4]);
         assert!(plan.slots().windows(2).all(|pair| pair[0] < pair[1]));
     }

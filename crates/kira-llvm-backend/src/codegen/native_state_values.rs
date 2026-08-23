@@ -699,6 +699,7 @@ mod tests {
                     },
                 ],
                 c_layout: true,
+                drop_glue: None,
             })
             .expect("the struct table accepts one declaration");
         let ty = Type::Struct(struct_id);

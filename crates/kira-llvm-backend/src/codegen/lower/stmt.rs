@@ -151,7 +151,87 @@ impl FunctionLowering<'_, '_> {
         }
         let value = self.lower_expr(expr)?;
         let pointer = self.local_pointer(slot)?;
-        self.store_through(pointer, ty, value)
+        self.store_into_local(slot, pointer, ty, value)
+    }
+
+    /// Stores into a local slot, releasing what it held when it held anything.
+    ///
+    /// The flag is what "anything" means for a slot whose type runs a user
+    /// `Drop`: its zero is not a value, so releasing it would run a body on
+    /// something nobody wrote. Every other slot has no flag and takes the
+    /// ordinary path, where a zero handle releases nothing by itself.
+    fn store_into_local(
+        &mut self,
+        slot: u32,
+        pointer: LLVMValueRef,
+        ty: Type,
+        value: LLVMValueRef,
+    ) -> Result<(), LlvmError> {
+        let Some(flag) = self.live_flag(slot) else {
+            return self.store_through(pointer, ty, value);
+        };
+        self.release_local_if_live(slot, pointer, ty)?;
+        // SAFETY: `pointer` addresses a value of `ty`, `flag` an `i1`, and the
+        // builder is on a live block.
+        unsafe {
+            LLVMBuildStore(self.codegen.builder, value, pointer);
+            LLVMBuildStore(
+                self.codegen.builder,
+                LLVMConstInt(self.codegen.types.i1, 1, 0),
+                flag,
+            );
+        }
+        Ok(())
+    }
+
+    /// Releases a local whose type runs a user `Drop`, only if it holds a
+    /// value, and marks it empty.
+    fn release_local_if_live(
+        &mut self,
+        slot: u32,
+        pointer: LLVMValueRef,
+        ty: Type,
+    ) -> Result<(), LlvmError> {
+        let Some(flag) = self.live_flag(slot) else {
+            return self.codegen.release_at(pointer, ty);
+        };
+        let function = self.current_function();
+        // SAFETY: the builder is on a live block of `function`, `flag`
+        // addresses an `i1`, and both blocks are appended to that function.
+        let after = unsafe {
+            let held = LLVMBuildLoad2(
+                self.codegen.builder,
+                self.codegen.types.i1,
+                flag,
+                c"live".as_ptr(),
+            );
+            let live = LLVMAppendBasicBlockInContext(
+                self.codegen.context,
+                function,
+                c"drop.live".as_ptr(),
+            );
+            let after = LLVMAppendBasicBlockInContext(
+                self.codegen.context,
+                function,
+                c"drop.done".as_ptr(),
+            );
+            LLVMBuildCondBr(self.codegen.builder, held, live, after);
+            LLVMPositionBuilderAtEnd(self.codegen.builder, live);
+            after
+        };
+        self.codegen.release_at(pointer, ty)?;
+        // SAFETY: the builder is on the unterminated `live` block, and `after`
+        // belongs to the same function.
+        unsafe {
+            LLVMBuildStore(
+                self.codegen.builder,
+                LLVMConstInt(self.codegen.types.i1, 0, 0),
+                flag,
+            );
+            LLVMBuildBr(self.codegen.builder, after);
+            LLVMPositionBuilderAtEnd(self.codegen.builder, after);
+        }
+        Ok(())
     }
 
     /// Stores into an assignment target, walking its path to the slot to write.
@@ -343,6 +423,7 @@ impl FunctionLowering<'_, '_> {
             self.function,
             &self.codegen.program.types,
             self.codegen.lending(),
+            self.drop_glue,
         )
         .map_err(|error| LlvmError::internal(mid_error_detail(error)))?;
         for &slot in plan.slots() {
@@ -351,7 +432,7 @@ impl FunctionLowering<'_, '_> {
             // The slot itself, not a load of it: a drop reads its value through
             // a pointer anyway, and the frame is about to end, so nothing reads
             // the slot again.
-            self.codegen.release_at(pointer, ty)?;
+            self.release_local_if_live(slot, pointer, ty)?;
         }
         // SAFETY: the builder is positioned on an unterminated block, and
         // `value` matches the function's return type when present.

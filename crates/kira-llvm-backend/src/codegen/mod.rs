@@ -859,6 +859,10 @@ impl<'a> Codegen<'a> {
                 _ => kira_ir::mid::BorrowLending::ByValue,
             },
             write_through: kira_ir::mid::BorrowLending::ByPointer,
+            // Always lent, whatever the module kind: a copy of a value that
+            // runs a user `Drop` is a second value with the same body to run,
+            // and the release that runs it once would run it twice.
+            user_drop: kira_ir::mid::BorrowLending::ByPointer,
         }
     }
 
@@ -871,11 +875,21 @@ impl<'a> Codegen<'a> {
     /// sidecar by a host — none of which knows about a pointer this module
     /// decided to use, so those keep passing by value.
     fn param_is_pointer(&self, function: &IrFunction, slot: u32) -> bool {
-        function.param_by_reference(slot)
-            || (matches!(
-                self.kind,
-                ModuleKind::Executable | ModuleKind::NativeLiveLibrary
-            ) && function.param_by_pointer(slot))
+        if function.param_by_reference(slot) {
+            return true;
+        }
+        if !function.param_by_pointer(slot) {
+            return false;
+        }
+        // A borrow of a value that runs a user `Drop` is lent in every module
+        // kind; see the `user_drop` field of `kira_ir::mid::Lending`.
+        matches!(
+            self.kind,
+            ModuleKind::Executable | ModuleKind::NativeLiveLibrary
+        ) || function
+            .locals
+            .get(slot as usize)
+            .is_some_and(|&ty| self.program.types.runs_user_drop(ty))
     }
 
     fn llvm_type(&self, ty: Type) -> Result<LLVMTypeRef, LlvmError> {

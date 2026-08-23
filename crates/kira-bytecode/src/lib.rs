@@ -248,6 +248,7 @@ mod tests {
                 name: "Button".to_owned(),
                 fields: Vec::new(),
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("a fresh struct table takes the declaration");
         program.exports.push(IrExport {
@@ -320,6 +321,7 @@ mod tests {
             &program.functions[0],
             &program.types,
             kira_ir::mid::Lending::BY_VALUE,
+            false,
         )
         .expect("a plan");
         assert_eq!(plan.slots(), &[0, 2]);

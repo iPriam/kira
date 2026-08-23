@@ -113,6 +113,7 @@ impl<'h> Vm<'h> {
             frame_cache: scratch.frame_cache,
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,
+            running_drops: Vec::new(),
             trap_probe: None,
         }
     }

@@ -1,0 +1,156 @@
+import Foundation
+
+// User `Drop`: a body the engines run where they already release the value.
+// Prefix: drx / Drx.
+//
+// A type claims the compiler-known `Drop` trait and implements its one member.
+// The body runs once, before the type's own members are released, at every
+// point either engine releases a value of the type — a binding going out of
+// scope, a container being freed, a moved value dying in the callee that took
+// it.
+//
+// Ordering is what the printed section proves: the harness compares main's
+// output byte for byte across the VM and the native engine, so a body that ran
+// at a different moment on one of them fails there. The cases below prove the
+// rest: that a `Drop` value is still an ordinary value to use, that churning
+// one in a loop leaks nothing, and that a value moved into a callee is dropped
+// by the callee rather than twice.
+
+struct DrxTrace: Drop {
+    let tag: Int
+    function drop(borrow mut self) {
+        print(self.tag)
+        return
+    }
+}
+
+// A `Drop` type that owns heap storage: the members are released after the
+// body, so the body still reads them.
+struct DrxNamed: Drop {
+    let name: String
+    let tag: Int
+    function drop(borrow mut self) {
+        print(self.name)
+        return
+    }
+}
+
+// `Drop` claimed retroactively, for a type declared without a conformance list.
+struct DrxLate {
+    let tag: Int
+}
+
+extend DrxLate: Drop {
+    function drop(borrow mut self) {
+        print(self.tag)
+        return
+    }
+}
+
+// A container holding `Drop` values: freeing it releases them, which runs each
+// body.
+struct DrxPair {
+    let first: DrxTrace
+    let second: DrxTrace
+}
+
+function drxScoped(tag: Int) -> Int {
+    let held = DrxTrace(tag: tag)
+    return tag * 2
+}
+
+// Takes ownership: the value dies here, not at the binding the caller moved it
+// out of.
+function drxConsume(held: move DrxTrace) -> Int {
+    return held.tag + 1
+}
+
+// Borrows: the caller keeps the value, so nothing is released here.
+function drxRead(held: borrow DrxTrace) -> Int {
+    return held.tag * 10
+}
+
+function drxChurn(rounds: Int) -> Int {
+    var total = 0
+    var index = 0
+    while index < rounds {
+        let held = DrxNamed(name: "dr" + "x", tag: index)
+        total = total + held.tag
+        index = index + 1
+    }
+    return total
+}
+
+Test DrxAScopedValueIsStillOrdinaryToUse {
+    test {
+        return drxScoped(21)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test DrxABorrowLeavesTheValueUsable {
+    test {
+        let held = DrxTrace(tag: 3)
+        return drxRead(held) + held.tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+}
+
+Test DrxAMovedValueReachesTheCalleeWhole {
+    test {
+        let held = DrxTrace(tag: 8)
+        return drxConsume(move held)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+Test DrxARetroactiveDropIsAnOrdinaryConformance {
+    test {
+        let held = DrxLate(tag: 4)
+        return held.tag * 5
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+}
+
+Test DrxAContainerReleasesEveryDropItHolds {
+    test {
+        let pair = DrxPair(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
+        return pair.first.tag + pair.second.tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+// Churn: a heap-owning `Drop` type built and released 500 times, so a body that
+// leaked its members — or a release that ran none — scales into the harness
+// leak run.
+Test DrxChurningADropTypeLeaksNothing {
+    test {
+        return drxChurn(500)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(124750); return e }
+}
+
+// The order, printed. Every line here is one body running, and the sequence is
+// what the cross-backend byte comparison pins.
+function drxSection() -> Int {
+    print(700)
+    // Out of scope at the end of the call, before the caller resumes.
+    print(drxScoped(1))
+    // Moved into the callee, which is where it dies — printed once, before the
+    // caller's next line rather than at the end of this function.
+    let moved = DrxTrace(tag: 5)
+    print(drxConsume(move moved))
+    // Borrowed, so nothing is released until this function returns.
+    let kept = DrxTrace(tag: 7)
+    print(drxRead(kept))
+    // A container's members, released with it.
+    let pair = DrxPair(first: DrxTrace(tag: 11), second: DrxTrace(tag: 12))
+    print(pair.first.tag)
+    // Heap-owning: the body reads the member the release frees after it.
+    let named = DrxNamed(name: "drx-named", tag: 13)
+    print(named.tag)
+    let late = DrxLate(tag: 14)
+    print(late.tag)
+    print(701)
+    return 7
+}

@@ -264,7 +264,7 @@ answer would be invisible to every other user of both.
   A type whose members do not all copy is `KSEM297`, naming the member that owns
   storage a copy would have to clone.
 - **`Drop`** attaches a body the engines run where they already release the
-  value.
+  value. See [Drop](#drop).
 
 ### Receivers
 
@@ -279,6 +279,33 @@ function label() -> String                 // the same as `borrow self`
 A bare `self` is `KPAR075` — it reads like a consuming receiver, which this
 language does not have — and a receiver on a declaration that is not a method is
 `KSEM299`.
+
+### Drop
+
+A type claims `Drop` and implements its one member:
+
+```kira
+struct Handle: Drop {
+    let raw: Int
+    function drop(borrow mut self) { closeHandle(raw) }
+}
+```
+
+The body runs **once, before the type's own members are released**, at every
+point either engine releases a value of the type: a binding going out of scope,
+a container being freed, a value moved into a callee dying there rather than at
+the binding it was moved out of.
+
+Two rules follow, and neither is optional:
+
+- **The body is never called by name.** `value.drop()` is `KSEM300`. A release
+  is the compiler's to schedule, and a hand-written call would run the body a
+  second time and leave the value looking alive.
+- **The type moves rather than copies.** A copy would be a second value with the
+  same body to run. So a `Copyable` claim on a `Drop` type is `KSEM297`, and so
+  is one on a type that merely *holds* a `Drop` value.
+
+`drop` takes no arguments and returns nothing; anything else is `KSEM301`.
 
 ### What a trait is not
 

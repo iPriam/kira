@@ -182,7 +182,14 @@ impl FunctionLowering<'_, '_> {
                 values.push(pointer);
                 continue;
             }
-            values.push(self.lower_expr(argument)?);
+            // A borrow this module did not lend still arrives as a copy the
+            // callee owns, and the caller keeps the value it was read from.
+            let borrowed = callee.param_by_pointer(position as u32)
+                || callee.param_by_reference(position as u32);
+            values.push(match borrowed {
+                true => self.lower_borrowed_expr(argument)?,
+                false => self.lower_expr(argument)?,
+            });
         }
         let returns_value =
             self.codegen.program.functions[index as usize].return_type != Type::Void;

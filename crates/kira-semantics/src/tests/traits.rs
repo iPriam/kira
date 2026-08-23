@@ -308,3 +308,120 @@ fn a_conformance_declared_by_the_traits_own_package_is_accepted() {
     );
     assert!(codes.is_empty(), "{codes:?}");
 }
+
+const DROPPING: &str = "struct Handle: Drop {\n    let id: Int\n\
+                        \n    function drop(borrow mut self) { return }\n}\n";
+
+#[test]
+fn a_drop_conformance_with_a_drop_member_is_accepted() {
+    let items = diagnostics(&program(DROPPING));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_drop_conformance_with_no_drop_member_is_refused() {
+    let items = diagnostics(&program("struct Handle: Drop {\n    let id: Int\n}\n"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM301"))
+        .unwrap_or_else(|| panic!("expected a KSEM301, got {items:?}"));
+    assert!(
+        refusal.message.contains("presents no `drop`"),
+        "{refusal:?}"
+    );
+}
+
+#[test]
+fn a_drop_member_that_takes_or_returns_anything_is_refused() {
+    let items = diagnostics(&program(
+        "struct Handle: Drop {\n    let id: Int\n\
+         \n    function drop(borrow mut self, extra: Int) { return }\n}\n",
+    ));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert!(codes.contains(&"KSEM301".to_owned()), "{items:?}");
+}
+
+#[test]
+fn calling_drop_by_name_is_refused() {
+    let items = diagnostics(&format!(
+        "{DROPPING}@Main function main() {{ let h = Handle(id: 1) h.drop() return }}\n"
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM300"))
+        .unwrap_or_else(|| panic!("expected a KSEM300, got {items:?}"));
+    assert!(
+        refusal.message.contains("run by the release"),
+        "{refusal:?}"
+    );
+}
+
+#[test]
+fn a_drop_type_is_not_copyable() {
+    let items = diagnostics(&program(
+        "struct Handle: Copyable, Drop {\n    let id: Int\n\
+         \n    function drop(borrow mut self) { return }\n}\n",
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM297"))
+        .unwrap_or_else(|| panic!("expected a KSEM297, got {items:?}"));
+    assert!(refusal.message.contains("`Drop`"), "{refusal:?}");
+}
+
+#[test]
+fn a_drop_type_moves_when_it_is_bound() {
+    let items = diagnostics(&format!(
+        "{DROPPING}@Main function main() {{ let a = Handle(id: 1) let b = a print(a.id) return }}\n"
+    ));
+    assert!(!items.is_empty(), "binding a `Drop` value moves it");
+}
+
+#[test]
+fn a_drop_body_is_registered_as_the_types_glue() {
+    let program = analyze_text(&program(DROPPING));
+    let id = program
+        .types
+        .structs()
+        .lookup("Handle")
+        .expect("the struct is declared");
+    let def = program.types.structs().get(id).expect("the id resolves");
+    assert!(def.drop_glue.is_some(), "the body is recorded on the type");
+    // A type that runs a body is released wherever it is held, even when every
+    // member it holds is a scalar.
+    assert!(program.types.owns_heap(Type::Struct(id)));
+    assert!(program.types.moves_on_bind(Type::Struct(id)));
+}
+
+#[test]
+fn a_type_holding_a_drop_value_runs_one_too() {
+    let program = analyze_text(&program(&format!(
+        "{DROPPING}struct Box {{\n    let held: Handle\n}}\n"
+    )));
+    let id = program
+        .types
+        .structs()
+        .lookup("Box")
+        .expect("the struct is declared");
+    assert!(program.types.runs_user_drop(Type::Struct(id)));
+    assert!(program.types.moves_on_bind(Type::Struct(id)));
+}
+
+#[test]
+fn an_impl_block_for_drop_may_declare_only_drop() {
+    let items = diagnostics(&program(
+        "struct Handle {\n    let id: Int\n}\n\
+         extend Handle: Drop {\n    function drop(borrow mut self) { return }\n\
+         \n    function extra(borrow self) -> Int { return 1 }\n}\n",
+    ));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert!(codes.contains(&"KSEM294".to_owned()), "{items:?}");
+}

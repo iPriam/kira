@@ -20,6 +20,17 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
             .iter()
             .map(kira_runtime_abi::ForeignCallback::function),
     );
+    // A user `Drop` body is a root: nothing *calls* it, because what reaches it
+    // is a release, and a release is emitted from the type rather than from any
+    // body the walk below can see.
+    pending.extend(
+        program
+            .types
+            .structs()
+            .defs()
+            .iter()
+            .filter_map(|def| def.drop_glue),
+    );
 
     while let Some(index) = pending.pop_front() {
         let index = index as usize;

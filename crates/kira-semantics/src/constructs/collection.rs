@@ -188,6 +188,7 @@ impl<'a> Analyzer<'a> {
                     name: name.clone(),
                     fields: Vec::new(),
                     c_layout: false,
+                    drop_glue: None,
                 },
             ) {
                 Some(id) => {

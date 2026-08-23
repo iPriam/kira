@@ -377,13 +377,68 @@ impl TypeTable {
             | Type::Any
             | Type::Cell(_)
             | Type::CBlock => true,
+            // A type with a user `Drop` always owns something a release has to
+            // do — the body itself — so it is released even when every field it
+            // holds is a scalar.
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => {
-                    def.owning_c_slots().next().is_some()
+                    def.drop_glue.is_some()
+                        || def.owning_c_slots().next().is_some()
                         || def.fields.iter().any(|field| self.owns_heap(field.ty))
                 }
                 None => false,
             },
+            _ => false,
+        }
+    }
+
+    /// The function running `ty`'s user `Drop` body, when it declares one.
+    ///
+    /// Only a struct-shaped type can: a trait is claimed by a declaration, and
+    /// every declaration that can claim one becomes a struct row.
+    pub fn user_drop(&self, ty: Type) -> Option<u32> {
+        match ty {
+            Type::Struct(id) => self.structs.get(id).and_then(|def| def.drop_glue),
+            _ => None,
+        }
+    }
+
+    /// Whether releasing `ty` runs a user `Drop` body, directly or through
+    /// something it holds.
+    ///
+    /// Follows fields and array elements, because a release does: a struct
+    /// holding a `Drop` value releases it, and so runs its body. That is why
+    /// this — and not [`TypeTable::user_drop`] — is what decides whether
+    /// binding the value moves.
+    pub fn runs_user_drop(&self, ty: Type) -> bool {
+        self.reaches_user_drop(ty, &mut HashSet::new())
+    }
+
+    /// [`TypeTable::runs_user_drop`] with the set of shapes already being
+    /// walked.
+    ///
+    /// A shape can reach itself — a closure's representation struct may capture
+    /// a value of its own function type — and unlike
+    /// [`TypeTable::owns_heap`], which stops at the first owning member, this
+    /// walk has to visit everything before it can answer no. So it remembers
+    /// where it has been: a shape already open cannot be what makes itself run
+    /// a body.
+    fn reaches_user_drop(&self, ty: Type, open: &mut HashSet<Type>) -> bool {
+        if !open.insert(ty) {
+            return false;
+        }
+        match ty {
+            Type::Struct(id) => self.structs.get(id).is_some_and(|def| {
+                def.drop_glue.is_some()
+                    || def
+                        .fields
+                        .iter()
+                        .any(|field| self.reaches_user_drop(field.ty, open))
+            }),
+            Type::Array(id) => self
+                .arrays
+                .element(id)
+                .is_some_and(|element| self.reaches_user_drop(element, open)),
             _ => false,
         }
     }
@@ -441,7 +496,10 @@ impl TypeTable {
         if ty.moves_on_bind() {
             return true;
         }
-        self.owns_unique_c_storage(ty)
+        // A value that runs a user `Drop` body has exactly one release, so it
+        // has exactly one owner: a second binding would be a second body to
+        // run for storage that only goes away once.
+        self.owns_unique_c_storage(ty) || self.runs_user_drop(ty)
     }
 }
 
@@ -508,6 +566,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("declares");
         let points = table.array_of(Type::Struct(point));
@@ -536,6 +595,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("declares");
         assert!(!table.owns_heap(Type::Struct(scalars)));
@@ -550,6 +610,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(labelled)));
@@ -565,6 +626,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(nested)));
@@ -585,6 +647,7 @@ mod tests {
                     mutable: true,
                 }],
                 c_layout: false,
+                drop_glue: None,
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(holder)));

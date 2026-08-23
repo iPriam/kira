@@ -224,6 +224,17 @@ impl Heap {
     /// declaration order, so a cycle is unrepresentable — which is what bounds
     /// this recursion by the program's nesting depth.
     pub fn free_struct(&mut self, id: StructId) {
+        // A user `Drop` body runs when the *last* holder goes, and it runs
+        // before anything the value holds is released — so the object is parked
+        // whole rather than freed, and the interpreter, which is the only thing
+        // that can call Kira, finishes it. A handle that is not the last one
+        // owns nothing to release, so it falls through to the ordinary free.
+        if let Some(glue) = self.glue_of(id.0)
+            && self.last_holder_of(id)
+        {
+            self.park_pending_drop(id, glue);
+            return;
+        }
         let taken = match self.slots.get_mut(id.0 as usize) {
             Some(slot @ Some(Object::Struct(_))) => slot.take(),
             _ => None,
@@ -241,6 +252,19 @@ impl Heap {
         for field in fields {
             self.drop_value(field);
         }
+    }
+
+    /// Whether `id` is the last handle onto its fields.
+    fn last_holder_of(&self, id: StructId) -> bool {
+        matches!(
+            self.slots.get(id.0 as usize),
+            Some(Some(Object::Struct(fields))) if Rc::strong_count(fields) == 1
+        )
+    }
+
+    /// Parks a struct object until the interpreter has run its `Drop` body.
+    fn park_pending_drop(&mut self, id: StructId, glue: u32) {
+        self.pending_drops.push(PendingDrop { id, glue });
     }
 
     /// Current allocation counters.
@@ -299,7 +323,14 @@ impl Heap {
                     Some(Some(Object::Struct(fields))) => Rc::clone(fields),
                     _ => Rc::new(Vec::new()),
                 };
-                Value::Struct(StructId(self.alloc_object(Object::Struct(shared))))
+                let copy = StructId(self.alloc_object(Object::Struct(shared)));
+                // The `Drop` body belongs to the type, so every handle onto the
+                // same fields carries it: which handle is the last one is not
+                // known until one of them is the last one.
+                if let Some(glue) = self.glue_of(id.0) {
+                    self.drop_glue.insert(copy.0, glue);
+                }
+                Value::Struct(copy)
             }
             // The elements are shared rather than copied: a fresh handle onto
             // the same ones, and whichever array is written first copies them

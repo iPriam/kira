@@ -40,6 +40,12 @@ pub enum Instruction {
     ConstVoid,
     /// Push a copy of local slot `n` (strings are cloned).
     LoadLocal(u64),
+    /// Push local slot `n`, leaving unit behind.
+    ///
+    /// A value that runs a user `Drop` is never copied — binding one moves — so
+    /// reading it *takes* it: the slot no longer holds anything, and the frame
+    /// release must not run a body the value's new owner will run.
+    TakeLocal(u64),
     /// Pop the stack top into local slot `n`, dropping the slot's old value.
     StoreLocal(u64),
     /// Pop and drop the stack top.
@@ -256,6 +262,23 @@ pub enum Instruction {
     /// names never reach the runtime. The compiler resolves names to indices
     /// and fills every field — defaults included — before emitting this.
     NewStruct(u64),
+    /// Pop `fields` values and push a struct holding them, recording the
+    /// function that runs its type's user `Drop` body.
+    ///
+    /// The VM is structurally typed, so a heap object cannot be asked what type
+    /// it is when the last holder goes — and that is exactly the moment the
+    /// body has to run. So the answer travels with the construction, which is
+    /// the one place the type is known.
+    ///
+    /// A separate instruction rather than an operand on [`Instruction::NewStruct`]
+    /// because every struct in every program that declares no `Drop` would
+    /// otherwise carry eight bytes saying so.
+    NewStructDropping {
+        /// How many field values to pop, first field deepest.
+        fields: u64,
+        /// The function running the type's user `Drop` body.
+        glue: u32,
+    },
     /// Pop a struct, push a copy of field `n`, and drop the struct.
     GetField(u64),
     /// Pop a pointer word and push it advanced by `offset` bytes.
@@ -844,6 +867,15 @@ mod opcode {
     // `FOREIGN_INDEX`; both are nullary and only retag one 64-bit VM value.
     pub const CONVERT_INT_TO_RAW_PTR: u8 = 0x6f;
     pub const CONVERT_RAW_PTR_TO_INT: u8 = 0x70;
+
+    /// Construction of a struct whose type declares a user `Drop`. Appended
+    /// after `CONVERT_RAW_PTR_TO_INT`, which is where the set ended before it;
+    /// adding an opcode is not an ABI change.
+    pub const NEW_STRUCT_DROPPING: u8 = 0x71;
+
+    /// Reading a local that runs a user `Drop`, which takes it. Appended after
+    /// `NEW_STRUCT_DROPPING`; adding an opcode is not an ABI change.
+    pub const TAKE_LOCAL: u8 = 0x72;
 }
 
 #[cfg(test)]
