@@ -94,8 +94,19 @@ impl LldbLaunch {
             commands.push(format!("breakpoint set --name {symbol}"));
         }
         for (symbol, condition) in &self.conditional_breakpoints {
+            // `--skip-prologue false` is what makes the condition mean anything.
+            //
+            // The condition reads the ARGUMENT REGISTERS, and those hold the
+            // arguments only at the function's first instruction. LLDB's default
+            // is to skip the prologue, and a prologue spills its arguments to
+            // the stack and reuses the registers — so an optimized build, whose
+            // prologue is nothing, matched, and a debug build silently never
+            // did: the breakpoint resolved a hundred bytes in, at an inlined
+            // call site, with `$rdi` long since something else. The program ran
+            // to completion and every command after `run` then failed with
+            // "requires a process which is currently stopped".
             commands.push(format!(
-                "breakpoint set --name {symbol} --condition {}",
+                "breakpoint set --name {symbol} --skip-prologue false --condition {}",
                 quote_command_argument(condition)
             ));
         }
@@ -319,10 +330,14 @@ mod tests {
     fn commands_include_conditional_breakpoints() {
         let mut launch = LldbLaunch::from_info("demo.exe", &info());
         launch.add_conditional_breakpoint("kira_vm_debug_probe", "function_id == 3 && pc == 2");
-        assert!(launch.commands().iter().any(|command| {
-            command
-                == "breakpoint set --name kira_vm_debug_probe --condition \"function_id == 3 && pc == 2\""
-        }));
+        // The prologue flag is part of the command, not decoration: the
+        // condition reads argument registers, which hold the arguments only at
+        // the function's first instruction.
+        let expected = concat!(
+            "breakpoint set --name kira_vm_debug_probe --skip-prologue false ",
+            "--condition \"function_id == 3 && pc == 2\""
+        );
+        assert!(launch.commands().iter().any(|command| command == expected));
     }
 
     #[test]

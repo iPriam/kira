@@ -17,6 +17,17 @@ use kira_debug::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// Why a session could not start, with the target it still owns.
+///
+/// The target is boxed to keep the error small enough to return by value on
+/// every path; the caller owes its artifacts a cleanup either way.
+pub struct StartFailure {
+    /// What went wrong.
+    pub reason: String,
+    /// The prepared target whose build artifacts are still on disk.
+    pub target: Box<PreparedTarget>,
+}
+
 /// How long a launched target may take to report its first stop.
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
 /// How much of the VM's published state text is read at a stop.
@@ -99,40 +110,60 @@ pub struct Session {
 
 impl Session {
     /// Launches `target` under a debug adapter and configures it.
-    pub fn start(id: String, target: PreparedTarget) -> Result<Self, String> {
-        let mut client = DapClient::start(Engine::DebugAdapter).map_err(|error| {
-            format!("{error}; set KIRA_LLDB_DAP to the `lldb-dap` executable to use another one")
-        })?;
-        let capabilities = client
-            .request(
-                "initialize",
-                json!({
-                    "clientID": "kira-lldb-mcp",
-                    "clientName": "Kira LLDB",
-                    "adapterID": "lldb-dap",
-                    "pathFormat": "path",
-                    "linesStartAt1": true,
-                    "columnsStartAt1": true,
-                    "supportsVariableType": true,
-                    "supportsMemoryReferences": true,
-                }),
-                DEFAULT_TIMEOUT,
-            )
-            .map_err(|error| error.to_string())?;
+    /// Starts a session over a prepared target.
+    ///
+    /// On failure the target comes back alongside the reason, so its build
+    /// artifacts stay somebody's to clean rather than dropping silently.
+    pub fn start(id: String, target: PreparedTarget) -> Result<Self, StartFailure> {
+        let launch_arguments = json!({
+            "program": target.executable,
+            "args": target.arguments,
+            "cwd": std::env::current_dir().unwrap_or_default(),
+            "stopAtEntry": false,
+            "noDebug": false,
+        });
+        let mut client = match DapClient::start(Engine::DebugAdapter) {
+            Ok(client) => client,
+            Err(error) => {
+                return Err(StartFailure {
+                    reason: format!(
+                        "{error}; set KIRA_LLDB_DAP to the `lldb-dap` executable to use another one"
+                    ),
+                    target: Box::new(target),
+                });
+            }
+        };
+        let initialized = client.request(
+            "initialize",
+            json!({
+                "clientID": "kira-lldb-mcp",
+                "clientName": "Kira LLDB",
+                "adapterID": "lldb-dap",
+                "pathFormat": "path",
+                "linesStartAt1": true,
+                "columnsStartAt1": true,
+                "supportsVariableType": true,
+                "supportsMemoryReferences": true,
+            }),
+            DEFAULT_TIMEOUT,
+        );
+        let capabilities = match initialized {
+            Ok(capabilities) => capabilities,
+            Err(error) => {
+                return Err(StartFailure {
+                    reason: error.to_string(),
+                    target: Box::new(target),
+                });
+            }
+        };
         client.set_capabilities(capabilities);
-        client
-            .await_configuration(
-                "launch",
-                json!({
-                    "program": target.executable,
-                    "args": target.arguments,
-                    "cwd": std::env::current_dir().unwrap_or_default(),
-                    "stopAtEntry": false,
-                    "noDebug": false,
-                }),
-                LAUNCH_TIMEOUT,
-            )
-            .map_err(|error| error.to_string())?;
+        let configured = client.await_configuration("launch", launch_arguments, LAUNCH_TIMEOUT);
+        if let Err(error) = configured {
+            return Err(StartFailure {
+                reason: error.to_string(),
+                target: Box::new(target),
+            });
+        }
         let mut session = Self {
             id,
             target,
@@ -142,11 +173,27 @@ impl Session {
             touched_sources: BTreeSet::new(),
             stepping: false,
         };
-        session.send_breakpoints()?;
-        session
+        if let Err(error) = session.send_breakpoints() {
+            // The adapter is up, so it goes down properly; the target comes
+            // back for the caller to clean.
+            let Self { client, target, .. } = session;
+            let _ = client.disconnect(true);
+            return Err(StartFailure {
+                reason: error.to_string(),
+                target: Box::new(target),
+            });
+        }
+        let done = session
             .client
-            .request("configurationDone", json!({}), DEFAULT_TIMEOUT)
-            .map_err(|error| error.to_string())?;
+            .request("configurationDone", json!({}), DEFAULT_TIMEOUT);
+        if let Err(error) = done {
+            let Self { client, target, .. } = session;
+            let _ = client.disconnect(true);
+            return Err(StartFailure {
+                reason: error.to_string(),
+                target: Box::new(target),
+            });
+        }
         Ok(session)
     }
 
@@ -486,8 +533,12 @@ impl Session {
 
     /// Ends the session and removes the artifacts its target owned.
     pub fn close(self) -> (Option<i32>, String) {
+        // Disconnect before cleaning: on Windows, deleting the executable of a
+        // debuggee that is still running fails with a sharing violation, so the
+        // target has to be dead before its artifacts are removed.
+        let (code, errors) = self.client.disconnect(true);
         self.target.clean();
-        self.client.disconnect(true)
+        (code, errors)
     }
 }
 
@@ -594,6 +645,19 @@ mod tests {
         }
     }
 
+    /// The registers this HOST passes the probe's two arguments in.
+    ///
+    /// Asked rather than written down: the pair is `$rdi`/`$rsi` under System
+    /// V, `$rcx`/`$rdx` on Windows and `$x0`/`$x1` on aarch64, so a literal
+    /// condition pins the tests to one ABI and fails everywhere else. The
+    /// condition's SHAPE is what these tests are about; which registers carry it
+    /// is `probe_registers`' business.
+    fn condition_for(function_id: u32, pc: u32) -> String {
+        let (function_register, pc_register) =
+            kira_debug::probe_registers().expect("the test host has known probe registers");
+        format!("({function_register} == {function_id} && {pc_register} == {pc})")
+    }
+
     #[test]
     fn several_kira_breakpoints_become_one_probe_condition() {
         let target = target(Backend::Vm);
@@ -601,7 +665,7 @@ mod tests {
         let second = kira_breakpoint(2, 3, None);
         assert_eq!(
             probe_condition(&[&first, &second], &target).as_deref(),
-            Some("($rcx == 4 && $rdx == 0) || ($rcx == 4 && $rdx == 3)")
+            Some(format!("{} || {}", condition_for(4, 0), condition_for(4, 3))).as_deref()
         );
     }
 
@@ -612,7 +676,7 @@ mod tests {
         let breakpoint = kira_breakpoint(1, 0, Some("$rax > 100"));
         assert_eq!(
             probe_condition(&[&breakpoint], &target).as_deref(),
-            Some("(($rcx == 4 && $rdx == 0) && ($rax > 100))")
+            Some(format!("({} && ($rax > 100))", condition_for(4, 0))).as_deref()
         );
     }
 
@@ -648,7 +712,7 @@ mod tests {
             probe_request(false, &[&breakpoint], &target),
             Some(json!({
                 "name": "kira_vm_debug_probe",
-                "condition": "($rcx == 4 && $rdx == 2)",
+                "condition": condition_for(4, 2),
             }))
         );
     }

@@ -144,8 +144,11 @@ impl ConstValue {
     #[must_use]
     pub fn as_extent(self) -> Option<u32> {
         match self {
-            ConstValue::Uint(value) => u32::try_from(value).ok(),
-            ConstValue::Int(value) => u32::try_from(value).ok(),
+            // Zero is refused along with the negatives: no dialect accepts a
+            // workgroup dimension of zero, so folding one here would only move
+            // the failure into backend output.
+            ConstValue::Uint(value) => u32::try_from(value).ok().filter(|extent| *extent >= 1),
+            ConstValue::Int(value) => u32::try_from(value).ok().filter(|extent| *extent >= 1),
             ConstValue::Bool(_) | ConstValue::Float(_) => None,
         }
     }
@@ -395,15 +398,30 @@ impl BinaryOp {
     pub fn is_comparison(self) -> bool {
         matches!(
             self,
-            BinaryOp::Eq
-                | BinaryOp::Ne
-                | BinaryOp::Lt
-                | BinaryOp::Le
-                | BinaryOp::Gt
-                | BinaryOp::Ge
-                | BinaryOp::And
-                | BinaryOp::Or
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         )
+    }
+
+    /// Whether the operator orders one value against another.
+    ///
+    /// Split from [`Self::is_comparison`] because equality over booleans is
+    /// legal in every dialect while an *ordering* over them is not: `true <
+    /// false` is a type error everywhere, so it is one here too.
+    pub fn is_ordering(self) -> bool {
+        matches!(
+            self,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        )
+    }
+
+    /// Whether the operator is a logical connective over two booleans.
+    ///
+    /// Split from [`Self::is_comparison`] because the two demand different
+    /// operands: a comparison needs two values of one (orderable or equatable)
+    /// type and answers `Bool`, while `&&`/`||` need *Bool* operands — every
+    /// target dialect treats `1 && 2` as a type error, not as C's truthiness.
+    pub fn is_logical(self) -> bool {
+        matches!(self, BinaryOp::And | BinaryOp::Or)
     }
 }
 
@@ -468,6 +486,41 @@ pub enum BuiltinFn {
     AtomicAdd,
 }
 
+impl BuiltinFn {
+    /// Whether every argument must be a float scalar or float vector of one
+    /// shape — the component-wise math family.
+    pub fn wants_floats(self) -> bool {
+        matches!(
+            self,
+            BuiltinFn::Abs
+                | BuiltinFn::Floor
+                | BuiltinFn::Ceil
+                | BuiltinFn::Min
+                | BuiltinFn::Max
+                | BuiltinFn::Clamp
+                | BuiltinFn::Mix
+                | BuiltinFn::Step
+                | BuiltinFn::Smoothstep
+                | BuiltinFn::Pow
+                | BuiltinFn::Sqrt
+                | BuiltinFn::Sin
+                | BuiltinFn::Cos
+                | BuiltinFn::Tan
+                | BuiltinFn::Exp
+                | BuiltinFn::Log
+                | BuiltinFn::Fract
+        )
+    }
+
+    /// Whether every argument must be a float vector of one shape.
+    pub fn wants_vectors(self) -> bool {
+        matches!(
+            self,
+            BuiltinFn::Dot | BuiltinFn::Cross | BuiltinFn::Normalize | BuiltinFn::Length
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,8 +529,14 @@ mod tests {
     #[test]
     fn a_comparison_answers_bool_whatever_it_compares() {
         assert!(BinaryOp::Lt.is_comparison());
-        assert!(BinaryOp::And.is_comparison());
+        assert!(BinaryOp::Eq.is_comparison());
         assert!(!BinaryOp::Add.is_comparison());
+        // A logical connective is NOT one. `&&` answers a `Bool`, but only
+        // because it already took two — `check::expr` settles it in its own
+        // branch before this question is asked, and letting it through here
+        // would type `1 && 2` as a comparison of two equal types.
+        assert!(!BinaryOp::And.is_comparison());
+        assert!(!BinaryOp::Or.is_comparison());
     }
 
     #[test]

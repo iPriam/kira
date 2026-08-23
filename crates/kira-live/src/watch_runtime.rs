@@ -35,6 +35,7 @@ impl SourceWatcher {
             _watcher: watcher,
             events,
             registered: Vec::new(),
+            watching_for_arrival: false,
         };
         let set = source_watcher.set.clone();
         source_watcher.register_roots(&set)?;
@@ -123,7 +124,20 @@ impl SourceWatcher {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let first = match self.events.recv_timeout(remaining) {
                 Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => return Ok(Vec::new()),
+                Err(RecvTimeoutError::Timeout) => {
+                    // A root that does not exist yet cannot be watched; the
+                    // fallback watches the nearest existing ancestor and waits
+                    // for the tree to appear. Installing a recursive inotify
+                    // watch is not atomic with the directories being created,
+                    // so `mkdir -p a/b && write a/b/f` can finish before the
+                    // watch on `a` exists and the creation is never reported.
+                    //
+                    // Events are a hint; the snapshot is the truth. Reconciling
+                    // against it on the way out costs a walk only on the timeout
+                    // path, and only while a root is still missing — once the
+                    // tree exists the watches are real and this never runs.
+                    return self.reconcile_on_arrival();
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     if reconnects >= MAX_RECONNECT_ATTEMPTS {
                         return Err(WatchError::Disconnected);
@@ -148,10 +162,35 @@ impl SourceWatcher {
             self.record_result(first, &mut pending)?;
             self.collect_debounced(&deadline, &mut pending)?;
             let changes = self.finish_pending(pending)?;
-            if !changes.is_empty() || Instant::now() >= deadline {
+            if !changes.is_empty() {
                 return Ok(changes);
             }
+            if Instant::now() >= deadline {
+                return self.reconcile_on_arrival();
+            }
         }
+    }
+
+    /// The changes a walk finds when the events could not be trusted.
+    ///
+    /// Both ways out of `wait_for` with nothing to report come here. Events for
+    /// paths outside the source set are filtered, so a batch can arrive, leave
+    /// `pending` empty, and short-circuit before any snapshot is taken — which
+    /// is the same blind spot as receiving no event at all.
+    fn reconcile_on_arrival(&mut self) -> Result<Vec<Change>, WatchError> {
+        if !self.watching_for_arrival {
+            return Ok(Vec::new());
+        }
+        let changes = self.finish_pending(PendingEvents {
+            rescan: true,
+            ..PendingEvents::default()
+        })?;
+        // Every root exists now, so the platform watches are real ones and the
+        // events can be trusted again.
+        if self.set.roots().iter().all(|root| root.exists()) {
+            self.watching_for_arrival = false;
+        }
+        Ok(changes)
     }
 
     /// Keeps events arriving during one save in the same batch.
@@ -241,6 +280,19 @@ impl SourceWatcher {
 
     /// Registers roots not already covered by this platform watcher.
     fn register_roots(&mut self, set: &WatchSet) -> Result<(), WatchError> {
+        // A root that does not exist yet is watched through the nearest
+        // existing ancestor, and installing a recursive watch is not atomic
+        // with the directories being created — `mkdir -p a/b && write a/b/f`
+        // can finish before the watch on `a` exists, and nothing reports it.
+        // While that is true, events are a hint and the snapshot is the truth.
+        // Sticky. Re-registration happens again after the tree appears — a
+        // transient notify error re-registers, and by then every root exists —
+        // so assigning here cleared the flag before the arrival was ever
+        // reported, and the reconcile that existed to catch it never ran.
+        // Cleared in `reconcile_on_arrival`, once the arrival has been reported.
+        if set.roots().iter().any(|root| !root.exists()) {
+            self.watching_for_arrival = true;
+        }
         let desired = set.event_roots();
         let mut index = 0;
         while index < self.registered.len() {
