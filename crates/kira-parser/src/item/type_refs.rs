@@ -7,7 +7,7 @@
 
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Param, TypeAliasDecl, TypeRef, TypeRefId};
+use kira_syntax_model::ast::{Param, ReceiverDecl, TypeAliasDecl, TypeRef, TypeRefId};
 use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
@@ -61,9 +61,32 @@ impl Parser<'_> {
     // ----- shared signature pieces ---------------------------------------
 
     pub(crate) fn parse_params(&mut self) -> Vec<Param> {
+        let (receiver, params) = self.parse_signature_params();
+        if let Some(receiver) = receiver {
+            self.error(
+                receiver.span,
+                "KPAR074",
+                "only a method declares a `self` receiver, and this declaration runs on no \
+                 value; drop the receiver",
+            );
+        }
+        params
+    }
+
+    /// Parses `( [self,] <param>* )`, reporting the receiver separately.
+    ///
+    /// A leading `self` — bare, `borrow self`, or `borrow mut self` — is the
+    /// receiver rather than a parameter: it names no type, because its type is
+    /// whatever the declaration is a method of. Every other position calls
+    /// [`Parser::parse_params`], which refuses one.
+    pub(crate) fn parse_signature_params(&mut self) -> (Option<ReceiverDecl>, Vec<Param>) {
         let mut params = Vec::new();
         if !self.expect(TokenKind::LParen) {
-            return params;
+            return (None, params);
+        }
+        let receiver = self.parse_receiver();
+        if receiver.is_some() && !self.at(TokenKind::RParen) {
+            self.expect(TokenKind::Comma);
         }
         while !self.at(TokenKind::RParen) && !self.at_eof() {
             let before = self.pos;
@@ -78,7 +101,52 @@ impl Parser<'_> {
             }
         }
         self.expect(TokenKind::RParen);
-        params
+        (receiver, params)
+    }
+
+    /// Consumes a written `self` receiver at the head of a parameter list.
+    ///
+    /// `self` is an ordinary identifier everywhere else, so the receiver is
+    /// committed to only when the name is followed by `,` or `)` — a parameter
+    /// *named* `self` writes `self: T` and still parses as one.
+    ///
+    /// Only the two borrow modes reach a receiver. A consuming receiver would
+    /// be a method that destroys the value it was called on, which is a
+    /// different call rule at every site; it is refused by name rather than
+    /// read as a borrow.
+    fn parse_receiver(&mut self) -> Option<ReceiverDecl> {
+        let start = self.current().span;
+        let (mutable, offset) = if self.at_word("borrow")
+            && self.peek_is_word(1, "mut")
+            && self.peek_is_word(2, "self")
+        {
+            (true, 3)
+        } else if self.at_word("borrow") && self.peek_is_word(1, "self") {
+            (false, 2)
+        } else if self.at_word("self") {
+            (false, 1)
+        } else {
+            return None;
+        };
+        if !matches!(self.peek(offset).kind, TokenKind::Comma | TokenKind::RParen) {
+            return None;
+        }
+        // A bare `self` is refused rather than read as a borrow: it reads like
+        // the consuming receiver it is not.
+        let bare = offset == 1;
+        for _ in 0..offset {
+            self.bump();
+        }
+        let span = Span::from_bounds(start.start, self.previous_end());
+        if bare {
+            self.error(
+                span,
+                "KPAR075",
+                "write `borrow self` or `borrow mut self`: a receiver borrows, and a bare \
+                 `self` would read as a method that consumes the value it was called on",
+            );
+        }
+        Some(ReceiverDecl { mutable, span })
     }
 
     fn parse_param(&mut self) -> Option<Param> {

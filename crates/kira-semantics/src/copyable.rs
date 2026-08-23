@@ -29,12 +29,12 @@ struct NotCopyable {
     member: String,
     /// That member's type, as a user sees it.
     ty: String,
-    /// The type the member belongs to, when it is not the annotated one.
+    /// The type the member belongs to.
     ///
-    /// `Some` for a transitively non-copyable member, so a nested struct that
-    /// owns a `String` is reported at the member that owns it rather than at the
-    /// field that merely holds it.
-    owner: Option<String>,
+    /// Named separately from the claiming type so a transitively non-copyable
+    /// member is reported at the member that owns it rather than at the field
+    /// that merely holds it.
+    owner: String,
 }
 
 impl Analyzer<'_> {
@@ -48,24 +48,45 @@ impl Analyzer<'_> {
         for (source, span, name, ty) in claims {
             self.source = source;
             let mut seen = HashSet::new();
-            if let Some(reason) = self.not_copyable(ty, &mut seen) {
-                let NotCopyable { member, ty, owner } = reason;
-                let where_it_is = match owner {
-                    Some(owner) if owner != name => format!("`{owner}`'s member `{member}`"),
-                    _ => format!("its member `{member}`"),
-                };
+            if let Some(reason) = self.not_copyable_reason(&name, ty, &mut seen) {
                 self.emit(
                     span,
                     "KIR005",
                     format!(
-                        "`{name}` derives `Copy`, but {where_it_is} has type `{ty}`, which is not \
-                         copyable — it owns storage a copy would have to clone — so `{name}` moves \
-                         rather than copies. Remove the derive and let it move, borrow it, or give \
-                         it an explicit duplication."
+                        "`{name}` derives `Copy`, but {reason}, so `{name}` moves rather than \
+                         copies. Remove the derive and let it move, borrow it, or give it an \
+                         explicit duplication."
                     ),
                 );
             }
         }
+    }
+
+    /// Why `ty` is not copyable, phrased as a clause naming the member that
+    /// owns storage, or `None` when it is copyable.
+    ///
+    /// `claimed` is the type the assertion was written on: an offending member
+    /// of that type itself reads as "its member", and one reached through
+    /// another type names the type it belongs to, which is where the fix goes.
+    ///
+    /// Shared by the two spellings of the same assertion — `@Derive(Copy)` and
+    /// the `Copyable` trait — so both name the offending member identically and
+    /// neither can drift from the other.
+    pub(crate) fn not_copyable_reason(
+        &self,
+        claimed: &str,
+        ty: Type,
+        seen: &mut HashSet<Type>,
+    ) -> Option<String> {
+        let NotCopyable { member, ty, owner } = self.not_copyable(ty, seen)?;
+        let where_it_is = match owner == claimed {
+            true => format!("its member `{member}`"),
+            false => format!("`{owner}`'s member `{member}`"),
+        };
+        Some(format!(
+            "{where_it_is} has type `{ty}`, which is not copyable — it owns storage a copy would \
+             have to clone"
+        ))
     }
 
     /// Every `@Derive(Copy)` written in the program, resolved to its type.
@@ -174,7 +195,7 @@ impl Analyzer<'_> {
         Some(NotCopyable {
             member: member.to_owned(),
             ty: self.type_name(ty),
-            owner: Some(owner.to_owned()),
+            owner: owner.to_owned(),
         })
     }
 }

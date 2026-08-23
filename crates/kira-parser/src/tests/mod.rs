@@ -24,6 +24,7 @@ mod native_state;
 mod ownership;
 mod precedence;
 mod recovery;
+mod traits;
 
 use crate::*;
 use kira_runtime_abi::Execution;

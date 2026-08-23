@@ -32,7 +32,20 @@ impl<'a> Analyzer<'a> {
     /// `false` to `true`, so the iteration is monotonic and terminates when a
     /// pass changes nothing.
     pub(crate) fn collect_mutating_methods(&mut self, callables: &[Callable<'a>]) {
-        self.mutating_methods = vec![false; callables.len()];
+        // A written `borrow mut self` seeds the fixpoint: it says the body
+        // writes through the receiver, and it means that whether or not a
+        // statement in the body does so yet. Only the seed is declared; every
+        // other entry is still discovered, so the iteration stays monotone.
+        self.mutating_methods = callables
+            .iter()
+            .map(|callable| {
+                callable.receiver.is_some()
+                    && callable
+                        .function
+                        .receiver
+                        .is_some_and(|receiver| receiver.mutable)
+            })
+            .collect();
         loop {
             let mut changed = false;
             for (index, callable) in callables.iter().enumerate() {

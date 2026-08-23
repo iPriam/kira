@@ -66,9 +66,13 @@ impl<'a> Analyzer<'a> {
                 | Item::TypeAlias(_)
                 | Item::Import(_)
                 | Item::Extend(_)
+                | Item::Trait(_)
                 | Item::Unsupported(_) => {}
             }
         }
+        // Before specialization, so a trait default a class inherits specializes
+        // on its class-typed parameters exactly as a written method does.
+        self.trait_callables(&mut callables);
         self.specialize_callables(&mut callables);
         callables
     }

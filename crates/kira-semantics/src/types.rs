@@ -318,6 +318,21 @@ impl Analyzer<'_> {
             );
             return Type::Error;
         }
+        // A trait classifies types; it is not one. A value that carried its own
+        // dispatch would be a different feature from the static conformance
+        // this language has, so the name is refused here rather than resolved
+        // to something that only looks like it works.
+        if self.traits.contains_key(&text) || crate::traits::is_builtin_trait(&text) {
+            self.emit(
+                span,
+                "KSEM295",
+                format!(
+                    "`{text}` is a trait, so it names no value: a trait says what a type \
+                     presents, not what a binding holds. Name the conforming type here."
+                ),
+            );
+            return Type::Error;
+        }
         if let Some(id) = self.visible_struct_qualified(&qualified) {
             self.link_type_name(&text, span);
             return Type::Struct(id);

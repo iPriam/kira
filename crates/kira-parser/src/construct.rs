@@ -62,7 +62,7 @@ impl Parser<'_> {
         self.at(TokenKind::Identifier)
             && self.text_of(self.current().span) == "extend"
             && self.peek(1).kind == TokenKind::Identifier
-            && self.peek(2).kind == TokenKind::LBrace
+            && matches!(self.peek(2).kind, TokenKind::LBrace | TokenKind::Colon)
     }
 
     /// Parses `extend Family { [@Native] function ... }`, with `extend` at the
@@ -89,6 +89,19 @@ impl Parser<'_> {
             );
             Symbol::ERROR
         };
+        // `extend T: Trait { … }` is the impl block, and it may name exactly one
+        // trait: a block implements the members of one trait for one type, so a
+        // second name would have no members of its own to carry.
+        let conformance = self.parse_trait_list();
+        let conforms = conformance.first().copied();
+        for extra in conformance.iter().skip(1) {
+            self.error(
+                extra.span,
+                "KPAR076",
+                "an `extend` block implements one trait; write a second block for the \
+                 second trait",
+            );
+        }
         let mut methods = Vec::new();
         self.expect(TokenKind::LBrace);
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
@@ -149,6 +162,7 @@ impl Parser<'_> {
         Some(ExtendDecl {
             name,
             name_span,
+            conforms,
             methods,
             span,
         })
@@ -169,6 +183,9 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
+        // `: traits` first, `extends parents` second — the same two clauses, in
+        // the same order, a struct and a class write.
+        let traits = self.parse_trait_list();
         let mut deferred = Vec::new();
         let mut extends = Vec::new();
         self.skip_construct_header_clauses(&mut extends, &mut deferred);
@@ -182,6 +199,7 @@ impl Parser<'_> {
             kind: ConstructKind::Family,
             name,
             name_span,
+            traits,
             fields: body.fields,
             methods: body.methods,
             inits: body.inits,
@@ -206,6 +224,7 @@ impl Parser<'_> {
         } else {
             Vec::new()
         };
+        let traits = self.parse_trait_list();
         let mut body = ConstructBody::default();
         self.parse_construct_body(&mut body, Some((family, family_span)));
         let span = Span::from_bounds(start.start, self.previous_end());
@@ -217,6 +236,7 @@ impl Parser<'_> {
             },
             name,
             name_span,
+            traits,
             fields: body.fields,
             methods: body.methods,
             inits: body.inits,

@@ -1,0 +1,243 @@
+import Foundation
+
+// Traits: declaration, conformance, defaults, and retroactive implementation.
+// Prefix: trx / Trx.
+//
+// A trait names a set of members a type may promise to present. A bodyless
+// member is a requirement; one with a body is a default a conforming type
+// inherits unless it writes its own. Conformance is spelled with `:` on the
+// declaration, or retroactively with `extend T: Trait { … }`. Dispatch is
+// static: `value.member()` resolves to the implementation at type-check time,
+// so every case here is an ordinary direct call on both engines.
+//
+// Exercises: a requirement implemented in the type's own body; a default
+// inherited; a default overridden; a marker trait with no members; a
+// retroactive impl on a struct declared elsewhere in the package; conformance
+// on a class, including a subclass inheriting the implementation; conformance
+// on a construct-backed declaration; the compiler-known `Copyable` claim; a
+// default that calls a requirement and so runs the conforming type's body; a
+// receiver written `borrow self`; and a `borrow mut self` receiver that writes
+// through to the caller's storage.
+
+trait TrxScored {
+    function score(borrow self) -> Int
+    function doubled(borrow self) -> Int {
+        return self.score() * 2
+    }
+    function label(borrow self) -> String {
+        return "scored"
+    }
+}
+
+trait TrxTagged {}
+
+struct TrxLeaf: TrxScored, TrxTagged {
+    let n: Int
+    function score(borrow self) -> Int {
+        return n + 1
+    }
+}
+
+// Overrides the `doubled` default and inherits `label`.
+struct TrxTriple: TrxScored {
+    let n: Int
+    function score(borrow self) -> Int {
+        return n
+    }
+    function doubled(borrow self) -> Int {
+        return n * 3
+    }
+}
+
+// Declared with no conformance clause; the trait is claimed retroactively.
+struct TrxLate {
+    let base: Int
+}
+
+extend TrxLate: TrxScored {
+    function score(borrow self) -> Int {
+        return base * 10
+    }
+}
+
+// A struct whose members are all scalars really is copyable, so the claim
+// holds. An ineligible claim is a compile error rather than a runtime one, so
+// it belongs to the diagnostic tests instead of here.
+struct TrxPoint: Copyable {
+    let x: Int
+    let y: Int
+}
+
+class TrxBase: TrxScored {
+    let seed: Int = 4
+    function score(borrow self) -> Int {
+        return seed
+    }
+}
+
+// A subclass takes its parent's implementation, so it keeps the promise too.
+class TrxDerived: TrxScored extends TrxBase {
+    override function score(borrow self) -> Int {
+        return seed * 100
+    }
+}
+
+construct TrxShape {
+    @Required function sides() -> Int
+}
+
+TrxShape TrxSquare(edge: Int): TrxScored {
+    function sides() -> Int {
+        return 4
+    }
+    function score(borrow self) -> Int {
+        return edge * 4
+    }
+}
+
+// A `borrow mut self` receiver: the method writes through the value it was
+// called on, and the write lands in the caller's storage.
+struct TrxCounter {
+    var ticks: Int
+    function bump(borrow mut self, by: Int) {
+        self.ticks = self.ticks + by
+        return
+    }
+}
+
+function trxSum(value: borrow TrxLeaf) -> Int {
+    return value.score() + value.doubled()
+}
+
+Test TrxARequirementIsCalledDirectly {
+    test {
+        let leaf = TrxLeaf(n: 6)
+        return leaf.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test TrxADefaultIsInheritedAndCallsTheRequirement {
+    test {
+        let leaf = TrxLeaf(n: 6)
+        return leaf.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}
+
+Test TrxADefaultTheTypeWroteWins {
+    test {
+        let triple = TrxTriple(n: 5)
+        return triple.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+}
+
+Test TrxADefaultReturningTextIsInherited {
+    test {
+        let triple = TrxTriple(n: 5)
+        return triple.label()
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("scored"); return e }
+}
+
+Test TrxARetroactiveImplementationIsAnOrdinaryMethod {
+    test {
+        let late = TrxLate(base: 3)
+        return late.score() + late.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(90); return e }
+}
+
+Test TrxAMarkerTraitAddsNoMembers {
+    test {
+        let leaf = TrxLeaf(n: 1)
+        return leaf.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+Test TrxAClassKeepsThePromise {
+    test {
+        let base = TrxBase()
+        return base.score() + base.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+Test TrxASubclassOverrideWinsThroughTheDefault {
+    test {
+        let derived = TrxDerived()
+        return derived.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(800); return e }
+}
+
+Test TrxAConstructBackedDeclarationKeepsThePromise {
+    test {
+        let square = TrxSquare(edge: 3)
+        return square.doubled() + square.sides()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+}
+
+Test TrxACopyableClaimLeavesTheTypeCopying {
+    test {
+        let a = TrxPoint(x: 2, y: 3)
+        let b = a
+        return a.x + b.y
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+Test TrxABorrowedReceiverLeavesTheValueUsable {
+    test {
+        let leaf = TrxLeaf(n: 2)
+        return trxSum(leaf) + leaf.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+Test TrxAMutableReceiverWritesBackToTheCaller {
+    test {
+        var counter = TrxCounter(ticks: 1)
+        counter.bump(by: 5)
+        counter.bump(by: 2)
+        return counter.ticks
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+}
+
+// Churn: a heap-owning conforming type built and released in a loop, so a
+// per-iteration leak in the inherited-default path would scale.
+struct TrxNamed: TrxScored {
+    let name: String
+    function score(borrow self) -> Int {
+        return name.count
+    }
+}
+
+Test TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean {
+    test {
+        var total = 0
+        var i = 0
+        while i < 500 {
+            let named = TrxNamed(name: "ab" + "cd")
+            total = total + named.doubled()
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(4000); return e }
+}
+
+function trxSection() -> Int {
+    var checksum = 0
+    checksum = checksum + TrxLeaf(n: 6).doubled()
+    checksum = checksum * 31 + TrxTriple(n: 5).doubled()
+    checksum = checksum * 31 + TrxLate(base: 3).doubled()
+    checksum = checksum * 31 + TrxDerived().doubled()
+    checksum = checksum * 31 + TrxSquare(edge: 3).doubled()
+    checksum = checksum * 31 + TrxNamed(name: "abcd").doubled()
+    return checksum
+}

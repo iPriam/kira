@@ -98,6 +98,11 @@ fn item_metadata(item: &Item, names: &Names) -> Option<(String, String, Span)> {
             names.resolve(declaration.name).to_owned(),
             declaration.span,
         )),
+        Item::Trait(declaration) => Some((
+            "trait".to_owned(),
+            names.resolve(declaration.name).to_owned(),
+            declaration.span,
+        )),
         Item::Import(_) | Item::Unsupported(_) => None,
     }
 }

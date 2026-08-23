@@ -109,6 +109,11 @@ impl Parser<'_> {
                     self.items.push(Item::Construct(declaration));
                 }
             }
+            TokenKind::Trait => {
+                if let Some(declaration) = self.parse_trait() {
+                    self.items.push(Item::Trait(declaration));
+                }
+            }
             // `extend Family { ... }` leads with the contextual keyword
             // `extend`, whose second token is an identifier and third a brace —
             // the same shape a construct-backed declaration wears, so it is
@@ -371,6 +376,25 @@ impl Parser<'_> {
         execution: Execution,
         foreign: Option<ForeignKind>,
     ) -> Option<Function> {
+        let mut function = self.parse_function_signature(is_main, execution)?;
+        function.body = self.parse_function_body(foreign);
+        function.span = Span::from_bounds(function.span.start, self.previous_end());
+        Some(function)
+    }
+
+    /// Parses a function's header — `function name(params) -> Type` — leaving
+    /// the cursor on whatever follows it.
+    ///
+    /// The returned declaration carries an empty body spanned at the header's
+    /// end, so a caller that reads no body has a well-formed node. Split from
+    /// [`Parser::parse_function`] because a trait member's body is *optional*:
+    /// whether one follows is what separates a requirement from a default, and
+    /// that question can only be asked once the header is consumed.
+    pub(crate) fn parse_function_signature(
+        &mut self,
+        is_main: bool,
+        execution: Execution,
+    ) -> Option<Function> {
         let start = self.current().span;
         self.expect(TokenKind::Function);
         let (name, name_span) = if self.at(TokenKind::Identifier) {
@@ -385,10 +409,10 @@ impl Parser<'_> {
             self.bump();
         }
         self.refuse_type_params("function");
-        let params = self.parse_params();
+        let (receiver, params) = self.parse_signature_params();
         let return_type = self.parse_return_type();
-        let body = self.parse_function_body(foreign);
         let span = Span::from_bounds(start.start, self.previous_end());
+        let empty = Span::from_bounds(self.previous_end(), self.previous_end());
         Some(Function {
             name,
             name_span,
@@ -401,9 +425,13 @@ impl Parser<'_> {
             export: None,
             foreign: None,
             execution,
+            receiver,
             params,
             return_type,
-            body,
+            body: Block {
+                stmts: Vec::new(),
+                span: empty,
+            },
             span,
         })
     }
@@ -607,6 +635,7 @@ fn is_item_start(kind: TokenKind) -> bool {
             | TokenKind::Type
             | TokenKind::Class
             | TokenKind::Construct
+            | TokenKind::Trait
             | TokenKind::Import
     )
 }

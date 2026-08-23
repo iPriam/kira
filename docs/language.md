@@ -195,6 +195,98 @@ A dispatcher carries a narrowed answer up to the result the family it belongs to
 declared, so reading `render()` through `Any Parent` yields the erased `Any` and
 reading it through `Any Child` yields the `String`.
 
+## Traits
+
+A trait names a set of members a type may promise to present. A member with no
+body is a **requirement**; a member with a body is a **default** a conforming
+type inherits unless it writes its own. A trait with no members is a **marker**:
+it classifies without obliging.
+
+```kira
+trait Hashable {
+    function hash(borrow self) -> Int
+    function doubled(borrow self) -> Int {
+        return self.hash() * 2
+    }
+}
+
+trait Send {}
+
+struct Mesh: Hashable, Send {
+    let id: Int
+    function hash(borrow self) -> Int { return id * 7 }
+}
+```
+
+`:` is **always** conformance and `extends` is **always** a parent. Both clauses
+follow the declaration's name, traits first:
+
+```kira
+class Panel: Hashable extends Surface { … }
+```
+
+Dispatch is **static**. `mesh.hash()` resolves to the implementation at
+type-check time and lowers to an ordinary direct call, so there is no vtable and
+no runtime representation of a trait. That is also why a trait names no type:
+`let x: Hashable` is `KSEM295`.
+
+### Retroactive implementation
+
+`extend T: Trait { … }` implements a trait for a type declared elsewhere. It is
+the impl block; `extend Family { … }` without a colon stays the fluent modifier
+block construct families use.
+
+```kira
+struct Plate { let n: Int }
+
+extend Plate: Hashable {
+    function hash(borrow self) -> Int { return n + 1 }
+}
+```
+
+A type conforms to one trait in exactly one place: writing the trait in the
+declaration's colon list *and* in an `extend` block is `KSEM290`. A block may
+carry only members the trait declares (`KSEM294`), and it may add conformance
+only — never a parent.
+
+### Coherence
+
+A conformance may be declared only in the package that declares the type or the
+package that declares the trait. Anywhere else is `KSEM291`: a third package's
+answer would be invisible to every other user of both.
+
+### Compiler-known traits
+
+`Copyable` and `Drop` exist without a declaration, and declaring either is
+`KSEM288`.
+
+- **`Copyable`** is a checked assertion, the trait spelling of `@Derive(Copy)`.
+  A type whose members do not all copy is `KSEM297`, naming the member that owns
+  storage a copy would have to clone.
+- **`Drop`** attaches a body the engines run where they already release the
+  value.
+
+### Receivers
+
+A method's receiver is written as a leading `self` parameter, or left out:
+
+```kira
+function hash(borrow self) -> Int          // reads the receiver
+function bump(borrow mut self, by: Int)    // writes through it
+function label() -> String                 // the same as `borrow self`
+```
+
+A bare `self` is `KPAR075` — it reads like a consuming receiver, which this
+language does not have — and a receiver on a declaration that is not a method is
+`KSEM299`.
+
+### What a trait is not
+
+Refused by name rather than half-supported: supertraits (`KSEM296`), a trait in
+a type position (`KSEM295`), a conformance on a construct family (`KSEM298`),
+and type parameters on a trait. A requirement a conforming type never presents
+is `KSEM292`, and one it presents with the wrong shape is `KSEM293`.
+
 ## Arrays
 
 An array is a shared, growable, heap-backed sequence, written `[T]`. Its whole

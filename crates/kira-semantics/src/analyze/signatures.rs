@@ -47,6 +47,22 @@ impl<'a> Analyzer<'a> {
             // they resolve against that file's imports.
             self.source = callable.source;
             let name = self.callable_name(callable);
+            // A receiver names the value a method runs on, so a declaration
+            // that runs on none has nothing for it to name. Reported here
+            // rather than at the parse, because whether a declaration is a
+            // method is decided by where it was written, not by how it reads.
+            if let Some(receiver) = function.receiver
+                && callable.receiver.is_none()
+            {
+                self.emit(
+                    receiver.span,
+                    "KSEM299",
+                    format!(
+                        "`{name}` is not a method, so it has no receiver to borrow: a `self` \
+                         parameter belongs to a declaration written inside a type"
+                    ),
+                );
+            }
             // A method's receiver is parameter 0, so its signature carries the
             // struct type ahead of what was written.
             let mut params: Vec<Type> = callable.receiver.map(Type::Struct).into_iter().collect();
