@@ -13,11 +13,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Stack() {
+construct Stack() extends Family {
     @Content let children: [Any Family]
     function value() -> Int { return children.count }
 }
@@ -43,7 +43,7 @@ construct Family {
     let node: Int { 0 }
 }
 
-Family One() {
+construct One() extends Family {
     let child: some Leaf
     let node: Int { 0 }
 }
@@ -64,7 +64,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf {
+construct Leaf() extends Child {
     let value: Int = 0
 }
 
@@ -72,12 +72,12 @@ construct Family {
     let node: Int { 0 }
 }
 
-Family One() {
+construct One() extends Family {
     let child: some Child
     let node: Int { child.value }
 }
 
-Family Many() {
+construct Many() extends Family {
     let items: [some Child]
     let node: Int { items.count }
 }
@@ -98,7 +98,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf {
+construct Leaf() extends Child {
     let value: Int = 0
 }
 
@@ -106,12 +106,12 @@ construct Family {
     let count: Int { 0 }
 }
 
-Family One() {
+construct One() extends Family {
     let child: some Child
     let count: Int { 1 }
 }
 
-Family Many() {
+construct Many() extends Family {
     let items: [some Child]
     let count: Int { items.count }
 }
@@ -140,7 +140,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf {
+construct Leaf() extends Child {
     let value: Int = 0
 }
 
@@ -148,7 +148,7 @@ construct Family {
     let count: Int { 0 }
 }
 
-Family One() {
+construct One() extends Family {
     let child: some Child
     let count: Int { 1 }
 }
@@ -175,7 +175,7 @@ construct Child {
     @Required let value: Int
 }
 
-Child Leaf {
+construct Leaf() extends Child {
     let value: Int = 0
 }
 
@@ -183,7 +183,7 @@ construct Family {
     let count: Int { 0 }
 }
 
-Family One() {
+construct One() extends Family {
     let child: some Child
     let count: Int { 1 }
 }
@@ -214,7 +214,7 @@ construct Family {
     let count: Int { 0 }
 }
 
-Family Plain(tag: Int) {
+construct Plain(tag: Int) extends Family {
     let count: Int { tag }
 }
 
@@ -264,11 +264,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Group() {
+construct Group() extends Widget {
     let children: [some Widget]
     function total() -> Int { return 0 }
 }
@@ -309,11 +309,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Group() {
+construct Group() extends Widget {
     let children: [some Widget]
     function total() -> Int { return 0 }
 }
@@ -351,11 +351,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Wrap() {
+construct Wrap() extends Widget {
     let child: some Widget
     function total() -> Int { return child.total() }
 }
@@ -414,7 +414,7 @@ construct Family {
     @Required let value: Int
 }
 
-Family One {
+construct One() extends Family {
     let value: Int = 1
 }
 
@@ -448,7 +448,7 @@ construct Family {
     @Required let value: Int
 }
 
-Family One {
+construct One() extends Family {
     let value: Int = 1
 }
 
@@ -474,11 +474,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split(gap: Int = 0) {
+construct Split(gap: Int = 0) extends Family {
     let sidebar: some Family
     let detail: some Family
     function value() -> Int { return sidebar.value() + detail.value() + gap }
@@ -507,11 +507,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split() {
+construct Split() extends Family {
     let sidebar: some Family
     let detail: some Family
     function value() -> Int { return sidebar.value() + detail.value() }
@@ -537,11 +537,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split() {
+construct Split() extends Family {
     let sidebar: some Family
     let detail: some Family
     function value() -> Int { return sidebar.value() + detail.value() }
@@ -567,11 +567,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split() {
+construct Split() extends Family {
     let sidebar: some Family
     let detail: some Family
     function value() -> Int { return sidebar.value() + detail.value() }
@@ -597,11 +597,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split() {
+construct Split() extends Family {
     let sidebar: some Family
     let detail: some Family = Leaf(number: 9)
     function value() -> Int { return sidebar.value() + detail.value() }
@@ -627,11 +627,11 @@ construct Family {
     function value() -> Int { return 0 }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Split() {
+construct Split() extends Family {
     let sidebar: some Family
     let detail: some Family
     function value() -> Int { return sidebar.value() + detail.value() }
@@ -658,11 +658,11 @@ construct Family {
     function value() -> Int { return children.count }
 }
 
-Family Leaf(number: Int) {
+construct Leaf(number: Int) extends Family {
     function value() -> Int { return number }
 }
 
-Family Wrap() {
+construct Wrap() extends Family {
     function value() -> Int { return children.count * 2 }
 }
 

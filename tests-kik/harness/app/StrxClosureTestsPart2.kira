@@ -8,7 +8,7 @@ import Foundation
 // Shared mutable var captures
 // ---------------------------------------------------------------------------
 
-Test StrxClMutTotal {
+construct StrxClMutTotal() extends Test {
     test {
         var total = 0
         let acc: (Int) -> Int = { x in
@@ -26,7 +26,7 @@ Test StrxClMutTotal {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test StrxClMutCount {
+construct StrxClMutCount() extends Test {
     test {
         var count = 0
         let tick: (Int) -> Int = { x in
@@ -43,7 +43,7 @@ Test StrxClMutCount {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxClMutMul {
+construct StrxClMutMul() extends Test {
     test {
         var prod = 1
         let mul: (Int) -> Int = { x in
@@ -61,7 +61,7 @@ Test StrxClMutMul {
     expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
 }
 
-Test StrxClMutToggle {
+construct StrxClMutToggle() extends Test {
     test {
         var flag = 0
         let toggle: (Int) -> Int = { x in
@@ -83,7 +83,7 @@ Test StrxClMutToggle {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxClMutEvenCount {
+construct StrxClMutEvenCount() extends Test {
     test {
         var evens = 0
         let countEven: (Int) -> Int = { x in
@@ -103,7 +103,7 @@ Test StrxClMutEvenCount {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxClMutAccumProd {
+construct StrxClMutAccumProd() extends Test {
     test {
         let mult = 3
         var total = 0
@@ -122,7 +122,7 @@ Test StrxClMutAccumProd {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test StrxClMutBucket {
+construct StrxClMutBucket() extends Test {
     test {
         var bucket = 0
         let deposit: (Int) -> Int = { x in
@@ -140,7 +140,7 @@ Test StrxClMutBucket {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test StrxClMutMax {
+construct StrxClMutMax() extends Test {
     test {
         var mx = 0
         let track: (Int) -> Int = { x in
@@ -161,7 +161,7 @@ Test StrxClMutMax {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test StrxClMutCountDown {
+construct StrxClMutCountDown() extends Test {
     test {
         var remaining = 10
         let use: (Int) -> Int = { x in
@@ -179,7 +179,7 @@ Test StrxClMutCountDown {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxClMutRunning {
+construct StrxClMutRunning() extends Test {
     test {
         var running = 0
         let update: (Int) -> Int = { x in
@@ -198,7 +198,7 @@ Test StrxClMutRunning {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test StrxClMutTriangle {
+construct StrxClMutTriangle() extends Test {
     test {
         var sum = 0
         let addI: (Int) -> Int = { x in
@@ -216,7 +216,7 @@ Test StrxClMutTriangle {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test StrxClMutLoopModify {
+construct StrxClMutLoopModify() extends Test {
     test {
         var accum = 0
         let add: (Int) -> Int = { x in
@@ -238,7 +238,7 @@ Test StrxClMutLoopModify {
 // Compose by sequencing (two closures, one after another)
 // ---------------------------------------------------------------------------
 
-Test StrxClCompose {
+construct StrxClCompose() extends Test {
     test {
         let f: (Int) -> Int = { x in return x + 3 }
         let g: (Int) -> Int = { x in return x * 2 }
@@ -250,7 +250,7 @@ Test StrxClCompose {
     expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
 }
 
-Test StrxClComposeLoop {
+construct StrxClComposeLoop() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -268,7 +268,7 @@ Test StrxClComposeLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
 }
 
-Test StrxClNestedHOF {
+construct StrxClNestedHOF() extends Test {
     test {
         let xs = [1, 2, 3, 4]
         let add2: (Int) -> Int = { x in return x + 2 }
@@ -284,7 +284,7 @@ Test StrxClNestedHOF {
 // More patterns
 // ---------------------------------------------------------------------------
 
-Test StrxClSingleCall {
+construct StrxClSingleCall() extends Test {
     test {
         let add1: (Int) -> Int = { x in return x + 1 }
         let r = strxCApplyTwice(move add1, 40)
@@ -294,7 +294,7 @@ Test StrxClSingleCall {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test StrxClDirectCall {
+construct StrxClDirectCall() extends Test {
     test {
         let f: (Int) -> Int = { x in return x * x }
         return f(9)
@@ -303,7 +303,7 @@ Test StrxClDirectCall {
     expect { let e: Result<Int, TestFailure> = .Ok(81); return e }
 }
 
-Test StrxClMultiCallSameClosure {
+construct StrxClMultiCallSameClosure() extends Test {
     test {
         let f: (Int) -> Int = { x in return x + 5 }
         var acc = 0
@@ -316,7 +316,7 @@ Test StrxClMultiCallSameClosure {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test StrxClChainResult {
+construct StrxClChainResult() extends Test {
     test {
         var step = 1
         let f: (Int) -> Int = { x in return x + step }
@@ -332,7 +332,7 @@ Test StrxClChainResult {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxClReduceThenApply {
+construct StrxClReduceThenApply() extends Test {
     test {
         let xs = [2, 4, 6]
         let id: (Int) -> Int = { x in return x }
@@ -348,7 +348,7 @@ Test StrxClReduceThenApply {
 // Trap tests — closure body traps, or outer array OOB
 // ---------------------------------------------------------------------------
 
-Test StrxClTrapOobInClosure {
+construct StrxClTrapOobInClosure() extends Test {
     test {
         // Closure body itself causes OOB by computing an out-of-range index
         let f: (Int) -> Int = { x in
@@ -360,7 +360,7 @@ Test StrxClTrapOobInClosure {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClTrapDivZeroInClosure {
+construct StrxClTrapDivZeroInClosure() extends Test {
     test {
         let f: (Int) -> Int = { x in return 100 / x }
         return f(0)
@@ -368,7 +368,7 @@ Test StrxClTrapDivZeroInClosure {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClTrapModZeroInClosure {
+construct StrxClTrapModZeroInClosure() extends Test {
     test {
         let f: (Int) -> Int = { x in return x % 0 }
         return f(5)
@@ -376,7 +376,7 @@ Test StrxClTrapModZeroInClosure {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClTrapOobDirect {
+construct StrxClTrapOobDirect() extends Test {
     test {
         let xs: [Int] = [1, 2, 3]
         let _ = xs[10]
@@ -385,7 +385,7 @@ Test StrxClTrapOobDirect {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxClTrapOobBeforeApply {
+construct StrxClTrapOobBeforeApply() extends Test {
     test {
         let f: (Int) -> Int = { x in return x * 2 }
         let xs = [1, 2, 3]

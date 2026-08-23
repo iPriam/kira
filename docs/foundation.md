@@ -269,7 +269,7 @@ Foundation contains no test declarations or runner. `tests-kik/harness`,
 by `Test` providing the two members the family requires:
 
 ```kira
-Test SumsToTen {
+construct SumsToTen() extends Test {
     test { return add(4, 6) }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }

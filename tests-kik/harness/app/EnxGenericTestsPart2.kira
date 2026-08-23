@@ -12,7 +12,7 @@ import Foundation
 // ---------------------------------------------------------------------------
 
 // buildRange(5) -> Ok([0,3,6,9,12]) -> sum=30
-Test EnxGRangeOk5 {
+construct EnxGRangeOk5() extends Test {
     test {
         let r = enxGBuildRange(5)
         var out = 0
@@ -32,7 +32,7 @@ Test EnxGRangeOk5 {
 }
 
 // buildRange(10) -> Ok([0,3,6,...,27]) -> sum=3*(0+1+...+9)=3*45=135
-Test EnxGRangeOk10 {
+construct EnxGRangeOk10() extends Test {
     test {
         let r = enxGBuildRange(10)
         var out = 0
@@ -52,7 +52,7 @@ Test EnxGRangeOk10 {
 }
 
 // buildRange(0) -> Error(Empty) -> -4
-Test EnxGRangeErrEmpty {
+construct EnxGRangeErrEmpty() extends Test {
     test {
         let r = enxGBuildRange(0)
         var out = 0
@@ -66,7 +66,7 @@ Test EnxGRangeErrEmpty {
 }
 
 // buildRange(-1) -> Error(Empty) -> -4
-Test EnxGRangeErrNeg {
+construct EnxGRangeErrNeg() extends Test {
     test {
         let r = enxGBuildRange(0 - 1)
         var out = 0
@@ -80,7 +80,7 @@ Test EnxGRangeErrNeg {
 }
 
 // buildRange(200) -> Error(Overflow) -> -2
-Test EnxGRangeErrOverflow {
+construct EnxGRangeErrOverflow() extends Test {
     test {
         let r = enxGBuildRange(200)
         var out = 0
@@ -95,7 +95,7 @@ Test EnxGRangeErrOverflow {
 
 // sum buildRange(m) for m=1..6:
 // 0 + 3 + 9 + 18 + 30 + 45 = 105
-Test EnxGRangeSumFold {
+construct EnxGRangeSumFold() extends Test {
     test {
         var total = 0
         var m = 1
@@ -119,7 +119,7 @@ Test EnxGRangeSumFold {
 }
 
 // buildRange(3) -> count = 3
-Test EnxGRangeCount {
+construct EnxGRangeCount() extends Test {
     test {
         let r = enxGBuildRange(3)
         var out = 0
@@ -133,7 +133,7 @@ Test EnxGRangeCount {
 }
 
 // buildRange(1) -> Ok([0]) -> sum=0
-Test EnxGRangeSingleElem {
+construct EnxGRangeSingleElem() extends Test {
     test {
         let r = enxGBuildRange(1)
         var out = 0
@@ -154,37 +154,37 @@ Test EnxGRangeSingleElem {
 
 // chain3(100, 5, 4):
 // r1=Ok(20); r2=safeDiv(30,4)=Ok(7); r3=safeDiv(12,2)=Ok(6); return 20+7+6=33
-Test EnxGChain3Success {
+construct EnxGChain3Success() extends Test {
     test { return enxGChain3(100, 5, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
 // chain3(100, 0, 4): r1=Error(DivByZero) -> -1
-Test EnxGChain3ErrStep1 {
+construct EnxGChain3ErrStep1() extends Test {
     test { return enxGChain3(100, 0, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
 }
 
 // chain3(100, 5, 0): r1=Ok(20); r2=safeDiv(30,0)=Error(DivByZero) -> -1
-Test EnxGChain3ErrStep2 {
+construct EnxGChain3ErrStep2() extends Test {
     test { return enxGChain3(100, 5, 0) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
 }
 
 // chain3(0, 5, 4): r1=Ok(0); r2=safeDiv(10,4)=Ok(2); r3=safeDiv(7,2)=Ok(3); return 0+2+3=5
-Test EnxGChain3ZeroSeed {
+construct EnxGChain3ZeroSeed() extends Test {
     test { return enxGChain3(0, 5, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
 // chain3(-1, 5, 4): r1=Error(BadInput) -> -5
-Test EnxGChain3BadInput {
+construct EnxGChain3BadInput() extends Test {
     test { return enxGChain3(0 - 1, 5, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
 }
 
 // sum chain3 results for multiple inputs: 33 + (-1) + (-1) + 5 = 36
-Test EnxGChain3SumFold {
+construct EnxGChain3SumFold() extends Test {
     test {
         let v1 = enxGChain3(100, 5, 4)
         let v2 = enxGChain3(100, 0, 4)
@@ -202,20 +202,20 @@ Test EnxGChain3SumFold {
 // pipeline(12, 4, 2, 3):
 // r0=Ok(12); r1=step(12,4)=safeDiv(16,4)=Ok(4);
 // r2=step(4,2)=safeDiv(6,2)=Ok(3); r3=step(3,3)=safeDiv(6,3)=Ok(2); return 2
-Test EnxGPipelineSuccess {
+construct EnxGPipelineSuccess() extends Test {
     test { return enxGPipeline(12, 4, 2, 3) }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
 // pipeline(20, 0, 3, 5): k1=0 causes DivByZero at step1, propagates -> -1
-Test EnxGPipelineErrPropagates {
+construct EnxGPipelineErrPropagates() extends Test {
     test { return enxGPipeline(20, 0, 3, 5) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
 }
 
 // pipeline(6, 3, 2, 4):
 // r0=Ok(6); r1=safeDiv(9,3)=Ok(3); r2=safeDiv(5,2)=Ok(2); r3=safeDiv(6,4)=Ok(1); return 1
-Test EnxGPipelineSmallValues {
+construct EnxGPipelineSmallValues() extends Test {
     test { return enxGPipeline(6, 3, 2, 4) }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
@@ -223,7 +223,7 @@ Test EnxGPipelineSmallValues {
 // Two-step manual pipeline using enxGStep
 // r0=safeDiv(10,1)=Ok(10); r1=step(Ok(10),5)=safeDiv(15,5)=Ok(3);
 // r2=step(Ok(3),3)=safeDiv(6,3)=Ok(2); final=2
-Test EnxGStepTwoSteps {
+construct EnxGStepTwoSteps() extends Test {
     test {
         let r0 = enxGSafeDiv(10, 1)
         let r1 = enxGStep(move r0, 5)
@@ -243,7 +243,7 @@ Test EnxGStepTwoSteps {
 // ---------------------------------------------------------------------------
 
 // slot{10, Ok(5)} -> 5+10=15
-Test EnxGSlotOk {
+construct EnxGSlotOk() extends Test {
     test {
         let slot = EnxGSlot { tag: 10, r: .Ok(5) }
         return enxGSlotVal(slot)
@@ -252,7 +252,7 @@ Test EnxGSlotOk {
 }
 
 // slot{10, Error(DivByZero)} -> 10+(-1)=9
-Test EnxGSlotErr {
+construct EnxGSlotErr() extends Test {
     test {
         let slot = EnxGSlot { tag: 10, r: .Error(.DivByZero) }
         return enxGSlotVal(slot)
@@ -261,7 +261,7 @@ Test EnxGSlotErr {
 }
 
 // slot{0, Error(BadInput)} -> 0+(-5)=-5
-Test EnxGSlotErrBadInput {
+construct EnxGSlotErrBadInput() extends Test {
     test {
         let slot = EnxGSlot { tag: 0, r: .Error(.BadInput) }
         return enxGSlotVal(slot)
@@ -273,7 +273,7 @@ Test EnxGSlotErrBadInput {
 // enxGSlotVal = 200/(s+1) + s
 // s=0:200, s=1:101, s=2:68, s=3:53, s=4:44, s=5:38, s=6:34, s=7:32, s=8:30, s=9:29
 // sum=629
-Test EnxGSlotFold {
+construct EnxGSlotFold() extends Test {
     test {
         var acc = 0
         var s = 0
@@ -290,7 +290,7 @@ Test EnxGSlotFold {
 // Mixed slots: some Ok, some Error, fold values
 // [slot{1,Ok(10)}, slot{2,Error(DivByZero)}, slot{3,Ok(20)}, slot{4,Error(Empty)}]
 // values: 10+1=11, 2-1=1, 20+3=23, 4-4=0 -> sum=35
-Test EnxGSlotMixedFold {
+construct EnxGSlotMixedFold() extends Test {
     test {
         var slots: [EnxGSlot] = []
         slots.append(EnxGSlot { tag: 1, r: .Ok(10) })
@@ -316,7 +316,7 @@ Test EnxGSlotMixedFold {
 // i=0:Ok(0), i=1:Ok(5), i=2:Err(-3), i=3:Ok(15), i=4:Ok(20),
 // i=5:Err(-3), i=6:Ok(30), i=7:Ok(35), i=8:Err(-3), i=9:Ok(45)
 // sum=0+5-3+15+20-3+30+35-3+45=141
-Test EnxGResultArrayFold {
+construct EnxGResultArrayFold() extends Test {
     test {
         var results: [Result<Int, EnxGErr>] = []
         var i = 0
@@ -343,7 +343,7 @@ Test EnxGResultArrayFold {
 
 // Build results from safeDiv, then sum: safeDiv(100, j+1) for j=0..5 (all Ok)
 // 100/1+100/2+100/3+100/4+100/5+100/6 = 100+50+33+25+20+16 = 244
-Test EnxGResultArrayDivFold {
+construct EnxGResultArrayDivFold() extends Test {
     test {
         var results: [Result<Int, EnxGErr>] = []
         var j = 0
@@ -365,7 +365,7 @@ Test EnxGResultArrayDivFold {
 // Mix Ok and Error in result array, count errors
 // safeDiv(i-5, 2) for i=0..9: i<5 -> BadInput (-5 each); i>=5 -> Ok
 // errors: i=0,1,2,3,4 -> 5 errors
-Test EnxGResultArrayCountErrors {
+construct EnxGResultArrayCountErrors() extends Test {
     test {
         var results: [Result<Int, EnxGErr>] = []
         var i = 0
@@ -390,7 +390,7 @@ Test EnxGResultArrayCountErrors {
 
 // Combine T=Int and T=struct in one test
 // safeDiv(100,5)=Ok(20) plus makeRect(4,5)->area=20; total=40
-Test EnxGCombineIntAndRect {
+construct EnxGCombineIntAndRect() extends Test {
     test {
         let ri = enxGSafeDiv(100, 5)
         let rr = enxGMakeRect(4, 5)
@@ -411,7 +411,7 @@ Test EnxGCombineIntAndRect {
 
 // Combine T=enum and T=array
 // colorResult(2)->Ok(Neutral)->300 + sum of buildRange(3)->[0,3,6]=9; total=309
-Test EnxGCombineToneAndRange {
+construct EnxGCombineToneAndRange() extends Test {
     test {
         let tone = enxGToneResultVal(enxGColorResult(2))
         let rng = enxGBuildRange(3)
@@ -432,7 +432,7 @@ Test EnxGCombineToneAndRange {
 }
 
 // Error path combines: all errors -> DivByZero(-1)+BadInput(-5)+Empty(-4)+Overflow(-2)=-12
-Test EnxGCombineAllErrors {
+construct EnxGCombineAllErrors() extends Test {
     test {
         let e1 = enxGResultIntVal(enxGSafeDiv(10, 0))
         let e2 = enxGResultIntVal(enxGSafeDiv(0 - 5, 1))
@@ -451,7 +451,7 @@ Test EnxGCombineAllErrors {
 
 // Nested Ok: chain feeds rect
 // safeDiv(15,3)=Ok(5) -> makeRect(5,4)=Ok->area=20
-Test EnxGChainFeedsRect {
+construct EnxGChainFeedsRect() extends Test {
     test {
         let r1 = enxGSafeDiv(15, 3)
         var out = 0
@@ -473,7 +473,7 @@ Test EnxGChainFeedsRect {
 // Multiple independent results combined
 // safeDiv(100,4)=Ok(25) + safeDiv(60,3)=Ok(20) + safeDiv(0-10,5)=Error(BadInput)->-5
 // 25+20-5=40
-Test EnxGMultipleResults {
+construct EnxGMultipleResults() extends Test {
     test {
         let v1 = enxGResultIntVal(enxGSafeDiv(100, 4))
         let v2 = enxGResultIntVal(enxGSafeDiv(60, 3))
@@ -485,7 +485,7 @@ Test EnxGMultipleResults {
 
 // Pipeline result feeding into rect creation
 // pipeline(12,4,2,3)=2 -> makeRect(2,3)=Ok->area=6
-Test EnxGPipelineFeedsRect {
+construct EnxGPipelineFeedsRect() extends Test {
     test {
         let w = enxGPipeline(12, 4, 2, 3)
         let r = enxGMakeRect(w, 3)
@@ -504,7 +504,7 @@ Test EnxGPipelineFeedsRect {
 // ---------------------------------------------------------------------------
 
 // Direct divide by zero
-Test EnxGTrapDivZero {
+construct EnxGTrapDivZero() extends Test {
     test {
         let a = 42
         let b = 0
@@ -514,7 +514,7 @@ Test EnxGTrapDivZero {
 }
 
 // Direct mod by zero
-Test EnxGTrapModZero {
+construct EnxGTrapModZero() extends Test {
     test {
         let a = 100
         let b = 0
@@ -524,7 +524,7 @@ Test EnxGTrapModZero {
 }
 
 // Match Ok of range array, then index OOB
-Test EnxGTrapOOBOnOkArray {
+construct EnxGTrapOOBOnOkArray() extends Test {
     test {
         let r = enxGBuildRange(3)
         var out = 0
@@ -541,7 +541,7 @@ Test EnxGTrapOOBOnOkArray {
 }
 
 // OOB on empty array
-Test EnxGTrapOOBEmpty {
+construct EnxGTrapOOBEmpty() extends Test {
     test {
         let xs: [Int] = []
         let _ = xs[0]
@@ -551,7 +551,7 @@ Test EnxGTrapOOBEmpty {
 }
 
 // OOB on result array after building it
-Test EnxGTrapResultArrayOOB {
+construct EnxGTrapResultArrayOOB() extends Test {
     test {
         var results: [Result<Int, EnxGErr>] = []
         results.append(enxGSafeDiv(10, 2))
@@ -567,7 +567,7 @@ Test EnxGTrapResultArrayOOB {
 // makeRect(5,0) -> BadInput(-5), but 10 / (-5) is not zero...
 // Instead: pipeline result that happens to be 0?
 // Actually let's use: safeDiv(0,1)=Ok(0), then 5 / that value
-Test EnxGTrapDivByOkValue {
+construct EnxGTrapDivByOkValue() extends Test {
     test {
         let r = enxGSafeDiv(0, 1)
         var divisor = 1
@@ -581,7 +581,7 @@ Test EnxGTrapDivByOkValue {
 }
 
 // Mod by zero derived from Ok value
-Test EnxGTrapModByOkValue {
+construct EnxGTrapModByOkValue() extends Test {
     test {
         let r = enxGSafeDiv(0, 5)
         var d = 1
@@ -595,7 +595,7 @@ Test EnxGTrapModByOkValue {
 }
 
 // OOB via loop scanning result array past end
-Test EnxGTrapResultArrayLoopOOB {
+construct EnxGTrapResultArrayLoopOOB() extends Test {
     test {
         var results: [Result<Int, EnxGErr>] = []
         var i = 0

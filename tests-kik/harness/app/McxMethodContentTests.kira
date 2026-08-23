@@ -19,19 +19,19 @@ construct McxNode {
     @Required function total() -> Int
 }
 
-McxNode McxLeaf(n: Int) {
+construct McxLeaf(n: Int) extends McxNode {
     function total() -> Int {
         return n
     }
 }
 
-McxNode McxPair(first: Any McxNode, second: Any McxNode) {
+construct McxPair(first: Any McxNode, second: Any McxNode) extends McxNode {
     function total() -> Int {
         return first.total() * 10 + second.total()
     }
 }
 
-McxNode McxSum(scale: Int) {
+construct McxSum(scale: Int) extends McxNode {
     let parts: [some McxNode]
 
     function total() -> Int {
@@ -63,7 +63,7 @@ extend McxNode {
     }
 }
 
-Test McxAMethodTakesOneChild {
+construct McxAMethodTakesOneChild() extends Test {
     test {
         let node = McxLeaf(n: 3).paired {
             McxLeaf(n: 4)
@@ -73,7 +73,7 @@ Test McxAMethodTakesOneChild {
     expect { let e: Result<Int, TestFailure> = .Ok(34); return e }
 }
 
-Test McxAMethodTakesSeveralChildren {
+construct McxAMethodTakesSeveralChildren() extends Test {
     test {
         let node = McxLeaf(n: 1).gathered(scale: 2) {
             McxLeaf(n: 3)
@@ -86,7 +86,7 @@ Test McxAMethodTakesSeveralChildren {
 
 // The block is the whole argument list, so the parentheses go away entirely —
 // which is the spelling the feature exists for.
-Test McxAMethodWithNoArgumentsNeedsNoParentheses {
+construct McxAMethodWithNoArgumentsNeedsNoParentheses() extends Test {
     test {
         let node = McxLeaf(n: 2).paired {
             McxLeaf(n: 7)
@@ -98,7 +98,7 @@ Test McxAMethodWithNoArgumentsNeedsNoParentheses {
 
 // A builder inside the block produces children exactly as one inside a
 // construction's block does.
-Test McxAForInsideTheBlockProducesChildren {
+construct McxAForInsideTheBlockProducesChildren() extends Test {
     test {
         let node = McxLeaf(n: 1).gathered(scale: 1) {
             For(value in [2, 3, 4]) {

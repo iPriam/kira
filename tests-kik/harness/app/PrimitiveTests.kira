@@ -32,31 +32,31 @@ function prmScaled(value: Float, digits: Int) -> Int {
 
 // --- floating point --------------------------------------------------------
 
-Test PrimitiveSqrtIsExactOnASquare {
+construct PrimitiveSqrtIsExactOnASquare() extends Test {
     test { return Int(sqrt(144.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
 // The case the Newton approximation could not answer: ten digits of a root
 // that is not one.
-Test PrimitiveSqrtHoldsTenDigits {
+construct PrimitiveSqrtHoldsTenDigits() extends Test {
     test { return prmScaled(sqrt(2.0), 10) }
     expect { let e: Result<Int, TestFailure> = .Ok(14142135623); return e }
 }
 
-Test PrimitiveSqrtOfZero {
+construct PrimitiveSqrtOfZero() extends Test {
     test { return Int(sqrt(0.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test PrimitiveSinAndCosAtZero {
+construct PrimitiveSinAndCosAtZero() extends Test {
     test { return Int(sin(0.0)) * 10 + Int(cos(0.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
 // A quarter turn: sine is one and cosine is zero, which a series expansion
 // only reaches approximately.
-Test PrimitiveSinAtAQuarterTurn {
+construct PrimitiveSinAtAQuarterTurn() extends Test {
     test { return prmScaled(sin(1.5707963267948966), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(1000000000); return e }
 }
@@ -65,19 +65,19 @@ Test PrimitiveSinAtAQuarterTurn {
 // IEEE-754, because pi/4 is not exactly representable. The assertion is the
 // value the hardware gives — rounding it up to 1 here would be a test that
 // passes against an implementation which is wrong by more.
-Test PrimitiveTanAtAnEighthTurn {
+construct PrimitiveTanAtAnEighthTurn() extends Test {
     test { return prmScaled(tan(0.7853981633974483), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(999999999); return e }
 }
 
 // Rounding away from zero is where floor and ceil differ, and where a naive
 // truncation gets both wrong.
-Test PrimitiveFloorAndCeilOnANegative {
+construct PrimitiveFloorAndCeilOnANegative() extends Test {
     test { return Int(floor(0.0 - 1.5)) * 10 + Int(ceil(0.0 - 1.5)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
 }
 
-Test PrimitiveAbsDropsTheSign {
+construct PrimitiveAbsDropsTheSign() extends Test {
     test { return prmScaled(abs(0.0 - 1.5), 1) + prmScaled(abs(1.5), 1) }
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
@@ -86,12 +86,12 @@ Test PrimitiveAbsDropsTheSign {
 
 // The pair a program used to reach for a series expansion to get. Ten digits
 // of `e` is past where a Taylor sum written in Kira stopped agreeing.
-Test PrimitiveExpAtOneIsE {
+construct PrimitiveExpAtOneIsE() extends Test {
     test { return prmScaled(exp(1.0), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(2718281828); return e }
 }
 
-Test PrimitiveLogOfOneIsZero {
+construct PrimitiveLogOfOneIsZero() extends Test {
     test { return Int(log(1.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
@@ -104,7 +104,7 @@ Test PrimitiveLogOfOneIsZero {
 // the parity fact is the band, not a single value. The band is one scaled
 // unit wide: anything outside it is an implementation wrong by more than a
 // last bit, which is what this test exists to catch.
-Test PrimitiveExpAndLogInvertEachOther {
+construct PrimitiveExpAndLogInvertEachOther() extends Test {
     test {
         let scaled = prmScaled(exp(log(37.0)), 6)
         if scaled >= 36999999 {
@@ -117,12 +117,12 @@ Test PrimitiveExpAndLogInvertEachOther {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test PrimitiveLog2AndExp2OnAPowerOfTwo {
+construct PrimitiveLog2AndExp2OnAPowerOfTwo() extends Test {
     test { return Int(log2(1024.0)) * 10000 + Int(exp2(10.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(101024); return e }
 }
 
-Test PrimitiveLog10OnAPowerOfTen {
+construct PrimitiveLog10OnAPowerOfTen() extends Test {
     test { return prmScaled(log10(1000.0), 6) }
     expect { let e: Result<Int, TestFailure> = .Ok(3000000); return e }
 }
@@ -131,34 +131,34 @@ Test PrimitiveLog10OnAPowerOfTen {
 
 // Halves go away from zero, and the fraction is dropped toward it. A cast to
 // `Int` gives the second answer for both, which is why `round` is here.
-Test PrimitiveRoundAndTruncDisagreeOnAHalf {
+construct PrimitiveRoundAndTruncDisagreeOnAHalf() extends Test {
     test { return Int(round(0.0 - 1.5)) * 10 + Int(trunc(0.0 - 1.5)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
 }
 
-Test PrimitiveRoundGoesAwayFromZero {
+construct PrimitiveRoundGoesAwayFromZero() extends Test {
     test { return Int(round(1.5)) * 10 + Int(round(2.5)) }
     expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
 }
 
 // --- inverse and hyperbolic trigonometry -----------------------------------
 
-Test PrimitiveAsinAndAcosAtOne {
+construct PrimitiveAsinAndAcosAtOne() extends Test {
     test { return prmScaled(asin(1.0), 9) + Int(acos(1.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(1570796326); return e }
 }
 
-Test PrimitiveAtanAtOneIsAnEighthTurn {
+construct PrimitiveAtanAtOneIsAnEighthTurn() extends Test {
     test { return prmScaled(atan(1.0), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(785398163); return e }
 }
 
-Test PrimitiveHyperbolicsAtZero {
+construct PrimitiveHyperbolicsAtZero() extends Test {
     test { return Int(sinh(0.0)) * 100 + Int(cosh(0.0)) * 10 + Int(tanh(0.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test PrimitiveTanhSaturatesBelowOne {
+construct PrimitiveTanhSaturatesBelowOne() extends Test {
     test { return prmScaled(tanh(1.0), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(761594155); return e }
 }
@@ -167,43 +167,43 @@ Test PrimitiveTanhSaturatesBelowOne {
 
 // Two operands travel on one instruction, and the second is not ignored: an
 // arity taken from the operation is what makes `pow` reachable at all.
-Test PrimitivePowRaisesTheFirstToTheSecond {
+construct PrimitivePowRaisesTheFirstToTheSecond() extends Test {
     test { return Int(pow(2.0, 10.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(1024); return e }
 }
 
 // The operands are not interchangeable, and a lowering that popped them in the
 // wrong order would answer 100 here.
-Test PrimitivePowKeepsItsOperandsInOrder {
+construct PrimitivePowKeepsItsOperandsInOrder() extends Test {
     test { return Int(pow(10.0, 2.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
 // A scroll view's deceleration: the rate is per millisecond, so where a fling
 // comes to rest is the rate raised to a count of them.
-Test PrimitivePowDeceleratesAFling {
+construct PrimitivePowDeceleratesAFling() extends Test {
     test { return prmScaled(pow(0.998, 500.0), 6) }
     expect { let e: Result<Int, TestFailure> = .Ok(367511); return e }
 }
 
-Test PrimitiveMinAndMaxPickAnOperand {
+construct PrimitiveMinAndMaxPickAnOperand() extends Test {
     test { return Int(min(1.0, 2.0)) * 10 + Int(max(1.0, 2.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test PrimitiveMinAndMaxOnNegatives {
+construct PrimitiveMinAndMaxOnNegatives() extends Test {
     test { return Int(min(0.0 - 1.0, 0.0 - 2.0)) * 10 + Int(max(0.0 - 1.0, 0.0 - 2.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
 }
 
-Test PrimitiveHypotIsTheThreeFourFiveTriangle {
+construct PrimitiveHypotIsTheThreeFourFiveTriangle() extends Test {
     test { return Int(hypot(3.0, 4.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
 // The sign comes from the second operand and the magnitude from the first, so
 // the two directions answer -15 and 15.
-Test PrimitiveCopysignTakesTheSecondSign {
+construct PrimitiveCopysignTakesTheSecondSign() extends Test {
     test { return prmScaled(copysign(1.5, 0.0 - 2.0), 1) * 100 + prmScaled(copysign(0.0 - 1.5, 2.0), 1) }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 1485); return e }
 }
@@ -211,7 +211,7 @@ Test PrimitiveCopysignTakesTheSecondSign {
 // Negative zero is the case `copysign` exists for: `0.0 - 0.0` is POSITIVE
 // zero, so the sign has to be carried rather than derived, and a `< 0.0` test
 // on the second operand would answer with the wrong sign here.
-Test PrimitiveCopysignReadsANegativeZerosSign {
+construct PrimitiveCopysignReadsANegativeZerosSign() extends Test {
     test {
         let negativeZero = copysign(0.0, 0.0 - 1.0)
         return prmScaled(copysign(1.5, negativeZero), 1) * 100 + prmScaled(copysign(1.5, 0.0 - 0.0), 1)
@@ -220,28 +220,28 @@ Test PrimitiveCopysignReadsANegativeZerosSign {
 }
 
 // Truncated toward zero, so the remainder keeps the dividend's sign.
-Test PrimitiveFmodKeepsTheDividendsSign {
+construct PrimitiveFmodKeepsTheDividendsSign() extends Test {
     test { return Int(fmod(7.0, 4.0)) * 10 + Int(fmod(0.0 - 7.0, 4.0)) }
     expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
 }
 
 // `atan2` reads both signs to place the angle in its quadrant, which is the
 // whole reason it exists beside `atan`.
-Test PrimitiveAtan2TakesItsQuadrantFromBothSigns {
+construct PrimitiveAtan2TakesItsQuadrantFromBothSigns() extends Test {
     test { return prmScaled(atan2(1.0, 0.0 - 1.0), 9) }
     expect { let e: Result<Int, TestFailure> = .Ok(2356194490); return e }
 }
 
 // A two-operand primitive nested in another: the inner call must leave exactly
 // one value behind or the outer one pops the wrong operand.
-Test PrimitiveTwoOperandCallsNest {
+construct PrimitiveTwoOperandCallsNest() extends Test {
     test { return Int(pow(min(2.0, 3.0), max(3.0, 2.0))) }
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
 // The operands are `Float`, and a count held as an `Int` is converted at the
 // call rather than silently: `pow(2, 8)` is KSEM063, exactly as `sqrt(2)` is.
-Test PrimitiveTwoOperandCallsTakeConvertedInts {
+construct PrimitiveTwoOperandCallsTakeConvertedInts() extends Test {
     test {
         let base = 2
         let exponent = 8
@@ -256,7 +256,7 @@ function prmMin(a: Int, b: Int) -> Int {
     return a * 100 + b
 }
 
-Test PrimitiveAProgramsOwnTwoOperandNameWins {
+construct PrimitiveAProgramsOwnTwoOperandNameWins() extends Test {
     test { return prmMin(4, 2) }
     expect { let e: Result<Int, TestFailure> = .Ok(402); return e }
 }
@@ -267,54 +267,54 @@ function prmSqrt(value: Int) -> Int {
     return value + 1
 }
 
-Test PrimitiveAProgramsOwnNameWins {
+construct PrimitiveAProgramsOwnNameWins() extends Test {
     test { return prmSqrt(41) }
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
 // --- Unicode scalars -------------------------------------------------------
 
-Test PrimitiveScalarTextBuildsAscii {
+construct PrimitiveScalarTextBuildsAscii() extends Test {
     test { return scalarText(65) + scalarText(66) }
     expect { let e: Result<String, TestFailure> = .Ok("AB"); return e }
 }
 
 // Two bytes and four bytes: a byte-wise implementation gives a different
 // answer here rather than a slightly wrong one.
-Test PrimitiveScalarTextBuildsMultiByteScalars {
+construct PrimitiveScalarTextBuildsMultiByteScalars() extends Test {
     test { return scalarText(233).count * 10 + scalarText(128512).count }
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test PrimitiveScalarTextOfANonScalarIsEmpty {
+construct PrimitiveScalarTextOfANonScalarIsEmpty() extends Test {
     test { return scalarText(0 - 1).count + scalarText(1114112).count }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test PrimitiveDropLastScalarOnAscii {
+construct PrimitiveDropLastScalarOnAscii() extends Test {
     test { return "kira".dropLastScalar() }
     expect { let e: Result<String, TestFailure> = .Ok("kir"); return e }
 }
 
 // The whole reason this is not `substring(0, count - 1)`: the last scalar is
 // two bytes, so a byte-wise drop leaves text that is no longer UTF-8.
-Test PrimitiveDropLastScalarOnATwoByteScalar {
+construct PrimitiveDropLastScalarOnATwoByteScalar() extends Test {
     test { return "kirä".dropLastScalar() }
     expect { let e: Result<String, TestFailure> = .Ok("kir"); return e }
 }
 
-Test PrimitiveDropLastScalarOnAFourByteScalar {
+construct PrimitiveDropLastScalarOnAFourByteScalar() extends Test {
     test { let text = "A" + scalarText(128512)  return text.dropLastScalar() }
     expect { let e: Result<String, TestFailure> = .Ok("A"); return e }
 }
 
-Test PrimitiveDropLastScalarOnEmptyTextIsEmpty {
+construct PrimitiveDropLastScalarOnEmptyTextIsEmpty() extends Test {
     test { return "".dropLastScalar().count }
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
 // Appending a code point and taking it back off is what a text field does.
-Test PrimitiveScalarRoundTripsThroughATextField {
+construct PrimitiveScalarRoundTripsThroughATextField() extends Test {
     test {
         var typed = ""
         typed = typed + scalarText(107)
@@ -328,45 +328,45 @@ Test PrimitiveScalarRoundTripsThroughATextField {
 
 // --- reading a number out of text ------------------------------------------
 
-Test PrimitiveIsIntAcceptsAWholeNumber {
+construct PrimitiveIsIntAcceptsAWholeNumber() extends Test {
     test { return "42".isInt() }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test PrimitiveIsIntAcceptsANegative {
+construct PrimitiveIsIntAcceptsANegative() extends Test {
     test { return "-13".isInt() }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test PrimitiveIsIntRefusesText {
+construct PrimitiveIsIntRefusesText() extends Test {
     test { return "abc".isInt() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test PrimitiveIsIntRefusesEmptyText {
+construct PrimitiveIsIntRefusesEmptyText() extends Test {
     test { return "".isInt() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
 // A decimal is not a whole number, and answering `3` for `"3.5"` would be a
 // wrong answer rather than a refusal.
-Test PrimitiveIsIntRefusesADecimal {
+construct PrimitiveIsIntRefusesADecimal() extends Test {
     test { return "3.5".isInt() }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test PrimitiveToIntReadsSurroundingSpace {
+construct PrimitiveToIntReadsSurroundingSpace() extends Test {
     test { return "  7 ".toInt() }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test PrimitiveToIntReadsANegative {
+construct PrimitiveToIntReadsANegative() extends Test {
     test { return "-13".toInt() }
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 13); return e }
 }
 
 // The pair as a program uses them: ask, then convert.
-Test PrimitiveIsIntGuardsToInt {
+construct PrimitiveIsIntGuardsToInt() extends Test {
     test {
         var total = 0
         let written = ["10", "x", "20", "", "30"]

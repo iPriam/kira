@@ -41,7 +41,7 @@ construct Shape {
     @Required function area() -> Int
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function area() -> Int { return side * side }
 }
 
@@ -96,7 +96,7 @@ construct Widget {
     @Required function total() -> Int
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
     function grown(by: Int) -> Int { return number + by }
     function grown(by: Int, times: Int) -> Int { return (number + by) * times }
@@ -176,11 +176,11 @@ construct Widget {
     @Required function total() -> Int
 }
 
-Widget Text(text: String) {
+construct Text(text: String) extends Widget {
     function total() -> Int { return text.count }
 }
 
-Widget Row(gap: Int = 0) {
+construct Row(gap: Int = 0) extends Widget {
     @Content let children: [Any Widget]
     function total() -> Int {
         var sum = gap

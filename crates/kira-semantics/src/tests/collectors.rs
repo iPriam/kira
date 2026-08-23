@@ -14,7 +14,7 @@ const TEST_VOCABULARY: &str = include_str!(concat!(
 fn source(db: &salsa::DatabaseImpl, kind: BuildKind) -> SourceProgram {
     SourceProgram::new(
         db,
-        "Test Sample {}".to_owned(),
+        "construct Sample() extends Test {}".to_owned(),
         "main.kira".to_owned(),
         vec![
             ModuleSource {

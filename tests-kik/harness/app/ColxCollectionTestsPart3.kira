@@ -8,7 +8,7 @@ import Foundation
 // GROUP I - ColxGrid
 // ---------------------------------------------------------------------------
 
-Test ColxGridSum5 {
+construct ColxGridSum5() extends Test {
     test {
         var cells: [Int] = []
         cells.append(1)
@@ -22,7 +22,7 @@ Test ColxGridSum5 {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test ColxGridCellCount7 {
+construct ColxGridCellCount7() extends Test {
     test {
         var cells: [Int] = []
         var i = 0
@@ -36,7 +36,7 @@ Test ColxGridCellCount7 {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test ColxGridLarge100 {
+construct ColxGridLarge100() extends Test {
     test {
         var cells: [Int] = []
         var i = 0
@@ -51,7 +51,7 @@ Test ColxGridLarge100 {
     expect { let e: Result<Int, TestFailure> = .Ok(4950); return e }
 }
 
-Test ColxGridMultiRowSum {
+construct ColxGridMultiRowSum() extends Test {
     test {
         // 3 grids with 4 cells each: grid r has cells r*4, r*4+1, r*4+2, r*4+3
         var total = 0
@@ -73,7 +73,7 @@ Test ColxGridMultiRowSum {
     expect { let e: Result<Int, TestFailure> = .Ok(66); return e }
 }
 
-Test ColxGridEmptySum {
+construct ColxGridEmptySum() extends Test {
     test {
         let cells: [Int] = []
         let grid = ColxGrid { cells: move cells }
@@ -82,7 +82,7 @@ Test ColxGridEmptySum {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test ColxGridEmptyCount {
+construct ColxGridEmptyCount() extends Test {
     test {
         let cells: [Int] = []
         let grid = ColxGrid { cells: move cells }
@@ -91,7 +91,7 @@ Test ColxGridEmptyCount {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test ColxGridRangeSum {
+construct ColxGridRangeSum() extends Test {
     test {
         let cells = colxBuildRange(10)
         let grid = ColxGrid { cells: move cells }
@@ -101,7 +101,7 @@ Test ColxGridRangeSum {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test ColxGridSquaresSum {
+construct ColxGridSquaresSum() extends Test {
     test {
         let cells = colxBuildSquares(8)
         let grid = ColxGrid { cells: move cells }
@@ -115,7 +115,7 @@ Test ColxGridSquaresSum {
 // GROUP J - Allocation churn
 // ---------------------------------------------------------------------------
 
-Test ColxChurnRange100 {
+construct ColxChurnRange100() extends Test {
     test {
         var total = 0
         var round = 0
@@ -130,7 +130,7 @@ Test ColxChurnRange100 {
     expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
 }
 
-Test ColxChurnSquares50 {
+construct ColxChurnSquares50() extends Test {
     test {
         var total = 0
         var round = 0
@@ -145,7 +145,7 @@ Test ColxChurnSquares50 {
     expect { let e: Result<Int, TestFailure> = .Ok(14250); return e }
 }
 
-Test ColxChurnFib30 {
+construct ColxChurnFib30() extends Test {
     test {
         var total = 0
         var round = 0
@@ -160,7 +160,7 @@ Test ColxChurnFib30 {
     expect { let e: Result<Int, TestFailure> = .Ok(990); return e }
 }
 
-Test ColxChurnReverse20 {
+construct ColxChurnReverse20() extends Test {
     test {
         var total = 0
         var round = 0
@@ -176,7 +176,7 @@ Test ColxChurnReverse20 {
     expect { let e: Result<Int, TestFailure> = .Ok(140); return e }
 }
 
-Test ColxChurnStructs40 {
+construct ColxChurnStructs40() extends Test {
     test {
         var total = 0
         var round = 0
@@ -202,7 +202,7 @@ Test ColxChurnStructs40 {
     expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
 }
 
-Test ColxChurnGrids25 {
+construct ColxChurnGrids25() extends Test {
     test {
         var total = 0
         var r = 0
@@ -221,7 +221,7 @@ Test ColxChurnGrids25 {
     expect { let e: Result<Int, TestFailure> = .Ok(975); return e }
 }
 
-Test ColxChurnLarge200 {
+construct ColxChurnLarge200() extends Test {
     test {
         var total = 0
         var round = 0
@@ -236,7 +236,7 @@ Test ColxChurnLarge200 {
     expect { let e: Result<Int, TestFailure> = .Ok(494000); return e }
 }
 
-Test ColxChurnMixed30 {
+construct ColxChurnMixed30() extends Test {
     test {
         var total = 0
         var round = 0
@@ -257,7 +257,7 @@ Test ColxChurnMixed30 {
 // GROUP K - Arithmetic and write traps
 // ---------------------------------------------------------------------------
 
-Test ColxTrapDivByZero {
+construct ColxTrapDivByZero() extends Test {
     test {
         let x = 10 / 0
         return x
@@ -265,7 +265,7 @@ Test ColxTrapDivByZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapModByZero {
+construct ColxTrapModByZero() extends Test {
     test {
         let x = 10 % 0
         return x
@@ -273,7 +273,7 @@ Test ColxTrapModByZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapDivByZeroVar {
+construct ColxTrapDivByZeroVar() extends Test {
     test {
         var xs: [Int] = []
         xs.append(0)
@@ -283,7 +283,7 @@ Test ColxTrapDivByZeroVar {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapModByZeroVar {
+construct ColxTrapModByZeroVar() extends Test {
     test {
         var xs: [Int] = []
         xs.append(0)
@@ -293,7 +293,7 @@ Test ColxTrapModByZeroVar {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapIndexAtCount {
+construct ColxTrapIndexAtCount() extends Test {
     test {
         let xs = colxBuildRange(5)
         let _ = xs[xs.count]
@@ -302,7 +302,7 @@ Test ColxTrapIndexAtCount {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapLoopOOB {
+construct ColxTrapLoopOOB() extends Test {
     test {
         var xs: [Int] = []
         xs.append(1)
@@ -319,7 +319,7 @@ Test ColxTrapLoopOOB {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapWriteOOB {
+construct ColxTrapWriteOOB() extends Test {
     test {
         var xs: [Int] = []
         xs.append(1)
@@ -330,7 +330,7 @@ Test ColxTrapWriteOOB {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test ColxTrapFibOOBDirect {
+construct ColxTrapFibOOBDirect() extends Test {
     test {
         let xs = colxBuildFib(5)
         let _ = xs[5]
@@ -369,7 +369,7 @@ function colxSumNest(b: borrow ColxNestBox) -> Int {
     return total
 }
 
-Test ColxNestedArrayFree {
+construct ColxNestedArrayFree() extends Test {
     test {
         var total = 0
         var i = 0

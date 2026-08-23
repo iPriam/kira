@@ -2,7 +2,7 @@ import Foundation
 
 // Kira Test coverage for language-wide `type Name = Target` aliases.
 
-Test AlxByteAliasAssignsIntegerLiteral {
+construct AlxByteAliasAssignsIntegerLiteral() extends Test {
     test {
         let value: Byte = 7
         return value
@@ -10,7 +10,7 @@ Test AlxByteAliasAssignsIntegerLiteral {
     expect { let e: Result<Byte, TestFailure> = .Ok(7); return e }
 }
 
-Test AlxAliasBufferSum {
+construct AlxAliasBufferSum() extends Test {
     test {
         var payload: ByteBuffer = []
         payload.append(2)
@@ -21,7 +21,7 @@ Test AlxAliasBufferSum {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test AlxAliasPacketCarriesAliasField {
+construct AlxAliasPacketCarriesAliasField() extends Test {
     test {
         let packet = aliasBuildPacket(3, 3)
         return aliasBufferSum(packet.payload)
@@ -29,7 +29,7 @@ Test AlxAliasPacketCarriesAliasField {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test AlxNestedAliasMatrix {
+construct AlxNestedAliasMatrix() extends Test {
     test {
         var left: ByteBuffer = []
         left.append(1)

@@ -54,7 +54,7 @@ function ferValSum(v: FerVal) -> Int {
 
 // ── Group A: @Native returns a payload-less enum, matched in the VM ───────────
 
-Test FerNativeReturnsKindB {
+construct FerNativeReturnsKindB() extends Test {
     test {
         let k = ferMakeKind(1)
         return ferKindCode(k)
@@ -62,7 +62,7 @@ Test FerNativeReturnsKindB {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test FerNativeReturnsKindC {
+construct FerNativeReturnsKindC() extends Test {
     test {
         let k = ferMakeKind(2)
         return ferKindCode(k)
@@ -73,7 +73,7 @@ Test FerNativeReturnsKindC {
 
 // ── Group B: @Native returns an enum WITH a payload ──────────────────────────
 
-Test FerNativeReturnsLoadedPayload {
+construct FerNativeReturnsLoadedPayload() extends Test {
     test {
         let v = ferMakeVal(5)
         return ferValSum(move v)
@@ -82,7 +82,7 @@ Test FerNativeReturnsLoadedPayload {
     expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
 }
 
-Test FerNativeReturnsEmpty {
+construct FerNativeReturnsEmpty() extends Test {
     test {
         let v = ferMakeVal(0)
         return ferValSum(move v)
@@ -98,7 +98,7 @@ function ferValReadInVm(v: borrow FerVal) -> Int {
     }
 }
 
-Test FerNativePayloadReadInVm {
+construct FerNativePayloadReadInVm() extends Test {
     test {
         let v = ferMakeVal(7)
         return ferValReadInVm(v)
@@ -109,7 +109,7 @@ Test FerNativePayloadReadInVm {
 
 // ── Group C: round-trip churn — return from native, pass back to native ──────
 
-Test FerNativeEnumRoundTripLoop {
+construct FerNativeEnumRoundTripLoop() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -124,7 +124,7 @@ Test FerNativeEnumRoundTripLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test FerNativePayloadRoundTripLoop {
+construct FerNativePayloadRoundTripLoop() extends Test {
     test {
         var acc = 0
         var i = 1

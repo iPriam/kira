@@ -371,7 +371,7 @@ construct MfxPanel {
     @Required let body: Int
 }
 
-MfxPanel MfxDemo() {
+construct MfxDemo() extends MfxPanel {
     @MfxTracked var count: Int = 7
     @MfxTracked var label: String = "hello"
     let body: Int = 1
@@ -498,7 +498,7 @@ construct MwsPanel {
     @Required let body: Int
 }
 
-MwsPanel MwsDemo() {
+construct MwsDemo() extends MwsPanel {
     @MwsState var count: Int = 7
     @MwsState var label: String = "hello"
     let body: Int = 1

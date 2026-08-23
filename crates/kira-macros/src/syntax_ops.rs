@@ -321,7 +321,7 @@ impl Scopes {
 mod tests {
     use super::*;
 
-    const FORM: &str = "MwsPanel MwsDemo() {\n    @MwsState var count: Int = 7\n    let body: Int = 1\n\n    function poke() -> Int {\n        count = count + 1\n        return count\n    }\n\n    function shadowed() -> Int {\n        let count = 99\n        return count\n    }\n}\n";
+    const FORM: &str = "construct MwsDemo() extends MwsPanel {\n    @MwsState var count: Int = 7\n    let body: Int = 1\n\n    function poke() -> Int {\n        count = count + 1\n        return count\n    }\n\n    function shadowed() -> Int {\n        let count = 99\n        return count\n    }\n}\n";
 
     #[test]
     fn dropping_a_field_leaves_every_other_byte_alone() {

@@ -36,7 +36,7 @@ construct Drawable {
     }
 }
 
-Drawable Sprite {
+construct Sprite() extends Drawable {
     let base: Int = 7
 
     function draw() -> Int {
@@ -54,7 +54,7 @@ Drawable Sprite {
     }
 }
 
-Drawable Tile {
+construct Tile() extends Drawable {
     let side: Int = 4
 
     function draw() -> Int {
@@ -122,13 +122,13 @@ construct Cell {
     @Required let tag: String
 }
 
-Cell Stored {
+construct Stored() extends Cell {
     let tag: String = "stored"
     function render() -> String { return "[" + tag + "]" }
     function weight() -> Int { return 2 }
 }
 
-Cell Computed {
+construct Computed() extends Cell {
     let side: Int = 3
     let tag: String { "computed" }
     function render() -> String { return "<" + tag + ">" }
@@ -182,12 +182,12 @@ construct Task extends Runnable {
 
 construct Job extends Runnable {}
 
-Task Fetch {
+construct Fetch() extends Task {
     label { return "fetch" }
     render { return "[fetch]" }
 }
 
-Job Render {
+construct Render() extends Job {
     label { return "render" }
     function render() -> Any { return 7 }
 }

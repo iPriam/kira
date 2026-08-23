@@ -1,5 +1,5 @@
 //! Parser tests for the construct declaration family: the `construct Family`
-//! template and the construct-backed `Family Name(params)` declaration.
+//! template and the backed `construct Name(params) extends Family` declaration.
 
 use crate::*;
 use kira_syntax_model::ast::{ConstructKind, Item};
@@ -47,7 +47,7 @@ construct Shape {
 fn a_backed_declaration_parses_its_family_params_and_computed_override() {
     let result = parse_text(
         r#"
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side * side }
 }
 "#,
@@ -69,7 +69,7 @@ Shape Square(side: Int) {
 fn a_backed_declaration_with_no_params_parses() {
     let result = parse_text(
         r#"
-Widget Spacer() {
+construct Spacer() extends Widget {
     let node: Int { 0 }
 }
 "#,
@@ -86,7 +86,7 @@ Widget Spacer() {
 fn a_function_member_parses_alongside_a_computed_member() {
     let result = parse_text(
         r#"
-Widget Text(content: Int) {
+construct Text(content: Int) extends Widget {
     let node: Int { content }
     function width() -> Int {
         return content
@@ -105,7 +105,7 @@ Widget Text(content: Int) {
 fn a_content_annotation_parses_as_a_real_child_slot_field() {
     let result = parse_text(
         r#"
-Widget Stack() {
+construct Stack() extends Widget {
     @Content let children: [Int]
     let node: Int { 0 }
 }
@@ -134,7 +134,7 @@ Widget Stack() {
 fn a_some_slot_field_and_a_list_slot_field_parse() {
     let result = parse_text(
         r#"
-Widget Wrap() {
+construct Wrap() extends Widget {
     let inner: some Leaf
     let items: [some Leaf]
     let node: Int { 0 }
@@ -169,7 +169,7 @@ Widget Wrap() {
 fn a_body_shorthand_member_defers_its_result_type_to_the_family() {
     let result = parse_text(
         r#"
-Widget Divider() {
+construct Divider() extends Widget {
     body {
         Rectangle(width = 1.0)
     }
@@ -304,10 +304,10 @@ extend Widget {
 
 #[test]
 fn extend_is_only_contextual_so_a_name_spelled_extend_is_unaffected() {
-    // A construct-backed declaration whose *declaration* name is `extend` must
-    // still parse as a backed declaration, not be mistaken for an extend block:
-    // the block form is `extend Family {`, this is `Family extend {`.
-    let result = parse_text("Widget extend {\n}\n");
+    // A declaration *named* `extend` must still parse as the declaration it is
+    // rather than as an extend block: the block form is `extend Family {`, and
+    // this is a construct whose own name happens to be that word.
+    let result = parse_text("construct extend() extends Widget {\n}\n");
     assert!(
         matches!(
             result.tree.items(),
@@ -429,7 +429,7 @@ construct Shape {
 fn a_requires_section_on_a_backed_declaration_parses_as_requirements() {
     let result = parse_text(
         r#"
-Shape Circle {
+construct Circle() extends Shape {
     requires {
         function render() -> String
     }
@@ -645,4 +645,68 @@ function f() -> Int {
 "#,
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_parameter_list_is_what_makes_a_construct_a_backed_declaration() {
+    let family = parse_text("construct Widget extends Surface {\n}");
+    assert!(family.diagnostics.is_empty(), "{:?}", family.diagnostics);
+    assert!(matches!(
+        only_construct(&family).kind,
+        ConstructKind::Family
+    ));
+    let backed = parse_text("construct Text() extends Widget {\n}");
+    assert!(backed.diagnostics.is_empty(), "{:?}", backed.diagnostics);
+    let declaration = only_construct(&backed);
+    let ConstructKind::Backed { family, .. } = &declaration.kind else {
+        panic!("expected a backed declaration, got {:?}", declaration.kind);
+    };
+    assert_eq!(backed.interner.resolve(*family), "Widget");
+    // The family is the kind's, not a parent: a declaration is not a variant of
+    // its own family twice.
+    assert!(declaration.extends.is_empty());
+}
+
+#[test]
+fn a_backed_declaration_that_names_no_family_is_refused() {
+    let result = parse_text("construct Text(content: Int) {\n}");
+    let codes: Vec<&str> = result
+        .diagnostics
+        .iter()
+        .filter_map(|item| item.code_text())
+        .collect();
+    assert_eq!(codes, vec!["KPAR077"]);
+}
+
+#[test]
+fn a_backed_declaration_that_names_two_families_is_refused() {
+    let result = parse_text("construct Text() extends Widget, Surface {\n}");
+    let codes: Vec<&str> = result
+        .diagnostics
+        .iter()
+        .filter_map(|item| item.code_text())
+        .collect();
+    assert_eq!(codes, vec!["KPAR078"]);
+}
+
+#[test]
+fn a_backed_declaration_takes_traits_before_its_family() {
+    let result = parse_text("construct Text(content: Int): Hashable extends Widget {\n}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let declaration = only_construct(&result);
+    assert_eq!(declaration.traits.len(), 1);
+    assert!(matches!(declaration.kind, ConstructKind::Backed { .. }));
+}
+
+#[test]
+fn the_bare_two_word_head_is_no_longer_a_declaration() {
+    let result = parse_text("Widget Text(content: Int) {\n}");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|item| item.has_code("KSEM900")),
+        "{:?}",
+        result.diagnostics
+    );
 }

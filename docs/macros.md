@@ -194,7 +194,8 @@ comptime macro Name {
 `kind` is required and fixed to one of the four words; it determines both the
 call syntax and the signature of `expand`. `appliesTo` lists the declaration
 kinds the macro is legal on and is required for everything but `function`;
-`form` admits construct-backed declarations (`MyPanel Counter(…) { … }`).
+`form` admits construct-backed declarations
+(`construct Counter(…) extends MyPanel { … }`).
 `expand` is the one member every `comptime macro` must define, and its body is
 ordinary Kira run at compile time.
 
@@ -548,7 +549,7 @@ struct State {
     function set(value: Wrapped) { …storage write… }
 }
 
-MyPanel Counter() {
+construct Counter() extends MyPanel {
     @State var count: Int = 0     // works because State IS a @PropertyWrapper
     let body: Int = 1
 }

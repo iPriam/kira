@@ -9,7 +9,7 @@ import Foundation
 // for-in tests
 // ---------------------------------------------------------------------------
 
-Test CfxForInLiteralSum {
+construct CfxForInLiteralSum() extends Test {
     test {
         var s = 0
         for x in [1, 2, 3, 4, 5] {
@@ -20,7 +20,7 @@ Test CfxForInLiteralSum {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxForInProduct {
+construct CfxForInProduct() extends Test {
     test {
         var p = 1
         for x in [1, 2, 3, 4, 5] {
@@ -32,7 +32,7 @@ Test CfxForInProduct {
     expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
 }
 
-Test CfxForInCount {
+construct CfxForInCount() extends Test {
     test {
         var count = 0
         for x in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
@@ -45,7 +45,7 @@ Test CfxForInCount {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test CfxForInBuiltArray {
+construct CfxForInBuiltArray() extends Test {
     test {
         var xs: [Int] = []
         var i = 0
@@ -63,7 +63,7 @@ Test CfxForInBuiltArray {
     expect { let e: Result<Int, TestFailure> = .Ok(285); return e }
 }
 
-Test CfxForInNested {
+construct CfxForInNested() extends Test {
     test {
         var acc = 0
         let outer: [Int] = [1, 2, 3]
@@ -79,7 +79,7 @@ Test CfxForInNested {
     expect { let e: Result<Int, TestFailure> = .Ok(360); return e }
 }
 
-Test CfxForInSingleElement {
+construct CfxForInSingleElement() extends Test {
     test {
         var s = 0
         for x in [42] {
@@ -90,7 +90,7 @@ Test CfxForInSingleElement {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test CfxForInMaxFinder {
+construct CfxForInMaxFinder() extends Test {
     test {
         var mx = 0
         for x in [5, 3, 9, 1, 7, 4, 8, 2, 6] {
@@ -102,7 +102,7 @@ Test CfxForInMaxFinder {
     expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
-Test CfxForInMinFinder {
+construct CfxForInMinFinder() extends Test {
     test {
         var mn = 1000000
         for x in [5, 3, 9, 1, 7, 4, 8, 2, 6] {
@@ -114,7 +114,7 @@ Test CfxForInMinFinder {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxForInEvenSum {
+construct CfxForInEvenSum() extends Test {
     test {
         var s = 0
         for x in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
@@ -127,7 +127,7 @@ Test CfxForInEvenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test CfxForInCountLiteral {
+construct CfxForInCountLiteral() extends Test {
     test {
         var xs: [Int] = [10, 20, 30, 40, 50]
         return xs.count
@@ -135,7 +135,7 @@ Test CfxForInCountLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test CfxForInAppendAndCount {
+construct CfxForInAppendAndCount() extends Test {
     test {
         var xs: [Int] = []
         var i = 0
@@ -152,7 +152,7 @@ Test CfxForInAppendAndCount {
 // long comparison-chain tests
 // ---------------------------------------------------------------------------
 
-Test CfxSwitchExact {
+construct CfxSwitchExact() extends Test {
     test {
         var out = 0
         var i = 0
@@ -166,7 +166,7 @@ Test CfxSwitchExact {
     expect { let e: Result<Int, TestFailure> = .Ok(550); return e }
 }
 
-Test CfxSwitchDefault {
+construct CfxSwitchDefault() extends Test {
     test {
         var out = 0
         if 99 == 0 {
@@ -181,7 +181,7 @@ Test CfxSwitchDefault {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test CfxSwitchZero {
+construct CfxSwitchZero() extends Test {
     test {
         var out = 0
         if 0 == 0 {
@@ -196,7 +196,7 @@ Test CfxSwitchZero {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test CfxSwitchNegativeDefault {
+construct CfxSwitchNegativeDefault() extends Test {
     test {
         var out = 0
         if (0 - 1) == 0 {
@@ -211,7 +211,7 @@ Test CfxSwitchNegativeDefault {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test CfxSwitchFoldModulo {
+construct CfxSwitchFoldModulo() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -235,7 +235,7 @@ Test CfxSwitchFoldModulo {
     expect { let e: Result<Int, TestFailure> = .Ok(555); return e }
 }
 
-Test CfxSwitchManyArms {
+construct CfxSwitchManyArms() extends Test {
     test {
         var s = 0
         var i = 0
@@ -277,7 +277,7 @@ Test CfxSwitchManyArms {
     expect { let e: Result<Int, TestFailure> = .Ok(506); return e }
 }
 
-Test CfxSwitchLargeScrutinee {
+construct CfxSwitchLargeScrutinee() extends Test {
     test {
         var out = 0
         if 1000 == 999 {
@@ -294,7 +294,7 @@ Test CfxSwitchLargeScrutinee {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test CfxSwitchDrivenByLoop {
+construct CfxSwitchDrivenByLoop() extends Test {
     test {
         var ones = 0
         var twos = 0
@@ -324,7 +324,7 @@ Test CfxSwitchDrivenByLoop {
 // match on payload-less enums
 // ---------------------------------------------------------------------------
 
-Test CfxMatchPayloadless {
+construct CfxMatchPayloadless() extends Test {
     test {
         let c: CfxColor = .Green
         var out = 0
@@ -334,7 +334,7 @@ Test CfxMatchPayloadless {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test CfxMatchPayloadlessSum {
+construct CfxMatchPayloadlessSum() extends Test {
     test {
         let colors: [CfxColor] = [.Red, .Green, .Blue, .Red]
         var s = 0
@@ -351,7 +351,7 @@ Test CfxMatchPayloadlessSum {
 // match on single-payload enums
 // ---------------------------------------------------------------------------
 
-Test CfxMatchPayloadCircle {
+construct CfxMatchPayloadCircle() extends Test {
     test {
         let s: CfxShape = .Circle(5)
         return cfxShapeArea(s)
@@ -360,7 +360,7 @@ Test CfxMatchPayloadCircle {
     expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
 }
 
-Test CfxMatchPayloadRect {
+construct CfxMatchPayloadRect() extends Test {
     test {
         let s: CfxShape = .Rect(3)
         return cfxShapeArea(s)
@@ -369,7 +369,7 @@ Test CfxMatchPayloadRect {
     expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
 }
 
-Test CfxMatchPayloadPoint {
+construct CfxMatchPayloadPoint() extends Test {
     test {
         let s: CfxShape = .Point
         return cfxShapeArea(s)
@@ -377,7 +377,7 @@ Test CfxMatchPayloadPoint {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxMatchPayloadSum {
+construct CfxMatchPayloadSum() extends Test {
     test {
         let shapes: [CfxShape] = [.Circle(3), .Rect(2), .Point, .Circle(4)]
         var s = 0
@@ -390,7 +390,7 @@ Test CfxMatchPayloadSum {
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
-Test CfxMatchSignPos {
+construct CfxMatchSignPos() extends Test {
     test {
         let s: CfxSign = .Pos(42)
         return cfxSignVal(s)
@@ -398,7 +398,7 @@ Test CfxMatchSignPos {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test CfxMatchSignNeg {
+construct CfxMatchSignNeg() extends Test {
     test {
         let s: CfxSign = .Neg(7)
         return cfxSignVal(s)
@@ -407,7 +407,7 @@ Test CfxMatchSignNeg {
     expect { let e: Result<Int, TestFailure> = .Ok(0 - 7); return e }
 }
 
-Test CfxMatchSignZero {
+construct CfxMatchSignZero() extends Test {
     test {
         let s: CfxSign = .Zero
         return cfxSignVal(s)
@@ -415,7 +415,7 @@ Test CfxMatchSignZero {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxMatchSignFold {
+construct CfxMatchSignFold() extends Test {
     test {
         var acc = 0
         let sigs: [CfxSign] = [.Pos(10), .Neg(3), .Zero, .Pos(5), .Neg(2)]
@@ -432,92 +432,92 @@ Test CfxMatchSignFold {
 // Recursion tests
 // ---------------------------------------------------------------------------
 
-Test CfxRecursionFactorial5 {
+construct CfxRecursionFactorial5() extends Test {
     test { return cfxFactorial(5) }
     expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
 }
 
-Test CfxRecursionFactorial10 {
+construct CfxRecursionFactorial10() extends Test {
     test { return cfxFactorial(10) }
     expect { let e: Result<Int, TestFailure> = .Ok(3628800); return e }
 }
 
-Test CfxRecursionFib10 {
+construct CfxRecursionFib10() extends Test {
     test { return cfxFib(10) }
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test CfxRecursionFib15 {
+construct CfxRecursionFib15() extends Test {
     test { return cfxFib(15) }
     expect { let e: Result<Int, TestFailure> = .Ok(610); return e }
 }
 
-Test CfxRecursionFib20 {
+construct CfxRecursionFib20() extends Test {
     test { return cfxFib(20) }
     expect { let e: Result<Int, TestFailure> = .Ok(6765); return e }
 }
 
-Test CfxRecursionGcd {
+construct CfxRecursionGcd() extends Test {
     test { return cfxGcd(48, 18) }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
-Test CfxRecursionGcdCoprime {
+construct CfxRecursionGcdCoprime() extends Test {
     test { return cfxGcd(17, 13) }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxRecursionGcdLarge {
+construct CfxRecursionGcdLarge() extends Test {
     test { return cfxGcd(1071, 462) }
     expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
 }
 
-Test CfxRecursionTriangle {
+construct CfxRecursionTriangle() extends Test {
     test { return cfxTriangle(10) }
     // 55
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test CfxRecursionTriangle50 {
+construct CfxRecursionTriangle50() extends Test {
     test { return cfxTriangle(50) }
     // 1275
     expect { let e: Result<Int, TestFailure> = .Ok(1275); return e }
 }
 
-Test CfxMutualRecursionEven {
+construct CfxMutualRecursionEven() extends Test {
     test { return cfxIsEven(20) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test CfxMutualRecursionOdd {
+construct CfxMutualRecursionOdd() extends Test {
     test { return cfxIsOdd(15) }
     expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
 }
 
-Test CfxMutualRecursionEvenFalse {
+construct CfxMutualRecursionEvenFalse() extends Test {
     test { return cfxIsEven(7) }
     expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
 }
 
-Test CfxRecursionPow {
+construct CfxRecursionPow() extends Test {
     test { return cfxPow(3, 10) }
     // 59049
     expect { let e: Result<Int, TestFailure> = .Ok(59049); return e }
 }
 
-Test CfxRecursionDigitSum {
+construct CfxRecursionDigitSum() extends Test {
     test { return cfxDigitSum(123456789) }
     // 1+2+3+4+5+6+7+8+9 = 45
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test CfxRecursionSumRange {
+construct CfxRecursionSumRange() extends Test {
     test { return cfxSumRange(1, 50) }
     // 1275
     expect { let e: Result<Int, TestFailure> = .Ok(1275); return e }
 }
 
-Test CfxRecursionCountDiv {
+construct CfxRecursionCountDiv() extends Test {
     test { return cfxCountDiv(100, 7) }
     // floor(100/7) = 14
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
@@ -527,7 +527,7 @@ Test CfxRecursionCountDiv {
 // Early-return patterns
 // ---------------------------------------------------------------------------
 
-Test CfxEarlyReturnFromBranch {
+construct CfxEarlyReturnFromBranch() extends Test {
     test {
         var i = 0
         while i < 100 {
@@ -542,7 +542,7 @@ Test CfxEarlyReturnFromBranch {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxEarlyReturnSwitch {
+construct CfxEarlyReturnSwitch() extends Test {
     test {
         var i = 0
         while i < 50 {
@@ -563,7 +563,7 @@ Test CfxEarlyReturnSwitch {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test CfxEarlyReturnForIn {
+construct CfxEarlyReturnForIn() extends Test {
     test {
         let xs: [Int] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
         for v in xs {

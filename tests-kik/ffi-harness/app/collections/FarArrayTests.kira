@@ -274,7 +274,7 @@ function farRtSetRowCell(row: borrow mut FarRow, i: Int, v: Int) {
 // Tests: [Int] borrow — literal and variable
 // ---------------------------------------------------------------------------
 
-Test FarSumBorrowLiteral {
+construct FarSumBorrowLiteral() extends Test {
     test {
         let xs: [Int] = [1, 2, 3, 4, 5]
         return farSumBorrow(xs)
@@ -282,21 +282,21 @@ Test FarSumBorrowLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test FarSumBorrowDirect {
+construct FarSumBorrowDirect() extends Test {
     test {
         return farSumBorrow([10, 20, 30])
     }
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test FarSumOwnedLiteral {
+construct FarSumOwnedLiteral() extends Test {
     test {
         return farSumOwned([7, 8, 9])
     }
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test FarNthIntFirst {
+construct FarNthIntFirst() extends Test {
     test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 0)
@@ -304,7 +304,7 @@ Test FarNthIntFirst {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test FarNthIntMid {
+construct FarNthIntMid() extends Test {
     test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 1)
@@ -312,7 +312,7 @@ Test FarNthIntMid {
     expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
 }
 
-Test FarNthIntLast {
+construct FarNthIntLast() extends Test {
     test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 2)
@@ -320,14 +320,14 @@ Test FarNthIntLast {
     expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
 }
 
-Test FarProductLiteral {
+construct FarProductLiteral() extends Test {
     test {
         return farProduct([2, 3, 4, 5])
     }
     expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
 }
 
-Test FarCountLiteral {
+construct FarCountLiteral() extends Test {
     test {
         let xs: [Int] = [10, 20, 30, 40, 50]
         return farCount(xs)
@@ -335,7 +335,7 @@ Test FarCountLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test FarScaleAndSumLiteral {
+construct FarScaleAndSumLiteral() extends Test {
     test {
         let xs: [Int] = [1, 2, 3, 4]
         return farScaleAndSum(xs, 10)
@@ -343,7 +343,7 @@ Test FarScaleAndSumLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
 }
 
-Test FarDotProductLiteral {
+construct FarDotProductLiteral() extends Test {
     test {
         let a: [Int] = [1, 2, 3]
         let b: [Int] = [4, 5, 6]
@@ -352,7 +352,7 @@ Test FarDotProductLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
 }
 
-Test FarSumSquaresLiteral {
+construct FarSumSquaresLiteral() extends Test {
     test {
         let xs: [Int] = [3, 4, 5]
         return farSumSquares(xs)
@@ -364,7 +364,7 @@ Test FarSumSquaresLiteral {
 // Tests: [Int] mutation through native
 // ---------------------------------------------------------------------------
 
-Test FarAppendThenSum {
+construct FarAppendThenSum() extends Test {
     test {
         var xs: [Int] = [1, 2, 3]
         farAppendInt(xs, 4)
@@ -373,7 +373,7 @@ Test FarAppendThenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test FarAppendMultiThenSum {
+construct FarAppendMultiThenSum() extends Test {
     test {
         var xs: [Int] = [0]
         farAppendInt(xs, 10)
@@ -384,7 +384,7 @@ Test FarAppendMultiThenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
 
-Test FarSetIntThenSum {
+construct FarSetIntThenSum() extends Test {
     test {
         var xs: [Int] = [10, 20, 30]
         farSetInt(xs, 1, 99)
@@ -393,7 +393,7 @@ Test FarSetIntThenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(139); return e }
 }
 
-Test FarDoubleAllThenSum {
+construct FarDoubleAllThenSum() extends Test {
     test {
         var xs: [Int] = [1, 2, 3, 4]
         farDoubleAll(xs)
@@ -402,7 +402,7 @@ Test FarDoubleAllThenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test FarDoubleAllThenProduct {
+construct FarDoubleAllThenProduct() extends Test {
     test {
         var xs: [Int] = [1, 2, 3]
         farDoubleAll(xs)
@@ -411,7 +411,7 @@ Test FarDoubleAllThenProduct {
     expect { let e: Result<Int, TestFailure> = .Ok(48); return e }
 }
 
-Test FarNativeIndexAfterAppend {
+construct FarNativeIndexAfterAppend() extends Test {
     test {
         var xs: [Int] = [1, 2, 3]
         farAppendInt(xs, 4)
@@ -425,7 +425,7 @@ Test FarNativeIndexAfterAppend {
 // Tests: @Runtime builds arrays, @Native processes them
 // ---------------------------------------------------------------------------
 
-Test FarRuntimeBuildNativeSum5 {
+construct FarRuntimeBuildNativeSum5() extends Test {
     test {
         let xs = farBuildRange(5)
         return farSumBorrow(xs)
@@ -433,7 +433,7 @@ Test FarRuntimeBuildNativeSum5 {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test FarRuntimeBuildNativeSum10 {
+construct FarRuntimeBuildNativeSum10() extends Test {
     test {
         let xs = farBuildRange(10)
         return farSumBorrow(xs)
@@ -441,7 +441,7 @@ Test FarRuntimeBuildNativeSum10 {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test FarRuntimeBuildNativeProduct {
+construct FarRuntimeBuildNativeProduct() extends Test {
     test {
         let xs = farBuildRange(4)
         return farProduct(xs)
@@ -449,7 +449,7 @@ Test FarRuntimeBuildNativeProduct {
     expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
 }
 
-Test FarRuntimeBuildNativeCount {
+construct FarRuntimeBuildNativeCount() extends Test {
     test {
         let xs = farBuildRange(7)
         return farCount(xs)
@@ -457,7 +457,7 @@ Test FarRuntimeBuildNativeCount {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test FarRuntimeEvenBuildNativeSum {
+construct FarRuntimeEvenBuildNativeSum() extends Test {
     test {
         let xs = farBuildEven(5)
         return farSumBorrow(xs)
@@ -465,7 +465,7 @@ Test FarRuntimeEvenBuildNativeSum {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test FarRuntimeBuildNthInt {
+construct FarRuntimeBuildNthInt() extends Test {
     test {
         let xs = farBuildRange(5)
         return farNthInt(xs, 3)
@@ -473,7 +473,7 @@ Test FarRuntimeBuildNthInt {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test FarRuntimeBuildAppendNativeSum {
+construct FarRuntimeBuildAppendNativeSum() extends Test {
     test {
         var xs = farBuildRange(3)
         farAppendInt(xs, 100)
@@ -482,7 +482,7 @@ Test FarRuntimeBuildAppendNativeSum {
     expect { let e: Result<Int, TestFailure> = .Ok(106); return e }
 }
 
-Test FarBuildThenDoubleSum {
+construct FarBuildThenDoubleSum() extends Test {
     test {
         var xs = farBuildRange(4)
         farDoubleAll(xs)
@@ -491,7 +491,7 @@ Test FarBuildThenDoubleSum {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test FarSumSquaresBuilt {
+construct FarSumSquaresBuilt() extends Test {
     test {
         let xs = farBuildRange(5)
         return farSumSquares(xs)
@@ -499,7 +499,7 @@ Test FarSumSquaresBuilt {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test FarDotProductBuilt {
+construct FarDotProductBuilt() extends Test {
     test {
         let a = farBuildRange(3)
         let b = farBuildEven(3)
@@ -512,7 +512,7 @@ Test FarDotProductBuilt {
 // Tests: arrays of @Runtime structs across the bridge
 // ---------------------------------------------------------------------------
 
-Test FarSumPointsLiteral {
+construct FarSumPointsLiteral() extends Test {
     test {
         let pts: [FarPoint] = [FarPoint { x: 1, y: 2 }, FarPoint { x: 3, y: 4 }]
         return farSumPoints(pts)
@@ -520,7 +520,7 @@ Test FarSumPointsLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test FarSumPointsBuilt {
+construct FarSumPointsBuilt() extends Test {
     test {
         let pts = farBuildPoints(4)
         return farSumPoints(pts)
@@ -529,7 +529,7 @@ Test FarSumPointsBuilt {
     expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
 }
 
-Test FarNthPointXLiteral {
+construct FarNthPointXLiteral() extends Test {
     test {
         let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
         return farNthPointX(pts, 1)
@@ -537,7 +537,7 @@ Test FarNthPointXLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test FarNthPointYLiteral {
+construct FarNthPointYLiteral() extends Test {
     test {
         let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
         return farNthPointY(pts, 0)
@@ -545,7 +545,7 @@ Test FarNthPointYLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
 }
 
-Test FarMutatePointSync {
+construct FarMutatePointSync() extends Test {
     test {
         var pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
         farMutatePoint(pts, 0, 99, 88)
@@ -554,7 +554,7 @@ Test FarMutatePointSync {
     expect { let e: Result<Int, TestFailure> = .Ok(187); return e }
 }
 
-Test FarAppendPointSync {
+construct FarAppendPointSync() extends Test {
     test {
         var pts: [FarPoint] = [FarPoint { x: 1, y: 2 }]
         farAppendPoint(pts, 10, 20)
@@ -564,7 +564,7 @@ Test FarAppendPointSync {
     expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
 }
 
-Test FarAppendPointCount {
+construct FarAppendPointCount() extends Test {
     test {
         var pts: [FarPoint] = [FarPoint { x: 0, y: 0 }]
         farAppendPoint(pts, 5, 6)
@@ -574,7 +574,7 @@ Test FarAppendPointCount {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test FarSumPointsWeightedLiteral {
+construct FarSumPointsWeightedLiteral() extends Test {
     test {
         let pts: [FarPoint] = [FarPoint { x: 2, y: 3 }, FarPoint { x: 4, y: 5 }]
         return farSumPointsWeighted(pts)
@@ -583,7 +583,7 @@ Test FarSumPointsWeightedLiteral {
     expect { let e: Result<Int, TestFailure> = .Ok(58); return e }
 }
 
-Test FarPointBuildMutateSum {
+construct FarPointBuildMutateSum() extends Test {
     test {
         var pts = farBuildPoints(3)
         farMutatePoint(pts, 0, 100, 200)
@@ -593,7 +593,7 @@ Test FarPointBuildMutateSum {
     expect { let e: Result<Int, TestFailure> = .Ok(320); return e }
 }
 
-Test FarBuildPointsNativeNth {
+construct FarBuildPointsNativeNth() extends Test {
     test {
         let pts = farBuildPoints(5)
         return farNthPointX(pts, 3) + farNthPointY(pts, 3)

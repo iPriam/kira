@@ -8,7 +8,7 @@ import Foundation
 // Array of structs with String fields
 // ---------------------------------------------------------------------------
 
-Test StrxBoxArrCount {
+construct StrxBoxArrCount() extends Test {
     test {
         var boxes: [StrxBox] = []
         var i = 0
@@ -22,7 +22,7 @@ Test StrxBoxArrCount {
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
 
-Test StrxBoxArrSum {
+construct StrxBoxArrSum() extends Test {
     test {
         var boxes: [StrxBox] = []
         var i = 0
@@ -43,7 +43,7 @@ Test StrxBoxArrSum {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test StrxBoxArrIdx3 {
+construct StrxBoxArrIdx3() extends Test {
     test {
         var boxes: [StrxBox] = []
         var i = 0
@@ -58,7 +58,7 @@ Test StrxBoxArrIdx3 {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StrxBoxArrIdxCode {
+construct StrxBoxArrIdxCode() extends Test {
     test {
         var boxes: [StrxBox] = []
         var i = 0
@@ -77,7 +77,7 @@ Test StrxBoxArrIdxCode {
 // Nested struct with String field
 // ---------------------------------------------------------------------------
 
-Test StrxOutLen1 {
+construct StrxOutLen1() extends Test {
     test {
         let o = StrxBoxOuter {
             inner: StrxBoxInner { word: "hello" },
@@ -90,7 +90,7 @@ Test StrxOutLen1 {
     expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
 }
 
-Test StrxOutLen2 {
+construct StrxOutLen2() extends Test {
     test {
         let o = StrxBoxOuter {
             inner: StrxBoxInner { word: "" },
@@ -103,7 +103,7 @@ Test StrxOutLen2 {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxOutDirect {
+construct StrxOutDirect() extends Test {
     test {
         let o = StrxBoxOuter {
             inner: StrxBoxInner { word: "abcd" },
@@ -116,7 +116,7 @@ Test StrxOutDirect {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test StrxOutTagCount {
+construct StrxOutTagCount() extends Test {
     test {
         let o = StrxBoxOuter {
             inner: StrxBoxInner { word: "test" },
@@ -129,7 +129,7 @@ Test StrxOutTagCount {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test StrxOutTwoFields {
+construct StrxOutTwoFields() extends Test {
     test {
         let o = StrxBoxOuter {
             inner: StrxBoxInner { word: "abcde" },
@@ -142,7 +142,7 @@ Test StrxOutTwoFields {
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
 }
 
-Test StrxInnerWordLen {
+construct StrxInnerWordLen() extends Test {
     test {
         let inn = StrxBoxInner { word: "hello" }
         return inn.word.count
@@ -155,7 +155,7 @@ Test StrxInnerWordLen {
 // String-payload enum
 // ---------------------------------------------------------------------------
 
-Test StrxLblNamed {
+construct StrxLblNamed() extends Test {
     test {
         let l: StrxLbl = .Named("hello")
         return strxLblLen(l)
@@ -163,7 +163,7 @@ Test StrxLblNamed {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxLblEmpty {
+construct StrxLblEmpty() extends Test {
     test {
         let l: StrxLbl = .Empty
         return strxLblLen(l)
@@ -171,7 +171,7 @@ Test StrxLblEmpty {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxLblNamedZero {
+construct StrxLblNamedZero() extends Test {
     test {
         let l: StrxLbl = .Named("")
         return strxLblLen(l)
@@ -179,7 +179,7 @@ Test StrxLblNamedZero {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxLblFor0 {
+construct StrxLblFor0() extends Test {
     test {
         let l = strxLblFor(0)
         return strxLblLen(l)
@@ -188,7 +188,7 @@ Test StrxLblFor0 {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxLblFor1 {
+construct StrxLblFor1() extends Test {
     test {
         let l = strxLblFor(1)
         return strxLblLen(l)
@@ -197,7 +197,7 @@ Test StrxLblFor1 {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test StrxLblFor2 {
+construct StrxLblFor2() extends Test {
     test {
         let l = strxLblFor(2)
         return strxLblLen(l)
@@ -206,7 +206,7 @@ Test StrxLblFor2 {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test StrxLblFor3 {
+construct StrxLblFor3() extends Test {
     test {
         let l = strxLblFor(3)
         return strxLblLen(l)
@@ -215,7 +215,7 @@ Test StrxLblFor3 {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxLblLoopSum {
+construct StrxLblLoopSum() extends Test {
     test {
         var total = 0
         var i = 0
@@ -230,7 +230,7 @@ Test StrxLblLoopSum {
     expect { let e: Result<Int, TestFailure> = .Ok(70); return e }
 }
 
-Test StrxLblArrBuild {
+construct StrxLblArrBuild() extends Test {
     test {
         var lbls: [StrxLbl] = []
         var i = 0
@@ -250,7 +250,7 @@ Test StrxLblArrBuild {
     expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
 }
 
-Test StrxLblArrCount {
+construct StrxLblArrCount() extends Test {
     test {
         var lbls: [StrxLbl] = []
         var i = 0
@@ -267,7 +267,7 @@ Test StrxLblArrCount {
 // String arrays — literal and built
 // ---------------------------------------------------------------------------
 
-Test StrxArrLitIdx0 {
+construct StrxArrLitIdx0() extends Test {
     test {
         let arr = ["one", "two", "three"]
         return arr[0].count
@@ -276,7 +276,7 @@ Test StrxArrLitIdx0 {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxArrLitIdx2 {
+construct StrxArrLitIdx2() extends Test {
     test {
         let arr = ["one", "two", "three"]
         return arr[2].count
@@ -285,7 +285,7 @@ Test StrxArrLitIdx2 {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxArrLitForIn {
+construct StrxArrLitForIn() extends Test {
     test {
         let ws = ["cat", "dog", "fish", ""]
         var total = 0
@@ -298,7 +298,7 @@ Test StrxArrLitForIn {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxArrLitCount {
+construct StrxArrLitCount() extends Test {
     test {
         let arr = ["a", "b", "c"]
         return arr.count
@@ -306,7 +306,7 @@ Test StrxArrLitCount {
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxArrBuildCount {
+construct StrxArrBuildCount() extends Test {
     test {
         var arr: [String] = []
         var i = 0
@@ -320,7 +320,7 @@ Test StrxArrBuildCount {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test StrxArrBuildSum {
+construct StrxArrBuildSum() extends Test {
     test {
         var arr: [String] = []
         var i = 0
@@ -341,7 +341,7 @@ Test StrxArrBuildSum {
     expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
 }
 
-Test StrxArrBuildIdx {
+construct StrxArrBuildIdx() extends Test {
     test {
         var arr: [String] = []
         var i = 0
@@ -356,7 +356,7 @@ Test StrxArrBuildIdx {
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test StrxArrBuildMvLen {
+construct StrxArrBuildMvLen() extends Test {
     test {
         var arr: [String] = []
         var buildTotal = 0
@@ -385,7 +385,7 @@ Test StrxArrBuildMvLen {
 // Per-iteration string selection by index
 // ---------------------------------------------------------------------------
 
-Test StrxSelByMod {
+construct StrxSelByMod() extends Test {
     test {
         var total = 0
         var i = 0
@@ -405,7 +405,7 @@ Test StrxSelByMod {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test StrxCountUnderThree {
+construct StrxCountUnderThree() extends Test {
     test {
         var cnt = 0
         var i = 0
@@ -427,7 +427,7 @@ Test StrxCountUnderThree {
 // Trap tests
 // ---------------------------------------------------------------------------
 
-Test StrxTrapArrOob {
+construct StrxTrapArrOob() extends Test {
     test {
         let arr: [String] = ["a", "b"]
         let s = arr[5]
@@ -436,7 +436,7 @@ Test StrxTrapArrOob {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxTrapBoxArrOob {
+construct StrxTrapBoxArrOob() extends Test {
     test {
         var boxes: [StrxBox] = []
         boxes.append(StrxBox { name: "x", code: 1 })
@@ -446,7 +446,7 @@ Test StrxTrapBoxArrOob {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxTrapLblArrOob {
+construct StrxTrapLblArrOob() extends Test {
     test {
         var lbls: [StrxLbl] = []
         lbls.append(.Empty)
@@ -456,7 +456,7 @@ Test StrxTrapLblArrOob {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxTrapDivZero {
+construct StrxTrapDivZero() extends Test {
     test {
         let a = 5
         let b = 0
@@ -465,7 +465,7 @@ Test StrxTrapDivZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxTrapModZero {
+construct StrxTrapModZero() extends Test {
     test {
         let a = 10
         let b = 0
@@ -474,7 +474,7 @@ Test StrxTrapModZero {
     expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
 }
 
-Test StrxTrapStrArrEmpty {
+construct StrxTrapStrArrEmpty() extends Test {
     test {
         let arr: [String] = []
         let s = arr[0]

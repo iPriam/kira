@@ -21,11 +21,11 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side * side }
 }
 
-Shape Rect(width: Int, height: Int) {
+construct Rect(width: Int, height: Int) extends Shape {
     let area: Int { width * height }
 }
 
@@ -59,7 +59,7 @@ construct Widget {
     let node: Node { Node {} }
 }
 
-Widget Box(kind: Int, weight: Int) {
+construct Box(kind: Int, weight: Int) extends Widget {
     let node: Node {
         Node { kind: kind, weight: weight }
     }
@@ -99,7 +99,7 @@ construct Item {
     @Required let value: Int
 }
 
-Item Leaf {
+construct Leaf() extends Item {
     let value: Int = 0
 }
 
@@ -108,13 +108,13 @@ construct Panel {
 }
 
 // A single-child slot: exactly one child, read back through the bridge.
-Panel Wrap() {
+construct Wrap() extends Panel {
     let inner: some Item
     let total: Int { inner.value }
 }
 
 // A list slot: an ordered array of children, summed through the bridge.
-Panel Group() {
+construct Group() extends Panel {
     let items: [some Item]
     let total: Int {
         var sum = 0
@@ -150,7 +150,7 @@ construct Shape {
     let area: Int { 0 }
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     let area: Int { side * side }
     function scaled(factor: Int) -> Int {
         return side * factor
@@ -183,19 +183,19 @@ construct Widget {
     }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function value() -> Int {
         return number
     }
 }
 
-Widget Double(number: Int) {
+construct Double(number: Int) extends Widget {
     body {
         Leaf(number = number * 2)
     }
 }
 
-Widget Sum() {
+construct Sum() extends Widget {
     @Content let children: [Any Widget]
     function value() -> Int {
         var total = 0
@@ -238,13 +238,13 @@ construct Widget {
     }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function value() -> Int {
         return number
     }
 }
 
-Widget Boxed(extra: Int) {
+construct Boxed(extra: Int) extends Widget {
     let child: some Widget
     function value() -> Int {
         return child.value() + extra
@@ -288,13 +288,13 @@ construct Widget {
     }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function value() -> Int {
         return number
     }
 }
 
-Widget Boxed(extra: Int) {
+construct Boxed(extra: Int) extends Widget {
     let child: some Widget
     function value() -> Int {
         return child.value() + extra
@@ -337,11 +337,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Group() {
+construct Group() extends Widget {
     let children: [some Widget]
     function total() -> Int {
         var sum = 0
@@ -396,11 +396,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Group() {
+construct Group() extends Widget {
     let children: [some Widget]
     function total() -> Int {
         var n = 0
@@ -446,11 +446,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Group() {
+construct Group() extends Widget {
     let children: [some Widget]
     function total() -> Int {
         var sum = 0
@@ -501,11 +501,11 @@ construct Widget {
     function total() -> Int { return body.total() }
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Chain(kind: Int) {
+construct Chain(kind: Int) extends Widget {
     body {
         if kind == 1 {
             Leaf(number = 10)
@@ -540,12 +540,12 @@ construct Shape {
     @Required function label() -> String
 }
 
-Shape Square(side: Int) {
+construct Square(side: Int) extends Shape {
     function area() -> Int { return side * side }
     function label() -> String { return "square" }
 }
 
-Shape Strip(length: Int) {
+construct Strip(length: Int) extends Shape {
     function area() -> Int { return length }
     function label() -> String { return "strip" }
 }
@@ -579,11 +579,11 @@ construct Widget {
     @Required function total() -> Int
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Split(gap: Int = 0) {
+construct Split(gap: Int = 0) extends Widget {
     let sidebar: some Widget
     let detail: some Widget
     function total() -> Int {
@@ -622,11 +622,11 @@ construct Widget {
     @Required function total() -> Int
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Frame(tag: Int) {
+construct Frame(tag: Int) extends Widget {
     let main: some Widget
     let side: some Widget = Leaf(number = 9)
     function total() -> Int { return main.total() * 10 + side.total() + tag }
@@ -652,11 +652,11 @@ construct Widget {
     @Required function total() -> Int
 }
 
-Widget Leaf(number: Int) {
+construct Leaf(number: Int) extends Widget {
     function total() -> Int { return number }
 }
 
-Widget Panes(tag: Int) {
+construct Panes(tag: Int) extends Widget {
     let header: some Widget
     let rows: [some Widget]
     function total() -> Int {

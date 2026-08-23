@@ -39,7 +39,8 @@ pub enum Item {
     /// An `import Module [as Alias]` declaration.
     Import(ImportDecl),
     /// A `construct Family { ... }` declaration family, or a construct-backed
-    /// `Family Name(params) { ... }` declaration that conforms to one.
+    /// `construct Name(params) extends Family { ... }` declaration that conforms
+    /// to one.
     Construct(ConstructDecl),
     /// An `extend Family { function ... }` block: fluent modifier methods added
     /// to a construct family's chainable surface, or an `extend T: Trait { … }`
@@ -84,7 +85,11 @@ pub struct ExtendDecl {
 
 /// A member of the `construct` declaration family: either a family template
 /// (`construct Family { ... }`) or a construct-backed declaration
-/// (`Family Name(params) { ... }`) that conforms to one.
+/// (`construct Name(params) extends Family { ... }`) that conforms to one.
+///
+/// One keyword for both, and the parameter list is what tells them apart: a
+/// construct with one is a declaration whose parameters are its construction
+/// inputs, and a construct without one is the template itself.
 ///
 /// New Kira design proven against the oracle's *meaning*, not its state: the
 /// oracle documents the construct family as validate-only ("construct-backed
@@ -183,7 +188,8 @@ pub struct ConstructMethod {
 pub enum ConstructKind {
     /// `construct Family { ... }` — a declaration family (a typed template).
     Family,
-    /// `Family Name(params) { ... }` — a declaration backed by a family.
+    /// `construct Name(params) extends Family { ... }` — a declaration backed
+    /// by a family.
     Backed {
         /// The family this declaration conforms to.
         family: Symbol,

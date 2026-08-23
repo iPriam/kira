@@ -55,7 +55,7 @@ function ltxScore(holder: borrow LtxHolder) -> Int {
 // Two lent temporaries in one call: the literal and the call result. The
 // crash was in the caller's cleanup after `ltxHold` returned, so surviving to
 // the checksum is most of the assertion and the value pins the copies.
-Test LtxTwoLentTemporariesReleaseInOrder {
+construct LtxTwoLentTemporariesReleaseInOrder() extends Test {
     test {
         var items: [LtxInner] = []
         var one = LtxInner()
@@ -69,7 +69,7 @@ Test LtxTwoLentTemporariesReleaseInOrder {
 
 // The same shape churned: a per-call clobber or leak scales with the loop and
 // the leak run catches what the checksum cannot.
-Test LtxLentTemporariesChurn {
+construct LtxLentTemporariesChurn() extends Test {
     test {
         var total = 0
         var round = 0
@@ -89,7 +89,7 @@ Test LtxLentTemporariesChurn {
 
 // Three lent temporaries, nested call results, both field orders — the widest
 // shape the release loop has to unwind in one go.
-Test LtxNestedLentTemporaries {
+construct LtxNestedLentTemporaries() extends Test {
     test {
         var items: [LtxInner] = []
         var one = LtxInner()

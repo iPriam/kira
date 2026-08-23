@@ -58,7 +58,7 @@ function fvaNativeCallsRuntimeMutatingArray(seed: Int) -> Int {
     return fvaNativeWeightedSum(xs)
 }
 
-Test FvaNativeArrayCallbackForwardLoop {
+construct FvaNativeArrayCallbackForwardLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -73,7 +73,7 @@ Test FvaNativeArrayCallbackForwardLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(492); return e }
 }
 
-Test FvaNativeArrayCallbackMutateLoop {
+construct FvaNativeArrayCallbackMutateLoop() extends Test {
     test {
         var total = 0
         var i = 0

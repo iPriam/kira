@@ -21,13 +21,13 @@ import Foundation
 // color sum: 4 cycles*(10+20+30)=240
 // state sum: 3 cycles*(0+1+2+3)=18
 // total = 288
-Test FenMixedLoopSum12 {
+construct FenMixedLoopSum12() extends Test {
     test { return fenMixedLoopSum(12) }
     expect { let e: Result<Int, TestFailure> = .Ok(288); return e }
 }
 
 // 24 iters: double the above = 576
-Test FenMixedLoopSum24 {
+construct FenMixedLoopSum24() extends Test {
     test { return fenMixedLoopSum(24) }
     expect { let e: Result<Int, TestFailure> = .Ok(576); return e }
 }
@@ -37,19 +37,19 @@ Test FenMixedLoopSum24 {
 // accumulates fenStateScore(s). Tests Copy enum var-reassignment in VM context.
 
 // 4 steps from Idle: R(1)+P(2)+D(3)+I(0) = 6
-Test FenStateChain4 {
+construct FenStateChain4() extends Test {
     test { return fenNativeStateChain(4) }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
 // 8 steps: 2 full cycles = 12
-Test FenStateChain8 {
+construct FenStateChain8() extends Test {
     test { return fenNativeStateChain(8) }
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
 // 12 steps: 3 full cycles = 18
-Test FenStateChain12 {
+construct FenStateChain12() extends Test {
     test { return fenNativeStateChain(12) }
     expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
 }
@@ -58,7 +58,7 @@ Test FenStateChain12 {
 
 // Same packet borrowed twice for two dispatch calls; dir is Copy so both are valid.
 // fenMakePacket(2): East, n=10, score=13; two borrows → 26
-Test FenPacketDoubleBorrow {
+construct FenPacketDoubleBorrow() extends Test {
     test {
         let p = fenMakePacket(2)
         var acc = fenPacketScore(p)
@@ -70,7 +70,7 @@ Test FenPacketDoubleBorrow {
 
 // Four packets created and scored; all are owned locals, each borrowed once.
 // 1+7+13+19 = 40
-Test FenFourPacketsSequential {
+construct FenFourPacketsSequential() extends Test {
     test {
         let p0 = fenMakePacket(0)
         let p1 = fenMakePacket(1)
@@ -86,7 +86,7 @@ Test FenFourPacketsSequential {
 }
 
 // All four cell types scored; 0+20+15+104 = 139
-Test FenFourCellsSequential {
+construct FenFourCellsSequential() extends Test {
     test {
         let c0 = fenMakeCell(0)
         let c1 = fenMakeCell(1)
@@ -103,7 +103,7 @@ Test FenFourCellsSequential {
 
 // Mix packet and cell in the same test:
 // packet(1)=7, cell(2)=15 → 22
-Test FenPacketAndCell {
+construct FenPacketAndCell() extends Test {
     test {
         let p = fenMakePacket(1)
         let c = fenMakeCell(2)
@@ -115,7 +115,7 @@ Test FenPacketAndCell {
 }
 
 // All four dirs, direct bridge (not via struct), sum = 1+2+3+4 = 10
-Test FenAllDirsSum {
+construct FenAllDirsSum() extends Test {
     test {
         var acc = fenNativeDirScore(0)
         acc = acc + fenNativeDirScore(1)
@@ -127,7 +127,7 @@ Test FenAllDirsSum {
 }
 
 // All three colors, sum = 10+20+30 = 60
-Test FenAllColorsSum {
+construct FenAllColorsSum() extends Test {
     test {
         var acc = fenNativeColorScore(0)
         acc = acc + fenNativeColorScore(1)
@@ -138,7 +138,7 @@ Test FenAllColorsSum {
 }
 
 // All four states, sum = 0+1+2+3 = 6
-Test FenAllStatesSum {
+construct FenAllStatesSum() extends Test {
     test {
         var acc = fenNativeStateScore(0)
         acc = acc + fenNativeStateScore(1)
@@ -153,14 +153,14 @@ Test FenAllStatesSum {
 
 // 20 iters: odd i in 0..19 = 1,3,5,7,9,11,13,15,17,19
 // values: 7,21,35,49,63,77,91,105,119,133 → sum = 700
-Test FenValLoopSum20 {
+construct FenValLoopSum20() extends Test {
     test { return fenValLoopSum(20) }
     expect { let e: Result<Int, TestFailure> = .Ok(700); return e }
 }
 
 // Sequential val calls (no loop): 4 specific values
 // i=0(0) + i=1(7) + i=2(0) + i=3(21) = 28
-Test FenValFourCalls {
+construct FenValFourCalls() extends Test {
     test {
         var acc = fenNativeValScore(0)
         acc = acc + fenNativeValScore(1)
@@ -174,13 +174,13 @@ Test FenValFourCalls {
 // ── Tests — Group I: high-churn struct loop ───────────────────────────────────
 
 // 40 iters of packets (i%4 cycles): 10 cycles * 40 = 400
-Test FenPacketHighVolume {
+construct FenPacketHighVolume() extends Test {
     test { return fenPacketLoopSum(40) }
     expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
 }
 
 // 40 iters of cells: 10 cycles * 139 = 1390
-Test FenCellHighVolume {
+construct FenCellHighVolume() extends Test {
     test { return fenCellLoopSum(40) }
     expect { let e: Result<Int, TestFailure> = .Ok(1390); return e }
 }
@@ -188,7 +188,7 @@ Test FenCellHighVolume {
 // 50 iters of val loop: odd i in 0..49 = 25 odds: 1,3,...,49
 // values: i*7 for each odd i
 // sum = 7*(1+3+5+...+49) = 7 * 25^2 = 7*625 = 4375
-Test FenValHighVolume {
+construct FenValHighVolume() extends Test {
     test { return fenValLoopSum(50) }
     expect { let e: Result<Int, TestFailure> = .Ok(4375); return e }
 }
@@ -196,25 +196,25 @@ Test FenValHighVolume {
 // ── Tests — Group J: state machine variants ────────────────────────────────────
 
 // 1 step: Idle→Running, score=1
-Test FenStateChain1 {
+construct FenStateChain1() extends Test {
     test { return fenNativeStateChain(1) }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
 // 2 steps: R+P = 1+2 = 3
-Test FenStateChain2 {
+construct FenStateChain2() extends Test {
     test { return fenNativeStateChain(2) }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
 // 3 steps: step1=R(1) + step2=P(2) + step3=D(3) = 6
-Test FenStateChain3 {
+construct FenStateChain3() extends Test {
     test { return fenNativeStateChain(3) }
     expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
 }
 
 // 20 steps: 5 full cycles = 5*6 = 30
-Test FenStateChain20 {
+construct FenStateChain20() extends Test {
     test { return fenNativeStateChain(20) }
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }

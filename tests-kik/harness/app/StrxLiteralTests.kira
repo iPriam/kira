@@ -6,18 +6,18 @@ import Foundation
 
 // --- escapes ---------------------------------------------------------------
 
-Test StrxLiteralNewlineEscape {
+construct StrxLiteralNewlineEscape() extends Test {
     test { return "a\nb".count }
     expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
 }
 
-Test StrxLiteralTabAndQuote {
+construct StrxLiteralTabAndQuote() extends Test {
     test { return "\t\"".count }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
 // One character, not the two that were written.
-Test StrxLiteralBackslashIsOneCharacter {
+construct StrxLiteralBackslashIsOneCharacter() extends Test {
     test { return "\\".count }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
@@ -27,7 +27,7 @@ Test StrxLiteralBackslashIsOneCharacter {
 // A message too long for one line, written across two. The newline and the
 // indentation lining the second line up under the first are layout: neither
 // reaches the string, so this is the same value as the single-line spelling.
-Test StrxLiteralContinuationJoinsTheLines {
+construct StrxLiteralContinuationJoinsTheLines() extends Test {
     test {
         let split = "the compositor offers no wl_compositor or no \
                      xdg_wm_base, and a window needs both"
@@ -42,7 +42,7 @@ Test StrxLiteralContinuationJoinsTheLines {
 // The space belongs to the text BEFORE the backslash, so a continuation
 // written without one joins the halves with nothing between them. This is the
 // case that says the indentation is dropped rather than collapsed to a space.
-Test StrxLiteralContinuationJoinsWithNoSpace {
+construct StrxLiteralContinuationJoinsWithNoSpace() extends Test {
     test {
         let joined = "un\
                       split"
@@ -53,7 +53,7 @@ Test StrxLiteralContinuationJoinsWithNoSpace {
 
 // Three lines is two continuations, and a continued literal is still one
 // token: it measures like any other string.
-Test StrxLiteralContinuationSpansThreeLines {
+construct StrxLiteralContinuationSpansThreeLines() extends Test {
     test {
         let long = "one \
                     two \
@@ -65,7 +65,7 @@ Test StrxLiteralContinuationSpansThreeLines {
 
 // A continuation inside a literal that also carries ordinary escapes: the two
 // resolve independently.
-Test StrxLiteralContinuationBesideAnEscape {
+construct StrxLiteralContinuationBesideAnEscape() extends Test {
     test {
         let mixed = "a\nb \
                      c"

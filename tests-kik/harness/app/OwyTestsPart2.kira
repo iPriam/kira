@@ -58,7 +58,7 @@ function owyVisit13(node: borrow OwyClosureNode13) -> Int {
     return total
 }
 
-Test OwyRecursiveClosureTreeParity {
+construct OwyRecursiveClosureTreeParity() extends Test {
     test {
         var total = 0
         var rebuild = 0
@@ -115,7 +115,7 @@ function owyUnwrap14(m: OwyMessage14) -> String {
     return "unreachable"
 }
 
-Test OwyStringDeepValueParity {
+construct OwyStringDeepValueParity() extends Test {
     test {
         var okCount = 0
         var panel = OwyPanel14 {}
@@ -215,7 +215,7 @@ function owyBuild15(n: Int) -> [OwyItem15] {
     return items
 }
 
-Test OwyStructParamMoveIntoArrayParity {
+construct OwyStructParamMoveIntoArrayParity() extends Test {
     test {
         var frame = 0
         var total = 0
@@ -247,7 +247,7 @@ function owyConsume16(mesh: OwyMesh16) -> Int {
     return mesh.id
 }
 
-Test OwyTemporaryMoveOk {
+construct OwyTemporaryMoveOk() extends Test {
     test {
         return owyConsume16(owyMakeMesh16())
     }
@@ -260,7 +260,7 @@ function owyAdd17(a: Int, b: Int) -> Int {
     return a + b
 }
 
-Test OwyTrivialValueNoMove {
+construct OwyTrivialValueNoMove() extends Test {
     test {
         let x = 1
         let y = owyAdd17(x, x)
@@ -292,7 +292,7 @@ function owyConsume18(pair: OwyPair18) -> Int {
     return left + right
 }
 
-Test OwyPartialMoveDisjointFields {
+construct OwyPartialMoveDisjointFields() extends Test {
     test {
         let pair = OwyPair18 {
             a: [1, 2, 3]
@@ -314,7 +314,7 @@ function owyUpdateBoth19(a: borrow mut OwyCell19, b: borrow mut OwyCell19) {
     return
 }
 
-Test OwyMidIrDisjointStructFieldBorrows {
+construct OwyMidIrDisjointStructFieldBorrows() extends Test {
     test {
         var pair = OwyPairCell19 { left: OwyCell19 { value: 1 }, right: OwyCell19 { value: 2 } }
         owyUpdateBoth19(pair.left, pair.right)
@@ -334,7 +334,7 @@ construct OwyWidget23 {
     }
 }
 
-OwyWidget23 OwyLeaf23(text: String) {
+construct OwyLeaf23(text: String) extends OwyWidget23 {
     function render() -> [String] {
         return [text]
     }
@@ -357,7 +357,7 @@ function owyConsume23(outer: OwyOuter23) -> Int {
     return lines.count
 }
 
-Test OwyConsumingNestedFieldReceiverParity {
+construct OwyConsumingNestedFieldReceiverParity() extends Test {
     test {
         var round = 0
         var total = 0
@@ -382,7 +382,7 @@ construct OwyWidget24 {
     }
 }
 
-OwyWidget24 OwyLeaf24(text: String) {
+construct OwyLeaf24(text: String) extends OwyWidget24 {
     function render() -> [String] {
         return [text]
     }
@@ -411,7 +411,7 @@ function owyRenderNested24(outer: OwyOuter24) -> Int {
     return total
 }
 
-Test OwyConsumingNestedIndexedReceiverParity {
+construct OwyConsumingNestedIndexedReceiverParity() extends Test {
     test {
         var round = 0
         var total = 0

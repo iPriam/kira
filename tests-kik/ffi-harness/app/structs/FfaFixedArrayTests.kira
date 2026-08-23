@@ -45,14 +45,14 @@ function ffaStoreReadback() -> Int {
     return total
 }
 
-Test FfaInlineArrayStoreReadback {
+construct FfaInlineArrayStoreReadback() extends Test {
     test { return ffaStoreReadback() }
     expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
 }
 
 // Churn the store/read cycle so a per-iteration native leak (the old orphaned
 // element clone) scales and surfaces in the harness leak run.
-Test FfaInlineArrayChurn {
+construct FfaInlineArrayChurn() extends Test {
     test {
         var acc = 0
         var i = 0

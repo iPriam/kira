@@ -30,14 +30,14 @@ construct TreeNode {
     @Required let weight: Int
 }
 
-TreeNode LeafNode {
+construct LeafNode() extends TreeNode {
     let text: String = ""
     let n: Int = 0
     let label: String { text }
     let weight: Int { n }
 }
 
-TreeNode PairNode {
+construct PairNode() extends TreeNode {
     @Required let first: Any TreeNode
     @Required let second: Any TreeNode
     let label: String { "pair" }
@@ -100,20 +100,20 @@ construct Cell {
 }
 
 // Discharges both requirements with stored fields.
-Cell Stored {
+construct Stored() extends Cell {
     let size: Int = 11
     let tag: String = "stored"
 }
 
 // Discharges both with computed members.
-Cell Computed {
+construct Computed() extends Cell {
     let side: Int = 5
     let size: Int { side * side }
     let tag: String { "computed" }
 }
 
 // Mixes the two shapes in one declaration.
-Cell Mixed {
+construct Mixed() extends Cell {
     let size: Int = 7
     let tag: String { "mixed" }
 }
@@ -152,12 +152,12 @@ construct Shape {
     @Required let area: Int
 }
 
-Shape Circle {
+construct Circle() extends Shape {
     let r: Int = 0
     let area: Int { r * r * 3 }
 }
 
-Shape Square {
+construct Square() extends Shape {
     let s: Int = 0
     let area: Int { s * s }
 }

@@ -115,14 +115,21 @@ construct Widget {
     function announce() -> String { return "<" + render() + ">" }
 }
 
-Widget Text(content: String) {
+construct Text(content: String) extends Widget {
     render { return content }
 }
 
-Widget Divider() {
+construct Divider() extends Widget {
     render { return "---" }
 }
 ```
+
+**The parameter list tells the two apart.** A `construct` with one is a
+declaration: the parameters are its construction inputs, and `extends` names the
+one family backing it. A `construct` without one is the family template, and
+`extends` names the families it takes requirements and members from. A parameter
+list with no `extends` is `KPAR077`, and a declaration naming two families is
+`KPAR078`.
 
 `@Required` states an obligation; a member with a body is inherited by every
 declaration that does not write its own. A declaration that leaves a requirement
@@ -157,7 +164,7 @@ construct Runnable {
 
 construct Task extends Runnable {}
 
-Task Fetch { label { return "fetch" } }
+construct Fetch() extends Task { label { return "fetch" } }
 
 function drive(items: borrow [Any Runnable]) {
     for item in items { print(item.announce()) }

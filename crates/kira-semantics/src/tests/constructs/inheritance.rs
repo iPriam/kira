@@ -18,7 +18,7 @@ construct Child extends Parent {
     @Required function label() -> String
 }
 
-Child One { label { return "one" } }
+construct One() extends Child { label { return "one" } }
 
 function collect() -> Int {
     let all: [Any Parent] = [One()]
@@ -43,7 +43,7 @@ construct Parent {
 
 construct Child extends Parent {}
 
-Child One {}
+construct One() extends Child {}
 "#;
     assert!(
         library_codes(source).iter().any(|code| code == "KSEM234"),
@@ -64,7 +64,7 @@ construct Child extends Parent {
     @Required function render() -> String
 }
 
-Child One { render { return "one" } }
+construct One() extends Child { render { return "one" } }
 "#;
     assert!(
         library_codes(source).is_empty(),
@@ -168,7 +168,7 @@ construct Middle extends Top {}
 
 construct Bottom extends Middle {}
 
-Bottom One { label { return "one" } }
+construct One() extends Bottom { label { return "one" } }
 
 function collect() -> Int {
     let all: [Any Top] = [One()]

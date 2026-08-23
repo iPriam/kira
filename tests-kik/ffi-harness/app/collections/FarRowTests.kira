@@ -15,7 +15,7 @@ import Foundation
 // Tests: FarRow — struct with [Int] field, native read
 // ---------------------------------------------------------------------------
 
-Test FarSumRowSimple {
+construct FarSumRowSimple() extends Test {
     test {
         let row = FarRow { label: 10, cells: [1, 2, 3] }
         return farSumRow(row)
@@ -23,7 +23,7 @@ Test FarSumRowSimple {
     expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
 }
 
-Test FarSumRowEmpty {
+construct FarSumRowEmpty() extends Test {
     test {
         let row = FarRow { label: 42, cells: [] }
         return farSumRow(row)
@@ -31,7 +31,7 @@ Test FarSumRowEmpty {
     expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
 }
 
-Test FarSumRowLarge {
+construct FarSumRowLarge() extends Test {
     test {
         let row = FarRow { label: 0, cells: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }
         return farSumRow(row)
@@ -39,7 +39,7 @@ Test FarSumRowLarge {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test FarSumRowsMulti {
+construct FarSumRowsMulti() extends Test {
     test {
         let rows: [FarRow] = [
             FarRow { label: 1, cells: [10, 20] },
@@ -52,7 +52,7 @@ Test FarSumRowsMulti {
     expect { let e: Result<Int, TestFailure> = .Ok(156); return e }
 }
 
-Test FarSumRowsBuilt {
+construct FarSumRowsBuilt() extends Test {
     test {
         let rows: [FarRow] = [
             FarRow { label: 100, cells: [1, 2, 3] },
@@ -68,7 +68,7 @@ Test FarSumRowsBuilt {
 // Tests: FarRow mutation via @Runtime, then @Native read
 // ---------------------------------------------------------------------------
 
-Test FarRowRtAppendNativeRead {
+construct FarRowRtAppendNativeRead() extends Test {
     test {
         var row = FarRow { label: 5, cells: [1, 2] }
         farRtAppendToRow(row, 10)
@@ -78,7 +78,7 @@ Test FarRowRtAppendNativeRead {
     expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
 }
 
-Test FarRowRtSetNativeRead {
+construct FarRowRtSetNativeRead() extends Test {
     test {
         var row = FarRow { label: 0, cells: [10, 20, 30] }
         farRtSetRowCell(row, 1, 99)
@@ -88,7 +88,7 @@ Test FarRowRtSetNativeRead {
     expect { let e: Result<Int, TestFailure> = .Ok(139); return e }
 }
 
-Test FarRowRtChurnAppend {
+construct FarRowRtChurnAppend() extends Test {
     test {
         var row = FarRow { label: 0, cells: [] }
         var i = 0
@@ -102,7 +102,7 @@ Test FarRowRtChurnAppend {
     expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
 }
 
-Test FarRowRtDoubleNativeRead {
+construct FarRowRtDoubleNativeRead() extends Test {
     test {
         var row = FarRow { label: 0, cells: [1, 2, 3, 4, 5] }
         farRtSetRowCell(row, 0, 2)
@@ -120,7 +120,7 @@ Test FarRowRtDoubleNativeRead {
 // Tests: native appends FarRow into [FarRow], mutates nested array field
 // ---------------------------------------------------------------------------
 
-Test FarNativeAppendRowThenSum {
+construct FarNativeAppendRowThenSum() extends Test {
     test {
         var rows: [FarRow] = [FarRow { label: 1, cells: [10] }]
         farNativeAppendRow(rows, 2, 20, 30)
@@ -130,7 +130,7 @@ Test FarNativeAppendRowThenSum {
     expect { let e: Result<Int, TestFailure> = .Ok(63); return e }
 }
 
-Test FarNativeAppendRowCellSync {
+construct FarNativeAppendRowCellSync() extends Test {
     test {
         var rows: [FarRow] = [FarRow { label: 0, cells: [1, 2, 3] }]
         farNativeAppendRowCell(rows, 0, 100)
@@ -140,7 +140,7 @@ Test FarNativeAppendRowCellSync {
     expect { let e: Result<Int, TestFailure> = .Ok(106); return e }
 }
 
-Test FarNativeSetRowCellSync {
+construct FarNativeSetRowCellSync() extends Test {
     test {
         var rows: [FarRow] = [FarRow { label: 5, cells: [10, 20, 30] }]
         farNativeSetRowCell(rows, 0, 1, 99)
@@ -150,7 +150,7 @@ Test FarNativeSetRowCellSync {
     expect { let e: Result<Int, TestFailure> = .Ok(144); return e }
 }
 
-Test FarNativeRowsMixedMutation {
+construct FarNativeRowsMixedMutation() extends Test {
     test {
         var rows: [FarRow] = [
             FarRow { label: 10, cells: [1, 2] },
@@ -168,7 +168,7 @@ Test FarNativeRowsMixedMutation {
 // Tests: allocation churn — build-and-discard arrays repeatedly
 // ---------------------------------------------------------------------------
 
-Test FarChurnSumSmall {
+construct FarChurnSumSmall() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -183,7 +183,7 @@ Test FarChurnSumSmall {
     expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
 }
 
-Test FarChurnNthRepeat {
+construct FarChurnNthRepeat() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -198,7 +198,7 @@ Test FarChurnNthRepeat {
     expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
 }
 
-Test FarChurnNativeBuild {
+construct FarChurnNativeBuild() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -216,7 +216,7 @@ Test FarChurnNativeBuild {
     expect { let e: Result<Int, TestFailure> = .Ok(84); return e }
 }
 
-Test FarChurnPoints {
+construct FarChurnPoints() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -231,7 +231,7 @@ Test FarChurnPoints {
     expect { let e: Result<Int, TestFailure> = .Ok(135); return e }
 }
 
-Test FarChurnDotProducts {
+construct FarChurnDotProducts() extends Test {
     test {
         var total = 0
         var k = 0
@@ -251,7 +251,7 @@ Test FarChurnDotProducts {
 // Tests: multi-call native pass chains
 // ---------------------------------------------------------------------------
 
-Test FarNativeScoreLoop {
+construct FarNativeScoreLoop() extends Test {
     test {
         var total = 0
         var i = 0
@@ -265,7 +265,7 @@ Test FarNativeScoreLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
 }
 
-Test FarNativeNthLoop {
+construct FarNativeNthLoop() extends Test {
     test {
         var total = 0
         let xs: [Int] = [10, 20, 30, 40, 50]
@@ -280,7 +280,7 @@ Test FarNativeNthLoop {
     expect { let e: Result<Int, TestFailure> = .Ok(550); return e }
 }
 
-Test FarMultiPassBorrowChain {
+construct FarMultiPassBorrowChain() extends Test {
     test {
         let xs: [Int] = [3, 7, 2, 8, 1]
         let s = farSumBorrow(xs)
@@ -292,7 +292,7 @@ Test FarMultiPassBorrowChain {
     expect { let e: Result<Int, TestFailure> = .Ok(399); return e }
 }
 
-Test FarMixedMutation {
+construct FarMixedMutation() extends Test {
     test {
         var xs: [Int] = [5, 10, 15]
         var pts: [FarPoint] = [FarPoint { x: 1, y: 1 }]
@@ -304,7 +304,7 @@ Test FarMixedMutation {
     expect { let e: Result<Int, TestFailure> = .Ok(56); return e }
 }
 
-Test FarRowsAndIntsInterleaved {
+construct FarRowsAndIntsInterleaved() extends Test {
     test {
         var xs: [Int] = [1, 2, 3]
         var rows: [FarRow] = [FarRow { label: 10, cells: [4, 5] }]
@@ -316,7 +316,7 @@ Test FarRowsAndIntsInterleaved {
     expect { let e: Result<Int, TestFailure> = .Ok(66); return e }
 }
 
-Test FarPointsAndIntsInterleaved {
+construct FarPointsAndIntsInterleaved() extends Test {
     test {
         var pts = farBuildPoints(3)
         var xs = farBuildRange(3)
@@ -330,7 +330,7 @@ Test FarPointsAndIntsInterleaved {
     expect { let e: Result<Int, TestFailure> = .Ok(136); return e }
 }
 
-Test FarCountAfterManyAppends {
+construct FarCountAfterManyAppends() extends Test {
     test {
         var xs: [Int] = [0]
         var i = 0
@@ -344,7 +344,7 @@ Test FarCountAfterManyAppends {
     expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
 }
 
-Test FarSumAfterManyAppends {
+construct FarSumAfterManyAppends() extends Test {
     test {
         var xs: [Int] = [0]
         var i = 1

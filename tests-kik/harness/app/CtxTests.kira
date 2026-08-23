@@ -32,7 +32,7 @@ struct CtxEcfP { var ok: Bool }
 // if_basic_parity
 // ---------------------------------------------------------------------------
 
-Test CtxIfBasic {
+construct CtxIfBasic() extends Test {
     test {
         let value = 2
         var out = ""
@@ -51,7 +51,7 @@ Test CtxIfBasic {
 // if_condition_trailing_call
 // ---------------------------------------------------------------------------
 
-Test CtxIfConditionTrailingCall {
+construct CtxIfConditionTrailingCall() extends Test {
     test {
         var out = ""
         let key = ctxSyllable(14, 9)
@@ -85,7 +85,7 @@ Test CtxIfConditionTrailingCall {
 // for_basic_parity
 // ---------------------------------------------------------------------------
 
-Test CtxForBasic {
+construct CtxForBasic() extends Test {
     test {
         var out = 0
         for item in [10, 20, 30] {
@@ -101,7 +101,7 @@ Test CtxForBasic {
 // for_binding_parity
 // ---------------------------------------------------------------------------
 
-Test CtxForBinding {
+construct CtxForBinding() extends Test {
     test {
         var total = 0
         for item in [1, 2, 3] {
@@ -117,7 +117,7 @@ Test CtxForBinding {
 // for_empty_parity
 // ---------------------------------------------------------------------------
 
-Test CtxForEmpty {
+construct CtxForEmpty() extends Test {
     test {
         var out = 0
         for item in [] {
@@ -134,7 +134,7 @@ Test CtxForEmpty {
 // for_stateful_parity
 // ---------------------------------------------------------------------------
 
-Test CtxForStateful {
+construct CtxForStateful() extends Test {
     test {
         var total = 0
         var out = ""
@@ -163,7 +163,7 @@ Test CtxForStateful {
 // comparison_chain_parity
 // ---------------------------------------------------------------------------
 
-Test CtxSwitchBasic {
+construct CtxSwitchBasic() extends Test {
     test {
         var out = ""
         if 2 == 1 {
@@ -183,7 +183,7 @@ Test CtxSwitchBasic {
 // empty_control_flow_bodies
 // ---------------------------------------------------------------------------
 
-Test CtxEmptyControlFlowBodies {
+construct CtxEmptyControlFlowBodies() extends Test {
     test {
         var n = 0
         if true {

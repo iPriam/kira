@@ -10,7 +10,7 @@ construct OwyTreeNode {
     @Required let label: String
 }
 
-OwyTreeNode OwyLeafNode {
+construct OwyLeafNode() extends OwyTreeNode {
     let text: String = ""
     let weight: Int = 0
 
@@ -19,7 +19,7 @@ OwyTreeNode OwyLeafNode {
     }
 }
 
-OwyTreeNode OwyPairNode {
+construct OwyPairNode() extends OwyTreeNode {
     @Required let first: Any OwyTreeNode
     @Required let second: Any OwyTreeNode
 
@@ -35,7 +35,7 @@ function owyBuildRow(index: Int) -> some OwyTreeNode {
     return OwyPairNode(first: OwyLeafNode(text: "a"), second: OwyLeafNode(text: "b"))
 }
 
-Test OwyConstructAnyTreeChurnParity {
+construct OwyConstructAnyTreeChurnParity() extends Test {
     test {
         var total = 0
         var rebuild = 0
@@ -86,7 +86,7 @@ function owySpan1(m: borrow OwyMode1) -> Int {
     }
 }
 
-Test OwyEnumArgumentIntoFieldParity {
+construct OwyEnumArgumentIntoFieldParity() extends Test {
     test {
         var frame = 0
         var total = 0
@@ -131,7 +131,7 @@ function owyPickMessage3(envelope: borrow OwyEnvelope3) -> OwyMessage3 {
     return envelope.message
 }
 
-Test OwyEnumStringPayloadFreeParity {
+construct OwyEnumStringPayloadFreeParity() extends Test {
     test {
         var hits = 0
         var i = 0
@@ -179,7 +179,7 @@ function owyRebrand4(b: borrow OwyBox4) -> OwyBox4 {
     return OwyBox4 { kind: b.kind, n: b.n + 100 }
 }
 
-Test OwyEnumStructFieldParity {
+construct OwyEnumStructFieldParity() extends Test {
     test {
         var frame = 0
         var total = 0
@@ -204,7 +204,7 @@ function owyConsume5(mesh: OwyMesh5) -> Int {
     return mesh.id
 }
 
-Test OwyExplicitMoveOk {
+construct OwyExplicitMoveOk() extends Test {
     test {
         var mesh = OwyMesh5 { id: 7 }
         return owyConsume5(move mesh)
@@ -245,7 +245,7 @@ function owyRebuild6(tree: OwyTree6) -> OwyTree6 {
     return next
 }
 
-Test OwyFreeStateMoveoutReturnParity {
+construct OwyFreeStateMoveoutReturnParity() extends Test {
     test {
         var okFlag = 1
         let state = nativeState(OwyScratch6 {})
@@ -301,7 +301,7 @@ function owyLeak7(flag: Bool, bag: OwyBag7) -> Int {
     return 0
 }
 
-Test OwyLetFieldAliasIfPartialMove {
+construct OwyLetFieldAliasIfPartialMove() extends Test {
     test {
         let bag = OwyBag7 { items: [1, 2, 3] }
         return owyLeak7(true, move bag)
@@ -320,7 +320,7 @@ function owyLeak8(bag: OwyBag8) -> Int {
     return alias.count
 }
 
-Test OwyLetFieldAliasPartialMove {
+construct OwyLetFieldAliasPartialMove() extends Test {
     test {
         let bag = OwyBag8 { items: [1, 2, 3] }
         return owyLeak8(move bag)
@@ -343,7 +343,7 @@ function owyLeak9(value: Int, bag: OwyBag9) -> Int {
     }
 }
 
-Test OwyLetFieldAliasSwitchPartialMove {
+construct OwyLetFieldAliasSwitchPartialMove() extends Test {
     test {
         let bag = OwyBag9 { items: [1, 2, 3] }
         return owyLeak9(0, move bag)
@@ -365,7 +365,7 @@ function owyLeak10(flag: Bool, bag: OwyBag10) -> Int {
     return 0
 }
 
-Test OwyLetFieldAliasWhilePartialMove {
+construct OwyLetFieldAliasWhilePartialMove() extends Test {
     test {
         let bag = OwyBag10 { items: [1, 2, 3] }
         return owyLeak10(true, move bag)
@@ -381,7 +381,7 @@ function owyCallTwice11(first: () -> Int, second: () -> Int) -> Int {
     return a * 100 + b
 }
 
-Test OwyMultiClosureCopyCapture {
+construct OwyMultiClosureCopyCapture() extends Test {
     test {
         let seed = 4
         let adder: () -> Int = { in
@@ -403,7 +403,7 @@ construct OwyPmNode12 {
     @Required let tag: Int
 }
 
-OwyPmNode12 OwyPmLeaf12(value: Int) {
+construct OwyPmLeaf12(value: Int) extends OwyPmNode12 {
     let tag: Int {
         value
     }
@@ -443,7 +443,7 @@ function owyConsume12(holder: OwyHolder12) -> Int {
     return total
 }
 
-Test OwyPartialMoveScopeExitParity {
+construct OwyPartialMoveScopeExitParity() extends Test {
     test {
         var round = 0
         var total = 0

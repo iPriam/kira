@@ -26,17 +26,17 @@ function fltReadFrame(desc: borrow FltFrameDesc) -> Int {
     return desc.tag
 }
 
-Test FltCStorageLoop {
+construct FltCStorageLoop() extends Test {
     test { return fltBuildAndDropFrames(500) }
     expect { let e: Result<Int, TestFailure> = .Ok(500); return e }
 }
 
-Test FltCStorageNativeReturn {
+construct FltCStorageNativeReturn() extends Test {
     test { let desc = fltMakeFrame(73); return desc.tag }
     expect { let e: Result<Int, TestFailure> = .Ok(73); return e }
 }
 
-Test FltCStorageNativeArgument {
+construct FltCStorageNativeArgument() extends Test {
     test {
         let desc = FltFrameDesc { tag: 91, label: "runtime" }
         return fltReadFrame(desc)

@@ -1,6 +1,6 @@
 // A file a program ships with, declared rather than spelled at the point of use.
 //
-//     Asset GlassBackdrop {
+//     construct GlassBackdrop() extends Asset {
 //         path { return "assets/background-cubes-cool.rgba" }
 //         byteCount { return 1600 * 900 * 4 }
 //     }

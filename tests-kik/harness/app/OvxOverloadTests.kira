@@ -35,14 +35,14 @@ function ovxDescribe(f: Float) -> Int {
     return 7
 }
 
-Test OvxFreeFunctionsByType {
+construct OvxFreeFunctionsByType() extends Test {
     test {
         return ovxDescribe(3) + ovxDescribe("hi") + ovxDescribe(1.5)
     }
     expect { let e: Result<Int, TestFailure> = .Ok(237); return e }
 }
 
-Test OvxFreeFunctionsByArity {
+construct OvxFreeFunctionsByArity() extends Test {
     test {
         return ovxDescribe(2, 5)
     }
@@ -57,11 +57,11 @@ construct OvxShape {
     @Required function area() -> Int
 }
 
-OvxShape OvxSquare(side: Int) {
+construct OvxSquare(side: Int) extends OvxShape {
     function area() -> Int { return side * side }
 }
 
-OvxShape OvxStrip(length: Int) {
+construct OvxStrip(length: Int) extends OvxShape {
     function area() -> Int { return length }
 }
 
@@ -73,14 +73,14 @@ function ovxSize(s: OvxSquare) -> Int {
     return s.area() * 1000
 }
 
-Test OvxConcreteBeatsErased {
+construct OvxConcreteBeatsErased() extends Test {
     test {
         return ovxSize(OvxSquare(side: 3))
     }
     expect { let e: Result<Int, TestFailure> = .Ok(9000); return e }
 }
 
-Test OvxErasedTakesTheFamilyOverload {
+construct OvxErasedTakesTheFamilyOverload() extends Test {
     test {
         let erased: Any OvxShape = OvxSquare(side: 2)
         return ovxSize(move erased)
@@ -88,7 +88,7 @@ Test OvxErasedTakesTheFamilyOverload {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test OvxAnUnrelatedVariantStillErases {
+construct OvxAnUnrelatedVariantStillErases() extends Test {
     test {
         return ovxSize(OvxStrip(length: 6))
     }
@@ -107,14 +107,14 @@ function ovxTag(n: Int, times: Int = 3) -> Int {
     return n * times
 }
 
-Test OvxExactArityBeatsADefault {
+construct OvxExactArityBeatsADefault() extends Test {
     test {
         return ovxTag(5)
     }
     expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
 }
 
-Test OvxAFilledDefaultSlotReachesTheOtherOverload {
+construct OvxAFilledDefaultSlotReachesTheOtherOverload() extends Test {
     test {
         return ovxTag(5, 4)
     }
@@ -134,7 +134,7 @@ struct OvxVec2 {
     function scaled(label: String) -> Int { return label.count }
 }
 
-Test OvxStructMethodsOverload {
+construct OvxStructMethodsOverload() extends Test {
     test {
         let v = OvxVec2 { x: 2, y: 3 }
         return v.scaled(by: 4) + v.scaled(by: 4, plus: 1) + v.scaled(label: "abc")
@@ -168,7 +168,7 @@ class OvxFastCounter extends OvxCounter {
     }
 }
 
-Test OvxClassMethodsOverload {
+construct OvxClassMethodsOverload() extends Test {
     test {
         var c = OvxCounter { }
         return c.bump() + c.bump(step: 10)
@@ -176,7 +176,7 @@ Test OvxClassMethodsOverload {
     expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
 }
 
-Test OvxOverridingOneOverloadInheritsTheRest {
+construct OvxOverridingOneOverloadInheritsTheRest() extends Test {
     test {
         var f = OvxFastCounter { }
         // The inherited `bump()` runs the base body; the overridden
@@ -194,17 +194,17 @@ construct OvxWidget {
     @Required function total() -> Int
 }
 
-OvxWidget OvxText(text: String) {
+construct OvxText(text: String) extends OvxWidget {
     function total() -> Int { return text.count }
 }
 
-OvxWidget OvxLeaf(number: Int) {
+construct OvxLeaf(number: Int) extends OvxWidget {
     function total() -> Int { return number }
     function grown(by: Int) -> Int { return number + by }
     function grown(by: Int, times: Int) -> Int { return (number + by) * times }
 }
 
-Test OvxConstructMembersOverload {
+construct OvxConstructMembersOverload() extends Test {
     test {
         let leaf = OvxLeaf(number: 3)
         return leaf.grown(by: 1) + leaf.grown(by: 1, times: 5)
@@ -221,7 +221,7 @@ Test OvxConstructMembersOverload {
 // parameter.
 // ---------------------------------------------------------------------------
 
-OvxWidget OvxLink(destination: Any OvxWidget, label: Any OvxWidget) {
+construct OvxLink(destination: Any OvxWidget, label: Any OvxWidget) extends OvxWidget {
     init(title: String, value: Int) {
         return OvxLink(destination: OvxLeaf(number: value), label: OvxText(text: title))
     }
@@ -235,7 +235,7 @@ OvxWidget OvxLink(destination: Any OvxWidget, label: Any OvxWidget) {
     }
 }
 
-Test OvxConstructionReachesTheHeader {
+construct OvxConstructionReachesTheHeader() extends Test {
     test {
         let link = OvxLink(destination: OvxLeaf(number: 3), label: OvxText(text: "ab"))
         return link.total()
@@ -243,21 +243,21 @@ Test OvxConstructionReachesTheHeader {
     expect { let e: Result<Int, TestFailure> = .Ok(302); return e }
 }
 
-Test OvxConstructionReachesAnInit {
+construct OvxConstructionReachesAnInit() extends Test {
     test {
         return OvxLink(title: "abc", value: 7).total()
     }
     expect { let e: Result<Int, TestFailure> = .Ok(703); return e }
 }
 
-Test OvxATrailingBlockFillsAnInitContentParameter {
+construct OvxATrailingBlockFillsAnInitContentParameter() extends Test {
     test {
         return OvxLink(value: 5) { OvxText(text: "wxyz") }.total()
     }
     expect { let e: Result<Int, TestFailure> = .Ok(504); return e }
 }
 
-Test OvxAnInitValueCrossesTheFamilyBoundary {
+construct OvxAnInitValueCrossesTheFamilyBoundary() extends Test {
     test {
         // The chosen init erases its concrete argument into the family the
         // header stores, so the value survives the crossing.
@@ -336,7 +336,7 @@ function ovxPick(n: Int, ok: () -> Int, other: () -> Int) -> Int {
     return other()
 }
 
-OvxWidget OvxRow(gap: Int = 0) {
+construct OvxRow(gap: Int = 0) extends OvxWidget {
     @Content let children: [Any OvxWidget]
     function total() -> Int {
         var sum = gap
@@ -345,7 +345,7 @@ OvxWidget OvxRow(gap: Int = 0) {
     }
 }
 
-Test OvxParenlessTrailingClosures {
+construct OvxParenlessTrailingClosures() extends Test {
     test {
         return ovxDoThing {
             return 1
@@ -358,21 +358,21 @@ Test OvxParenlessTrailingClosures {
     expect { let e: Result<Int, TestFailure> = .Ok(123); return e }
 }
 
-Test OvxAnArgumentThenTrailingClosures {
+construct OvxAnArgumentThenTrailingClosures() extends Test {
     test {
         return ovxPick(3) { return 1 } other: { return 2 }
     }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test OvxTheOtherBranchOfTrailingClosures {
+construct OvxTheOtherBranchOfTrailingClosures() extends Test {
     test {
         return ovxPick(0) { return 1 } other: { return 2 }
     }
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test OvxTheSameBraceShapeStillPassesChildren {
+construct OvxTheSameBraceShapeStillPassesChildren() extends Test {
     test {
         return OvxRow(gap: 1) { OvxText(text: "ab") OvxText(text: "cde") }.total()
     }

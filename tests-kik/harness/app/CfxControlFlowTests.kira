@@ -169,7 +169,7 @@ function cfxSwitchBand(x: Int) -> Int {
 // Nested if/else tests
 // ---------------------------------------------------------------------------
 
-Test CfxIfElseSimple {
+construct CfxIfElseSimple() extends Test {
     test {
         var x = 5
         var out = 0
@@ -180,7 +180,7 @@ Test CfxIfElseSimple {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
-Test CfxIfElseFalse {
+construct CfxIfElseFalse() extends Test {
     test {
         var x = 2
         var out = 0
@@ -191,7 +191,7 @@ Test CfxIfElseFalse {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test CfxIfElseIfChain {
+construct CfxIfElseIfChain() extends Test {
     test {
         var score = 75
         var grade = 0
@@ -211,7 +211,7 @@ Test CfxIfElseIfChain {
     expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
 }
 
-Test CfxIfElseIfChainTop {
+construct CfxIfElseIfChainTop() extends Test {
     test {
         var score = 95
         var grade = 0
@@ -231,7 +231,7 @@ Test CfxIfElseIfChainTop {
     expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
 }
 
-Test CfxIfElseIfChainBottom {
+construct CfxIfElseIfChainBottom() extends Test {
     test {
         var score = 40
         var grade = 0
@@ -251,7 +251,7 @@ Test CfxIfElseIfChainBottom {
     expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
 }
 
-Test CfxDeeplyNestedIf {
+construct CfxDeeplyNestedIf() extends Test {
     test {
         var a = 3
         var b = 7
@@ -280,7 +280,7 @@ Test CfxDeeplyNestedIf {
     expect { let e: Result<Int, TestFailure> = .Ok(999); return e }
 }
 
-Test CfxIfCountEvenOdd {
+construct CfxIfCountEvenOdd() extends Test {
     test {
         var evens = 0
         var odds = 0
@@ -296,7 +296,7 @@ Test CfxIfCountEvenOdd {
     expect { let e: Result<Int, TestFailure> = .Ok(1010); return e }
 }
 
-Test CfxIfNestedAccumulate {
+construct CfxIfNestedAccumulate() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -314,7 +314,7 @@ Test CfxIfNestedAccumulate {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxIfBoolExprComplex {
+construct CfxIfBoolExprComplex() extends Test {
     test {
         var count = 0
         var i = 0
@@ -333,7 +333,7 @@ Test CfxIfBoolExprComplex {
     expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
 }
 
-Test CfxIfElseTernaryMix {
+construct CfxIfElseTernaryMix() extends Test {
     test {
         var acc = 0
         var i = 0
@@ -358,7 +358,7 @@ Test CfxIfElseTernaryMix {
 // while loop tests
 // ---------------------------------------------------------------------------
 
-Test CfxWhileCountdown {
+construct CfxWhileCountdown() extends Test {
     test {
         var n = 10
         var steps = 0
@@ -371,7 +371,7 @@ Test CfxWhileCountdown {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
-Test CfxWhileAccumulate {
+construct CfxWhileAccumulate() extends Test {
     test {
         var sum = 0
         var i = 1
@@ -384,7 +384,7 @@ Test CfxWhileAccumulate {
     expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
 }
 
-Test CfxWhileMultiply {
+construct CfxWhileMultiply() extends Test {
     test {
         var prod = 1
         var i = 1
@@ -398,7 +398,7 @@ Test CfxWhileMultiply {
     expect { let e: Result<Int, TestFailure> = .Ok(3628800); return e }
 }
 
-Test CfxWhileEarlyReturn {
+construct CfxWhileEarlyReturn() extends Test {
     test {
         var i = 0
         while i < 1000 {
@@ -413,7 +413,7 @@ Test CfxWhileEarlyReturn {
     expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
 }
 
-Test CfxWhileNestedSum {
+construct CfxWhileNestedSum() extends Test {
     test {
         var total = 0
         var i = 1
@@ -431,7 +431,7 @@ Test CfxWhileNestedSum {
     expect { let e: Result<Int, TestFailure> = .Ok(225); return e }
 }
 
-Test CfxWhileNestedSkip {
+construct CfxWhileNestedSkip() extends Test {
     test {
         var count = 0
         var i = 0
@@ -451,7 +451,7 @@ Test CfxWhileNestedSkip {
     expect { let e: Result<Int, TestFailure> = .Ok(56); return e }
 }
 
-Test CfxWhileNestedMatrix {
+construct CfxWhileNestedMatrix() extends Test {
     test {
         var acc = 0
         var r = 0
@@ -469,7 +469,7 @@ Test CfxWhileNestedMatrix {
     expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
 }
 
-Test CfxWhileTripleNested {
+construct CfxWhileTripleNested() extends Test {
     test {
         var acc = 0
         var a = 0
@@ -491,7 +491,7 @@ Test CfxWhileTripleNested {
     expect { let e: Result<Int, TestFailure> = .Ok(81); return e }
 }
 
-Test CfxWhileCountDivisibleBy7 {
+construct CfxWhileCountDivisibleBy7() extends Test {
     test {
         var count = 0
         var i = 1
@@ -506,7 +506,7 @@ Test CfxWhileCountDivisibleBy7 {
     expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
 }
 
-Test CfxWhileSumSquares {
+construct CfxWhileSumSquares() extends Test {
     test {
         var s = 0
         var i = 1
@@ -520,7 +520,7 @@ Test CfxWhileSumSquares {
     expect { let e: Result<Int, TestFailure> = .Ok(385); return e }
 }
 
-Test CfxWhileCollatz {
+construct CfxWhileCollatz() extends Test {
     test {
         var n = 27
         var steps = 0
@@ -538,7 +538,7 @@ Test CfxWhileCollatz {
     expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
 }
 
-Test CfxWhileCountUp {
+construct CfxWhileCountUp() extends Test {
     test {
         var n = 0
         var steps = 0

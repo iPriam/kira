@@ -312,7 +312,7 @@ construct Measure {
     @Required function reading() -> Any
 }
 
-Measure Depth(seed: Any) {
+construct Depth(seed: Any) extends Measure {
     reading { 12 }
 }
 

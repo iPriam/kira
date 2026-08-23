@@ -1,6 +1,10 @@
-//! Construct declaration-family parsing: the family template
-//! `construct Family { ... }` and the construct-backed declaration
-//! `Family Name(params) { ... }` that conforms to one.
+//! Construct parsing: the family template `construct Family { ... }` and the
+//! backed declaration `construct Name(params) extends Family { ... }` that
+//! conforms to one.
+//!
+//! One keyword, and the **parameter list** tells the two apart: a construct
+//! with one is a declaration whose parameters are its construction inputs, and
+//! a construct without one is the template itself.
 //!
 //! Both share a member body — stored `let` members, computed block-bodied
 //! members (`let node: Any { expr }`), `function` members, and the bodyless
@@ -8,8 +12,11 @@
 //! adds nothing to the header beyond its name; a backed declaration adds a
 //! function-style parameter list, which becomes its construction inputs.
 //!
-//! A family may also name parents (`construct Child extends Parent`), which is
-//! how a declaration written against one family becomes usable through another.
+//! `extends` means one thing in both: the declaration this one is written
+//! against. On a family it names the parents whose requirements and members it
+//! takes on (`construct Child extends Parent`), which is how a declaration
+//! written against one family becomes usable through another; on a backed
+//! declaration it names the one family backing it.
 //!
 //! Members and clauses the executable slice does not cover yet (`@Content`
 //! slots, `@Consuming` methods, a `requires` clause) are parsed into a
@@ -40,24 +47,13 @@ struct ConstructBody {
 }
 
 impl Parser<'_> {
-    /// Whether the cursor begins a construct-backed declaration:
-    /// `Family Name(` or `Family Name {`. The leading identifier is the family
-    /// name, so this is what tells a backed declaration apart from a stray
-    /// identifier at top level.
-    pub(crate) fn at_construct_backed(&self) -> bool {
-        self.at(TokenKind::Identifier)
-            && self.peek(1).kind == TokenKind::Identifier
-            && matches!(self.peek(2).kind, TokenKind::LParen | TokenKind::LBrace)
-    }
-
     /// Whether the cursor begins an `extend Family { ... }` block.
     ///
     /// `extend` is a **contextual** keyword, not a reserved word: it is
     /// recognized only here, by the leading identifier's text, so an ordinary
-    /// name spelled `extend` elsewhere is untouched. The `{` after the family
-    /// name is what tells the block apart from a construct-backed declaration
-    /// (`Family Name {`), whose second identifier is the declaration name — this
-    /// check must therefore run before [`at_construct_backed`](Self::at_construct_backed).
+    /// name spelled `extend` elsewhere is untouched. The header ends at the
+    /// body's `{` or at the `:` of an impl block, and requiring one of those is
+    /// what keeps a local named `extend` from being read as a declaration.
     pub(crate) fn at_extend_block(&self) -> bool {
         self.at(TokenKind::Identifier)
             && self.text_of(self.current().span) == "extend"
@@ -168,8 +164,19 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses `construct Family [extends ...] { <member>* }`.
-    pub(crate) fn parse_construct_family(&mut self) -> Option<ConstructDecl> {
+    /// Parses `construct Name [(params)] [: traits] [extends ...] { <member>* }`.
+    ///
+    /// **The parameter list is what tells the two forms apart.** A construct
+    /// with one is a *backed declaration*: the parameters are its construction
+    /// inputs, and its `extends` clause names the one family backing it. A
+    /// construct without one is a *family*: a template, whose `extends` clause
+    /// names the families it takes requirements and members from.
+    ///
+    /// One keyword for both because they are one declaration form seen from
+    /// either end — the family states what a declaration must provide, and the
+    /// declaration provides it — and because `extends` means the same thing in
+    /// both: the declaration this one is written against.
+    pub(crate) fn parse_construct(&mut self) -> Option<ConstructDecl> {
         let start = self.current().span;
         self.expect(TokenKind::Construct);
         let (name, name_span) = if self.at(TokenKind::Identifier) {
@@ -183,20 +190,36 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
+        let params = self.at(TokenKind::LParen).then(|| self.parse_params());
         // `: traits` first, `extends parents` second — the same two clauses, in
         // the same order, a struct and a class write.
         let traits = self.parse_trait_list();
         let mut deferred = Vec::new();
         let mut extends = Vec::new();
         self.skip_construct_header_clauses(&mut extends, &mut deferred);
+        let kind = self.construct_kind(name_span, params, &extends);
+        let backing = match &kind {
+            ConstructKind::Backed {
+                family,
+                family_span,
+                ..
+            } => Some((*family, *family_span)),
+            ConstructKind::Family => None,
+        };
         let mut body = ConstructBody {
             deferred,
             ..ConstructBody::default()
         };
-        self.parse_construct_body(&mut body, None);
+        self.parse_construct_body(&mut body, backing);
+        // A backed declaration's family is its `extends` clause, already read
+        // into the kind; leaving it in the parent list as well would make the
+        // declaration a variant of its own family twice.
+        if matches!(kind, ConstructKind::Backed { .. }) {
+            extends.clear();
+        }
         let span = Span::from_bounds(start.start, self.previous_end());
         Some(ConstructDecl {
-            kind: ConstructKind::Family,
+            kind,
             name,
             name_span,
             traits,
@@ -209,41 +232,40 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses `Family Name(params) { <member>* }`, with the family name at the
-    /// cursor.
-    pub(crate) fn parse_construct_backed(&mut self) -> Option<ConstructDecl> {
-        let start = self.current().span;
-        let family_span = self.current().span;
-        let family = self.intern_span(family_span);
-        self.bump(); // family name
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump(); // declaration name
-        let params = if self.at(TokenKind::LParen) {
-            self.parse_params()
-        } else {
-            Vec::new()
+    /// Decides which of the two forms a construct header wrote.
+    ///
+    /// A parameter list makes it a backed declaration, which is backed by
+    /// exactly one family: a value has one shape, so a second family in the
+    /// clause would be a second set of members for one declaration to provide.
+    fn construct_kind(
+        &mut self,
+        name_span: Span,
+        params: Option<Vec<kira_syntax_model::ast::Param>>,
+        extends: &[ConstructParent],
+    ) -> ConstructKind {
+        let Some(params) = params else {
+            return ConstructKind::Family;
         };
-        let traits = self.parse_trait_list();
-        let mut body = ConstructBody::default();
-        self.parse_construct_body(&mut body, Some((family, family_span)));
-        let span = Span::from_bounds(start.start, self.previous_end());
-        Some(ConstructDecl {
-            kind: ConstructKind::Backed {
-                family,
-                family_span,
-                params,
-            },
-            name,
-            name_span,
-            traits,
-            fields: body.fields,
-            methods: body.methods,
-            inits: body.inits,
-            extends: Vec::new(),
-            deferred: body.deferred,
-            span,
-        })
+        let Some(family) = extends.first() else {
+            self.error(
+                name_span,
+                "KPAR077",
+                "a construct with a parameter list is a declaration backed by a family, so it                  has to name one: write `extends <Family>`. A construct with no parameter list                  is the family template itself.",
+            );
+            return ConstructKind::Family;
+        };
+        for extra in extends.iter().skip(1) {
+            self.error(
+                extra.span,
+                "KPAR078",
+                "a declaration is backed by one family: its members are that family's, and a                  second would be a second set for one value to provide. A family may extend                  another, which is how one declaration is seen through both.",
+            );
+        }
+        ConstructKind::Backed {
+            family: family.name,
+            family_span: family.span,
+            params,
+        }
     }
 
     /// Parses an `extends` clause and skips a `requires` one.
