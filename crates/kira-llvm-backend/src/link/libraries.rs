@@ -347,6 +347,11 @@ fn staging_dir(archive: &Path) -> std::io::Result<PathBuf> {
 /// and a copy everywhere else.
 #[cfg(unix)]
 fn stage_input(input: &Path, staged: &Path) -> std::io::Result<()> {
+    // Resolved first because a symlink stores its target verbatim: the link
+    // is read from inside the staging directory, so a relative input — which
+    // is what a build invoked from the package directory produces — would
+    // dangle there and the archiver would report the staged name missing.
+    let input = std::fs::canonicalize(input)?;
     std::os::unix::fs::symlink(input, staged)
 }
 
