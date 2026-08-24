@@ -1,0 +1,66 @@
+---
+title: FFI Overview
+description: "The current native library system: C ABI only, static-linking first, generated bindings, and hybrid/native support."
+---
+
+Kira currently provides a focused native interop model with clearly defined boundaries.
+
+## Current Contract
+
+The supported path today is:
+
+- C ABI only
+- static linking first
+- per-library TOML manifests under nearby `native_libs/`
+- Clang-driven autobinding generation
+- generated bindings emitted as real Kira source files
+- direct extern calls from explicitly marked `@Native` Kira declarations
+- explicit callback support
+- LLVM/native and hybrid as the intended FFI-capable pipelines
+
+## Native Edge Discipline
+
+Kira keeps the native boundary explicit:
+
+- a declaration that directly calls or references an `@FFI.Extern` symbol must be `@Native`
+- a declaration that only calls another Kira declaration marked `@Native` does not itself need `@Native`
+- storing opaque handles or passing values returned by native helpers through ordinary Kira logic does not create a transitive native requirement by itself
+
+This distinction matters for Kira Graphics-style packages. Sokol-facing helpers should be small `@Native` declarations that touch generated bindings directly. Higher-level graphics API code can call those helpers, keep ordinary Kira execution semantics, and stay available to hybrid/debug/live-runtime workflows.
+
+The VM does not execute FFI directly. In hybrid mode, runtime bytecode crosses to native code through the bridge/trampoline path; it does not magically invoke C ABI functions from the VM.
+
+## Current Scope
+
+The following capabilities are outside the current FFI scope:
+
+- libffi-backed runtime interop
+- dynamic linking as the primary documented workflow
+- a stable Kira ABI for third-party binary integration
+- non-C ABIs
+- variadics
+- captured closures crossing the boundary
+
+The supported and tested workflow is the contract described in the previous section.
+
+## Where FFI Lives In The Repo
+
+The current split is deliberate:
+
+- `kira_native_lib_definition`: native library contracts
+- `kira_manifest`: TOML parsing
+- `kira_build`: manifest discovery, host resolution, archive building, and autobinding generation
+- `kira_llvm_backend`: direct extern lowering and native/hybrid bridge wrapper emission
+- `kira_native_bridge` and `kira_hybrid_runtime`: runtime/native marshalling
+
+## Proof Targets
+
+The repository includes checked-in proof targets for:
+
+- native callbacks
+- hybrid callbacks
+- generated Sokol graphics bindings
+- a native triangle program
+- a hybrid Sokol call proof
+
+Read [Examples Overview](/docs/appendix/examples) and [Sokol Triangle](/docs/appendix/examples/sokol-triangle) after this page if you want the end-to-end examples.

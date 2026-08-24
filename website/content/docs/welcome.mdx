@@ -1,0 +1,40 @@
+---
+title: Welcome to Kira
+description: What this manual is for, how it is organized, and how to read Kira's current-status-first documentation.
+---
+
+Welcome to Kira.
+
+This manual is written for the Kira implementation that exists in this repository today, not for a future product brochure. That shapes the whole book:
+
+- guide chapters explain the language in a readable order
+- reference chapters pin down the accepted syntax and current rules
+- appendix chapters keep operational material nearby without breaking the flow of the language manual
+
+## Current-Status-First
+
+Kira's frontend understands more than the current backends execute.
+
+That means the book will often distinguish between:
+
+- syntax the parser accepts
+- forms the semantics pass validates
+- code paths the current VM, LLVM/native, and hybrid backends can run
+
+This is not a warning label. It is part of how Kira is being built, and the docs make that boundary explicit instead of hiding it.
+
+## The Shape of the Book
+
+Read the early pages if you want orientation:
+
+1. [About Kira](/docs/about-kira)
+2. [Kira for LLMs & Agents](/docs/for-llms) — a dense orientation if you are a model or coding agent
+3. [Version Compatibility](/docs/version-compatibility)
+4. [A Kira Tour](/docs/a-kira-tour)
+
+Then use the two main halves of the manual:
+
+- [Language Guide](/docs/language-guide) for a chapter-by-chapter explanation
+- [Language Reference](/docs/language-reference) for concise, lookup-style rules
+
+Operational material such as install flow, CLI commands, diagnostics, examples, platform targets, and shaders lives in the [Appendix](/docs/appendix).

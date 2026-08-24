@@ -1,0 +1,87 @@
+---
+title: Generated Autobindings
+description: How Kira reads headers, applies manifest binding filters, and emits normal `.kira` modules.
+---
+
+Kira's autobinder is not generating an opaque sidecar format. It emits real Kira source files.
+
+That is one of the most important design decisions in the current FFI system.
+
+## What Triggers Generation
+
+When a Kira source file imports a binding module described by a nearby native library manifest, the current pipeline prepares that native library during parsing/check/build work and runs the autobinder when needed.
+
+That means commands like:
+
+```bash
+kira check examples/sokol_triangle
+```
+
+can validate the native library description and ensure the generated binding module exists before a full native run.
+
+## Binding Filter Shapes
+
+Binding filters now live directly in the native library manifest.
+
+### Listed mode
+
+Use it when you want to expose a selected subset:
+
+```toml
+[bindings]
+functions = ["kira_invoke_callback"]
+callbacks = ["kira_i64_callback"]
+```
+
+### `all_public` mode
+
+Use it when the proof target wants the whole public header surface:
+
+```toml
+[bindings]
+mode = "all_public"
+```
+
+The Sokol triangle proof uses `all_public` in its `[bindings]` section.
+
+## Generated Declaration Kinds
+
+The current autobinder emits Kira declarations such as:
+
+```ts
+@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
+struct kira_i64_callback {}
+
+@FFI.Extern { library: callbacks; symbol: kira_invoke_callback; abi: c; }
+function kira_invoke_callback(callback: kira_i64_callback, user_data: RawPtr, value: I64): I64;
+```
+
+It currently generates:
+
+- `@FFI.Extern`
+- `@FFI.Callback`
+- `@FFI.Pointer`
+- `@FFI.Struct`
+- `@FFI.Alias`
+- `@FFI.Array`
+
+## Why "Real Kira Source" Matters
+
+Because the emitted files are normal `.kira` modules:
+
+- imports are ordinary Kira imports
+- diagnostics refer to Kira source, not an opaque generator format
+- contributors can inspect the generated declarations directly
+- there is no separate wrapper API to learn before calling a native function
+
+That "no shim public API" rule is deliberate. The generated module is the public API.
+
+## Sokol As The Proof Target
+
+The strongest autobinding proof in the repo is Sokol:
+
+- upstream headers under `third_party/sokol/`
+- a manifest under `examples/sokol_triangle/native_libs/`
+- a generated module at `examples/sokol_triangle/sokol.kira`
+- Kira-written app logic that uses the generated declarations directly
+

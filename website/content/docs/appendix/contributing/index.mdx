@@ -1,0 +1,74 @@
+---
+title: Contributing and Architecture Notes
+description: Repo layout, where to change things, testing expectations, and how to extend the current system cleanly.
+---
+
+## Package Layout
+
+Important top-level areas:
+
+- `packages/`: compiler, runtime, build, CLI, toolchain, native bridge, and C ABI packages
+- `tests/`: corpus-style pass/fail/check cases
+- `examples/`: runnable and frontend-proof examples
+- `templates/`: output used by `kira new`
+- `docs/`: older repo markdown references
+- `apps/docs/`: the Bun + Fumadocs documentation site
+
+## Where To Change Things
+
+Use the current package layering as the guide:
+
+- lexer/token changes: `packages/kira_lexer`, `packages/kira_syntax_model`
+- parser/AST changes: `packages/kira_parser`, `packages/kira_syntax_model`
+- semantic analysis and HIR lowering: `packages/kira_semantics`, `packages/kira_semantics_model`
+- shared IR: `packages/kira_ir`
+- VM execution: `packages/kira_bytecode`, `packages/kira_vm_runtime`
+- LLVM/native lowering: `packages/kira_llvm_backend`, `packages/kira_native_bridge`
+- hybrid runtime: `packages/kira_hybrid_runtime`, `packages/kira_hybrid_definition`
+- CLI behavior: `packages/kira_cli`
+- toolchain and install flow: `packages/kira_toolchain`, `packages/kira_build`, `packages/kira_bootstrapper`
+
+## Testing Expectations
+
+Use targeted coverage first, then broader repo coverage when practical.
+
+- local package behavior: add or update unit tests next to the package
+- user-visible compiler/runtime behavior: add a corpus case under `tests/`
+- backend-sensitive work: make sure the relevant backend matrix still exercises the path you changed
+
+Corpus conventions:
+
+- `tests/pass/run/`
+- `tests/pass/check/`
+- `tests/fail/`
+
+Each corpus case should keep `main.kira` and `expect.toml` in sync.
+
+## Native Libraries And Bindings
+
+If you add a native library:
+
+1. create a dedicated TOML manifest under `native_libs/`
+2. keep autobinding configuration in that manifest's `[bindings]` section
+3. keep generated bindings in a nearby `.kira` file tracked by the manifest
+4. add or update examples/tests that prove the path
+5. document the workflow in `content/docs/appendix/ffi-workflows/` if it changes user-visible behavior
+
+## Docs And Examples
+
+This repo already expects docs and examples to track implemented behavior.
+
+When you change:
+
+- command surface
+- install flow
+- backend behavior
+- executable language subset
+- native library shape
+
+update both:
+
+- the relevant checked-in examples/tests
+- the docs site content under `apps/docs/content/docs/`
+
+The docs should stay a trustworthy description of the repo, not a second design-doc universe.

@@ -1,0 +1,178 @@
+---
+title: Interop and FFI
+description: "The current compiler-visible FFI surface: extern declarations, callbacks, pointers, structs, aliases, arrays, and generated bindings."
+---
+
+Kira's native interop surface is explicit and compiler-visible.
+
+## Compiler-Meaning FFI Annotations
+
+Generated and handwritten interop code uses these annotation families today:
+
+- `@FFI.Extern`
+- `@FFI.Callback`
+- `@FFI.Pointer`
+- `@FFI.Struct`
+- `@FFI.Alias`
+- `@FFI.Array`
+
+## Extern Functions
+
+Extern functions are declarations terminated with `;`:
+
+```ts
+@FFI.Extern { library: callbacks; symbol: kira_invoke_callback; abi: c; }
+function kira_invoke_callback(callback: kira_i64_callback, user_data: RawPtr, value: I64): I64;
+```
+
+The semantics layer enforces that `@FFI.Extern` functions must be declarations rather than block-bodied functions.
+
+## Native Boundary Rule
+
+On the native-compiling backends (LLVM/native and hybrid), **direct FFI usage requires `@Native`**. The VM is different: it executes direct FFI through **LibFFI** (see [VM Dynamic FFI](#vm-dynamic-ffi-libffi) below), so the `@Native` requirement does not apply there.
+
+That rule applies at the declaration that actually touches the FFI-bound symbol:
+
+```ts
+@Native
+function createPipelineNative(desc: sg_pipeline_desc) -> sg_pipeline {
+    return sg_make_pipeline(desc)
+}
+```
+
+The rule is deliberately not transitive. A regular Kira declaration may call a Kira helper that is already `@Native`:
+
+```ts
+function createPipeline(desc: sg_pipeline_desc) -> sg_pipeline {
+    return createPipelineNative(desc)
+}
+```
+
+The direct native edge stays small and honest, while higher-level Kira code can remain ordinary runtime code when it is only orchestrating Kira helpers or moving handles around.
+
+That rule is deliberately narrow:
+
+- direct FFI usage requires `@Native`
+- indirect usage remains allowed
+- `@Runtime` code may still call `@Native` Kira helpers, construct native-annotated values, mutate them, and pass them back through hybrid honestly
+- `@Native` code may call back into `@Runtime` helpers through the same bridge
+
+Native-annotated structs and classes are still ordinary Kira values. Outside direct FFI edges, they are meant to move through runtime/native code naturally rather than forcing transitive `@Native` contagion on the surrounding API.
+
+Today, direct FFI usage includes direct calls or references to `@FFI.Extern` functions. On the native-compiling backends Kira reports `KSEM093` when a non-`@Native` declaration directly uses one. The diagnostic points at the FFI-bound symbol and asks you to mark the declaration `@Native` or move the direct extern call into a small native helper.
+
+## VM Dynamic FFI (LibFFI)
+
+The VM can invoke native functions **without a precompiled native backend and without `@Native`**, using a LibFFI-driven dynamic call path (the `kira_dynamic_ffi` package). The compiler carries FFI call signatures in bytecode metadata, the VM loads the target library, builds a LibFFI call interface from the signature, and dispatches the call at runtime.
+
+```bash
+kira run examples/ffi_dynamic_vm          # VM dynamic FFI via LibFFI
+```
+
+This lifts the `@Native` requirement on the VM specifically — direct extern calls run there as ordinary VM code. The native-compiling backends keep the `@Native` boundary because they marshal across a real compiled ABI edge.
+
+LibFFI is fetched and pinned (libffi 3.5.2) like the managed LLVM toolchain, through a build step:
+
+```bash
+zig build fetch-libffi
+```
+
+## Callback Types
+
+Callback signatures are first-class enough to validate:
+
+```ts
+@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
+struct kira_i64_callback {}
+```
+
+The fail corpus also proves `KSEM045` ("invalid callback signature") when a Kira callback does not match the expected FFI callback type.
+
+## Pointer, Struct, Alias, and Array Types
+
+The current generated/native examples also prove:
+
+- borrowed pointer wrappers
+- C-layout structs
+- alias carrier structs for enum-like native values
+- array metadata in generated bindings
+
+Examples:
+
+```ts
+@FFI.Struct { layout: c; }
+struct app_state {
+    var viewport_width: I32
+}
+
+@FFI.Pointer { target: app_state; ownership: borrowed; }
+struct app_state_ptr {}
+```
+
+## C-Layout Struct Construction
+
+For `@FFI.Struct { layout: c; }`, explicit construction is zero-filled before Kira applies the fields you provide:
+
+```ts
+let desc = sapp_desc {
+    init_userdata_cb: init
+    frame_userdata_cb: frame
+    cleanup_userdata_cb: cleanup
+    user_data: state
+    width: 640
+    height: 480
+    window_title: "Kira Sokol Triangle"
+}
+```
+
+`sapp_desc()` follows the same rule and produces a fully zeroed C-layout value.
+
+This does not change declaration semantics. `var desc: sapp_desc` is still an uninitialized local declaration, not a zero-filled value.
+
+## Opaque Callback State
+
+Kira now supports a first-class callback-state flow for native APIs that carry `void*` or userdata tokens:
+
+```ts
+struct CounterState {
+    var count: Int
+    var total: Int
+}
+
+var state = nativeState(CounterState {
+    count: 0
+    total: 0
+})
+
+var token = nativeUserData(state)
+
+@Native
+function onValue(value: I64, user_data: RawPtr) -> I64 {
+    var state = nativeRecover(user_data)
+    state.count = state.count + 1
+    state.total = state.total + value
+    return value + state.count
+}
+```
+
+Use each piece for a specific job:
+
+- `nativeState(value)` boxes a Kira-owned value into stable callback-state storage
+- `nativeUserData(state)` exports the opaque `RawPtr` token that native code can carry around
+- `nativeRecover(any)` turns the token back into typed mutable Kira access
+
+This is intentionally different from `@FFI.Struct { layout: c; }`:
+
+- `@FFI.Struct { layout: c; }` is a real native memory-layout contract
+- `nativeState`/`nativeUserData`/`nativeRecover(any)` is opaque userdata transport
+- native code is not supposed to know the Kira object layout behind that token
+- the feature exists so callback-driven interop does not have to fall back to globals
+
+Current lifetime model:
+
+- callback state is Kira-managed heap storage
+- it currently lives for the lifetime of the process
+- repeated `nativeUserData(state)` calls on the same handle return the same token
+- recovery gives access to the original stored state, not a copy
+
+This chapter explains the language-visible surface. For the workflow side of manifests, autobinding generation, and examples, continue in [FFI Workflows](/docs/appendix/ffi-workflows).

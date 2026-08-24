@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "index",
+    "welcome",
+    "about-kira",
+    "for-llms",
+    "version-compatibility",
+    "a-kira-tour",
+    "language-guide",
+    "language-reference",
+    "appendix"
+  ]
+}

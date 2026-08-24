@@ -1,0 +1,97 @@
+---
+title: KSL Shaders
+description: KSL — Kira's dedicated .ksl shading language — the shader declaration model, strict numeric/resource rules, semantic-first resource groups, reflection output, and the GLSL/WGSL/HLSL/MSL/SPIR-V backends.
+---
+
+KSL is the **Kira Shading Language**: a dedicated `.ksl` sibling language, not "normal Kira with shader annotations" and not a syntax skin over GLSL/HLSL/WGSL. It is **semantic-first** and **source-level backend-neutral** — meaning lives in the language; backend binding numbers stay out of ordinary source.
+
+KSL has its own lexer, parser, semantic model, and typed shader IR (`kira_ksl_syntax_model`, `kira_ksl_parser`, `kira_ksl_semantics`, `kira_shader_model`, `kira_shader_ir`), and is driven through `kira shader check|ast|build`.
+
+## Backends
+
+| Target | `--target` | Status |
+| --- | --- | --- |
+| GLSL 330 | `glsl_330` (default) | Emits; the current Kira Graphics/Sokol desktop path |
+| WGSL | `wgsl` | Emits; validated for WebGPU shader-module and render-pipeline creation |
+| HLSL | `hlsl` | Emits D3D-style source |
+| MSL | `msl` | Emits Metal source; syntax-checked through Apple's Metal compiler when available |
+| SPIR-V | `spirv` | Emits **textual** SPIR-V assembly (binary `spirv-as`/`spirv-val` is deferred) |
+
+Compute shaders are part of the source language, parser, semantic model, and reflection path, but the validated graphics backends **reject them intentionally** with a clear diagnostic rather than pretending they work.
+
+## The `shader` unit
+
+The canonical compile unit is a `shader` declaration grouping resources, options, and entry stages into one reflection unit. `.ksl` files may also hold top-level `import`, KSL `type`, and `function` declarations as shared helpers.
+
+```ksl
+import Common.Lighting as Lighting
+
+type CameraUniform {
+    let view_projection: Float4x4
+}
+
+shader LitSurface {
+    option use_vertex_color: Bool = false
+
+    group Frame {
+        uniform camera: CameraUniform
+    }
+
+    vertex {
+        input VertexIn
+        output VertexToFragment
+        function entry(input: VertexIn) -> VertexToFragment { ... }
+    }
+
+    fragment {
+        input VertexToFragment
+        output FragmentOut
+        function entry(input: VertexToFragment) -> FragmentOut { ... }
+    }
+}
+```
+
+## Types
+
+Scalars are fixed and explicit: `Bool`, `Int` (i32), `UInt` (u32), `Float` (f32). Vectors and matrices use readable names — `Float2`/`Float3`/`Float4`, `Int3`, `UInt4`, `Float4x4`, etc. — instead of angle-bracket generics. Resource types are named directly: `Texture2d`, `TextureCube`, `DepthTexture2d`, `Sampler`, `ComparisonSampler`.
+
+KSL is intentionally strict:
+
+- floating literals resolve to `Float`; integer literals have **no** standalone default and must be constrained by context (`let n: UInt = 4`, never `let n = 4`)
+- no implicit `Int`↔`UInt`, integer→float promotion, scalar→vector splat, or matrix-shape correction
+- explicit conversions use type constructors (`Float(n)`, `Float4(1.0, 0.8, 0.6, 1.0)`)
+- matrix multiplication is always `mul(a, b)` — `*` is not overloaded for matrix math, because row/column-major assumptions are portability traps
+
+## Resources
+
+Resources live in named `group` blocks (canonical names: `Frame`, `Pass`, `Material`, `Object`, `Draw`, `Dispatch`). **Source never contains descriptor-set or binding numbers** — the compiler assigns backend bindings deterministically and reports the final mapping through reflection.
+
+```ksl
+group Material {
+    uniform surface: SurfaceParams
+    texture albedo: Texture2d
+    sampler linear: Sampler
+}
+```
+
+`uniform` and `storage read` are read-only; `storage read_write` is writable and **compute-only** in v1. Textures and samplers are separate declarations, and sampling is explicit: `sample(albedo, linear, uv)`.
+
+## Stages, IO, and built-ins
+
+A shader has `vertex`, `fragment`, and/or `compute` stage blocks; each declares an input type, an optional output type, and exactly one `entry` function. A single shader is graphics **or** compute, never both. Stage IO uses ordinary `type` declarations with `@builtin(...)` and `@interpolate(flat|linear)` field annotations. Fragment inputs must match vertex outputs by name, type, and interpolation; integer varyings require `@interpolate(flat)`. Compute declares `threads(x, y, z)` with `x * y * z <= 256` (the portable floor).
+
+## Reflection
+
+Reflection is a required compiler output, emitted as a JSON sidecar. It reports shader name and kind, entry stages, option metadata, groups/resources with access mode and stage visibility, stage IO fields and built-ins, final backend binding assignments, and uniform/storage layout (offsets, alignment, strides, sizes). Host code binds by **semantic names + reflection data**, never handwritten slot tables.
+
+## CLI
+
+```bash
+kira shader check examples/shaders/textured_quad.ksl
+kira shader ast   examples/shaders/textured_quad.ksl
+kira shader build examples/shaders/textured_quad.ksl
+kira shader build examples/shaders/textured_quad.ksl --target wgsl
+kira shader build                       # discovers PascalCase entry shaders under Shaders/
+```
+
+`shader build` writes vertex/fragment source plus reflection JSON into `generated/shaders/` (or `generated/Shaders/` for project discovery). See the [Sokol triangle example](/docs/appendix/examples/sokol-triangle) for an end-to-end graphics path.

@@ -1,0 +1,77 @@
+---
+title: LLVM Toolchain
+description: Pinned LLVM bundles, discovery order, supported hosts, and the current fetch/install behavior.
+---
+
+Kira ships pinned LLVM bundles so contributors do not need to build LLVM manually as the normal path.
+
+## Install The Bundle
+
+```bash
+kira fetch-llvm
+```
+
+or:
+
+```bash
+zig build fetch-llvm
+```
+
+That flow reads `llvm-metadata.toml` and installs the matching host bundle under:
+
+```text
+~/.kira/toolchains/llvm/<llvm-version>/<host-key>/
+```
+
+## What The Repo Pins
+
+The repository source of truth is `llvm-metadata.toml`.
+
+It records:
+
+- the pinned LLVM version
+- the release tag that owns the bundle assets
+- supported host keys
+- exact asset filenames
+
+The current repo pin is LLVM `22.1.2`.
+
+## Supported Hosts
+
+The first published bundle set is intentionally small and tied to real CI-built hosts:
+
+- `x86_64-windows-msvc`
+- `x86_64-linux-gnu`
+- `aarch64-macos`
+
+## Discovery Order
+
+The LLVM backend checks, in order:
+
+1. `KIRA_LLVM_HOME`
+2. `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`
+3. older repo-local fallback paths if they already exist
+
+If `llvm-config` exists in the selected tree, Kira uses it to refine the bin/lib directories. Otherwise it uses the standard install layout directly.
+
+## Native And Hybrid Both Use It
+
+The same LLVM discovery path is used by:
+
+- the pure LLVM/native backend
+- the native half of hybrid mode
+
+So if LLVM is not available, both native and hybrid work will fail until you install or override the toolchain.
+
+## No Checksum Verification
+
+The current LLVM fetch flow intentionally does **not** use checksum verification.
+
+The source of truth is:
+
+- the pinned version in `llvm-metadata.toml`
+- the configured release tag
+- the host key
+- the exact asset filename
+
+The docs are spelling that out because it is a real implementation choice in this repo, not an omitted detail.

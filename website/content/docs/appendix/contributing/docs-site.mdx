@@ -1,0 +1,75 @@
+---
+title: Working on the Docs Site
+description: The docs app structure, Bun commands, and how to add or reorganize documentation pages.
+---
+
+The documentation site lives at:
+
+```text
+apps/docs/
+```
+
+It is a self-contained Bun app built with:
+
+- Next.js App Router
+- Fumadocs
+- Fumadocs MDX source generation
+- static search indexes
+
+## Important Folders
+
+```text
+apps/docs/
+  app/
+    components/
+    lib/
+    llms/
+    api/
+  content/docs/
+  public/
+```
+
+Use:
+
+- `app/` for the homepage, docs route shell, API routes, and LLM helper routes
+- `content/docs/` for the actual English documentation pages
+- `meta.json` files to control page order and grouping in the sidebar
+
+## Local Workflow
+
+```bash
+cd apps/docs
+bun install
+bun run dev
+```
+
+Type-check and source generation:
+
+```bash
+bun run typecheck
+```
+
+Static build:
+
+```bash
+bun run build
+```
+
+## Adding A New Page
+
+1. Add an `.mdx` file under the correct folder in `content/docs/`.
+2. Update the folder's `meta.json` if you want explicit ordering.
+3. Link to the page from nearby overview pages when it affects navigation.
+4. Run `bun run typecheck` and `bun run build`.
+
+## Versioning Readiness
+
+The site currently publishes only latest English docs.
+
+It is still organized so future versioning is possible:
+
+- stable section slugs
+- a clear content tree
+- homepage separate from `/docs`
+
+When versioning is introduced later, keep the current slugs stable unless the underlying product meaning has changed.

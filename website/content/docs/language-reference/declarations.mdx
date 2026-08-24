@@ -1,0 +1,144 @@
+---
+title: Declarations
+description: Import, annotation, capability, enum, function, class, struct, construct, and construct-form declarations in the current Kira language surface.
+---
+
+## Top-Level Declarations
+
+The current frontend recognizes these top-level declaration forms:
+
+- `import`
+- `annotation`
+- `capability`
+- `enum`
+- `function`
+- `class`
+- `struct`
+- `construct`
+- construct-defined forms such as `Widget Card(...) { ... }`
+
+## Imports
+
+Imports use qualified module names with an optional alias:
+
+```ts
+import Support
+import UI as Kit
+import bindings.callbacks as callbacks
+```
+
+Unresolved imports are rejected with `KSEM032`.
+
+Whole-library imports merge that library's public declarations into the program's global namespace. For the built-in Foundation library, write `import Foundation`, then use `Result`, `Printable`, and other declarations directly. Do not import dotted Foundation submodules such as `Foundation.Result`.
+
+```ts
+import Foundation
+
+let parsed = ParseError.UnexpectedEnd
+```
+
+## Enums
+
+Enum declarations use `enum`, a name, optional generic type parameters, and a variant body:
+
+```ts
+enum ParseError {
+    InvalidFormat: String = "bad"
+    UnexpectedEnd
+    EmptyInput
+}
+
+```
+
+A variant may declare one associated value type with `: Type` or `(Type)`. A variant may also declare a default associated value with `= expression`.
+
+Outside `match`, construct variants through the enum name:
+
+```ts
+let invalid = ParseError.InvalidFormat
+let end = ParseError.UnexpectedEnd
+```
+
+Inside `match`, patterns use unqualified variant names inferred from the matched enum.
+
+## Annotations
+
+Annotation declarations use `annotation`, a name, and a body:
+
+```ts
+annotation State {
+}
+
+annotation Attribute {
+    parameters {
+        index: Int
+    }
+}
+```
+
+Annotation bodies can declare parameter schemas, target restrictions, capability composition, and explicit generated members.
+
+## Functions
+
+Function declarations use `function`, a parameter list, an optional `-> ReturnType`, and either:
+
+- a block body
+- a trailing `;` for `@FFI.Extern` declarations
+
+## Local Declarations
+
+Local declarations use `let` or `var` and follow three explicit forms:
+
+```ts
+var title = "Quarterly Review"
+var pendingTitle: String
+var ratio: Float = 0.0
+```
+
+These forms mean:
+
+- `var name = expression`: infer the declared type from the initializer expression
+- `var name: SomeType`: declare an uninitialized local with that declared type
+- `var name: SomeType = expression`: require the initializer expression to already match the declared type
+
+Kira does not invent a default value for `var name: SomeType`. The declaration is real, but the local is not usable until it has been initialized.
+
+Annotated initializers are strict:
+
+```ts
+var ratio: Float = 0.0    // valid
+var ratio: Float = 0      // rejected
+```
+
+The second form is rejected because the declared type is `Float` and the initializer expression is an integer literal. Kira does not implicitly convert that declaration for you.
+
+## Classes and Structs
+
+Class declarations use `class Name { ... }` or `class Child extends Parent { ... }` and may contain:
+
+- stored members
+- methods
+- overrides
+
+Struct declarations use `struct Name { ... }` and stay value-oriented:
+
+```ts
+struct Position {
+    let x: Float = 0.0
+    let y: Float = 0.0
+}
+```
+
+## Constructs and Construct Forms
+
+Construct declarations use `construct Name { ... }`.
+
+Construct-defined forms look like ordinary declarations, but the leading identifier is the construct name:
+
+```ts
+Widget Card(title: String) {
+    content {
+        "Card"
+    }
+}
+```

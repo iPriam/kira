@@ -1,0 +1,124 @@
+{
+  "name": "kira",
+  "displayName": "Kira",
+  "scopeName": "source.kira",
+  "fileTypes": ["kira"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#properties" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.kira",
+          "match": "///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.kira",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.kira",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "annotations": {
+      "name": "meta.decorator.kira",
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.decorator.kira" },
+        "2": { "name": "entity.name.decorator.kira" }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.kira",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.kira",
+          "match": "\\\\(?:[nrt0\"'\\\\]|u\\{[0-9A-Fa-f]+\\})"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.kira",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.kira",
+          "match": "\\b(?:0x[0-9A-Fa-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.kira",
+          "match": "\\b(if|else|for|in|while|break|continue|match|switch|case|default|return|attempt|try|handle)\\b"
+        },
+        {
+          "name": "storage.type.kira",
+          "match": "\\b(function|let|var|static|construct|class|struct|enum|type|annotation|capability|comptime)\\b"
+        },
+        {
+          "name": "keyword.other.kira",
+          "match": "\\b(import|as|extends|extend|generated|override|overridable|targets|uses|requires|properties|content|lifecycle|builder|representation|modifiers|accepts|count|sealed|refine|passthrough|project)\\b"
+        },
+        {
+          "name": "storage.modifier.kira",
+          "match": "\\b(borrow|mut|move|copy|shared|required)\\b"
+        },
+        {
+          "name": "variable.language.self.kira",
+          "match": "\\b(self|Self)\\b"
+        },
+        {
+          "name": "constant.language.kira",
+          "match": "\\b(true|false|nil)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "entity.name.type.kira",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.kira" },
+            "2": { "name": "entity.name.function.kira" }
+          }
+        },
+        {
+          "name": "entity.name.function.call.kira",
+          "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "properties": {
+      "match": "(?<=\\.)\\s*([a-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "variable.other.property.kira" }
+      }
+    },
+    "operators": {
+      "name": "keyword.operator.kira",
+      "match": "(->|==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>=!?])"
+    }
+  }
+}

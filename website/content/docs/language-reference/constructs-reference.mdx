@@ -1,0 +1,123 @@
+---
+title: Constructs Reference
+description: Concise lookup for the construct-family grammar — extends, properties, requires, @Required/@Content/node members, extend modifiers, content channels and composition, attempt/try/handle, and every construct diagnostic code.
+---
+
+`construct` declares a **declaration family**. Concrete declarations are headed by the family name (`Widget Button { ... }`). See the [Constructs guide](/docs/language-guide/constructs) for narrative coverage.
+
+## Family declaration
+
+```kira
+construct Family [extends Parent1, Parent2] {
+    // section forms and/or direct members
+}
+```
+
+Multiple parents are allowed; the local inheritance graph must be acyclic. A prior concrete declaration may serve as a parent, inheriting its family and implementations.
+
+## Section forms
+
+| Section | Purpose |
+| --- | --- |
+| `properties { [required] name: T }` | Typed property schema; inherited through `extends`. |
+| `requires { function f(...) -> T }` | Functions the first concrete declaration must implement. |
+| `content { channel { accepts T; count m..n } }` | Named content channels. |
+| `content sealed` / `refine` / `passthrough` / `project { local as Parent.channel }` | Content composition over inherited channels. |
+
+Property values are supplied by a **section** in the declaration, never a constructor call:
+
+```kira
+Route Home { properties { path: "/"; id: "home" } }
+```
+
+## Direct members (SwiftUI-style surface)
+
+| Member | Meaning |
+| --- | --- |
+| `@Required let name: T` | A field every concrete declaration must provide. |
+| `@Required function f(...) -> T` | A required bodyless behavior (checked like `requires`). |
+| `let name: T { ... }` | A computed default member (block-bodied; overridable; not stored). |
+| `@Content let x: Widget` | One caller-provided child (channel name = field name). |
+| `@Content let xs: [Widget]` | An ordered list of caller-provided children. |
+
+The `let node: T { ... }` member is the typed **Widget→Node bridge**. Bare access (`widget.node`) invokes the accessor; chains compose (`button.body.node`). The **terminal-`node` rule**: an explicit `node` discharges the required `body`, and resolution stops there.
+
+A trailing `{ ... }` block on a construction fills `@Content` fields, routed by callee inspection: one `Widget` field takes exactly one child, one `[Widget]` field takes the whole block as a list, and multiple `@Content` fields require named fills (`header { ... } content { ... }`).
+
+## Fluent modifiers
+
+```kira
+extend Family {
+    function modifier(...) -> Family { ... }   // wraps the receiver via `self`
+}
+```
+
+`extend` adds the external chainable surface (`.padding(...)`), distinct from the `node` bridge.
+
+## Content channels
+
+```kira
+content {
+    channelName {
+        accepts ElementType
+        count 0..1   // or 1.. for "at least one"
+    }
+}
+```
+
+Content-requiredness is `count 1..`, reported as `KSEM129` when empty. `requires` declares required functions only.
+
+## Error handling
+
+```kira
+attempt {
+    let value = try fallible()
+} handle {
+    VariantA(payload) { ... }
+    VariantB { ... }
+}
+```
+
+`try` is valid only inside `attempt`; all `try`s in one `attempt` share one failure enum. Executes on `vm`, `llvm`, and `hybrid`.
+
+## Diagnostic codes
+
+| Code | Meaning |
+| --- | --- |
+| `KSEM118` | Unknown parent construct in `extends`. |
+| `KSEM119` | Inheritance cycle. |
+| `KSEM120` | Missing required function. |
+| `KSEM121` | Required-function signature mismatch. |
+| `KSEM123` | Missing required property. |
+| `KSEM124` | Unknown property. |
+| `KSEM125` | Property type mismatch. |
+| `KSEM126` | Duplicate property. |
+| `KSEM127` | Unknown content channel. |
+| `KSEM128` | Content added into a sealed construct. |
+| `KSEM129` | Content channel count violation (also: required content unmet). |
+| `KSEM130` | Content `accepts` element-type mismatch. |
+| `KSEM131` | Unknown content projection target. |
+| `KSEM132` | Invalid content composition (widening refine / meaningless passthrough). |
+| `KSEM133` | `try` outside `attempt` or in an unsupported position. |
+| `KSEM134` | `try` on a non-`Result` value. |
+| `KSEM135` | Missing `handle` case for a reachable failure variant. |
+| `KSEM136` | `handle` case is not a variant of the failure enum. |
+| `KSEM137` | Incompatible failure enums across one `attempt`. |
+| `KSEM138` | Duplicate content channel. |
+| `KSEM140` | Missing required direct member. |
+| `KSEM141` | Self-recursive `body` with no terminal `node`. |
+| `KSEM142` | Trailing block on a declaration with no `@Content` field. |
+| `KSEM143` | Wrong child count for a single-`Widget` `@Content` field. |
+| `KSEM144` | Bare block where named fills are required (multiple `@Content` fields). |
+| `KSEM145` | Non-widget content child. |
+| `KSEM146` | `extend` of an unknown construct. |
+
+## Execution status
+
+| Surface | Status |
+| --- | --- |
+| `extends` dispatch, properties, `requires`, content channels/composition | Validation-complete (parse + checks + diagnostics) |
+| `let node: T { ... }` bridge (computed accessors) | Executes on `vm` / `llvm` / `hybrid` |
+| `any Family` coercion + heterogeneous `[Widget]` unification | Executes on `vm` / `llvm` / `hybrid` |
+| `@Content` trailing-block content trees | Construct and execute on `vm` / `llvm` / `hybrid` |
+| `attempt` / `try` / `handle` | Executes on `vm` / `llvm` / `hybrid` |

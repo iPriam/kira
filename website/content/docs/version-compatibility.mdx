@@ -1,0 +1,34 @@
+---
+title: Version Compatibility
+description: How to interpret this manual's version label and why it tracks the checked-in repo state instead of a frozen language release.
+---
+
+This manual documents **Kira 0.1.0**, the version declared by the current repository manifests and build configuration.
+
+## What the Version Means Here
+
+In this docs site, the version label means:
+
+- the language and tooling behavior described here matches the checked-in repo state
+- examples and diagnostics are tied to the current bootstrap implementation
+- this is not yet a promise of long-term source compatibility across future Kira releases
+
+## Read the Book Like a Repository Manual
+
+When a chapter says something is supported, it means one of these:
+
+- the parser accepts it
+- the semantics pass validates it
+- the runnable backends prove it today
+
+When a chapter says a feature is not yet lowered or is only proven in check-only coverage, that is the current contract.
+
+## Practical Guidance
+
+If you are comparing examples or commits:
+
+- prefer the docs that ship in the same checkout
+- treat current diagnostics and current backend behavior as authoritative
+- do not assume that every frontend feature is runnable just because it appears in the guide
+
+For install, toolchain, and CLI compatibility details, continue in the [Appendix](/docs/appendix).

@@ -1,0 +1,4 @@
+{
+  "title": "FFI Workflows",
+  "pages": ["index", "manifests", "autobindings", "callbacks"]
+}

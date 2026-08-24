@@ -1,0 +1,4 @@
+{
+  "title": "Examples",
+  "pages": ["index", "callbacks", "hybrid-roundtrip", "sokol-triangle"]
+}

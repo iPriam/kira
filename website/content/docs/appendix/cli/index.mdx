@@ -1,0 +1,95 @@
+---
+title: CLI Overview
+description: The real `kira` command surface and the normal developer workflows around it.
+---
+
+The repo currently exposes the toolchain through `kira`.
+
+The live help text is:
+
+```text
+kira <command> [args]
+  run [--backend vm|llvm|hybrid] [path]
+  build [--backend vm|llvm|hybrid] [path]
+  check [path]
+  tokens [path]
+  ast [path]
+  shader check [file.ksl]
+  shader ast [file.ksl]
+  shader build [file.ksl]
+  sync [path]
+  add <Package>
+  remove <Package>
+  update [path]
+  package pack [path]
+  package inspect <archive-path|project-dir>
+  new <Name> <destination>
+  fetch-llvm
+  help
+  version
+```
+
+## Everyday Flow
+
+For source iteration:
+
+```bash
+kira run examples/hello
+kira check examples/hello
+kira run
+kira check
+```
+
+When no path is provided, `run`, `build`, `check`, `tokens`, and `ast` use the current directory and prefer `kira.toml`, then legacy `project.toml`.
+
+For backend-specific execution:
+
+```bash
+kira run --backend llvm examples/callbacks
+kira run --backend hybrid examples/hybrid_roundtrip
+```
+
+For shader work:
+
+```bash
+kira shader check examples/shaders/textured_quad.ksl
+kira shader ast examples/shaders/textured_quad.ksl
+kira shader build examples/shaders/textured_quad.ksl
+```
+
+For artifact creation:
+
+```bash
+kira build examples/hello
+kira build --backend llvm examples/hello
+kira build --backend hybrid examples/hybrid_roundtrip
+```
+
+## CLI vs `zig build run -- ...`
+
+Use `kira` when you are exercising the installed or managed toolchain.
+
+Use:
+
+```bash
+zig build run -- ...
+```
+
+when you are actively changing the CLI implementation and want each command to run against the just-built in-repo binary.
+
+## Logging And Diagnostics
+
+The CLI writes structured KiraLog lines such as:
+
+```text
+[info] frontend.started: Frontend compilation started. command=run path=examples/hello/app/main.kira
+```
+
+When compilation fails, the CLI renders Kira-native diagnostics with:
+
+- a diagnostic code
+- a title
+- the source location and caret
+- optional help and notes
+
+That is a deliberate design choice: invalid Kira input should fail as Kira, not as a raw Zig panic or linker crash.

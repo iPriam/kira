@@ -1,0 +1,55 @@
+---
+title: Kira for LLMs & Agents
+description: A dense, high-signal orientation for language models and coding agents — what Kira is, the backend-parity rule, the surfaces that execute today, where to look things up, and the machine-readable llms.txt endpoints.
+---
+
+This page is a compact orientation for language models and coding agents. If you are generating, explaining, or reviewing Kira code, read this first — it states the rules that change whether an answer is correct.
+
+## Machine-readable endpoints
+
+This site is built with [fumadocs](https://fumadocs.dev) and exposes the whole manual as plain text:
+
+- **`/llms.txt`** — an index of every page with titles and descriptions.
+- **`/llms-full.txt`** — the full text of the entire manual in one document.
+- **`/docs/<path>.mdx`** — the raw MDX source for any page (append `.mdx` to a docs URL).
+
+Prefer these over scraping rendered HTML.
+
+## What Kira is, in one paragraph
+
+Kira is a readable, ownership-aware systems-and-apps language compiled from a Zig monorepo. It is **dual-mode**: the same program runs on a bytecode **VM** (`kira run`), an **LLVM/native** backend (`kira build`), a **hybrid** runtime that mixes bytecode and native code, and a **WASM** target (`kira build --target wasm32-emscripten`). Kira UI is expressed through a **construct family** surface (a SwiftUI-style declaration model) and shaders through a dedicated `.ksl` language.
+
+## The single most important rule
+
+**Backend parity is a hard requirement, not a nicety.** A feature is only "done" when it works across VM and LLVM/native (and hybrid/WASM where relevant), *or* is explicitly rejected with a tested diagnostic. When you reason about a feature, never assume "VM works, so it works." Check the [Execution and Feature Status](/docs/language-reference/execution-and-feature-status) matrix, which marks exactly which backends run each surface.
+
+Corollary for generated code: do not invent syntax. If a form is not in the [Language Reference](/docs/language-reference), it probably is not accepted yet.
+
+## What actually executes today
+
+Across VM, LLVM, and hybrid: functions; integers/floats/strings/booleans; `let`/`var`; arithmetic, comparison, and short-circuit operators; `if`/`for`/`while`/`switch`/`match`; arrays; enums + exhaustive `match`; named structs + methods; `@Printable` print dispatch; class inheritance dispatch; callbacks and captures; `attempt`/`try`/`handle` over `Result`; and a growing slice of the construct surface — the `node` bridge, `any Family` coercion, and `@Content` widget trees.
+
+FFI differs by backend: the **VM runs direct FFI through LibFFI** (no `@Native` needed), while **LLVM/native and hybrid require `@Native`** at the declaration that touches the symbol (diagnostic `KSEM093`).
+
+## Where to look things up
+
+| You need | Go to |
+| --- | --- |
+| What runs on which backend | [Execution & Feature Status](/docs/language-reference/execution-and-feature-status) |
+| Core syntax and rules | [Language Reference](/docs/language-reference) |
+| Narrative explanation of a feature | [Language Guide](/docs/language-guide) |
+| The construct/UI declaration model | [Constructs](/docs/language-guide/constructs) |
+| Native interop | [Interop and FFI](/docs/language-guide/interop-and-ffi) |
+| CLI commands and flags | [Command Reference](/docs/appendix/cli/commands) |
+| Platforms, live, exports, web | [Platforms & Runners](/docs/appendix/platforms) |
+| Shaders | [KSL Shaders](/docs/appendix/shaders) |
+| Diagnostic codes | [Diagnostics](/docs/appendix/diagnostics) |
+
+## Conventions when writing Kira
+
+- Construct declarations are headed by the family name: `Widget Button { ... }` — not `class Button: Widget`.
+- Construct families inherit with `extends`, not `:`. `extend C { ... }` adds fluent modifiers; the two are different.
+- Property values are supplied by a `properties { ... }` **section**, not a constructor call.
+- Error handling is `attempt { ... try expr ... } handle { Variant { ... } }` — the keyword is `try`, not `?`.
+- Ownership: Kira owns by default; `borrow` / `borrow mut` / `move` are explicit. Non-trivial `copy` and returned borrows are reserved and currently diagnosed, not silently accepted.
+- This manual is **current-status-first**: it describes the implementation in the repository today, marks partial behavior as partial, and omits unsupported topics rather than padding them. Match that honesty.

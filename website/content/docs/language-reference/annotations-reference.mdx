@@ -1,0 +1,109 @@
+---
+title: Annotations Reference
+description: Annotation declarations, parameter schemas, use-site validation, construct allowlists, and compiler-reserved annotation families.
+---
+
+## Annotation Declarations
+
+Annotations are declared at top level:
+
+```ts
+annotation Name {
+}
+
+annotation Attribute {
+    parameters {
+        index: Int
+    }
+}
+```
+
+The supported v1 declaration body is optional `parameters { ... }`.
+
+Parameter forms:
+
+- `name: Type`
+- `name: Type = value`
+
+Supported parameter types and default value kinds:
+
+- `Bool`
+- `Int`
+- `Float`
+- `String`
+
+Annotation declarations are symbols. Duplicate annotation declarations are rejected, duplicate parameter names are rejected, and invalid default values are rejected.
+
+## Annotation Use Syntax
+
+The frontend understands these use forms:
+
+- bare annotations such as `@Main`
+- namespaced annotations such as `@FFI.Pointer`
+- positional argument annotations such as `@Attribute(0)`
+- named argument annotations such as `@InputMapping(priority: 10)`
+- FFI metadata bodies such as `@FFI.Callback { abi: c; ... }`
+
+For user-defined annotation schemas, parameters are passed with parentheses. The semantics layer validates:
+
+- annotation existence
+- argument count
+- argument names
+- argument types
+- default argument filling
+
+## Execution Annotations
+
+These annotations carry direct execution meaning:
+
+- `@Main`
+- `@Runtime`
+- `@Native`
+
+Important current rules:
+
+- `@Main` must identify the single entrypoint
+- duplicate `@Main` is rejected
+- conflicting execution annotations are rejected
+- direct FFI usage requires `@Native`; calling a Kira helper that is already `@Native` does not force the caller to be `@Native`
+
+## Documentation Comments
+
+Documentation uses `///` comments rather than annotations:
+
+```ts
+/// Horizontal position in points.
+var x: Float = 0.0
+```
+
+Construct definitions can declare which annotations are valid in their forms through an `annotations { ... }` section, but each listed annotation must resolve to an annotation declaration or an existing compiler-reserved annotation.
+
+## Construct Integration
+
+Construct allowlists are the domain validation mechanism:
+
+```ts
+annotation State {
+}
+
+construct Widget {
+    annotations {
+        @State;
+    }
+}
+```
+
+The `annotation` declaration defines identity and parameter schema. The `construct` declaration decides whether that annotation is valid and meaningful inside that construct domain.
+
+Annotations may declare readable target restrictions with `targets: class`, `targets: struct`, `targets: function`, `targets: construct`, or `targets: field`. Reusable generated behavior belongs in `capability` declarations and is composed into annotations with `uses CapabilityName`.
+
+## FFI Annotations
+
+These annotations have compiler meaning in the current interop path:
+
+- `@FFI.Extern`
+- `@FFI.Callback`
+- `@FFI.Pointer`
+- `@FFI.Struct`
+- `@FFI.Alias`
+- `@FFI.Array`

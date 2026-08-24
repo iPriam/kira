@@ -1,0 +1,54 @@
+---
+title: Lexical Structure
+description: Comments, identifiers, keywords, punctuation, literals, and qualified names in the current Kira lexer and parser.
+---
+
+## Comments and Whitespace
+
+The lexer ignores spaces, tabs, carriage returns, and newlines.
+
+The documented comment forms are:
+
+```ts
+// line comment
+/// documentation comment
+```
+
+## Identifiers and Qualified Names
+
+Identifiers begin with a letter or `_`, and may continue with identifier characters after that.
+
+Qualified names are dot-separated identifiers:
+
+```ts
+Support
+bindings.callbacks
+FFI.Pointer
+```
+
+## Keywords
+
+The current token set reserves these keywords:
+
+`annotation`, `capability`, `class`, `construct`, `enum`, `struct`, `extends`, `function`, `generated`, `override`, `overridable`, `targets`, `uses`, `let`, `var`, `return`, `import`, `as`, `if`, `else`, `for`, `in`, `match`, `switch`, `case`, `default`, `true`, `false`
+
+## Punctuation and Operators
+
+The lexer recognizes these punctuation/operator tokens:
+
+`@ ( ) { } [ ] ; , : ? = == ! != && || + - -> * / % . < <= > >=`
+
+## Literals
+
+The current literal families are:
+
+- integer literals
+- float literals
+- string literals
+- boolean literals (`true`, `false`)
+
+Strings use double quotes. Arrays use bracketed element syntax such as `[1, 2, 3]`.
+
+## Terminators
+
+The parser supports the semicolon-terminated and newline-delimited styles already used across the repo examples.

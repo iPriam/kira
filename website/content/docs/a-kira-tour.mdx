@@ -1,0 +1,146 @@
+---
+title: A Kira Tour
+description: A compact pass through entrypoints, imports, types, constructs, and execution annotations using repo-proven syntax.
+---
+
+This tour shows the current Kira language through the kinds of files the repo already proves.
+
+## A Small Entrypoint
+
+Kira programs pick their entrypoint with `@Main`:
+
+```kira
+@Main
+function main() {
+    let left = 40;
+    let right = 2;
+    let total = left + right;
+    print(total);
+    return;
+}
+```
+
+The current corpus proves this style across `vm`, `llvm`, and `hybrid`.
+
+## Imports and Helper Functions
+
+Imports use qualified names and can declare an alias:
+
+```kira
+import support as Support
+
+@Main
+function main() {
+    helper();
+    print("imports resolve");
+    return;
+}
+
+function helper() {
+    let first = 1;
+    let second = 2;
+    print(first + second);
+    return;
+}
+```
+
+This is the same import shape used by the runnable import corpus and by namespaced bindings such as `bindings.callbacks`.
+
+## Named Types and Members
+
+Kira uses `struct` for value-oriented data shapes and `class` for behavior:
+
+```kira
+struct RevenueSnapshot {
+    let monthLabel: String
+    let gross: Int
+    let net: Int
+}
+
+class StoryLane {
+    let width: Float
+    let height: Float
+
+    function area() -> Float {
+        return width * height
+    }
+}
+```
+
+Fields and defaults appear in structs; methods appear in classes.
+
+## Typed Declarations
+
+Kira local declarations now use an explicit three-form model:
+
+```kira
+var title = "Launch"
+var pendingTitle: String
+var opacity: Float = 0.8
+```
+
+That means:
+
+- inferred declaration from an initializer expression
+- explicit typed declaration with no initializer expression yet
+- explicit typed declaration with a strict initializer match
+
+For example, `var opacity: Float = 0.0` is valid, while `var opacity: Float = 0` is rejected.
+
+## Constructs and the UI Surface
+
+A `construct` defines a **declaration family** — a typed template that concrete declarations conform to. This is the SwiftUI-style surface Kira uses for UI: a family declares requirements as direct members, and concrete declarations are headed by the family name.
+
+```kira
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }   // default Widget->Node bridge
+}
+
+Widget Text {
+    let text: String = ""
+    let node: Node { TextNode(text: text) }   // terminal node, no body
+}
+
+Widget VStack {
+    @Content let children: [Widget]            // caller-provided children
+    let node: Node { VStackNode() }
+}
+
+Widget Card {
+    let title: String = ""
+    let body: Widget {
+        VStack {
+            Text(text: title)
+            Text(text: "subtitle")
+        }
+    }
+}
+```
+
+This is more than parsing: the `node` bridge (`widget.node`), `any Widget` coercion, heterogeneous `[Widget]` arrays, and caller-provided `@Content` trees now **construct and execute** across `vm`, `llvm`, and `hybrid`. The full family surface — `extends`, property schemas, `requires`, content channels, and `extend` modifiers — is validated with precise diagnostics. See [Constructs](/docs/language-guide/constructs).
+
+The same section/builder surface works especially well for C-layout FFI descriptors, because `@FFI.Struct { layout: c; }` construction starts from zeroed storage before applying the listed fields.
+
+## Execution Annotations
+
+Execution annotations matter when a program crosses runtime and native boundaries:
+
+```kira
+@Main
+@Native
+function main() {
+    print("native main");
+    runtime_helper();
+    return;
+}
+
+@Runtime
+function runtime_helper() {
+    print("runtime helper");
+    return;
+}
+```
+
+Use the [Language Guide](/docs/language-guide) for the full walkthrough, then keep the [Language Reference](/docs/language-reference) nearby when you need precise rules.
+

@@ -1,0 +1,86 @@
+---
+title: Installation
+description: Install Kira from GitHub Releases, put it on your PATH, verify the toolchain, and then run `check`, `run`, and `build`.
+---
+
+## Install From Releases
+
+For Kira 0.1.0 readiness, the normal user install flow is:
+
+```bash
+1. Download the latest release from GitHub Releases.
+2. Extract the archive for your platform.
+3. Add the directory containing `kira` to your shell `PATH`.
+4. Open a new terminal.
+5. Run `kira --version`.
+```
+
+The Releases page lives here:
+
+[GitHub Releases](https://github.com/kira-lang-com/kira/releases)
+
+## Verify The Install
+
+After `kira --version`, validate the basic workflow with a small program:
+
+```bash
+kira check path/to/main.kira
+kira run path/to/main.kira
+kira build path/to/main.kira
+```
+
+Those three commands are the minimum "is my install healthy?" smoke test:
+
+- `check` validates the program
+- `run` executes it
+- `build` proves the native backend is available too
+
+## Native / LLVM Support
+
+Native builds and the native half of hybrid mode depend on the pinned LLVM toolchain.
+
+Install it with:
+
+```bash
+kira fetch-llvm
+```
+
+or:
+
+```bash
+zig build fetch-llvm
+```
+
+LLVM discovery order is:
+
+1. `KIRA_LLVM_HOME`
+2. `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`
+3. older repo-local fallback paths under `.kira/`, if they already exist
+
+If you need to override the managed bundle temporarily:
+
+```bash
+export KIRA_LLVM_HOME=/path/to/llvm
+```
+
+## Build From Source
+
+If you are contributing to the Zig implementation itself, build from this monorepo:
+
+```bash
+zig build
+zig build test
+```
+
+That refreshes the local development snapshot used by `kira`.
+
+The most useful contributor commands are:
+
+```bash
+zig build run -- run examples/hello.kira
+kira check examples/hello.kira
+kira run examples/hello.kira
+kira build examples/hello.kira
+```
+
+`kira new` still scaffolds minimal `kira.toml` + `app/main.kira` starter apps from the managed template.

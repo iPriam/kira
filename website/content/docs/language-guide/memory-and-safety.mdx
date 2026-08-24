@@ -1,0 +1,72 @@
+---
+title: Memory and Safety
+description: "Kira's current ownership model: owned-by-default values, borrowed parameters, explicit moves, and the parts that are still intentionally limited."
+---
+
+Kira now has a small ownership model.
+
+Values are owned by default. Read-only access is written with `borrow`, exclusive mutation is written with `borrow mut`, and ownership transfer is explicit with `move` when a named non-trivial value is consumed.
+
+```ts
+function draw(mesh: borrow Mesh) {
+    return
+}
+
+function update(world: borrow mut World) {
+    return
+}
+
+function upload(mesh: Mesh) -> GpuMesh {
+    return GpuMesh()
+}
+
+draw(mesh)
+update(world)
+let gpu = upload(move mesh)
+```
+
+## Current Model
+
+- ordinary values are owned by default
+- borrowed parameters do not consume the caller's value
+- `borrow mut` requires a mutable caller binding
+- named non-trivial arguments require explicit `move` when ownership transfers
+- trivial scalar values still pass by value without extra syntax
+- non-trivial implicit copies are rejected instead of silently alias-copying
+- use-after-move and move-twice patterns are diagnosed in semantics
+- VM, LLVM/native, and hybrid all carry ownership metadata through the pipeline
+
+## Why It Exists
+
+Kira's ownership model is intentionally minimal:
+
+- deterministic cleanup matters
+- hot paths should not depend on GC or ARC traffic
+- VM iteration and LLVM/native execution need to agree on value movement
+- ordinary code should stay readable instead of forcing pervasive lifetime syntax
+
+The design goal is not "Rust but smaller." The design goal is a readable systems language with explicit ownership transfer, deterministic behavior, and backend parity.
+
+Kira does not use GC or ARC in the core runtime hot path.
+
+## Current Limitations
+
+This repo still has important limits, and the docs should stay honest about them:
+
+- returned borrows are rejected today instead of being accepted with incomplete lifetime checking
+- non-trivial `copy` lowering is not implemented yet
+- field-sensitive partial moves are not complete
+- closure escape borrow analysis is not complete
+- deterministic `deinit` lowering is not finished
+- callable-value ownership metadata is not fully propagated through every callback-style API path
+- LLVM ownership ABI details such as broad `readonly` / `noalias` annotation use are still incomplete
+
+## Practical Guidance
+
+When writing Kira today:
+
+- prefer `borrow` for read-only helpers
+- prefer `borrow mut` for in-place mutation
+- reserve owned/plain parameters for true ownership transfer
+- write `move value` at the call site when a named non-trivial value is consumed
+- expect the compiler to reject unsupported ownership shapes instead of guessing

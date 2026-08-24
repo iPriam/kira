@@ -1,0 +1,73 @@
+---
+title: Basic Operators
+description: Unary, arithmetic, comparison, logical, member, call, and assignment operators in the current Kira implementation.
+---
+
+Kira's parser accepts a familiar operator ladder.
+
+## Operator Families
+
+| Family | Forms |
+| --- | --- |
+| Unary | `-x`, `!x` |
+| Multiplicative | `*`, `/`, `%` |
+| Additive | `+`, `-` |
+| Comparison | `==`, `!=`, `<`, `<=`, `>`, `>=` |
+| Logical | `&&`, `||` |
+| Conditional | `condition ? then : else` |
+| Structural | member access with `.`, calls with `(...)`, assignment with `=` |
+
+## Arithmetic and Comparison Rules
+
+The current semantics layer enforces:
+
+- arithmetic operators require both sides to have the same numeric type
+- comparison operators require both sides to have the same type
+- logical operators require `Bool` on both sides
+
+Examples already checked into the repo:
+
+```ts
+let totalRevenue = baseRevenue + recurringRevenue;
+let containsPoint = point.x <= x + width;
+let hidden = isCompact || isCollapsed;
+```
+
+## Conditional Expressions
+
+The current lowered subset supports the ternary form:
+
+```ts
+condition ? thenValue : elseValue
+```
+
+`condition ? thenValue : elseValue` is now parsed, semantically checked, and lowered in the current scalar/pointer executable subset.
+
+## Member Access, Calls, and Assignment
+
+Member access and calls are heavily used:
+
+```ts
+callbacks.kira_invoke_callback(add_two, 0, 5)
+Rect(x: 0.0, y: 0.0, width: 0.0, height: 0.0)
+state.viewport_width = 128
+```
+
+Assignments are statements, not general expressions. Current semantic validation only allows the left side to be:
+
+- a local name
+- a field reference
+
+## Runnable Boundary
+
+The parser and semantics layers understand more than the currently proven lowering boundary.
+
+The current lowered executable subset is broader than the earliest bootstrap core. It includes:
+
+- integer `+`, `-`, `*`, `/`, `%`
+- float `+`, `-`, `*`, `/`, `%`
+- unary `-` on integers and floats
+- unary `!` on booleans
+- integer, float, and boolean comparisons
+- short-circuit `&&` and `||` on booleans
+- conditional `?:` in the lowered scalar/pointer subset

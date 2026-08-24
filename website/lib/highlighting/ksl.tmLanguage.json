@@ -1,0 +1,106 @@
+{
+  "name": "ksl",
+  "displayName": "KSL",
+  "scopeName": "source.ksl",
+  "fileTypes": ["ksl"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#properties" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.ksl", "match": "//.*$" },
+        { "name": "comment.block.ksl", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "annotations": {
+      "name": "meta.decorator.ksl",
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.decorator.ksl" },
+        "2": { "name": "entity.name.decorator.ksl" }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.ksl",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.ksl", "match": "\\\\." }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.ksl",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.ksl",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ksl",
+          "match": "\\b(if|else|for|in|return)\\b"
+        },
+        {
+          "name": "storage.type.ksl",
+          "match": "\\b(shader|group|type|function|let|option|uniform|storage|texture|sampler)\\b"
+        },
+        {
+          "name": "keyword.other.ksl",
+          "match": "\\b(import|as|vertex|fragment|compute|input|output|entry|threads)\\b"
+        },
+        {
+          "name": "storage.modifier.ksl",
+          "match": "\\b(read|read_write)\\b"
+        },
+        {
+          "name": "constant.language.ksl",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "entity.name.type.ksl",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.ksl" },
+            "2": { "name": "entity.name.function.ksl" }
+          }
+        },
+        {
+          "name": "entity.name.function.call.ksl",
+          "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "properties": {
+      "match": "(?<=\\.)\\s*([a-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "variable.other.property.ksl" }
+      }
+    },
+    "operators": {
+      "name": "keyword.operator.ksl",
+      "match": "(->|==|!=|<=|>=|[+\\-*/%<>=])"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+---
+title: Properties
+description: Stored members, defaults, `let` versus `var`, and assignment to locals or fields.
+---
+
+Kira examples use property-like members inside `class` or `struct` declarations and construct forms.
+
+## Stored Members
+
+```ts
+struct Point {
+    var x: Float = 0.0
+    var y: Float = 0.0
+}
+```
+
+Current member storage forms shown in the repo:
+
+- `let` for immutable stored members
+- `var` for mutable stored members
+
+## Default Values
+
+Defaults appear naturally in the checked-in examples:
+
+```ts
+struct ThemeConfig {
+    let title: String = "Operations";
+    let highlightLevel: Float = 0.8;
+}
+
+struct Point {
+    let x: Float = 0.0
+    let y: Float = 0.0
+}
+```
+
+## Assignment
+
+Assignments are statements that can target:
+
+- locals
+- fields
+
+Examples from the runnable native examples:
+
+```ts
+state.viewport_width = 128
+state.viewport_height = 128
+point.x = 4.0
+```
+
+The semantics layer rejects non-assignable targets with `KSEM046`.
+
+For `@FFI.Struct { layout: c; }` descriptors, builder construction is the preferred ergonomic path:
+
+```ts
+let desc = sapp_desc {
+    width: 640
+    height: 480
+    window_title: "Triangle"
+}
+```
+
+That construction form zero-fills omitted C-layout fields. A plain typed declaration such as `var desc: sapp_desc` stays uninitialized until some later assignment gives it a value.
+
+## Properties in Construct Forms
+
+Construct-defined forms also use stored-member syntax:
+
+```ts
+Widget Card(title: String) {
+    @State
+    let selected: Int = 0;
+}
+```
+
+That means the property surface is not limited to plain `struct` declarations.
+
