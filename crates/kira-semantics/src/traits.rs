@@ -57,8 +57,23 @@ pub(crate) struct TraitInfo<'a> {
     /// Its package is one of the two that may declare a conformance to this
     /// trait, and it is the scope the member signatures resolve against.
     pub(crate) source: SourceId,
+    /// The traits this one *requires*, written `trait Ord: Eq { … }`.
+    ///
+    /// A supertrait is an obligation rather than an inheritance: a type
+    /// claiming this trait must claim each of these too, and it takes their
+    /// members from *those* conformances rather than from this one.
+    pub(crate) supertraits: Vec<SupertraitRef>,
     /// The members, in declaration order.
     pub(crate) members: Vec<TraitMemberInfo<'a>>,
+}
+
+/// One trait named in another trait's supertrait clause.
+#[derive(Debug, Clone)]
+pub(crate) struct SupertraitRef {
+    /// The required trait's name, as written.
+    pub(crate) name: String,
+    /// Span of the name at the clause, for the diagnostics that point at it.
+    pub(crate) span: Span,
 }
 
 /// One member of a declared trait.

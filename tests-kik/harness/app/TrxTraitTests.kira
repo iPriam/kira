@@ -16,8 +16,9 @@ import Foundation
 // on a class, including a subclass inheriting the implementation; conformance
 // on a construct-backed declaration; the compiler-known `Copyable` claim; a
 // default that calls a requirement and so runs the conforming type's body; a
-// receiver written `borrow self`; and a `borrow mut self` receiver that writes
-// through to the caller's storage.
+// receiver written `borrow self`; a `borrow mut self` receiver that writes
+// through to the caller's storage; and a supertrait clause, whose default calls
+// across to the required trait's members.
 
 trait TrxScored {
     function score(borrow self) -> Int
@@ -231,6 +232,84 @@ construct TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(4000); return e }
 }
 
+// Supertraits: `trait Ord: Eq { … }` states that conforming to `TrxOrdered`
+// obliges a type to conform to `TrxEquated` too. It is a requirement rather
+// than an inheritance — the members come from the supertrait's own conformance
+// — so a default declared here may call across to them on `self`, and the call
+// resolves statically on the concrete type exactly as any other does.
+
+trait TrxEquated {
+    function equals(borrow self, other: Int) -> Bool
+}
+
+trait TrxOrdered: TrxEquated {
+    function less(borrow self, other: Int) -> Bool
+    function atMost(borrow self, other: Int) -> Bool {
+        return self.less(other) || self.equals(other)
+    }
+    function rank(borrow self, other: Int) -> Int {
+        if self.less(other) {
+            return 0
+        }
+        if self.equals(other) {
+            return 1
+        }
+        return 2
+    }
+}
+
+struct TrxMark: TrxEquated, TrxOrdered {
+    let n: Int
+    function equals(borrow self, other: Int) -> Bool {
+        return n == other
+    }
+    function less(borrow self, other: Int) -> Bool {
+        return n < other
+    }
+}
+
+// The supertrait is kept retroactively; the declaration claims only the
+// requiring trait.
+struct TrxLateMark: TrxOrdered {
+    let n: Int
+    function less(borrow self, other: Int) -> Bool {
+        return n * 2 < other
+    }
+}
+
+extend TrxLateMark: TrxEquated {
+    function equals(borrow self, other: Int) -> Bool {
+        return n * 2 == other
+    }
+}
+
+construct TrxADefaultCallsAcrossToASupertraitMember() extends Test {
+    test {
+        let mark = TrxMark(n: 4)
+        if mark.atMost(4) && mark.atMost(5) && !mark.atMost(3) {
+            return 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+construct TrxASupertraitDefaultRanksAcrossBothMembers() extends Test {
+    test {
+        let mark = TrxMark(n: 4)
+        return mark.rank(9) * 100 + mark.rank(4) * 10 + mark.rank(1)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct TrxARetroactiveSupertraitConformanceIsEnough() extends Test {
+    test {
+        let mark = TrxLateMark(n: 3)
+        return mark.rank(7) * 10 + mark.rank(6)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
 function trxSection() -> Int {
     var checksum = 0
     checksum = checksum + TrxLeaf(n: 6).doubled()
@@ -239,5 +318,8 @@ function trxSection() -> Int {
     checksum = checksum * 31 + TrxDerived().doubled()
     checksum = checksum * 31 + TrxSquare(edge: 3).doubled()
     checksum = checksum * 31 + TrxNamed(name: "abcd").doubled()
+    checksum = checksum * 31 + TrxMark(n: 4).rank(9)
+    checksum = checksum * 31 + TrxMark(n: 4).rank(4)
+    checksum = checksum * 31 + TrxLateMark(n: 3).rank(6)
     return checksum
 }

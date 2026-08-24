@@ -40,12 +40,62 @@ impl Analyzer<'_> {
                 self.check_copyable_claim(ty, source, span);
                 continue;
             }
+            self.check_supertraits_are_claimed(&trait_name, ty, source, span);
             let Some(shapes) = self.required_shapes(&trait_name) else {
                 continue;
             };
             for shape in shapes {
                 self.check_member(&trait_name, ty, source, span, &shape);
             }
+        }
+    }
+
+    /// Checks that a type claiming `trait_name` also claims every trait it
+    /// requires.
+    ///
+    /// Direct supertraits only: each of those conformances is itself checked
+    /// here, so the whole closure is covered without this pass walking it.
+    fn check_supertraits_are_claimed(
+        &mut self,
+        trait_name: &str,
+        ty: StructId,
+        source: SourceId,
+        span: Span,
+    ) {
+        let required: Vec<String> = self
+            .traits
+            .get(trait_name)
+            .map(|declared| {
+                declared
+                    .supertraits
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let type_name = self.program.types.type_name(Type::Struct(ty));
+        for super_name in required {
+            if self.conforms_to(ty, &super_name) {
+                continue;
+            }
+            // A name the supertrait clause could not resolve is already
+            // reported there; a second refusal per conforming type would bury
+            // it.
+            if !crate::traits::is_builtin_trait(&super_name)
+                && !self.traits.contains_key(&super_name)
+            {
+                continue;
+            }
+            self.source = source;
+            self.emit(
+                span,
+                "KSEM310",
+                format!(
+                    "`{type_name}` claims `{trait_name}`, which requires `{super_name}`, but \
+                     `{type_name}` does not conform to `{super_name}`. Add `{super_name}` to the \
+                     conformance list, or write `extend {type_name}: {super_name} {{ … }}`."
+                ),
+            );
         }
     }
 

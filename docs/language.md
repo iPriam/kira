@@ -217,9 +217,9 @@ trait Hashable {
     }
 }
 
-trait Send {}
+trait Tagged {}
 
-struct Mesh: Hashable, Send {
+struct Mesh: Hashable, Tagged {
     let id: Int
     function hash(borrow self) -> Int { return id * 7 }
 }
@@ -261,6 +261,19 @@ only — never a parent.
 A conformance may be declared only in the package that declares the type or the
 package that declares the trait. Anywhere else is `KSEM291`: a third package's
 answer would be invisible to every other user of both.
+
+### Supertraits
+
+`trait Ordered: Equated { … }` states that conforming to `Ordered` obliges a
+type to conform to `Equated` too. A supertrait is a requirement rather than an
+inheritance: `Ordered` takes none of `Equated`'s members into itself, and a
+conforming type answers for them through its own `Equated` conformance. A
+default on `Ordered` may still call them on `self`, because the receiver keeps
+both promises by the time it runs.
+
+A conformance keeping the requiring trait but not what it requires is `KSEM310`;
+a supertrait clause naming something that is not a trait is `KSEM308`; a chain
+that returns to where it started is `KSEM309`.
 
 ### Compiler-known traits
 

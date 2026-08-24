@@ -12,7 +12,7 @@ use kira_semantics_model::{StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ConstructKind, Function, Item, TraitRef};
 
-use super::{Conformance, TraitInfo, TraitMemberInfo, is_builtin_trait};
+use super::{Conformance, SupertraitRef, TraitInfo, TraitMemberInfo, is_builtin_trait};
 use crate::analyze::{Analyzer, Callable};
 
 /// Every method name each type presents, keyed by the type.
@@ -33,18 +33,14 @@ impl<'a> Analyzer<'a> {
             };
             self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
-            for supertrait in &declaration.supertraits {
-                let super_name = self.interner.resolve(supertrait.name).to_owned();
-                self.emit(
-                    supertrait.span,
-                    "KSEM296",
-                    format!(
-                        "a trait cannot require another: `{name}` may not name `{super_name}` as \
-                         a supertrait. Declare the members `{name}` needs on `{name}` itself, or \
-                         have each conforming type claim both traits."
-                    ),
-                );
-            }
+            let supertraits = declaration
+                .supertraits
+                .iter()
+                .map(|entry| SupertraitRef {
+                    name: self.interner.resolve(entry.name).to_owned(),
+                    span: entry.span,
+                })
+                .collect();
             if is_builtin_trait(&name) {
                 self.emit(
                     declaration.name_span,
@@ -77,8 +73,116 @@ impl<'a> Analyzer<'a> {
                     function: &member.function,
                 })
                 .collect();
-            self.traits.insert(name, TraitInfo { source, members });
+            self.traits.insert(
+                name,
+                TraitInfo {
+                    source,
+                    supertraits,
+                    members,
+                },
+            );
         }
+        self.check_supertrait_graph();
+    }
+
+    /// Checks every supertrait clause once every trait name is known.
+    ///
+    /// Two questions, both answerable from the graph alone: whether each name
+    /// is a trait at all, and whether following the clauses ever returns to
+    /// where it started. A cycle is refused because a requirement that
+    /// eventually requires itself can never be discharged — no conformance
+    /// list finishes it.
+    fn check_supertrait_graph(&mut self) {
+        let names: Vec<String> = self.traits.keys().cloned().collect();
+        let mut unknown = Vec::new();
+        for name in &names {
+            let source = self.traits[name].source;
+            for entry in &self.traits[name].supertraits {
+                if !is_builtin_trait(&entry.name) && !self.traits.contains_key(&entry.name) {
+                    unknown.push((source, entry.span, name.clone(), entry.name.clone()));
+                }
+            }
+        }
+        for (source, span, name, super_name) in unknown {
+            self.source = source;
+            self.emit(
+                span,
+                "KSEM308",
+                format!(
+                    "`{super_name}` is not a trait, so `{name}` cannot require it: a supertrait \
+                     names a trait every conforming type must also claim"
+                ),
+            );
+        }
+        for name in &names {
+            let Some((span, cycle)) = self.supertrait_cycle_through(name) else {
+                continue;
+            };
+            self.source = self.traits[name].source;
+            self.emit(
+                span,
+                "KSEM309",
+                format!(
+                    "`{name}` requires itself through {cycle}: a supertrait is an obligation a \
+                     conforming type discharges, and one that comes back around can never be \
+                     discharged"
+                ),
+            );
+        }
+    }
+
+    /// The clause `name` leaves on to return to itself, and the chain it takes,
+    /// or `None` when every clause terminates.
+    fn supertrait_cycle_through(&self, name: &str) -> Option<(Span, String)> {
+        let mut chain = vec![name.to_owned()];
+        let mut visited = HashSet::new();
+        if !self.walk_supertraits_back_to(name, &mut chain, &mut visited) {
+            return None;
+        }
+        let leaves_on = chain.get(1)?;
+        let span = self
+            .traits
+            .get(name)?
+            .supertraits
+            .iter()
+            .find(|entry| &entry.name == leaves_on)?
+            .span;
+        Some((span, chain.join(" -> ")))
+    }
+
+    /// Extends `chain` along supertrait edges until it returns to `target`.
+    ///
+    /// `visited` holds the traits already ruled out, so a shared subgraph is
+    /// walked once however many clauses reach it.
+    fn walk_supertraits_back_to(
+        &self,
+        target: &str,
+        chain: &mut Vec<String>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        let Some(declared) = chain.last().and_then(|here| self.traits.get(here)) else {
+            return false;
+        };
+        let edges: Vec<String> = declared
+            .supertraits
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect();
+        for next in edges {
+            if next == target {
+                chain.push(next);
+                return true;
+            }
+            if !visited.insert(next.clone()) {
+                continue;
+            }
+            chain.push(next);
+            if self.walk_supertraits_back_to(target, chain, visited) {
+                return true;
+            }
+            chain.pop();
+        }
+        false
     }
 
     /// What else already declares `name` in the package `source` belongs to, or

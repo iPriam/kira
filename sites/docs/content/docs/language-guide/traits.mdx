@@ -1,0 +1,119 @@
+---
+title: Traits
+description: "Named sets of members a type promises to present: requirements, defaults, supertraits, retroactive conformance, and the traits the compiler knows without a declaration."
+---
+
+A trait names a set of members a type may promise to present. A member with no body is a **requirement** every conforming type must present. A member with a body is a **default** a conforming type inherits unless it writes its own. A trait with no members is a **marker**: it classifies without obliging.
+
+```ts
+trait Hashable {
+    function hash(borrow self) -> Int
+
+    function doubled(borrow self) -> Int {
+        return self.hash() * 2
+    }
+}
+
+trait Tagged {}
+
+struct Mesh: Hashable, Tagged {
+    let id: Int
+
+    function hash(borrow self) -> Int {
+        return id * 7
+    }
+}
+```
+
+`:` is always conformance and `extends` is always a parent. Both clauses follow the declaration's name, traits first.
+
+```ts
+class Panel: Hashable extends Surface { }
+```
+
+A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement's parameters or result is `KSEM293`.
+
+## Dispatch
+
+Dispatch on a concrete type is static. `mesh.hash()` resolves to the implementation at type-check time and lowers to an ordinary direct call, so a conforming value costs nothing a hand-written method would not.
+
+## Retroactive Conformance
+
+`extend T: Trait { … }` implements a trait for a type declared elsewhere. It is the impl block; `extend Family { … }` without a colon stays the fluent modifier block construct families use.
+
+```ts
+struct Plate {
+    let n: Int
+}
+
+extend Plate: Hashable {
+    function hash(borrow self) -> Int {
+        return n + 1
+    }
+}
+```
+
+A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. A block may carry only members the trait declares (`KSEM294`).
+
+## Coherence
+
+A conformance may be declared only in the package that declares the type or the package that declares the trait. Anywhere else is `KSEM291`: a third package's answer would be invisible to every other user of both.
+
+## Supertraits
+
+A trait may require another. `trait Ordered: Equated { … }` says that conforming to `Ordered` obliges a type to conform to `Equated` too.
+
+```ts
+trait Equated {
+    function equals(borrow self, other: Int) -> Bool
+}
+
+trait Ordered: Equated {
+    function less(borrow self, other: Int) -> Bool
+
+    function atMost(borrow self, other: Int) -> Bool {
+        return self.less(other) || self.equals(other)
+    }
+}
+
+struct Mark: Equated, Ordered {
+    let n: Int
+
+    function equals(borrow self, other: Int) -> Bool {
+        return n == other
+    }
+
+    function less(borrow self, other: Int) -> Bool {
+        return n < other
+    }
+}
+```
+
+A supertrait is a **requirement**, not an inheritance. `Ordered` does not take `Equated`'s members into itself; it obliges each conforming type to answer for them through its own `Equated` conformance, written in the colon list or in an `extend` block. A default declared on `Ordered` may still call across to them on `self`, because by the time the default runs the receiver is a type that keeps both promises.
+
+- A conformance that keeps the requiring trait but not what it requires is `KSEM310`.
+- A supertrait clause naming something that is not a trait is `KSEM308`.
+- A chain of supertraits that returns to where it started is `KSEM309`: an obligation that comes back around can never be discharged.
+
+## Compiler-Known Traits
+
+Some traits exist without a declaration, because what they mean is decided by a type's own members rather than by a written body. Declaring one is `KSEM288`.
+
+| Trait | What claiming it means |
+| --- | --- |
+| `Copyable` | The type copies rather than moves. Checked against the type's members; one that owns storage a copy would have to clone is `KSEM297`. |
+| `Drop` | The type attaches a body the engines run where they already release the value. See [Memory and Safety](/docs/language-guide/memory-and-safety). |
+
+A compiler-known trait may be required as a supertrait, which is how a declared trait states that its conforming types must also copy or must also be movable between threads.
+
+## Receivers
+
+A method's receiver is written as a leading `self` parameter, or left out.
+
+```ts
+function hash(borrow self) -> Int          // reads the receiver
+function bump(borrow mut self, by: Int)    // writes through it
+function label() -> String                 // the same as `borrow self`
+```
+
+A bare `self` is `KPAR075`: it reads like a consuming receiver, which this language does not have. A receiver on a declaration that is not a method is `KSEM299`.

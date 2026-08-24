@@ -164,14 +164,91 @@ fn a_compiler_known_trait_may_not_be_declared() {
     assert_eq!(codes, vec!["KSEM288".to_owned()]);
 }
 
+/// `Eq` and an `Ord` that requires it, with a default calling across.
+const ORDERED: &str = "trait Eq {\n    function equals(borrow self, other: Int) -> Bool\n}\n\
+                       trait Ord: Eq {\n    function less(borrow self, other: Int) -> Bool\n\
+                       \n    function atMost(borrow self, other: Int) -> Bool \
+                       { return self.less(other) || self.equals(other) }\n}\n";
+
 #[test]
-fn a_supertrait_is_refused_by_name() {
-    let items = diagnostics(&program("trait Base {}\ntrait Ordered: Base {}\n"));
+fn a_type_claiming_both_a_trait_and_its_supertrait_is_accepted() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Eq, Ord {{\n    let n: Int\n\
+         \n    function equals(borrow self, other: Int) -> Bool {{ return n == other }}\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n\
+         function use(value: borrow Mark) -> Bool {{ return value.atMost(3) }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_conformance_missing_the_supertrait_names_both() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Ord {{\n    let n: Int\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n"
+    )));
     let refusal = items
         .iter()
-        .find(|item| item.has_code("KSEM296"))
-        .unwrap_or_else(|| panic!("expected a KSEM296, got {items:?}"));
-    assert!(refusal.message.contains("supertrait"), "{refusal:?}");
+        .find(|item| item.has_code("KSEM310"))
+        .unwrap_or_else(|| panic!("expected a KSEM310, got {items:?}"));
+    assert!(refusal.message.contains("`Ord`"), "{refusal:?}");
+    assert!(refusal.message.contains("`Eq`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_may_be_kept_by_a_retroactive_block() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Ord {{\n    let n: Int\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n\
+         extend Mark: Eq {{\n\
+         \n    function equals(borrow self, other: Int) -> Bool {{ return n == other }}\n}}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_compiler_known_trait_may_be_required_as_a_supertrait() {
+    let items = diagnostics(&program(
+        "trait Cheap: Copyable {}\nstruct Label: Cheap {\n    let text: String\n}\n",
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM310"))
+        .unwrap_or_else(|| panic!("expected a KSEM310, got {items:?}"));
+    assert!(refusal.message.contains("`Copyable`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_that_is_not_a_trait_is_refused() {
+    let items = diagnostics(&program(
+        "struct Point {\n    let x: Int\n}\ntrait Ordered: Point {}\n",
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM308"))
+        .unwrap_or_else(|| panic!("expected a KSEM308, got {items:?}"));
+    assert!(refusal.message.contains("`Point`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_cycle_is_refused() {
+    let items = diagnostics(&program("trait A: B {}\ntrait B: C {}\ntrait C: A {}\n"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM309"))
+        .unwrap_or_else(|| panic!("expected a KSEM309, got {items:?}"));
+    assert!(refusal.message.contains("A -> B -> C -> A"), "{refusal:?}");
+}
+
+#[test]
+fn a_trait_requiring_itself_is_refused() {
+    let items = diagnostics(&program("trait Loop: Loop {}\n"));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(codes, vec!["KSEM309".to_owned()]);
 }
 
 #[test]
