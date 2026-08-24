@@ -27,8 +27,9 @@ version = "0.7.0"
 # so installs worked and nobody noticed, but it was the pre-rewrite grammar —
 # and one `git gc` from breaking every install in the field.
 [grammars.kira]
-repository = "file:///Users/priamc/Code/kira-projects/kira-tree-sitter"
-rev = "6c1a5846fb4c363ef0f6a16936afee3f400030ca"
+repository = "file:///Users/priamc/Code/kira-projects/kira"
+rev = "6ae4b3629d4c9e0ecc410dd1b048def25dfceb39"
+path = "editors/tree-sitter"
 
 # `languages` must match the `name` in languages/kira/config.toml exactly.
 [language_servers.kira-lsp]
