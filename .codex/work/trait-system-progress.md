@@ -299,3 +299,15 @@ member on an existential; `KSEM278` reused verbatim for trailing-content on a
 member that takes none.
 
 Harness moved 1308 → 1315 cases, byte-identical VM/LLVM tallies.
+
+### The bare family-conformance head is language again
+
+`Family Name { … }` parses as a zero-parameter declaration backed by
+`Family` — the same tree `construct Name() extends Family { … }` produces,
+with the family named where the keyword would be and the clause implied by
+the position. The parser turns any two-identifier-plus-body head into the
+backed form; a pair carrying a parameter list stays refused, because a
+parameter list is what makes the spelled-out form's kind decidable. Computed
+members discharge `@Required let`s through it unchanged. Grammar gained
+`family_conformance_declaration` with its corpus case; harness pins the
+discharge end to end.

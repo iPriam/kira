@@ -526,3 +526,26 @@ construct TrxTwoExistentialValuesCompareByTheirConcreteValue() extends Test {
     }
     expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
 }
+
+// ----- bare family-conformance head ---------------------------------------
+//
+// `Family Name { … }` spells a zero-parameter declaration backed by `Family`
+// without the `construct` keyword or an `extends` clause. Computed members
+// discharge the family's `@Required let`s exactly as the spelled-out form
+// does.
+
+construct TrxBare { @Required function bare(borrow self) -> Int }
+
+TrxBare TrxBareHeadCase {
+    function bare(borrow self) -> Int {
+        return 77
+    }
+}
+
+construct TrxBareHeadIsCollected() extends Test {
+    test {
+        let head = TrxBareHeadCase()
+        return head.bare()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+}

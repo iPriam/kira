@@ -106,6 +106,7 @@ module.exports = grammar({
         $.enum_declaration,
         $.trait_declaration,
         $.construct_declaration,
+        $.family_conformance_declaration,
         $.extend_declaration,
         $.type_alias_declaration,
         $.package_declaration,
@@ -431,6 +432,17 @@ module.exports = grammar({
         optional(field('parameters', $.parameters)),
         optional(field('conforms', $.conformance_list)),
         optional(field('extends', $.extends_list)),
+        field('body', $.construct_body),
+      ),
+
+    // `Family Name { … }` — the bare head of a zero-parameter declaration
+    // backed by `Family`: the family named first, the declaration second, no
+    // parameter list and no clauses. Same body, same members.
+    family_conformance_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        field('family', $.identifier),
+        field('name', $.identifier),
         field('body', $.construct_body),
       ),
 
