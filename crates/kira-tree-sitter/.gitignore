@@ -1,0 +1,10 @@
+node_modules/
+*.wasm
+*.wasm.gz
+build/
+src/grammar.json
+src/node-types.json
+*.swp
+*.swo
+*~
+.DS_Store

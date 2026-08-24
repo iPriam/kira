@@ -1,0 +1,174 @@
+================================================================================
+Function with no parameters and no return type
+================================================================================
+
+function main() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Arrow return type
+================================================================================
+
+function runtimeCount() -> Int {
+    return 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (integer_literal)))))
+
+================================================================================
+Colon return type is the second legal spelling
+================================================================================
+
+function runtimeCount(): Int {
+    return 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (integer_literal)))))
+
+================================================================================
+Typed parameters
+================================================================================
+
+function add(a: Int, b: Float) -> Float {
+    return b
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+Trailing comma in a parameter list
+================================================================================
+
+function f(a: Int, b: String,) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    body: (block)))
+
+================================================================================
+A type is any identifier, not a closed set
+================================================================================
+
+function f(a: Foo) -> Bar {
+    return a
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+Several functions at the top level
+================================================================================
+
+function a() {}
+function b() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block))
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+The language is newline-insensitive
+================================================================================
+
+function
+  f
+  (
+  a
+  :
+  Int
+  )
+  ->
+  Int
+  {
+  return
+  a
+  }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (identifier)))))

@@ -1,0 +1,245 @@
+================================================================================
+struct is reserved but unimplemented (KSEM900)
+================================================================================
+
+struct Foo {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)))
+
+================================================================================
+enum is reserved but unimplemented (KSEM900)
+================================================================================
+
+enum Color {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)))
+
+================================================================================
+class is reserved but unimplemented (KSEM900)
+================================================================================
+
+class Foo {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)))
+
+================================================================================
+import is reserved but unimplemented (KSEM900)
+================================================================================
+
+import foo
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)))
+
+================================================================================
+Nothing but functions exists at the top level
+================================================================================
+
+let x = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)
+    (integer_literal)))
+
+================================================================================
+break is reserved but unimplemented at statement level (KSEM901)
+================================================================================
+
+function f() {
+    break
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (ERROR
+        (reserved_keyword)))))
+
+================================================================================
+continue is reserved but unimplemented at statement level (KSEM901)
+================================================================================
+
+function f() {
+    continue
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (ERROR
+        (reserved_keyword)))))
+
+================================================================================
+An attribute name must be an identifier, not a keyword (KPAR003)
+================================================================================
+
+@import
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (reserved_keyword))
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+There is no member access
+================================================================================
+
+function f() {
+    let x = a.b
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (identifier))
+      (ERROR
+        (UNEXPECTED '.'))
+      (expression_statement
+        (identifier)))))
+
+================================================================================
+There is no indexing
+================================================================================
+
+function f() {
+    let x = a[0]
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (identifier))
+      (ERROR
+        (UNEXPECTED '['))
+      (expression_statement
+        (integer_literal))
+      (ERROR
+        (UNEXPECTED ']')))))
+
+================================================================================
+There is no block comment
+================================================================================
+
+/* not a comment */
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (identifier)
+    (identifier))
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+A binding needs an = initializer (KPAR011)
+================================================================================
+
+function f() {
+    let x: Int
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (ERROR
+        (identifier)
+        (type_identifier)))))
+
+================================================================================
+Identifiers are ASCII only (KLEX001)
+================================================================================
+
+function f() {
+    let café = 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        (ERROR
+          (UNEXPECTED 233))
+        value: (integer_literal)))))
+
+================================================================================
+A string does not span an unescaped newline (KLEX002)
+================================================================================
+
+function f() {
+    let s = "unterminated
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (string_literal
+          (MISSING """))))))

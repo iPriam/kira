@@ -1,0 +1,330 @@
+// Comprehensive test file for Kira syntax highlighting
+// This file demonstrates all tokenization features
+
+// ============================================================================
+// COMMENTS
+// ============================================================================
+// Single line comment
+// Another comment with special chars: @#$%^&*()
+
+// ============================================================================
+// ATTRIBUTES (Execution Modes)
+// ============================================================================
+@Native
+func nativeFunction() {
+    return;
+}
+
+@Runtime
+func runtimeFunction() {
+    return;
+}
+
+@Platforms(linux, macos, windows)
+func platformSpecificFunction() {
+    return;
+}
+
+// ============================================================================
+// DIRECTIVES
+// ============================================================================
+#platforms
+
+// ============================================================================
+// KEYWORDS - Function and Variable Declarations
+// ============================================================================
+func main() {
+    let x: int = 42;
+    let y: float = 3.14;
+    let z: bool = true;
+    let message: string = "Hello, Kira!";
+    
+    return;
+}
+
+// ============================================================================
+// KEYWORDS - Control Flow (if/else)
+// ============================================================================
+func testIfElse(value: int) {
+    if value > 0 {
+        printIn("positive");
+    } else {
+        printIn("non-positive");
+    }
+    
+    if value == 0 {
+        printIn("zero");
+    } else {
+        if value < 0 {
+            printIn("negative");
+        } else {
+            printIn("positive");
+        }
+    }
+}
+
+// ============================================================================
+// KEYWORDS - Loops (for, while, break, continue)
+// ============================================================================
+func testLoops() {
+    // For loop with range operator
+    for i in 0..10 {
+        if i == 5 {
+            continue;
+        }
+        printIn("iteration");
+    }
+    
+    // For loop with inclusive range operator
+    for j in 0..=10 {
+        printIn("inclusive iteration");
+    }
+    
+    // While loop
+    while true {
+        break;
+    }
+    
+    let counter: int = 0;
+    while counter < 10 {
+        counter = counter + 1;
+        if counter == 5 {
+            continue;
+        }
+    }
+}
+
+// ============================================================================
+// KEYWORDS - Import and Struct
+// ============================================================================
+import
+
+struct Point {
+    x: int,
+    y: int
+}
+
+struct Rectangle {
+    topLeft: Point,
+    bottomRight: Point
+}
+
+struct Person {
+    name: string,
+    age: int,
+    height: float,
+    isActive: bool
+}
+
+// ============================================================================
+// TYPES - All Built-in Types
+// ============================================================================
+func testTypes() {
+    let intValue: int = 100;
+    let floatValue: float = 99.99;
+    let boolValue: bool = false;
+    let stringValue: string = "test";
+    
+    // Types in various contexts
+    let a: int;
+    let b: float;
+    let c: bool;
+    let d: string;
+}
+
+// ============================================================================
+// LITERALS - Numbers
+// ============================================================================
+func testNumericLiterals() {
+    let integer: int = 42;
+    let negative: int = -100;
+    let zero: int = 0;
+    let large: int = 1000000;
+    
+    let floatingPoint: float = 3.14;
+    let negativeFloat: float = -2.5;
+    let zeroFloat: float = 0.0;
+    let scientific: float = 1.5;
+}
+
+// ============================================================================
+// LITERALS - Booleans
+// ============================================================================
+func testBooleanLiterals() {
+    let trueValue: bool = true;
+    let falseValue: bool = false;
+    
+    if true {
+        printIn("always true");
+    }
+    
+    if false {
+        printIn("never executed");
+    }
+}
+
+// ============================================================================
+// LITERALS - Strings
+// ============================================================================
+func testStringLiterals() {
+    let simple: string = "hello";
+    let withSpaces: string = "hello world";
+    let empty: string = "";
+    let withNumbers: string = "test123";
+    let withSpecialChars: string = "test!@#$%";
+}
+
+// ============================================================================
+// OPERATORS - Arithmetic
+// ============================================================================
+func testArithmeticOperators(a: int, b: int) {
+    let sum: int = a + b;
+    let difference: int = a - b;
+    let product: int = a * b;
+    let quotient: int = a / b;
+    let remainder: int = a % b;
+}
+
+// ============================================================================
+// OPERATORS - Comparison
+// ============================================================================
+func testComparisonOperators(x: int, y: int) {
+    let equal: bool = x == y;
+    let notEqual: bool = x != y;
+    let lessThan: bool = x < y;
+    let greaterThan: bool = x > y;
+    let lessOrEqual: bool = x <= y;
+    let greaterOrEqual: bool = x >= y;
+}
+
+// ============================================================================
+// OPERATORS - Logical
+// ============================================================================
+func testLogicalOperators(a: bool, b: bool) {
+    let andResult: bool = a && b;
+    let orResult: bool = a || b;
+    let notResult: bool = !a;
+    
+    if a && b {
+        printIn("both true");
+    }
+    
+    if a || b {
+        printIn("at least one true");
+    }
+    
+    if !a {
+        printIn("a is false");
+    }
+}
+
+// ============================================================================
+// OPERATORS - Assignment
+// ============================================================================
+func testAssignment() {
+    let x: int = 10;
+    x = 20;
+    x = x + 5;
+}
+
+// ============================================================================
+// OPERATORS - Range
+// ============================================================================
+func testRangeOperators() {
+    // Exclusive range
+    for i in 0..10 {
+        printIn("exclusive");
+    }
+    
+    // Inclusive range
+    for j in 0..=10 {
+        printIn("inclusive");
+    }
+    
+    for k in 1..100 {
+        printIn("range");
+    }
+}
+
+// ============================================================================
+// BUILT-IN FUNCTIONS
+// ============================================================================
+func testBuiltInFunctions() {
+    printIn("Hello, World!");
+    printIn("Testing built-in function");
+    printIn("Multiple calls");
+}
+
+// ============================================================================
+// FUNCTION DEFINITIONS
+// ============================================================================
+func simpleFunction() {
+    return;
+}
+
+func functionWithParams(x: int, y: int) {
+    return;
+}
+
+func functionWithReturn(a: int, b: int) {
+    let result: int = a + b;
+    return;
+}
+
+// ============================================================================
+// COMPLEX EXAMPLES - Combining Multiple Features
+// ============================================================================
+@Native
+func complexExample(value: int) {
+    // Comment in function
+    let result: int = 0;
+    
+    if value > 0 {
+        for i in 0..value {
+            result = result + i;
+            if result > 100 {
+                break;
+            }
+        }
+    } else {
+        while result < 10 {
+            result = result + 1;
+        }
+    }
+    
+    printIn("Result calculated");
+    return;
+}
+
+@Runtime
+@Platforms(linux, macos)
+func multiAttributeFunction() {
+    let x: int = 42;
+    let y: float = 3.14;
+    let z: bool = true;
+    let s: string = "test";
+    
+    if x > 0 && z {
+        printIn("condition met");
+    }
+}
+
+// ============================================================================
+// EDGE CASES
+// ============================================================================
+func edgeCases() {
+    // Keywords should not match partial words
+    let function: int = 0;
+    let letter: int = 0;
+    let structure: int = 0;
+    
+    // Types should not match partial words
+    let integer: int = 0;
+    let floating: float = 0.0;
+    let boolean: bool = false;
+    let stringValue: string = "";
+    
+    // Multiple operators in expression
+    let complex: int = 1 + 2 * 3 - 4 / 2 % 3;
+    let comparison: bool = 1 < 2 && 3 > 2 || 4 == 4 && 5 != 6;
+}

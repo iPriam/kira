@@ -1,0 +1,190 @@
+================================================================================
+Integer literal
+================================================================================
+
+function f() -> Int {
+    return 1234567890
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (integer_literal)))))
+
+================================================================================
+Float literal needs a digit on both sides of the dot
+================================================================================
+
+function f() -> Float {
+    return 3.14
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (float_literal)))))
+
+================================================================================
+1e5 is an integer followed by the identifier e5, not an exponent
+================================================================================
+
+function f() {
+    let x = 1e5
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (integer_literal))
+      (expression_statement
+        (identifier)))))
+
+================================================================================
+Boolean literals
+================================================================================
+
+function f() -> Bool {
+    let t = true
+    return false
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (boolean_literal))
+      (return_statement
+        value: (boolean_literal)))))
+
+================================================================================
+String literal
+================================================================================
+
+function f() -> String {
+    return "one source, many backends"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (string_literal)))))
+
+================================================================================
+Empty string
+================================================================================
+
+function f() -> String {
+    return ""
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (string_literal)))))
+
+================================================================================
+The six escapes that decode specially
+================================================================================
+
+function f() -> String {
+    return "a\nb\tc\rd\0e\"f\\g"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (string_literal
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence))))))
+
+================================================================================
+An unknown escape is accepted and decodes to the character itself
+================================================================================
+
+function f() -> String {
+    return "es\qcape"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (string_literal
+          (escape_sequence))))))
+
+================================================================================
+A bare underscore is a legal identifier
+================================================================================
+
+function f() {
+    let _ = 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (integer_literal)))))
