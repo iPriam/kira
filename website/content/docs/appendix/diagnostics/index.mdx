@@ -1,0 +1,106 @@
+---
+title: Diagnostics and KiraLog
+description: Diagnostic codes, stage boundaries, rendered source errors, and the CLI log format.
+---
+
+Kira tries to fail as Kira.
+
+That means:
+
+- parser failures are Kira parser diagnostics
+- semantic failures are Kira semantic diagnostics
+- backend/build failures are Kira build diagnostics
+- unexpected internal failures go through an internal compiler error boundary instead of dumping raw Zig internals first
+
+## Rendered Diagnostics
+
+The current renderer prints:
+
+- severity
+- diagnostic code when available
+- title
+- message
+- source location and caret
+- optional related labels
+- optional help, suggestion, and notes
+
+Typical shape:
+
+```text
+error[KPAR001]: expected expression
+  ...
+  --> file.kira:line:column
+```
+
+## KiraLog
+
+The CLI also writes structured log lines such as:
+
+```text
+[info] frontend.started: Frontend compilation started. command=run path=examples/hello/app/main.kira
+```
+
+These logs come from `kira_log` and are distinct from the user-facing diagnostic renderer.
+
+Current log scopes include:
+
+- `frontend`
+- `build`
+- `compiler`
+
+## Stage Model
+
+Kira currently reports failures against the pipeline stages:
+
+- lexer
+- parser
+- semantics
+- IR/build
+
+That is also reflected in the corpus expectations under `tests/fail/`.
+
+## Representative Codes In The Repo
+
+| Code | Title | Stage |
+| --- | --- | --- |
+| `KPAR001` | expected `;` after annotation spec / parser expectation failures | parser |
+| `KPAR002` | expected expression | parser |
+| `KSEM002` | multiple `@Main` entrypoints | semantics |
+| `KSEM005` | conflicting execution annotations | semantics |
+| `KSEM021` | invalid lifecycle hook | semantics |
+| `KSEM023` | invalid `@Main` signature | semantics |
+| `KSEM026` | annotation is not allowed in this construct | semantics |
+| `KSEM029` | type inference is ambiguous | semantics |
+| `KSEM031` | type mismatch | semantics |
+| `KSEM032` | unresolved import | semantics |
+| `KSEM045` | invalid callback signature | semantics |
+| `KSEM063` | unknown annotation | semantics |
+| `KSEM064` | annotation does not accept parameters | semantics |
+| `KSEM066` | unknown annotation parameter | semantics |
+| `KSEM069` | missing annotation parameter | semantics |
+| `KSEM071` | annotation parameter type mismatch | semantics |
+| `KSEM093` | direct FFI requires `@Native` | semantics |
+| `KSEM100` | non-exhaustive match | semantics |
+| `KSEM101` | duplicate match arm | semantics |
+| `KSEM102` | missing `onPrint` for `@Printable` type | semantics |
+| `KSEM103` | duplicate enum variant | semantics |
+| `KSEM117` | non-`Copy` closure capture | semantics |
+| `KSEM118` / `KSEM119` | unknown parent / inheritance cycle (`extends`) | semantics |
+| `KSEM120` / `KSEM121` | missing required function / signature mismatch | semantics |
+| `KSEM123`–`KSEM126` | construct property schema violations | semantics |
+| `KSEM127`–`KSEM132`, `KSEM138` | content channel and composition violations | semantics |
+| `KSEM133`–`KSEM137` | `attempt` / `try` / `handle` rules | semantics |
+| `KSEM140`–`KSEM146` | `@Required` / `@Content` / `node` bridge / `extend` rules | semantics |
+| `KCL020` / `KCL021` | `run` / `live` rejected a library root | CLI |
+| `KBUILD001` | native code requires a native-capable backend | IR/build |
+| `KICE001` | internal compiler error | internal boundary |
+
+## Invalid Kira Should Not Collapse Into Zig
+
+This is an explicit project goal already reflected in the CLI tests:
+
+- invalid source should not crash the renderer
+- invalid hybrid input should not segfault the runtime host
+- unexpected failures should be wrapped by the internal compiler error boundary
+
+So when you are improving diagnostics, the bar is not just "emit an error". The bar is "emit a Kira-native error at the correct stage with stable, useful output."

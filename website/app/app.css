@@ -1,0 +1,321 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* ─── Kira warm amber theme ──────────────────────────────────────────────── */
+/* Override fumadocs neutral CSS variables with the warm amber palette so that
+   all fumadocs UI components (nav, sidebar, search, etc.) use the same colors
+   as the custom kira-* classes. */
+
+:root {
+  color-scheme: light;
+
+  --color-fd-background: #fcfaf4;
+  --color-fd-foreground: #201a13;
+  --color-fd-muted: #f2eadb;
+  --color-fd-muted-foreground: #7c6248;
+  --color-fd-popover: #fffdf7;
+  --color-fd-popover-foreground: #201a13;
+  --color-fd-card: #fefcf5;
+  --color-fd-card-foreground: #201a13;
+  --color-fd-border: rgba(43, 31, 12, 0.1);
+  --color-fd-primary: #b76418;
+  --color-fd-primary-foreground: #fff9f1;
+  --color-fd-secondary: rgba(183, 100, 24, 0.08);
+  --color-fd-secondary-foreground: #201a13;
+  --color-fd-accent: rgba(183, 100, 24, 0.1);
+  --color-fd-accent-foreground: #201a13;
+  --color-fd-ring: rgba(183, 100, 24, 0.4);
+  --color-fd-overlay: rgba(0, 0, 0, 0.3);
+
+  /* Kira brand tokens used in custom classes */
+  --kira-amber: #b76418;
+  --kira-amber-hover: #cf7a27;
+  --kira-amber-text: #fff9f1;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --color-fd-background: #131009;
+  --color-fd-foreground: #efe7d5;
+  --color-fd-muted: #1c160d;
+  --color-fd-muted-foreground: #a8937a;
+  --color-fd-popover: #18130a;
+  --color-fd-popover-foreground: #e8d8c4;
+  --color-fd-card: #1a1409;
+  --color-fd-card-foreground: #efe7d5;
+  --color-fd-border: rgba(239, 231, 213, 0.1);
+  --color-fd-primary: #d98534;
+  --color-fd-primary-foreground: #fff9f1;
+  --color-fd-secondary: rgba(217, 133, 52, 0.12);
+  --color-fd-secondary-foreground: #efe7d5;
+  --color-fd-accent: rgba(217, 133, 52, 0.15);
+  --color-fd-accent-foreground: #efe7d5;
+  --color-fd-ring: rgba(217, 133, 52, 0.4);
+  --color-fd-overlay: rgba(0, 0, 0, 0.5);
+
+  --kira-amber: #d98534;
+  --kira-amber-hover: #e09540;
+  --kira-amber-text: #fff9f1;
+}
+
+/* neutral.css overrides the sidebar in dark mode with neutral grays — restore
+   our warm palette so the sidebar stays consistent. */
+.dark #nd-sidebar {
+  --color-fd-muted: #1c160d;
+  --color-fd-secondary: rgba(217, 133, 52, 0.12);
+  --color-fd-muted-foreground: #a8937a;
+}
+
+/* ─── Base ───────────────────────────────────────────────────────────────── */
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0 !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Ensure all interactive elements in sidebars remain clickable and show cursor,
+   even when the parent wrapper has pointer-events-none for hover animations. */
+#nd-sidebar button,
+#nd-sidebar [role="button"],
+#nd-sidebar a,
+#nd-sidebar [role="menuitem"],
+#nd-sidebar [data-collapsible-trigger],
+#nd-sidebar-mobile button,
+#nd-sidebar-mobile [role="button"],
+#nd-sidebar-mobile a,
+#nd-sidebar-mobile [role="menuitem"],
+#nd-sidebar-mobile [data-collapsible-trigger] {
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+
+body {
+  font-family: "IBM Plex Sans", sans-serif;
+  background:
+    radial-gradient(
+      circle at top right,
+      rgba(196, 116, 28, 0.15),
+      transparent 32rem
+    ),
+    radial-gradient(
+      circle at bottom left,
+      rgba(63, 124, 120, 0.08),
+      transparent 28rem
+    ),
+    linear-gradient(180deg, #fcfaf4 0%, #f4efdf 100%);
+}
+
+html.dark body {
+  background:
+    radial-gradient(
+      circle at top right,
+      rgba(196, 116, 28, 0.07),
+      transparent 32rem
+    ),
+    radial-gradient(
+      circle at bottom left,
+      rgba(63, 124, 120, 0.04),
+      transparent 28rem
+    ),
+    linear-gradient(180deg, #131009 0%, #1a1208 100%);
+}
+
+/* Reduce the app-wide horizontal gutters without changing the visual design. */
+#nd-nav nav,
+#nd-subnav,
+#nd-page {
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
+}
+
+#nd-home-layout > div {
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
+}
+
+@media (min-width: 768px) {
+  #nd-nav nav,
+  #nd-subnav,
+  #nd-page {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  #nd-home-layout > div {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+}
+
+/* Remove the baked-in max-width caps so the app can actually use wide screens. */
+#nd-home-layout,
+#nd-docs-layout {
+  --fd-layout-width: calc(100vw - 1.5rem) !important;
+}
+
+#nd-home-layout > div {
+  max-width: none !important;
+}
+
+#nd-home-layout > div.kira-home-content {
+  max-width: 72rem !important;
+}
+
+/* Keep document pages readable, but a bit wider than the fumadocs default. */
+#nd-page {
+  max-width: 1040px !important;
+}
+
+@media (min-width: 768px) {
+  #nd-home-layout,
+  #nd-docs-layout {
+    --fd-layout-width: calc(100vw - 2rem) !important;
+  }
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* ─── Kira design tokens ─────────────────────────────────────────────────── */
+
+.kira-display {
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.kira-kicker {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-fd-border);
+  background: color-mix(in srgb, var(--color-fd-background) 80%, transparent);
+  padding: 0.4rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kira-amber);
+}
+
+.kira-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--kira-amber) 25%, transparent);
+  background: color-mix(in srgb, var(--kira-amber) 10%, transparent);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--kira-amber);
+}
+
+.kira-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-card);
+  padding: 0.65rem 1.2rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-fd-foreground);
+  text-decoration: none;
+  transition:
+    background 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.kira-button:hover {
+  background: var(--color-fd-card);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.kira-button-primary {
+  background: var(--kira-amber);
+  border-color: transparent;
+  color: var(--kira-amber-text);
+}
+
+.kira-button-primary:hover {
+  background: var(--kira-amber-hover);
+}
+
+.kira-panel {
+  border-radius: 1rem;
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-card);
+  padding: 1.25rem;
+}
+
+.kira-link-card {
+  display: block;
+  border-radius: 0.875rem;
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-card);
+  padding: 1.1rem;
+  text-decoration: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.kira-link-card:hover {
+  border-color: color-mix(in srgb, var(--kira-amber) 40%, transparent);
+  box-shadow: 0 6px 20px
+    color-mix(in srgb, var(--color-fd-foreground) 6%, transparent);
+  transform: translateY(-1px);
+}
+
+.kira-mini-card {
+  display: flex;
+  gap: 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-background);
+  padding: 0.875rem 1rem;
+}
+
+.kira-nav-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.kira-nav-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--kira-amber);
+  color: var(--kira-amber-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: "Space Grotesk", sans-serif;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}

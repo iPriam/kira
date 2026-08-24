@@ -1,0 +1,183 @@
+---
+title: Libraries and Package Management
+description: Create library packages, add them to existing apps or libraries, and understand the current lockfile-backed Kira package workflow.
+---
+
+## Built-in Foundation
+
+Every managed Kira install now bundles a `Foundation` package.
+
+- `import Foundation` resolves to the bundled package first
+- that bundled package wins before any installed package of the same name
+- Foundation uses an `app/` source tree, so files under that tree are merged into the importing program's global namespace
+- import the whole library with `import Foundation`; do not import dotted Foundation submodules such as `Foundation.Result`
+
+The current Foundation surface includes `Result` and the `Printable` construct:
+
+```ts
+import Foundation
+
+let parsed = ParseError.UnexpectedEnd
+```
+
+## Manifest
+
+New projects should use `kira.toml`.
+
+```toml
+[package]
+name = "Hello"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"
+
+[defaults]
+execution_mode = "vm"
+build_target = "host"
+
+[dependencies]
+FrostUI = "0.1.0"
+LocalDemo = { path = "../LocalDemo" }
+GameKit = { git = "https://github.com/Sunlight-Horizon/GameKit.git", rev = "a1b2c3d4" }
+```
+
+## Dependency Sources
+
+The current implementation supports:
+
+- exact-version official registry dependencies
+- local path dependencies
+- pinned git dependencies
+- deterministic lockfiles
+- a local shared cache
+
+Registry dependencies are exact-version-only in v1. Floating semver ranges are intentionally not supported yet.
+
+## Lockfile
+
+`kira.lock` records:
+
+- root dependency declarations
+- resolved source kind: registry, path, or git
+- exact registry versions
+- locked git commit hashes
+- registry archive checksum and canonical source URL
+- module-root ownership and transitive dependency names
+
+Re-running `kira sync` without graph changes keeps the lockfile stable.
+
+## Security Rules
+
+- no install scripts
+- no postinstall scripts
+- no lifecycle scripts
+- no arbitrary shell execution during package installation
+- registry archives are verified with SHA-256 before extraction
+- packages are source-only archives plus metadata
+- git dependencies must be pinned and locked to a concrete commit
+
+## Core Commands
+
+```bash
+kira new --lib GraphicsKit generated/GraphicsKit
+kira sync
+kira add FrostUI
+kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev a1b2c3d4 GameKit
+kira remove FrostUI
+kira update
+kira package pack
+kira package inspect generated/Hello-0.1.0.tar
+```
+
+`run`, `build`, and `check` automatically sync first. Add `--offline` for cache-only work and `--locked` when you want to require the current lockfile state exactly.
+
+## Creating A Library
+
+Use the CLI:
+
+```bash
+kira new --lib GraphicsKit generated/GraphicsKit
+```
+
+That scaffold creates:
+
+- `kira.toml`
+- `kind = "library"`
+- `module_root = "GraphicsKit"`
+- `app/graphicskit.kira`
+
+Consumers then import it with:
+
+```text
+import GraphicsKit
+```
+
+## Adding A Library To An Existing Application
+
+If you already have an app and want to add a library dependency, edit the app
+package manifest or use the CLI helper.
+
+For a registry package:
+
+```bash
+kira add FrostUI
+```
+
+For a local path library:
+
+```toml
+[dependencies]
+GraphicsKit = { path = "../GraphicsKit" }
+```
+
+For a pinned git library:
+
+```bash
+kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev a1b2c3d4 GameKit
+```
+
+Then sync and build:
+
+```bash
+kira sync
+kira run
+```
+
+Imports from the app look like:
+
+```text
+import GraphicsKit
+```
+
+## Adding A Library To An Existing Library
+
+Library packages use the same dependency model as apps. Add the dependency to
+the library package's own `kira.toml`, then sync:
+
+```toml
+[dependencies]
+Colors = { path = "../Colors" }
+```
+
+```bash
+kira sync
+```
+
+That allows one library package to build on top of another while keeping the
+dependency graph explicit and lockfile-backed.
+
+## Suggested Layout For A Local Library
+
+```text
+GraphicsKit/
+  kira.toml
+  app/
+    graphicskit.kira
+    Color/
+      palette.kira
+```
+
+With that shape:
+
+- `import GraphicsKit` resolves the root library module
+- `import GraphicsKit.Color.palette` resolves a descendant module in the same package tree

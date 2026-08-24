@@ -1,0 +1,116 @@
+---
+title: Structures and Types
+description: Named structs, classes, builtin types, and generated FFI shapes in Kira.
+---
+
+Kira names data shapes with `struct`, inheritable declarations with `class`, and tagged unions with `enum`.
+
+## Builtin Types
+
+The semantics layer resolves these builtin names today:
+
+| Group | Names |
+| --- | --- |
+| General | `Void`, `Int`, `Float`, `Bool`, `String` |
+| Fixed-width integers | `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `U64` |
+| Native/FFI helpers | `RawPtr`, `CString`, `CBool` |
+
+## Declaring a Struct
+
+```ts
+struct RevenueSnapshot {
+    let monthLabel: String
+    let gross: Int
+    let net: Int
+}
+```
+
+Structs are value-oriented declarations. They can contain:
+
+- stored members
+- default values
+- methods
+- methods declared directly inside the body
+- function-typed fields when an API needs non-capturing callback storage
+
+```ts
+struct Point {
+    let x: Float = 0.0
+    let y: Float = 0.0
+    let zero: Point = Point { x: 0.0, y: 0.0 }
+
+    function distanceTo(other: Point) -> Float {
+        return x + other.x
+    }
+}
+```
+
+Named struct literals are part of the current language surface:
+
+```ts
+let rect = Rect {
+    x: 0.0
+    y: 0.0
+    width: 10.0
+    height: 20.0
+}
+```
+
+Classes are the richer form when you need inheritance:
+
+```ts
+class StoryLane {
+    let width: Float
+    let height: Float
+
+    function area() -> Float {
+        return width * height
+    }
+}
+```
+
+## Type Execution Annotations
+
+`@Native` and `@Runtime` may appear on type declarations too.
+
+- `struct` is reserved for execution-boundary typing plus compiler FFI annotations
+- ordinary annotated structs should use only `@Native` or `@Runtime`
+- `class` keeps its broader annotation flexibility
+
+That means the execution model can be expressed on value shapes directly without turning `@Native` into a usability quarantine for the rest of the language.
+
+## Enums
+
+Enums declare a closed set of variants:
+
+```ts
+enum ParseError {
+    InvalidFormat: String = "bad"
+    UnexpectedEnd
+    EmptyInput
+}
+```
+
+Each variant may have no payload, one associated payload type, or a default payload value. Generic enum declarations are also supported, but this guide avoids placeholder generic examples and focuses on the concrete runnable surface.
+
+Foundation provides a `Result` enum alongside the `Printable` construct. Import the whole library and use the global name.
+
+Match over enum values with exhaustive `match` statements.
+
+## FFI-Generated Types
+
+Generated bindings use `struct`, often with compiler-meaning annotations:
+
+```ts
+@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
+struct kira_i64_callback {}
+
+@FFI.Pointer { target: app_state; ownership: borrowed; }
+struct app_state_ptr {}
+```
+
+That is why the guide treats named types as a shared surface for both app code and generated interop code.
+
+## What This Chapter Does Not Claim
+
+This repository does not currently document a protocol-oriented type system. The present Kira story is concrete: `struct` is the value-type surface, `class` is the inheritable declaration form, and `enum` is the closed tagged-union form.

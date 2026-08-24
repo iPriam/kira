@@ -1,0 +1,49 @@
+---
+title: Strings and Characters
+description: String literals, the builtin String type, documentation strings, and the current lack of a separate character surface.
+---
+
+Kira's current checked and runnable examples use **string literals** and the builtin `String` type.
+
+## String Literals
+
+Strings use double quotes:
+
+```ts
+print("hello from kira");
+print("callbacks")
+```
+
+The lexer also treats `//` comments and string delimiters as first-class syntax, which is why generated bindings and documentation annotations can use normal source text cleanly.
+
+## The `String` Type
+
+`String` is a builtin type recognized by the current semantics layer:
+
+```ts
+struct RevenueSnapshot {
+    let monthLabel: String
+}
+```
+
+It also appears in:
+
+- `///` documentation comments
+- struct/class fields and method signatures
+- the current proven `print(...)` contract
+
+## Characters
+
+This repository does **not** currently document a separate character literal or `Character` type surface.
+
+The Swift-style chapter name stays useful because strings are real Kira syntax today, but the current book should be read literally: Kira documents string behavior here, not a wider character model.
+
+## Current Status
+
+The proven cross-backend string path today is straightforward:
+
+- string literals parse and type-check
+- `print("...")` is proven in the checked-in runnable examples
+
+Do not assume that every future string API or text-processing abstraction already exists just because `String` is a builtin name.
+

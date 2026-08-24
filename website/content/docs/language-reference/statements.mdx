@@ -1,0 +1,70 @@
+---
+title: Statements
+description: Let, assignment, return, expression, block, if, for, while, break, continue, switch, and match statements in the current Kira grammar.
+---
+
+## Statement Forms
+
+The current parser models these statement families:
+
+- local declaration statements with `let` or `var`
+- assignment statements
+- `return`
+- expression statements
+- block statements
+- `if`
+- `for`
+- `while`
+- `break`
+- `continue`
+- `switch`
+- `match`
+
+## Local Declarations
+
+```ts
+let total = left + right;
+let result: I64 = callbacks.kira_invoke_callback(add_two, 0, 5)
+```
+
+## Assignment Statements
+
+Assignments are statements, not general expressions:
+
+```ts
+state.viewport_width = 128
+```
+
+Current semantic validation only allows assignment targets that resolve to:
+
+- locals
+- fields
+- array index expressions
+
+## Control Flow Statements
+
+`if`, `else if`, `for`, `while`, `break`, `continue`, `switch`, and `match` are accepted in statement position. Builder/content blocks currently use `if`, `else if`, `for`, and `switch`.
+
+The current executable boundary is narrower than the full frontend surface, so treat those forms according to the status notes in the guide and the execution matrix in this reference.
+
+## Match Statements
+
+`match` dispatches over enum variants and is exhaustive:
+
+```ts
+match parsed {
+    Ok(value) -> print(value);
+    Error(error) -> print(error);
+}
+```
+
+Important current rules:
+
+- variant patterns are unqualified inside `match`
+- every enum variant must be covered
+- there is no wildcard `_` arm and no `else` arm
+- duplicate variant coverage is rejected
+- arms may list multiple patterns separated by commas
+- patterns may destructure nested enum payloads and may bind with `as`
+
+Non-exhaustive matches raise `KSEM100`. Duplicate match arms raise `KSEM101`.

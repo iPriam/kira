@@ -1,0 +1,112 @@
+---
+title: Control Flow
+description: If, else if, for, while, break, continue, switch, and enum match in current Kira.
+---
+
+Kira's frontend and executable corpus understand these main control-flow forms:
+
+- `if`
+- `else if`
+- `for`
+- `while`
+- `break`
+- `continue`
+- `switch`
+- `match`
+
+## Statement Forms
+
+The current parser accepts these in ordinary statement position:
+
+```ts
+if iw <= 0.0 || ih <= 0.0 {
+    return Rect.zero
+}
+
+if score == 0 {
+    print("zero")
+} else if score == 1 {
+    print("one")
+} else {
+    print("many")
+}
+
+for item in [1, 2, 3] {
+    print(item)
+}
+
+while index < 10 {
+    if index == 2 {
+        index = index + 1
+        continue
+    }
+    if index == 4 {
+        break
+    }
+    index = index + 1
+}
+
+switch 0 {
+    case 0 {
+        print("primary")
+    }
+    default {
+        print("fallback")
+    }
+}
+
+match parsed {
+    Ok(value) -> print(value);
+    Error(error) -> print(error);
+}
+```
+
+## Builder Forms
+
+The same language families also appear in builder/content blocks:
+
+```ts
+content {
+    if 0 == 0 {
+        Kit.Badge("Overview")
+    } else {
+        Kit.Badge("Details")
+    }
+
+    for item in [1, 2, 3] {
+        Kit.Row("Dashboard row")
+    }
+
+    switch 0 {
+        case 0 {
+            Kit.Text("Overview panel")
+        }
+        default {
+            Kit.Text("Fallback panel")
+        }
+    }
+}
+```
+
+That construct coverage is one of the clearest examples of Kira's broader frontend surface. Builder/content blocks currently use `if`, `else if`, `for`, and `switch`. `while`, `break`, and `continue` are statement features.
+
+## What to Use in Executable Code
+
+Today, `if`, `else if`, `for`, `while`, `break`, `continue`, `switch`, and enum `match` are all part of the proven corpus across the runnable backends.
+
+`match` is specifically for enums. It is exhaustive, does not have a wildcard arm, and uses unqualified variant names in patterns:
+
+```ts
+match result {
+    Ok(text) -> print(text);
+    Error(inner) -> print(inner);
+}
+```
+
+## A Practical Rule
+
+If you need executable control flow today:
+
+- prefer statement-level branching and loops
+- use `else if` instead of nested manual blocks when that reads better
+- treat conditional `?:` expressions as a separate feature boundary

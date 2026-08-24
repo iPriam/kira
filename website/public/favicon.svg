@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Kira">
+  <defs>
+    <linearGradient id="kiraGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d28538" />
+      <stop offset="100%" stop-color="#b76418" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#fff8ef" />
+  <path d="M34 24h20v36l28-36h24L74 64l35 40H84L54 69v35H34z" fill="url(#kiraGradient)" />
+</svg>

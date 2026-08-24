@@ -1,0 +1,89 @@
+---
+title: Compiler Architecture
+description: The layered package graph, shared pipeline, backends, and why the repo is split this way.
+---
+
+Kira uses a strict layered package graph. Lower layers do not depend on higher ones.
+
+## Shared Pipeline
+
+The common compiler path is:
+
+```text
+kira_source -> kira_lexer -> kira_parser -> kira_semantics -> kira_ir
+```
+
+Backend selection happens later in `kira_build`.
+
+That keeps the frontend independent from:
+
+- CLI concerns
+- project/toolchain concerns
+- backend-specific linking
+
+## Package Layers
+
+The repo's current package graph is:
+
+| Layer | Packages |
+| --- | --- |
+| 0 | `kira_core`, `kira_source`, `kira_diagnostics`, `kira_log`, `kira_runtime_abi` |
+| 1 | `kira_syntax_model`, `kira_lexer`, `kira_parser` |
+| 2 | `kira_semantics_model`, `kira_semantics` |
+| 3 | `kira_ir`, `kira_hybrid_definition`, `kira_backend_api`, `kira_native_lib_definition` |
+| 4 | `kira_bytecode`, `kira_vm_runtime`, `kira_native_bridge`, `kira_hybrid_runtime`, `kira_llvm_backend` |
+| 5 | `kira_manifest`, `kira_project`, `kira_build_definition` |
+| 6 | `kira_build` |
+| 7 | `kira_linter`, `kira_doc`, `kira_app_generation` |
+| 8 | `kira_cli` |
+| 9 | `kira_main` |
+
+## Backend Responsibilities
+
+### VM
+
+- `kira_bytecode` compiles shared IR into the checked-in `KBC0` bytecode format
+- `kira_vm_runtime` executes that bytecode and provides the default runtime `print` behavior
+
+### LLVM / Native
+
+- `kira_llvm_backend` lowers shared IR through the text-LLVM/native path, verifies modules, and emits native objects
+- `kira_native_bridge` provides runtime helper symbols such as integer/string print helpers and hybrid callback plumbing
+- `kira_build` asks the Zig linker driver to link the emitted objects and native libraries
+
+### Hybrid
+
+- `kira_hybrid_definition` defines the manifest/contracts used to tie bytecode and native pieces together
+- `kira_hybrid_runtime` loads the `KHM1` hybrid manifest and coordinates entry execution
+- `kira_native_bridge` handles bridge descriptors and native/runtime symbol binding
+
+Hybrid is intentionally explicit: runtime bytecode calls native Kira functions through generated bridge/trampoline entrypoints, and native code can call back into runtime through the installed invoker. The VM side does not execute FFI symbols directly.
+
+The same bridge layer now also backs the debug-only `--trace-execution` run flag, which is useful when you need to prove whether a path is executing in VM code, native code, or through a trampoline/bridge transition.
+
+## Native Library Placement
+
+FFI work is intentionally not buried inside the frontend.
+
+- `kira_native_lib_definition` defines native library contracts
+- `kira_manifest` parses the per-library TOML shape
+- `kira_build` discovers matching manifests near the source file, resolves them for the host, builds static archives when needed, and runs the autobinder
+- `kira_llvm_backend` consumes the resolved native libraries when emitting native or hybrid output
+
+Semantic analysis enforces the declaration boundary before backend selection: direct use of an FFI-bound extern requires `@Native`, while ordinary Kira callers of that native helper remain ordinary Kira declarations. The execution boundary is about where code runs, not about quarantining the rest of the language from native-annotated helpers or values.
+
+## Why The Repo Is Split This Way
+
+This layout makes several future changes additive instead of destabilizing:
+
+- frontend work can grow without dragging backend code upward
+- backend experiments can stay behind `kira_build` and `kira_backend_api`
+- hybrid work does not need to undo a VM-only architecture first
+- CLI code remains a leaf surface instead of becoming compiler glue
+- `kira_main` stays focused on the app-facing C ABI facade rather than compiler orchestration
+
+For contributors, the practical rule is simple:
+
+- put business logic as low in the graph as it can reasonably live
+- keep `root.zig` files small and focused on exports/wiring
+- avoid adding imports that climb back up the architecture

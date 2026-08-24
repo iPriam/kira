@@ -1,0 +1,59 @@
+---
+title: Exports
+description: The `kira export` platform scaffolds — the merged Apple Xcode workspace, Windows/Linux CMake presets, the Android Gradle scaffold, and the Web/WASM bundle.
+---
+
+`kira export` generates platform project/export scaffolds. The target is optional inside a Kira project; profiles are selected with `--profile debug|profiler|release`, and Web accepts `--surface dom|webgpu|hybrid`.
+
+```bash
+kira export apple
+kira export macos
+kira export ios
+kira export tvos
+kira export visionos
+kira export windows
+kira export android
+kira export web
+kira export linux
+```
+
+## Apple
+
+Apple export writes a merged workspace with targets and schemes for macOS, iOS, tvOS, and visionOS (Debug, Profiler, Release):
+
+```text
+exports/apple/
+  KiraApp.xcworkspace
+  KiraApp.xcodeproj
+  Shared/
+    KiraRuntime/
+    KiraLiveClient/
+    KiraBundleLoader/
+    Assets.xcassets/
+  macOS/
+  iOS/
+  tvOS/
+  visionOS/
+```
+
+The macOS/iOS scaffolds build with Xcode command-line tools; device installation still requires valid user signing/provisioning.
+
+## Windows, Linux, Android
+
+- **Windows** export writes a Visual Studio / CMake Presets scaffold.
+- **Linux** export writes a CMake/Ninja scaffold.
+- **Android** export writes a Gradle scaffold and intentionally does **not** install Android Studio. Command-line SDK/Gradle/NDK setup can be installed separately and validated without changing that exception.
+
+## Web
+
+Web export writes a full browser bundle:
+
+```text
+index.html
+kira-browser-ffi.generated.js
+kira-wasm.js
+kira-app.wasm
+manifest.json
+```
+
+See [Web & WASM](/docs/appendix/platforms/web-and-wasm) for what the generated module proves today and what remains host-only.

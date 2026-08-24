@@ -1,0 +1,90 @@
+---
+title: Types
+description: Builtin types, named types, generated FFI types, and current coercion/inference boundaries.
+---
+
+## Builtin Types
+
+The semantics layer resolves these builtin names:
+
+| Group | Names |
+| --- | --- |
+| General | `Void`, `Int`, `Float`, `Bool`, `String` |
+| Fixed-width integers | `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `U64` |
+| Native/FFI helpers | `RawPtr`, `CString`, `CBool` |
+
+## Function Types
+
+Kira now checks first-class non-capturing function types:
+
+```ts
+(Float) -> Void
+() -> Void
+```
+
+These types are valid in parameters, fields, and local declarations. The current implementation lowers named function references, non-capturing inline callback literals, and callable-value invocations through locals and fields across the shared executable backends.
+
+Inline callback blocks are checked against an expected function type instead of declaring parameter types inside the block:
+
+```ts
+let cleanup: (Graphics, RawPtr) -> Void = { graphics, data in
+    return
+}
+```
+
+The supported callback model is non-capturing. A callback block can be stored anywhere an ordinary function value of the same type can be stored, but it cannot close over surrounding locals. Use callback parameters or `RawPtr` user data for callback state.
+
+## Ownership Type Forms
+
+Kira currently recognizes these ownership-oriented type forms:
+
+```ts
+borrow any
+borrow mut any
+move any
+copy any
+Array(any)
+UnsafePtr(any)
+```
+
+`borrow` and `borrow mut` are the important everyday forms in the executable language today. `move` and `copy` are available when you need to make transfer or copy intent explicit in the type or expression surface.
+
+## Named Types
+
+Named value types are declared with `struct`; behavior-bearing inheritable declarations use `class`; tagged unions use `enum`:
+
+```ts
+struct Point {
+    var x: Float = 0.0
+    var y: Float = 0.0
+}
+
+enum ParseResult {
+    Ok
+    Error: String = "error"
+}
+```
+
+Structs may contain stored members, defaults, and methods. Classes may contain stored members, methods, inheritance, and overrides. Enums may have optional generic type parameters and variants with at most one associated payload value.
+
+## Generated and Annotated Types
+
+Generated bindings and native interop declare transport and ABI shapes through `struct`, often with FFI annotations:
+
+- callback types
+- pointer wrapper types
+- struct types
+- alias types
+- array metadata types
+
+## Inference and Coercion
+
+Current semantic rules include:
+
+- locals may infer types when the result is unambiguous
+- ambiguous inference raises `KSEM029`
+- explicit typed declarations require the initializer expression to already match the declared type
+- `var value: Float = 0.0` is valid
+- `var value: Float = 0` is rejected
+- typed declarations without initializer expressions are valid, but remain uninitialized until a later assignment
+- illegal coercions raise a type mismatch diagnostic such as `KSEM031`

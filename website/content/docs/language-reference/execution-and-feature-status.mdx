@@ -1,0 +1,66 @@
+---
+title: Execution and Feature Status
+description: A compact status matrix for what Kira parses, semantically checks, and runs today.
+---
+
+## Status Matrix
+
+| Feature | Parsed | Checked | VM | LLVM | Hybrid |
+| --- | --- | --- | --- | --- | --- |
+| `@Main` entrypoint | Yes | Yes | Yes | Yes | Yes |
+| `@Runtime` / `@Native` | Yes | Yes | `@Runtime` only | Yes | Yes |
+| `function` declarations | Yes | Yes | Yes | Yes | Yes |
+| integer, float, string, and boolean runtime values | Yes | Yes | Yes | Yes | Yes |
+| local `let` (inferred and explicitly typed) | Yes | Yes | Yes | Yes | Yes |
+| member access | Yes | Yes | Yes | Yes | Yes |
+| integer, float, and boolean operators in the lowered subset | Yes | Yes | Yes | Yes | Yes |
+| array literals, indexing, and indexed assignment | Yes | Yes | Yes | Yes | Yes |
+| `if` / `else if` / `for` / `while` / `break` / `continue` / `switch` | Yes | Yes | Yes | Yes | Yes |
+| enum declarations, enum construction, and exhaustive `match` | Yes | Yes | Yes | Yes | Yes |
+| Foundation `Result` through `import Foundation` | Yes | Yes | Yes | Yes | Yes |
+| `@Printable` print dispatch through `onPrint()` | Yes | Yes | Yes | Yes | Yes |
+| conditional `?:` in the lowered scalar/pointer subset | Yes | Yes | Yes | Yes | Yes |
+| class inheritance dispatch (multiple parents, parent-qualified access) | Yes | Yes | Yes | Yes | Yes |
+| `attempt` / `try` / `handle` over `Result` | Yes | Yes | Yes | Yes | Yes |
+| construct families (`extends`, properties, `requires`, content channels) | Yes | Yes | check-oriented only | check-oriented only | check-oriented only |
+| construct `node` bridge (`let node: T { ... }` accessors) | Yes | Yes | Yes | Yes | Yes |
+| `any Family` coercion + heterogeneous `[Widget]` arrays | Yes | Yes | Yes | Yes | Yes |
+| `@Content` caller-provided widget trees | Yes | Yes | Yes | Yes | Yes |
+| `@FFI.Extern` declarations | Yes | Yes | Yes, via LibFFI | Yes, requires `@Native` | Yes, requires `@Native` |
+| callback-typed FFI calls and `@FFI.Struct` values | Yes | Yes | Yes, via LibFFI | Yes | Yes |
+| builtin `print` | Yes | Yes | Yes for scalars, pointers, arrays, named structs, and enums | Yes for ordinary executable values, including named structs, enums, and array summaries | Yes for ordinary executable values, including named structs, enums, and array summaries |
+| named struct construction | Yes | Yes | Yes | Yes | Yes |
+| callable values, callbacks, and captures through locals and fields | Yes | Yes | Yes | Yes | Yes |
+| KSL shaders (`.ksl`) → GLSL 330 / WGSL | Yes | Yes | n/a (separate surface) | n/a | n/a |
+
+## Reading the Matrix
+
+This table is intentionally conservative.
+
+- `Yes` means the repo has direct support and proof for that stage.
+- `partial` means the syntax and semantic model exist, but the manual does not claim broad runnable coverage.
+- `check-oriented only` means the feature is part of the implemented frontend and semantic validation surface, not a claim about today's executable lowering.
+
+For the current repo state, VM, LLVM/native, and hybrid share the same ordinary executable lowering surface for the checked-in parity and interop corpus.
+
+## FFI Across Backends
+
+Direct FFI behaves differently per backend, but every backend executes it:
+
+- **VM** invokes native functions through **LibFFI** (the `kira_dynamic_ffi` path), so direct FFI runs without `@Native` and without a precompiled native backend.
+- **LLVM/native and hybrid** still require `@Native` for *direct* FFI use (diagnostic `KSEM093`); indirect use is allowed, and the hybrid bridge marshals values across the runtime/native boundary.
+
+## Shaders and Platform Targets
+
+- KSL (`.ksl`) is a dedicated shader language, not part of the executable `.kira` frontend. It emits **GLSL 330**, **WGSL**, **HLSL**, **MSL**, and **textual SPIR-V assembly** for graphics shaders today. Compute shaders parse and type-check but are rejected by the current graphics backends, and binary SPIR-V (via `spirv-as`/`spirv-val`) is deferred.
+- `kira build --target wasm32-emscripten` lowers through the LLVM backend to WASM. `kira live` and `kira export` drive desktop, Apple (macOS/iOS/tvOS/visionOS), Windows, Android, Web, and Linux runners. Host-only probes are reported with `HOST_*` markers and never count as Kira runtime/render success.
+
+## Ownership Status
+
+The current ownership implementation is intentionally specific:
+
+- `borrow`, `borrow mut`, `move`, and `copy` syntax exists
+- missing-move, use-after-move, and move-twice diagnostics are checked in semantics
+- VM, LLVM/native, and hybrid all carry ownership metadata
+- returned borrows are rejected today instead of being accepted with incomplete lifetime checking
+- non-trivial `copy` lowering is not implemented yet and is diagnosed instead

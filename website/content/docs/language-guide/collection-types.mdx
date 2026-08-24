@@ -1,0 +1,51 @@
+---
+title: Collection Types
+description: Array literals, indexing, indexed assignment, and where arrays show up in current Kira.
+---
+
+The current frontend and executable corpus understand **array syntax**.
+
+## Array Literals
+
+Examples in the repo use array literals like these:
+
+```ts
+[1, 2, 3]
+[Widget]
+[I64, RawPtr]
+```
+
+Executable code can also index arrays:
+
+```ts
+let value = values[index]
+values[index] = nextValue
+```
+
+Those appear in several different roles:
+
+- ordinary expressions such as `for item in [1, 2, 3]`
+- construct representation fields such as `children: [Widget]`
+- FFI annotation arguments such as `params: [I64, RawPtr]`
+
+## Where Arrays Show Up Today
+
+Arrays are currently most visible in:
+
+- check-only declarative examples
+- construct definitions
+- generated FFI metadata
+
+The book does **not** currently document a broader standard-library collection API for arrays, dictionaries, or sets, because the repo does not prove one.
+
+## Runnable Boundary
+
+The current corpus proves:
+
+- array literals
+- array locals, params, and returns
+- indexing
+- indexed assignment
+- `for item in values`
+
+Kira still does not document a larger collection API beyond that proven surface.

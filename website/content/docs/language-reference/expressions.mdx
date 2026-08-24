@@ -1,0 +1,154 @@
+---
+title: Expressions
+description: Literal, unary, binary, conditional, call, member, array, struct-literal, indexing, and namespaced expression forms in current Kira.
+---
+
+## Primary Expression Forms
+
+The current frontend understands these expression families:
+
+- integer, float, string, and boolean literals
+- identifiers and qualified names
+- grouped expressions
+- array literals
+- named and nested struct literals
+- `nativeState(value)`
+- `nativeUserData(state)`
+- `nativeRecover(any)`
+- member access
+- indexing
+- call expressions
+
+## Unary and Binary Expressions
+
+Supported operator families include:
+
+- unary `-` and `!`
+- arithmetic `+ - * / %`
+- comparison `== != < <= > >=`
+- logical `&& ||`
+
+Current semantic rules:
+
+- arithmetic requires matching numeric operand types
+- comparison requires matching operand types
+- logical operators require booleans
+
+## Conditional Expressions
+
+The parser accepts conditional expressions:
+
+```ts
+condition ? thenValue : elseValue
+```
+
+Current status:
+
+- parsed by the frontend
+- semantically checked
+- part of the current lowered scalar/pointer subset
+
+## Calls and Member Access
+
+Call expressions support argument lists, labeled arguments, and direct trailing callbacks:
+
+```ts
+helper()
+Rect(x: 0.0, y: 0.0)
+callbacks.kira_invoke_callback(add_two, 0, 5)
+app.onFrame { frame in renderFrame(frame) }
+```
+
+Member access uses `.` and is part of ordinary source and generated/native interop examples.
+
+Enum variants are constructed with the enum name outside `match`:
+
+```ts
+let invalid = ParseError.InvalidFormat
+let ended = ParseError.UnexpectedEnd
+let empty = ParseError.EmptyInput
+```
+
+Struct literals provide the readable field-initialization surface for descriptor-style code:
+
+```ts
+let rect = Rect {
+    x: 0.0
+    y: 0.0
+    width: 10.0
+    height: 20.0
+}
+
+let pass = RenderPassDescriptor {
+    label: "swapchain-pass"
+    clearColor: Float4 { r: 0.04, g: 0.05, b: 0.08, a: 1.0 }
+}
+```
+
+For `@FFI.Struct { layout: c; }`, both `Type()` and `Type { ... }` begin from a zeroed C-layout value, then write the explicit fields you provide:
+
+```ts
+let desc = sapp_desc()
+
+let shaderSampler = sg_shader_sampler {
+    stage: stageValue
+    sampler_type: samplerTypeValue
+}
+```
+
+Omitted fields remain zero in those C-layout FFI construction forms. That rule belongs to construction only. A declaration such as `var desc: sapp_desc` is still just an uninitialized local declaration.
+
+Native callback-state expressions are separate:
+
+```ts
+var state = nativeState(CounterState { count: 0 })
+var token = nativeUserData(state)
+var recovered = nativeRecover(token)
+```
+
+Those forms are for opaque callback userdata transport. They do not promise that ordinary Kira structs use C layout.
+
+Member access uses dot syntax:
+
+```ts
+let width = rect.width
+```
+
+Indexing uses `[]`:
+
+```ts
+let value = values[index]
+values[index] = nextValue
+```
+
+Function values use the current readable surface:
+
+```ts
+let handler: (Float) -> Void = update
+handler(0.016)
+```
+
+Inline callback blocks use `{ params in ... }` and require an expected function type:
+
+```ts
+let handler: (Float) -> Void = { dt in
+    update(dt)
+}
+
+registerFrameHandler { frame, data in
+    return
+}
+```
+
+Current status for function values:
+
+- function types are valid in parameters, locals, and fields
+- named function references and non-capturing inline callback literals are lowered across the shared executable backends
+- callable-value invocations through locals and fields are part of the current lowered subset
+- callback block parameters are inferred from the expected function type and must match its arity
+- callback blocks are non-capturing; reading an outer local from the surrounding function is rejected with a callback-capture diagnostic
+
+Current callback/block distinction:
+
+- ordinary calls with a final function-typed parameter bind trailing blocks as callbacks
+- construct-driven builder/content blocks preserve child-tree structure instead of lowering to opaque callbacks

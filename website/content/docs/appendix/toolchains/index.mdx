@@ -1,0 +1,72 @@
+---
+title: Bootstrapper and Managed Toolchains
+description: How `kira`, `kirac`, templates, and the managed install layout work.
+---
+
+## Launcher vs Real CLI
+
+The user-facing command is `kira`.
+
+Its job is to:
+
+- find the active managed Kira toolchain
+- forward the command into the real CLI binary (`kirac`)
+- keep the path-facing launcher stable while the managed toolchain layout evolves
+
+## Managed Install Layout
+
+The install flow writes:
+
+```text
+~/.kira/toolchains/current.toml
+~/.kira/toolchains/<channel>/<version>/
+  bin/
+    kirac[.exe]
+  templates/
+  llvm-metadata.toml
+```
+
+`current.toml` records:
+
+- channel
+- version
+- primary executable
+
+That is how the launcher knows which real toolchain to launch.
+
+## Developer Targets
+
+The repo keeps the most common build targets explicit:
+
+```bash
+zig build kirac
+zig build kira-bootstrapper
+zig build install-kirac
+zig build install
+```
+
+Those let you validate the managed toolchain flow without guessing how it is packaged.
+
+## Resource Discovery
+
+When the CLI needs runtime resources, it looks in this order:
+
+1. the managed toolchain root if the current executable is already running from it
+2. the repo root when running directly from the checkout
+3. the managed toolchain root selected by channel/version
+
+That resource root is what gives the CLI access to:
+
+- `llvm-metadata.toml`
+- `templates/`
+
+## Template Apps
+
+`kira new` copies from the managed template tree, not from a remote service.
+
+Current template output:
+
+- `kira.toml`
+- `app/main.kira`
+
+The template is intentionally small. It reflects the current executable subset instead of pretending the repo already ships a full batteries-included application framework.

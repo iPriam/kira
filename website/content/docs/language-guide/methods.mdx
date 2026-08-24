@@ -1,0 +1,44 @@
+---
+title: Methods
+description: Functions declared inside `struct` or `class`.
+---
+
+Methods are functions declared inside a `struct` or `class` body.
+
+## Declaring a Method
+
+```ts
+struct StoryLane {
+    let width: Float
+    let height: Float
+
+    function area() -> Float {
+        return width * height
+    }
+}
+```
+
+The checked-in geometry examples show the same style repeatedly:
+
+- methods live inside the `struct` or `class` body
+- they use normal function syntax
+- they can refer to stored members directly by name
+
+## Returning Values
+
+Methods participate in the same return-type rules as top-level functions:
+
+- explicit return types are allowed
+- inference is possible when unambiguous
+- mismatched inferred returns require an explicit type
+
+## Current Limits
+
+This repository does not yet document a wider method model with topics such as:
+
+- method overloading rules
+- mutating/nonmutating markers
+- `self`-specific syntax
+- deinitializers
+
+What it does prove today is simpler and still useful: methods are part of the implemented frontend surface for both Kira `struct` and `class` declarations.

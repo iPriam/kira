@@ -1,0 +1,56 @@
+---
+title: Live & Hot Reload
+description: Kira Live — the networked server/client session behind `kira live`, the .klbundle artifact boundary, the hot-restart flow, and the observable live event sequence.
+---
+
+Kira Live is a **networked server/client system**. `kira live` starts a server that builds your target, exposes the build as a bundle graph over TCP, and connects a runner client that downloads, links, and starts the entrypoint. When source changes, the server rebuilds and the client hot-restarts the entrypoint in the same process. The **desktop runner is the complete implementation** today.
+
+```bash
+kira live examples/hello --quit-after 5s
+kira live desktop examples/hello --run-for 5s --kill-after
+kira live ios-simulator examples/hello --quit-after 5s
+kira live web examples/web_dom --surface dom --quit-after 10s
+kira live runners list|build|clean <target>
+```
+
+`--quit-after` bounds the session **without bypassing the live handshake**; `--headless` is for non-window reload tests. Library roots are rejected (`KCL020`/`KCL021`); examples and apps are the live-capable surfaces.
+
+## Flow
+
+```text
+kira live <runner> <target?>
+  -> resolve runner, target, profile, output roots
+  -> start live server
+  -> build target into .klbundle artifacts
+  -> expose bundle graph over TCP
+  -> runner client connects over TCP
+  -> client downloads bundles
+  -> client loads, links, and starts the entrypoint
+  -> client reports ready/frame events
+  -> source change rebuilds a new full bundle set
+  -> client hot-restarts the entrypoint in the same runner process
+```
+
+## The `.klbundle` boundary
+
+The `.klbundle` directory is the **runner artifact boundary**. Runners consume bundle manifests, graph metadata, bytecode/hybrid payloads, assets/resources, diagnostics summaries, hashes, and platform/surface metadata — they never reach into compiler internals.
+
+Hot restart is currently honest **full-bundle reload** (`mode=full-bundle`). Incremental patching is not claimed yet; the bundle layout leaves room for it.
+
+## Observable events
+
+A live session emits a precise event sequence, which is what tests assert against rather than relying on "a window opened":
+
+```text
+live.server.started        live.bundle.built          live.bundle.served
+live.client.connected      live.bundle.requested      live.bundle.sent
+live.bundle.received       live.bundle.loaded         live.bundle.linked
+live.entrypoint.started    live.frame.presented       live.session.ready
+live.source.changed        live.bundle.rebuilt        live.reload.notified
+live.bundle.update.received  live.hot_restart.started live.hot_restart.finished
+live.entrypoint.restarted  live.shutdown.started      live.shutdown.finished
+```
+
+## iOS physical devices
+
+iOS physical live must use a device-reachable endpoint, e.g. `--host 0.0.0.0 --port 42111` plus a LAN URL/token handoff. `localhost` is only valid for local desktop tests. When a physical iPhone is unavailable, Kira audits the simulator fallback instead of claiming physical-device success.

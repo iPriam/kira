@@ -1,0 +1,71 @@
+---
+title: Platforms & Runners
+description: How Kira models platform targets and runners — the typed runner ids, build profiles, default runner mapping, and the honesty rule that host probes never count as Kira render success.
+---
+
+Kira models runners with **typed ids**, not ad-hoc strings. Every id is valid for command parsing; if the host or generated runner client cannot complete a flow, Kira reports a precise diagnostic (missing Xcode tools, missing Visual Studio tools, missing Android SDK/Gradle, or a modeled-but-incomplete runner) instead of pretending to succeed.
+
+## Runner ids
+
+```text
+desktop  macos  ios  tvos  visionos  windows  android  web  linux
+```
+
+Default runners are synthesized even when a project's TOML omits them:
+
+| Platform | Default runner |
+| --- | --- |
+| Desktop | `kira` |
+| Apple (macOS/iOS/tvOS/visionOS) | `xcode` |
+| Windows | `visual-studio` |
+| Android | `android-studio` |
+| Web | `kira-wasm` (`default_surface = "dom"`) |
+| Linux | `cmake` |
+
+## Build profiles
+
+Profiles are synthesized even when TOML omits them. A minimal app needs only:
+
+```toml
+[package]
+name = "example"
+kind = "app"
+```
+
+The default profile set:
+
+```toml
+[profiles.debug]
+backend = "vm"
+optimization = "none"
+debug_symbols = true
+
+[profiles.profiler]
+backend = "llvm"
+optimization = "speed-lite"
+debug_symbols = true
+profiling = true
+
+[profiles.release]
+backend = "llvm"
+optimization = "speed"
+debug_symbols = false
+strip = true
+lto = true
+```
+
+`profiles.profiler` is the supported profiling profile; `profiles.profile` is reserved so configs do not silently drift between the noun and the mode name.
+
+## Command-aware target inference
+
+`kira live ios` means runner `ios` and the current project target. `kira live ./ios` means the default desktop runner with target path `./ios`.
+
+## The honesty rule
+
+A runner is a host bridge, not the app. It may create windows, surfaces, canvases, devices, event loops, and logging bridges — but it must not draw fake content and call it Kira output. Host-only evidence is reported with `HOST_*` markers and never satisfies Kira runtime, UI, layout, graphics-frame, or visible-content success. Apple, Android, and iOS live reporting keep build, device/emulator detection, install, launch, and protocol states separate; emulator-only or simulator-only success is never reported as physical-device success.
+
+## In this section
+
+- [Live & Hot Reload](/docs/appendix/platforms/live-and-hot-reload) — the `kira live` server/client session and hot restart.
+- [Exports](/docs/appendix/platforms/exports) — `kira export` scaffolds for Apple, Windows, Android, Web, and Linux.
+- [Web & WASM](/docs/appendix/platforms/web-and-wasm) — the Kira Wasm runner, web surfaces, and `Foundation.Web`.

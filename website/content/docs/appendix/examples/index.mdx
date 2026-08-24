@@ -1,0 +1,47 @@
+---
+title: Examples Overview
+description: The checked-in examples and what each one proves about the current Kira implementation.
+---
+
+Every example in `examples/` is there to prove something about the current toolchain.
+
+## Backend Matrix
+
+| Example | Proven backends | What it demonstrates |
+| --- | --- | --- |
+| `hello` | `vm`, `llvm`, `hybrid` | small runnable entrypoint and VM-side struct printing |
+| `arithmetic` | `vm`, `llvm`, `hybrid` | small multi-function arithmetic subset |
+| `imports_demo` | `vm`, `llvm`, `hybrid` | imports and local helper calls |
+| `report_pipeline` | `vm`, `llvm`, `hybrid` | ordinary runnable subset plus richer struct declarations |
+| `geometry_story` | `vm`, `llvm`, `hybrid` | similar subset with frontend-only struct/class surface alongside runnable top section |
+| `status_board` | `vm`, `llvm`, `hybrid` | same pattern for small app-shaped data |
+| `callbacks` | `llvm`, `hybrid` | native callback interop |
+| `callbacks_chain` | `llvm`, `hybrid` | multiple callback-driven native calls |
+| `sokol_triangle` | `llvm`, `hybrid` | manifest-driven autobinding plus a real triangle proof |
+| `sokol_runtime_entry` | `llvm`, `hybrid` | similar Sokol flow with a slightly different state layout |
+| `hybrid_roundtrip` | `hybrid` | runtime/native/runtime call flow |
+| `complex_language_showcase` | frontend/check-focused | constructs, lifecycle hooks, builder/content, namespaced annotations |
+| `ui_library` | frontend/check-focused | construct-driven library-style surface |
+
+## How To Use The Examples
+
+If you want:
+
+- the smallest runnable example, start with `examples/hello/`
+- a real native callback path, open [Callbacks](/docs/appendix/examples/callbacks)
+- a mixed runtime/native example, open [Hybrid Roundtrip](/docs/appendix/examples/hybrid-roundtrip)
+- the strongest FFI/autobinding proof, open [Sokol Triangle](/docs/appendix/examples/sokol-triangle)
+
+The current `hello` example also shows the built-in `Foundation` package and the default VM path printing a named struct value.
+
+## Examples vs Tests
+
+The examples folder is app- and workflow-oriented.
+
+The `tests/` corpus is more explicit about expectations:
+
+- `tests/pass/run/` for successful execution cases
+- `tests/pass/check/` for frontend/check-only cases
+- `tests/fail/` for expected diagnostics
+
+When you are unsure whether a feature is just an example shape or a tested backend contract, check the corpus.

@@ -1,0 +1,192 @@
+---
+title: Functions
+description: Function declarations, parameters, return types, calls, entrypoints, and execution annotations in the current Kira toolchain.
+---
+
+Functions are central to both the runnable subset and the broader language surface.
+
+## Declaring a Function
+
+```ts
+function projectedRunway() -> Int {
+    let quarterOne = 3 + 1;
+    let quarterTwo = quarterOne + 2;
+    let quarterThree = quarterTwo + 3;
+    return quarterThree;
+}
+```
+
+Current rules worth knowing:
+
+- parameters require explicit types
+- return types may be explicit or inferred from `return`
+- ordinary functions use a block body
+- `@FFI.Extern` functions are declared with `;` instead of a body
+
+## Entrypoints
+
+`@Main` marks the single program entrypoint:
+
+```ts
+@Main
+function main() {
+    return;
+}
+```
+
+Current semantic validation proves that:
+
+- exactly one `@Main` must exist for a runnable program
+- `@Main` may not declare parameters
+
+## Return Types and Inference
+
+Kira allows local and return inference when the answer is unambiguous.
+
+```ts
+function renderFooter() -> Int {
+    let pages = 8 + 2
+    let appendices = pages + 1
+    return appendices;
+}
+```
+
+If different `return` statements would imply different types, the semantics layer raises `KSEM030` and asks for an explicit return type.
+
+## Calling Functions
+
+The repo proves several call shapes:
+
+- direct local calls such as `helper()`
+- namespaced calls such as `callbacks.kira_invoke_callback(...)`
+- labeled construction-style calls such as `Rect(x: 0.0, y: 0.0, ...)`
+- indirect calls through function-typed locals and fields
+- trailing callback blocks for calls whose final parameter has a function type
+
+The builtin `print(...)` is a real compiler-recognized call path in the runnable subset.
+
+## Ownership In Signatures
+
+Kira uses function signatures to describe whether a parameter borrows or consumes:
+
+```ts
+function inspect(mesh: borrow Mesh) -> Int {
+    return mesh.vertexCount
+}
+
+function simulate(world: borrow mut World, dt: Float) {
+    return
+}
+
+function upload(mesh: Mesh) -> GpuMesh {
+    return GpuMesh()
+}
+```
+
+At the call site:
+
+- `inspect(mesh)` keeps `mesh` available
+- `simulate(world, 0.016)` requires `world` to be mutable
+- `upload(move mesh)` transfers ownership explicitly when `mesh` is a named non-trivial value
+
+Trivial scalars such as integers, floats, and booleans still pass normally without extra `move` syntax.
+
+Kira also accepts explicit ownership expressions when needed:
+
+```ts
+let gpu = upload(move mesh)
+let value = copy counter
+```
+
+Today, non-trivial `copy` is intentionally rejected rather than lowered implicitly.
+
+## Function Values and Callback Blocks
+
+Function types use the readable arrow form:
+
+```ts
+(GraphicsFrame, RawPtr) -> Void
+() -> Void
+```
+
+Named functions can be stored in a value with a matching function type:
+
+```ts
+function drawFrame(frame: GraphicsFrame, data: RawPtr) {
+    return
+}
+
+let onFrame: (GraphicsFrame, RawPtr) -> Void = drawFrame
+```
+
+Kira also supports non-capturing inline callback blocks when the surrounding code provides an expected function type:
+
+```ts
+let onFrame: (GraphicsFrame, RawPtr) -> Void = { frame, data in
+    print("frame")
+}
+```
+
+The callback block parameter list is checked against the expected function type. Parameter types are not written in the block; they come from the function type. If the expected type is `(GraphicsFrame, RawPtr) -> Void`, the block must declare exactly two parameters.
+
+Callback blocks are valid in the same ordinary function-value positions that provide an expected type:
+
+- typed local declarations
+- assignment to function-typed locals or fields
+- struct/class field initialization
+- direct call arguments
+- trailing block calls where the callee's final parameter is function-typed
+- explicit return positions, such as returning from a function declared `-> (Int) -> Void`
+
+This is the callback-builder surface used by lifecycle-style APIs:
+
+```ts
+app.onInit { graphics, data in
+    let state = nativeRecover(data)
+    return
+}
+
+app.onFrame { frame, data in
+    return
+}
+
+app.onCleanup { graphics, data in
+    return
+}
+```
+
+That syntax is ordinary method-call syntax. `onInit`, `onFrame`, and `onCleanup` are expected to be methods or functions whose final parameter has the matching function type.
+
+Current callback blocks are intentionally non-capturing. A block may use its parameters, locals declared inside the block, top-level functions, imports, and explicitly transported state such as `RawPtr` user data. It may not read an outer local from the surrounding function:
+
+```ts
+let offset = 1
+let callback: (Int) -> Void = { value in
+    print(value + offset) // rejected: callback captures are not supported
+}
+```
+
+Use an explicit parameter or callback user data when state must outlive registration. Direct conversion of inline blocks to named FFI callback pointer types is also not supported yet; pass a named `@Native` function for those FFI slots.
+
+Callable-value ownership metadata is still narrower than ordinary function-call ownership. If a callback-style API needs to preserve an owned value across the callback boundary, the API may still need a small adapter rather than relying on the compiler to infer borrowing there automatically.
+
+## Execution Annotations
+
+Functions may also carry execution annotations:
+
+- `@Main`
+- `@Runtime`
+- `@Native`
+
+These control where a function runs under VM, LLVM/native, or hybrid execution. The details are covered fully in [Execution Model](/docs/language-guide/execution-model).
+
+## Current Runnable Boundary
+
+The guide can treat these as strongly proven today:
+
+- function declarations
+- zero-argument entrypoints
+- local calls in the current lowered subset
+- non-capturing function values and callback blocks in typed callback positions
+- `return`
+- direct extern/native callback flows used by the FFI examples

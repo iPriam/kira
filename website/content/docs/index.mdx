@@ -1,0 +1,68 @@
+---
+title: The Kira Programming Language
+description: A language-manual-first guide to Kira 0.1.0 as implemented in this repository today.
+---
+
+Welcome to **The Kira Programming Language**.
+
+This manual documents **Kira 0.1.0** as it exists in this repository today. It follows a Swift-style book structure:
+
+- opening pages that explain what Kira is
+- a guided walkthrough of the current language
+- a formal language reference
+- an appendix for workflows such as CLI usage, toolchains, diagnostics, and examples
+
+## What This Book Covers
+
+Kira currently includes:
+
+- a frontend pipeline that parses and validates a broader Kira language surface
+- a VM backend that executes bytecode, including direct FFI through LibFFI
+- an LLVM-native backend that emits host executables and shared libraries
+- a hybrid runtime that runs bytecode and native code together
+- a `wasm32-emscripten` target reached through the LLVM backend
+- a SwiftUI-style construct surface whose `node` bridge and content trees execute
+- a live server/client system with hot restart (`kira live`) and platform export scaffolds (`kira export`)
+- a dedicated `.ksl` shading language with GLSL/WGSL/HLSL/MSL/SPIR-V backends
+- a manifest-driven native library and autobinding system
+- a managed toolchain flow for `kirac`, templates, and pinned LLVM/LibFFI bundles
+
+## Read in Order
+
+1. [Welcome](/docs/welcome)
+2. [About Kira](/docs/about-kira)
+3. [Version Compatibility](/docs/version-compatibility)
+4. [A Kira Tour](/docs/a-kira-tour)
+5. [Language Guide](/docs/language-guide)
+6. [Language Reference](/docs/language-reference)
+7. [Appendix](/docs/appendix)
+
+## How To Read the Status Notes
+
+Kira has an important boundary that appears throughout the manual:
+
+- some features are **parsed by the frontend**
+- some are **semantically validated**
+- a smaller subset is **runnable today**
+
+When those boundaries differ, the guide and reference call that out directly.
+
+## Start Here
+
+| Need | Start here |
+| --- | --- |
+| Orient an LLM or coding agent | [Kira for LLMs & Agents](/docs/for-llms) |
+| Understand the current language shape | [Language Guide](/docs/language-guide) |
+| Look up syntax and rules quickly | [Language Reference](/docs/language-reference) |
+| Know what runs on which backend | [Execution & Feature Status](/docs/language-reference/execution-and-feature-status) |
+| See a compact end-to-end sample | [A Kira Tour](/docs/a-kira-tour) |
+| Install and run the toolchain | [Getting Started](/docs/appendix/getting-started) |
+| Target platforms, live, and exports | [Platforms & Runners](/docs/appendix/platforms) |
+| Learn CLI and toolchain flows | [Appendix](/docs/appendix) |
+
+## Ground Rules
+
+- implemented behavior is described as current fact
+- partial behavior is marked as partial
+- unsupported topics are omitted instead of padded out with placeholders
+- command examples use the checked-in CLI surface

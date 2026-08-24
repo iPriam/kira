@@ -1,0 +1,111 @@
+---
+title: Native Library Manifests
+description: The per-library TOML format that owns header paths, autobinding inputs, build sources, and per-target artifacts.
+---
+
+Each native library is described by its own TOML file under a nearby `native_libs/` directory.
+
+Example from the Sokol proof target:
+
+```toml
+[library]
+name = "sokol"
+link_mode = "static"
+abi = "c"
+
+[headers]
+entrypoint = "../../../third_party/sokol/sokol_bindings.h"
+include_dirs = ["../../../third_party/sokol"]
+defines = ["SOKOL_NO_ENTRY", "SOKOL_GLCORE"]
+
+[autobinding]
+module = "sokol"
+output = "../sokol.kira"
+headers = [
+  "../../../third_party/sokol/sokol_app.h",
+  "../../../third_party/sokol/sokol_gfx.h",
+  "../../../third_party/sokol/sokol_glue.h"
+]
+
+[bindings]
+mode = "all_public"
+
+[build]
+sources = ["../../../third_party/sokol/sokol_impl.m"]
+include_dirs = ["../../../third_party/sokol"]
+
+[target.aarch64-macos-none]
+static_lib = "../generated/native/aarch64-macos/libsokol.a"
+frameworks = ["AppKit", "QuartzCore", "OpenGL"]
+
+[target.x86_64-linux-gnu]
+static_lib = "../generated/native/x86_64-linux-gnu/libsokol.a"
+system_libs = ["X11", "Xi", "Xcursor", "GL", "dl", "pthread", "m"]
+
+[target.x86_64-windows-msvc]
+static_lib = "../generated/native/x86_64-windows-msvc/sokol.lib"
+```
+
+## Section Meanings
+
+### `[library]`
+
+Defines the public identity and the supported ABI:
+
+- `name`
+- `link_mode`
+- `abi`
+
+For the current documented path, `link_mode = "static"` and `abi = "c"` are the supported choices.
+
+### `[headers]`
+
+Defines the C header view used for binding generation:
+
+- `entrypoint`
+- `include_dirs`
+- `defines`
+- optional framework/system library hints
+
+### `[autobinding]`
+
+Defines how Kira emits the binding module:
+
+- `module`: import path used by Kira source
+- `output`: generated `.kira` file path
+- `headers`: the public headers to inspect
+
+### `[bindings]`
+
+Defines how public declarations are filtered into the generated module.
+
+The Sokol proof target currently uses:
+
+- `mode = "all_public"`
+
+### `[build]`
+
+Defines how Kira should produce the static archive if sources are present:
+
+- `sources`
+- `include_dirs`
+- `defines`
+
+### `[target.<triple>]`
+
+Defines the per-host artifact and extra link settings.
+
+That is where platform-specific archive paths, frameworks, and system libraries live.
+
+## Important Rules
+
+- one TOML file describes one native library
+- the TOML owns header paths, autobinding inputs, and binary locations
+- Kira source should import the generated module, not hardcode binary paths
+- `.bind.toml` sidecar files are no longer part of the documented workflow in this repository
+
+## Dynamic Linking Note
+
+The manifest model includes `dynamic_lib` fields, but the documented workflow in this repository is based on static linking.
+
+The examples, tests, and proof targets all use static linking.

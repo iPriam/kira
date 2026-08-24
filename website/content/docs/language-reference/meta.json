@@ -1,0 +1,15 @@
+{
+  "title": "Language Reference",
+  "pages": [
+    "index",
+    "about-the-language-reference",
+    "lexical-structure",
+    "types",
+    "expressions",
+    "statements",
+    "declarations",
+    "annotations-reference",
+    "constructs-reference",
+    "execution-and-feature-status"
+  ]
+}
