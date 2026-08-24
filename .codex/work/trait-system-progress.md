@@ -255,3 +255,47 @@ the four CLI gates from AGENTS.md — `cargo build --workspace`, `cargo test`,
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` —
 plus the kik harness parity runs (VM vs LLVM checksums, ffi on hybrid) and
 `KIRA_FOUNDATION_HOME=$PWD/foundation kira lint ../ui-foundation`.
+
+### Slice 3 — trait existentials
+
+A trait's name in a type position (`let x: Scored`, parameters, results,
+array elements) is an **existential over its conformers**. The representation
+generalizes the construct-family machinery rather than inventing a second box:
+analysis synthesizes `some Scored = Leaf(Leaf) | Token(Token) | …` — one
+variant per distinct conforming type, in first-recording order from the
+conformance table — and a member call through the value lowers to the same
+balanced tag-tree dispatcher families build, each arm calling the concrete
+implementation that type's conformance provided. No new opcodes, tags, or wire
+surface: both engines execute ordinary enum projection, branching, and direct
+calls, unchanged.
+
+Decisions taken here:
+
+- *Membership is the table.* A variant exists exactly when the conformance
+  table has a row for `(trait, type)` — direct claims, impl blocks, and family
+  claims alike. Supertrait discharge is answered by the checker on demand
+  (`KSEM310`) and does not mint rows, so membership stays "what was written".
+- *Object safety.* Every member must be reachable through a value: a trait
+  whose member takes no `self` is refused at the type position with `KSEM313`
+  naming the first offending member. A member's parameters may themselves be
+  other existentials; nothing else restricts the shape.
+- *Compiler-known traits have no existential.* `Copyable`/`Drop`/`Send`/`Sync`
+  state facts about one type's own members or body and classify no values, so
+  their names in type positions keep `KSEM295`, reworded for the new rule.
+- *Equality.* An existential compares as the enum it is: same concrete variant
+  and equal payloads are equal; different conformers are unequal even when
+  their payloads compare equal. Same rule families already follow.
+- *Drop.* The existential IS an enum value, so single-owner enum rules apply
+  untouched: wrapping moves, the payload releases once through the ordinary
+  enum path. Sound without a refusal; `KSEM303` is left exactly as it was.
+- *Reservation is lazy, fill is two-phase, dispatchers fixpoint.* The enum id
+  is minted the first time the name resolves in a type position (signatures
+  resolve before conformances), variants and member shapes fill after
+  `collect_conformances`, and a reservation that lands later (a body that
+  mentions the trait first) fills itself at its first call or coercion.
+
+New codes: `KSEM313` object-unsafe trait in type position; `KSEM314` unknown
+member on an existential; `KSEM278` reused verbatim for trailing-content on a
+member that takes none.
+
+Harness moved 1308 → 1315 cases, byte-identical VM/LLVM tallies.

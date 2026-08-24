@@ -293,6 +293,12 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) enum_payload_sites: Vec<(Type, SourceId, Span)>,
     /// Reverse lookup from synthesized family enum to source family name.
     pub(crate) construct_family_names: HashMap<EnumId, String>,
+    /// Every trait existential reserved so far, keyed by trait name.
+    ///
+    /// See [`crate::traits::existential`].
+    pub(crate) trait_existentials: BTreeMap<String, crate::traits::existential::TraitExistential>,
+    /// Reverse lookup from synthesized existential enum to trait name.
+    pub(crate) existential_traits: HashMap<EnumId, String>,
     /// The methods each struct and class declares itself, keyed by id.
     ///
     /// Kept beside the struct table because a method is not part of a struct's

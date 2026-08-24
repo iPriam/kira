@@ -43,6 +43,8 @@ impl<'a> Analyzer<'a> {
             constructs: HashMap::new(),
             construct_families: BTreeMap::new(),
             construct_family_names: HashMap::new(),
+            trait_existentials: BTreeMap::new(),
+            existential_traits: HashMap::new(),
             traits: crate::traits::TraitTable::new(),
             conformances: Vec::new(),
             drop_extractions: Vec::new(),
@@ -120,6 +122,10 @@ impl<'a> Analyzer<'a> {
         // one has an id — and before callables are enumerated, because a
         // default a conforming type did not write becomes one of its methods.
         self.collect_conformances();
+        // A trait's name in a type position reserved its existential enum;
+        // with every conformance now recorded, the variants can be filled and
+        // the member shapes resolved.
+        self.fill_trait_existentials();
         // `@Derive(Copy)` asks a question about a whole reachable shape, so it
         // is answered once every struct, class, enum, and construct-backed type
         // exists and every payload is resolved.
@@ -214,6 +220,7 @@ impl<'a> Analyzer<'a> {
             let reserved = self.reserved_synth();
             self.build_extend_methods();
             self.build_construct_dispatchers();
+            self.build_trait_dispatchers();
             if self.reserved_synth() == reserved {
                 break;
             }

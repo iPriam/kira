@@ -252,9 +252,76 @@ fn a_trait_requiring_itself_is_refused() {
 }
 
 #[test]
-fn a_trait_names_no_type() {
+fn a_trait_type_position_is_an_existential_over_conformers() {
+    // The trait's name as a parameter type is the existential: any conforming
+    // value may cross, and no diagnostic speaks.
+    let items = diagnostics(&program(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+#[test]
+fn a_conforming_value_wraps_into_its_trait_existential() {
+    let items = diagnostics(&program(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_non_conforming_value_does_not_wrap_into_the_existential() {
+    // A `Plain` is not a `Scored`, so handing one over is refused at the call
+    // — the wrap site answers, not the parameter's annotation.
+    let items = diagnostics(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         struct Plain {{\n    let n: Int\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n\
+         @Main function main() {{ let s: Scored = Plain(n: 1) }}\n"
+    ));
+    let spoken: Vec<String> = items.iter().map(|item| item.message.clone()).collect();
+    assert!(
+        spoken
+            .iter()
+            .any(|message| message.contains("cannot hold a value of type")),
+        "{spoken:?}"
+    );
+    assert!(
+        !spoken
+            .iter()
+            .any(|message| message.contains("not supported yet")),
+        "{spoken:?}"
+    );
+}
+
+#[test]
+fn an_object_unsafe_trait_refuses_its_type_position_and_names_the_member() {
+    // `total` takes no `self`, so a call through a value could not reach it.
     let items = diagnostics(&program(
-        "trait Scored {}\nfunction take(value: Scored) -> Int { return 1 }\n",
+        "trait Scored {\n    function total(values: [Int]) -> Int\n}\n\
+         function take(value: Scored) -> Int { return 1 }\n",
+    ));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert!(codes.contains(&"KSEM313".to_owned()), "{items:?}");
+    let spoken: Vec<String> = items.iter().map(|item| item.message.clone()).collect();
+    assert!(
+        spoken.iter().any(|message| message.contains("`total`")),
+        "{spoken:?}"
+    );
+}
+
+#[test]
+fn a_compiler_known_trait_still_names_no_type() {
+    let items = diagnostics(&program(
+        "function take(value: Copyable) -> Int { return 1 }\n",
     ));
     let codes: Vec<String> = items
         .iter()

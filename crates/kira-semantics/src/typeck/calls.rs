@@ -214,6 +214,19 @@ impl Analyzer<'_> {
             let values = Self::argument_values(args);
             return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
         }
+        if let Type::Enum(existential_id) = receiver_ty
+            && self.is_trait_existential_type(existential_id)
+        {
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_trait_existential_call(
+                ctx,
+                receiver_hir,
+                existential_id,
+                &name,
+                crate::constructs::ConstructCallContent { args, children },
+                method_span,
+            );
+        }
         if let Type::Enum(family_id) = receiver_ty
             && self.is_construct_family_type(family_id)
         {
