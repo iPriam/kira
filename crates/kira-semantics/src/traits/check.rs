@@ -14,6 +14,7 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 
 use crate::analyze::Analyzer;
+use crate::traits::markers::Marker;
 
 /// One requirement's resolved shape, as the trait wrote it.
 struct RequiredShape {
@@ -38,6 +39,10 @@ impl Analyzer<'_> {
             };
             if trait_name == crate::traits::COPYABLE {
                 self.check_copyable_claim(ty, source, span);
+                continue;
+            }
+            if let Some(marker) = Marker::from_name(&trait_name) {
+                self.check_marker_claim(marker, ty, source, span);
                 continue;
             }
             self.check_supertraits_are_claimed(&trait_name, ty, source, span);
@@ -75,9 +80,23 @@ impl Analyzer<'_> {
             .unwrap_or_default();
         let type_name = self.program.types.type_name(Type::Struct(ty));
         for super_name in required {
-            if self.conforms_to(ty, &super_name) {
+            // A trait the compiler *derives* is true of a shape whether or not
+            // anyone wrote it down, so the obligation is discharged by the fact
+            // rather than by a second spelling of it. `Drop` is not one of
+            // those: it is true exactly where a body was written.
+            let unmet = match crate::traits::is_derived_trait(&super_name) {
+                true => self.derived_trait_unmet(&super_name, ty),
+                false => (!self.conforms_to(ty, &super_name)).then(|| {
+                    format!(
+                        "`{type_name}` does not conform to `{super_name}`. Add it to the \
+                         conformance list, or write \
+                         `extend {type_name}: {super_name} {{ … }}`."
+                    )
+                }),
+            };
+            let Some(unmet) = unmet else {
                 continue;
-            }
+            };
             // A name the supertrait clause could not resolve is already
             // reported there; a second refusal per conforming type would bury
             // it.
@@ -91,11 +110,19 @@ impl Analyzer<'_> {
                 span,
                 "KSEM310",
                 format!(
-                    "`{type_name}` claims `{trait_name}`, which requires `{super_name}`, but \
-                     `{type_name}` does not conform to `{super_name}`. Add `{super_name}` to the \
-                     conformance list, or write `extend {type_name}: {super_name} {{ … }}`."
+                    "`{type_name}` claims `{trait_name}`, which requires `{super_name}`: {unmet}"
                 ),
             );
+        }
+    }
+
+    /// Why `ty` does not carry the derived trait `name`, or `None` when it
+    /// does.
+    fn derived_trait_unmet(&self, name: &str, ty: StructId) -> Option<String> {
+        let type_name = self.program.types.type_name(Type::Struct(ty));
+        match Marker::from_name(name) {
+            Some(marker) => self.marker_reason(&type_name, Type::Struct(ty), marker),
+            None => self.not_copyable_reason(&type_name, Type::Struct(ty), &mut HashSet::new()),
         }
     }
 

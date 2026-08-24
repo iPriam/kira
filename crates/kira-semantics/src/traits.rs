@@ -18,19 +18,22 @@
 //! value that carries its own dispatch, which is a different feature; it is
 //! refused by name rather than half-supported.
 //!
-//! # Two compiler-known traits
+//! # Compiler-known traits
 //!
-//! [`COPYABLE`] and [`DROP`] exist without a declaration, because both state
-//! something only the compiler can settle. Claiming `Copyable` is an assertion
-//! checked against the type's own members; claiming `Drop` attaches a body the
-//! engines run where they already release the value. Neither may be declared in
-//! source.
+//! [`COPYABLE`], [`DROP`], [`SEND`], and [`SYNC`] exist without a declaration,
+//! because each states something only the compiler can settle. `Copyable`,
+//! `Send`, and `Sync` are *derived* from a type's own members and a written
+//! claim is an assertion checked against them; `Drop` attaches a body the
+//! engines run where they already release the value. None may be declared in
+//! source. See [`markers`] for what `Send` and `Sync` mean and which leaves
+//! settle them.
 //!
 //! [`Callable`]: crate::analyze::Callable
 
 mod check;
 mod conformance;
 pub(crate) mod drop;
+pub(crate) mod markers;
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -44,9 +47,28 @@ pub(crate) const COPYABLE: &str = "Copyable";
 /// The compiler-known trait attaching a user body to a type's release.
 pub(crate) const DROP: &str = "Drop";
 
+/// The compiler-known trait asserting that a value may be moved to another
+/// thread.
+pub(crate) const SEND: &str = "Send";
+
+/// The compiler-known trait asserting that a value may be borrowed from more
+/// than one thread at once.
+pub(crate) const SYNC: &str = "Sync";
+
 /// Whether `name` is a trait the compiler knows without a declaration.
 pub(crate) fn is_builtin_trait(name: &str) -> bool {
-    name == COPYABLE || name == DROP
+    matches!(name, COPYABLE | DROP | SEND | SYNC)
+}
+
+/// Whether `name` is a compiler-known trait whose truth is *derived* from a
+/// type's members rather than declared.
+///
+/// `Drop` is the one that is not: it attaches a body, so it is true exactly
+/// where someone wrote one. The rest are facts about a shape, which is why a
+/// supertrait requiring one is discharged by the fact rather than by a second
+/// spelling of it.
+pub(crate) fn is_derived_trait(name: &str) -> bool {
+    matches!(name, COPYABLE | SEND | SYNC)
 }
 
 /// One declared trait's members and where it was written.

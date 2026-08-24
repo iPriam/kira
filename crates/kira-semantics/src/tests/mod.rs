@@ -26,6 +26,7 @@ mod foreign_field;
 mod generics;
 mod imports;
 mod libraries;
+mod markers;
 mod matches;
 mod memberwise;
 mod mutation;

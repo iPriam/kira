@@ -277,14 +277,27 @@ that returns to where it started is `KSEM309`.
 
 ### Compiler-known traits
 
-`Copyable` and `Drop` exist without a declaration, and declaring either is
-`KSEM288`.
+`Copyable`, `Drop`, `Send`, and `Sync` exist without a declaration, and
+declaring any of them is `KSEM288`.
 
 - **`Copyable`** is a checked assertion, the trait spelling of `@Derive(Copy)`.
   A type whose members do not all copy is `KSEM297`, naming the member that owns
   storage a copy would have to clone.
 - **`Drop`** attaches a body the engines run where they already release the
   value. See [Drop](#drop).
+- **`Send`** says a value may be moved to another thread; **`Sync`** says it may
+  be borrowed from more than one thread at once. Both are derived from the
+  type's members, and a claim the members refute is `KSEM311`. Ownership decides
+  them: a move leaves one holder, and `borrow` is a shared read. So owned heap
+  storage and pointer words carry both, while a function type, a captured `var`,
+  callback state, and a task handle carry neither.
+
+`Copyable`, `Send`, and `Sync` are *derived*, so a supertrait requiring one is
+discharged by the fact rather than by a second spelling of it.
+
+A `Task { … }` spawn is the one boundary a value crosses without its spawner, so
+what the deferred call takes and returns must be `Send` (`KSEM312`). The slot
+rule (`KSEM159`) is narrower today, and every type it admits is `Send`.
 
 ### Receivers
 

@@ -103,8 +103,48 @@ Some traits exist without a declaration, because what they mean is decided by a 
 | --- | --- |
 | `Copyable` | The type copies rather than moves. Checked against the type's members; one that owns storage a copy would have to clone is `KSEM297`. |
 | `Drop` | The type attaches a body the engines run where they already release the value. See [Memory and Safety](/docs/language-guide/memory-and-safety). |
+| `Send` | A value of the type may be moved to another thread. |
+| `Sync` | A value of the type may be borrowed from more than one thread at once. |
 
-A compiler-known trait may be required as a supertrait, which is how a declared trait states that its conforming types must also copy or must also be movable between threads.
+`Copyable`, `Send`, and `Sync` are **derived**: the fact belongs to every type whether or not anyone writes it down, and writing it is an assertion checked against the type's members. A `Send` or `Sync` claim the members refute is `KSEM311`.
+
+A compiler-known trait may be required as a supertrait, and a derived one is discharged by the fact rather than by a second spelling of it:
+
+```ts
+trait Portable: Send {
+    function ferry(borrow self) -> Int
+}
+
+struct Crate: Portable {          // no `: Send` needed; `Crate` carries it
+    let id: Int
+
+    function ferry(borrow self) -> Int {
+        return id * 3
+    }
+}
+```
+
+### What Carries `Send` and `Sync`
+
+Ownership decides both. A move leaves exactly one holder, so a value whose storage travels with it may cross a thread boundary; `borrow` is a shared read and `borrow mut` is exclusive, so concurrent borrows of one value observe storage nothing may write.
+
+| Type | `Send` | `Sync` | Why |
+| --- | --- | --- | --- |
+| `Int`, `Float`, `Bool`, `Void` | yes | yes | A word, with no storage behind it. |
+| `String`, arrays, structs, classes, enums, `Any` | yes | yes | Owned storage with a single owner. How an engine accounts for a copy is its own business. |
+| `RawPtr`, `@FFI.Pointer` | yes | yes | Kira never dereferences a pointer word. What the storage at the other end allows is the foreign library's contract, stated where the call is declared. |
+| A function type | no | no | Its values are closures, and a closure may have captured a `var`. The type names the shape a closure has, not the box a particular closure kept. |
+| A captured `var` | no | no | The one shared mutable box the language has: every holder writes through it. |
+| Callback state (`nativeState`) | no | no | A handle to a store the engine that minted it owns. |
+| A task handle | no | no | A row in the executor's table, which no other thread has. |
+
+An aggregate carries a marker exactly when everything it holds does, following fields, variant payloads, and array elements.
+
+### Tasks
+
+`Task { … }` is the one boundary a value crosses without its spawner: what goes in is evaluated at the spawn and read by the task, and what comes back is read by whoever joins. Both directions must be `Send`, and a deferred call that takes or returns something that is not is `KSEM312`.
+
+A task slot is one machine word, so today a narrower rule sits in front of that one: a task body is a call to a named function taking `Int`/`Float` and returning `Int`, `Float`, or nothing (`KSEM159`). Every type that rule admits is `Send`.
 
 ## Receivers
 

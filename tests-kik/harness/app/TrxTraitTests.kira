@@ -310,6 +310,56 @@ construct TrxARetroactiveSupertraitConformanceIsEnough() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
 }
 
+// `Send` and `Sync` are compiler-known markers derived from a type's members,
+// the way `Copyable` is. A claim is a checked assertion and adds no member and
+// no representation, so a claiming type behaves exactly as it did without one —
+// which is what these cases show on both engines. Owning heap storage does not
+// stop a value crossing a thread boundary: one owner moves, and the receiving
+// side is then the only holder.
+
+struct TrxParcel: Send, Sync {
+    let label: String
+    let weights: [Int]
+    function total(borrow self) -> Int {
+        var sum = 0
+        var i = 0
+        while i < weights.count {
+            sum = sum + weights[i]
+            i = i + 1
+        }
+        return sum + label.count
+    }
+}
+
+// A declared trait may require a marker; the obligation is discharged by the
+// derived fact rather than by writing the marker out a second time.
+trait TrxPortable: Send {
+    function ferry(borrow self) -> Int
+}
+
+struct TrxCrate: TrxPortable {
+    let id: Int
+    function ferry(borrow self) -> Int {
+        return id * 3
+    }
+}
+
+construct TrxAMarkerClaimLeavesAHeapOwningTypeAlone() extends Test {
+    test {
+        let parcel = TrxParcel(label: "ab", weights: [3, 4, 5])
+        return parcel.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}
+
+construct TrxATraitRequiringSendIsKeptByTheDerivedFact() extends Test {
+    test {
+        let box = TrxCrate(id: 7)
+        return box.ferry()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+}
+
 function trxSection() -> Int {
     var checksum = 0
     checksum = checksum + TrxLeaf(n: 6).doubled()
@@ -321,5 +371,7 @@ function trxSection() -> Int {
     checksum = checksum * 31 + TrxMark(n: 4).rank(9)
     checksum = checksum * 31 + TrxMark(n: 4).rank(4)
     checksum = checksum * 31 + TrxLateMark(n: 3).rank(6)
+    checksum = checksum * 31 + TrxParcel(label: "ab", weights: [3, 4, 5]).total()
+    checksum = checksum * 31 + TrxCrate(id: 7).ferry()
     return checksum
 }
