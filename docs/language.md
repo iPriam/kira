@@ -256,6 +256,12 @@ declaration's colon list *and* in an `extend` block is `KSEM290`. A block may
 carry only members the trait declares (`KSEM294`), and it may add conformance
 only — never a parent.
 
+A construct family may claim a trait in either spelling — `construct Widget:
+Hashable { … }` or `extend Widget: Hashable { … }`. A family is a template, so
+the claim files one conformance per backed declaration; members the family
+provides answer for every variant at once. A compiler-known trait
+(`Copyable`, `Drop`, `Send`, `Sync`) cannot be claimed by a family (`KSEM298`).
+
 ### Coherence
 
 A conformance may be declared only in the package that declares the type or the
@@ -342,10 +348,12 @@ Two rules follow, and neither is optional:
 
 ### What a trait is not
 
-Refused by name rather than half-supported: supertraits (`KSEM296`), a trait in
-a type position (`KSEM295`), a conformance on a construct family (`KSEM298`),
-and type parameters on a trait. A requirement a conforming type never presents
-is `KSEM292`, and one it presents with the wrong shape is `KSEM293`.
+### What a trait is not
+
+Refused by name rather than half-supported: a trait in a type position
+(`KSEM295`) and type parameters on a trait. A requirement a conforming type
+never presents is `KSEM292`, and one it presents with the wrong shape is
+`KSEM293`.
 
 ## Arrays
 

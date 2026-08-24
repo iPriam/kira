@@ -173,3 +173,85 @@ libclang needed the Apple `-isysroot` exactly as `native_sources` did (dawn's
 webgpu.h found no `<math.h>` once the cache invalidated), and a test package
 now has to own the `Test` family and its collector runner — project-matter's
 harness gained both files and reports 170/170 on the VM driver.
+
+# Trait system, phase 3
+
+## Slice status
+
+- Slice 1a, supertraits — committed `6cd9027`.
+- Slice 1b, `Send`/`Sync` compiler-known markers — committed `67a94dd`.
+- Slice 2, constructs re-anchored on the conformance table — this commit.
+- Slice 3, trait existentials — next.
+- Slice 4, generic bounds — after 3.
+
+## Design decisions taken here
+
+### A supertrait is an obligation, discharged once
+
+`trait Ordered: Equated { … }` makes conforming to `Ordered` demand an
+`Equated` conformance from the same type — written in its colon list or an
+`extend` block, or discharged structurally when the supertrait is one of the
+compiler-known derived markers. Defaults may call supertrait members on `self`,
+because by the time a default runs the receiver keeps both promises. Cycles are
+`KSEM309`; a clause naming a non-trait is `KSEM308`.
+
+### `Send` and `Sync` are derived facts about a shape
+
+Both join `Copyable` as compiler-known derived markers: a written claim is a
+checked assertion against the type's own members (`KSEM311`), never data
+inheritance. The base facts, reasoned from what each leaf actually is:
+
+| Leaf | Send | Sync | Why |
+| --- | --- | --- | --- |
+| aggregate (struct/class/enum/construct-backed) | all fields Send | all fields Sync | structural, like `Copyable` |
+| capture cell (`var` capture) | no | no | the language's shared mutable box; both engines write through it without a lock |
+| native-state token | no | no | names a store the minting engine owns; elsewhere it is a number |
+| task handle | no | no | a row in an executor's table, which no other thread holds |
+| C block | yes | no | uniquely owned foreign storage: movable, but a second concurrent holder would be a second owner of storage the foreign side may have freed |
+| `RawPtr` / `ForeignPtr` | yes | yes | an opaque word Kira never dereferences, frees, or computes on; thread-safety of the pointee is the foreign declaration's contract, stated where the call is |
+| function type | no | no | its fields are the program-wide join over closure captures, not final until every literal is lifted — a type that cannot promise what its values kept promises neither |
+
+The VM's `Rc` internals are deliberately absent from the table: they are
+engine-internal bookkeeping, and a rule that read them would deny a plain
+`Point` the right to cross a thread.
+
+The concurrency seam layered on top is today's narrow task surface: creating a
+task checks that everything it captures and returns is `Send` (`KSEM312`),
+beside the existing `KSEM159` restrictions. The check reads only the trait
+table, so it stays correct if the task surface widens; the current interaction
+is pinned by tests rather than redesigned away.
+
+### A family claim files per-declaration conformances
+
+`construct Widget: Hashable { … }` and `extend Widget: Hashable { … }` both
+record one [`Conformance`] per backed declaration, tagged `via_family`, filed
+at that declaration — where a refusal's fix goes. Members the family provides
+at its own scope satisfy the variants at once. A declaration's own colon-list
+claim wins over the family's. The family's contract half (`@Required`) now
+records its rows in the same table traits use, so one engine answers "does this
+type satisfy the surface" for both. `KSEM298` survives narrowed: it is now the
+diagnostic for a claim that cannot conform at all, chiefly a compiler-known
+trait claimed by a template that has no members of its own.
+
+## New diagnostic codes
+
+| Code | Meaning |
+| --- | --- |
+| `KSEM308` | A supertrait clause naming something that is not a trait. |
+| `KSEM309` | A cycle of supertrait clauses. |
+| `KSEM310` | A claimed trait whose supertrait obligation is unmet. |
+| `KSEM311` | A `Send`/`Sync` claim the type's own members refute. |
+| `KSEM312` | A task boundary crossing a value that is not `Send`. |
+
+## Test counts
+
+Harness moved 1300 → 1308 cases, byte-identical tallies on VM and LLVM; ffi
+harness steady at 274. Semantics unit suite at 747.
+
+## Gate note
+
+`kira_dev_validate` (MCP) is unavailable in this session; the gate was run as
+the four CLI gates from AGENTS.md — `cargo build --workspace`, `cargo test`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` —
+plus the kik harness parity runs (VM vs LLVM checksums, ffi on hybrid) and
+`KIRA_FOUNDATION_HOME=$PWD/foundation kira lint ../ui-foundation`.

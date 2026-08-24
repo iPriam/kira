@@ -83,7 +83,9 @@ class TrxDerived: TrxScored extends TrxBase {
     }
 }
 
-construct TrxShape {
+// A family may claim a trait: every declaration backed by it must keep the
+// promise, and one that writes the claim itself keeps its own conformance.
+construct TrxShape: TrxScored {
     @Required function sides() -> Int
 }
 
@@ -360,6 +362,67 @@ construct TrxATraitRequiringSendIsKeptByTheDerivedFact() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
 }
 
+// A declaration that never writes the trait in its own head still keeps it,
+// because the family it is backed by claimed it.
+construct TrxHex(edge: Int) extends TrxShape {
+    function sides() -> Int {
+        return 6
+    }
+    function score(borrow self) -> Int {
+        return edge * 6
+    }
+}
+
+// A family may also *answer* a trait it claims, once, for every declaration
+// backed by it: an `extend Family: Trait` block carries the member on the
+// family value, so no declaration owes it.
+trait TrxTitled {
+    function title(borrow self) -> String
+    function shout(borrow self) -> String {
+        return self.title() + "!"
+    }
+}
+
+construct TrxPane {
+    @Required function depth() -> Int
+}
+
+extend TrxPane: TrxTitled {
+    function title(borrow self) -> String {
+        return "pane"
+    }
+}
+
+construct TrxSidebar(width: Int) extends TrxPane {
+    function depth() -> Int {
+        return width
+    }
+}
+
+construct TrxAFamilyClaimBindsEveryDeclarationBackedByIt() extends Test {
+    test {
+        let hex = TrxHex(edge: 2)
+        return hex.doubled() + hex.sides()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+}
+
+construct TrxADeclarationMayAlsoWriteTheClaimItsFamilyMade() extends Test {
+    test {
+        let square = TrxSquare(edge: 2)
+        return square.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+}
+
+construct TrxAFamilyMayAnswerTheTraitForEveryDeclaration() extends Test {
+    test {
+        let bar = TrxSidebar(width: 3)
+        return bar.shout()
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("pane!"); return e }
+}
+
 function trxSection() -> Int {
     var checksum = 0
     checksum = checksum + TrxLeaf(n: 6).doubled()
@@ -373,5 +436,7 @@ function trxSection() -> Int {
     checksum = checksum * 31 + TrxLateMark(n: 3).rank(6)
     checksum = checksum * 31 + TrxParcel(label: "ab", weights: [3, 4, 5]).total()
     checksum = checksum * 31 + TrxCrate(id: 7).ferry()
+    checksum = checksum * 31 + TrxHex(edge: 2).doubled()
+    checksum = checksum * 31 + TrxSidebar(width: 3).shout().count
     return checksum
 }

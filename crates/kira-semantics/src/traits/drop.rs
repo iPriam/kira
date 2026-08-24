@@ -74,7 +74,7 @@ impl Analyzer<'_> {
         let claims: Vec<(StructId, SourceId, Span)> = self
             .conformances
             .iter()
-            .filter(|entry| entry.trait_name == super::DROP)
+            .filter(|entry| entry.contract.trait_name() == Some(super::DROP))
             .map(|entry| (entry.ty, entry.source, entry.span))
             .collect();
         for (ty, source, span) in claims {

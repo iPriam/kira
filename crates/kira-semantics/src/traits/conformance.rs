@@ -12,7 +12,7 @@ use kira_semantics_model::{StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ConstructKind, Function, Item, TraitRef};
 
-use super::{Conformance, SupertraitRef, TraitInfo, TraitMemberInfo, is_builtin_trait};
+use super::{Conformance, Contract, SupertraitRef, TraitInfo, TraitMemberInfo, is_builtin_trait};
 use crate::analyze::{Analyzer, Callable};
 
 /// Every method name each type presents, keyed by the type.
@@ -219,13 +219,20 @@ impl<'a> Analyzer<'a> {
         })
     }
 
-    /// Records every conformance the program declares, from both spellings.
+    /// Records every conformance the program declares, from every spelling.
     ///
     /// Runs once every struct-shaped type has an id, because a conformance
     /// names one, and before callables are enumerated, because an inherited
     /// default becomes one.
+    ///
+    /// A construct family's claim is held back to a second pass, because it
+    /// obliges declarations rather than declaring their conformance: one that
+    /// writes the trait itself keeps its own, and the family's claim is then
+    /// already satisfied for it.
     pub(crate) fn collect_conformances(&mut self) {
         let presented = self.presented_method_names();
+        self.record_family_contracts();
+        let mut family_claims: Vec<(SourceId, String, Vec<TraitRef>)> = Vec::new();
         let tree = self.tree;
         for (source, item) in tree.items_with_source() {
             self.source = source;
@@ -245,7 +252,10 @@ impl<'a> Analyzer<'a> {
                 Item::Construct(declaration) if !declaration.traits.is_empty() => match declaration
                     .kind
                 {
-                    ConstructKind::Family => self.refuse_family_conformance(&declaration.traits),
+                    ConstructKind::Family => {
+                        let name = self.interner.resolve(declaration.name).to_owned();
+                        family_claims.push((source, name, declaration.traits.clone()));
+                    }
                     ConstructKind::Backed { .. } => {
                         let name = self.interner.resolve(declaration.name);
                         if let Some(id) = self.declared_struct(name, source) {
@@ -258,6 +268,10 @@ impl<'a> Analyzer<'a> {
                         continue;
                     };
                     let name = self.interner.resolve(declaration.name).to_owned();
+                    if self.construct_families.contains_key(&name) {
+                        family_claims.push((source, name, vec![claimed]));
+                        continue;
+                    }
                     match self.visible_struct(&name) {
                         Some(id) => self.declare_conformances(
                             std::slice::from_ref(&claimed),
@@ -281,6 +295,10 @@ impl<'a> Analyzer<'a> {
                 }
                 _ => {}
             }
+        }
+        for (source, family, claimed) in family_claims {
+            self.source = source;
+            self.declare_family_conformances(&claimed, &family, source, &presented);
         }
     }
 
@@ -341,20 +359,156 @@ impl<'a> Analyzer<'a> {
         presented
     }
 
-    /// Refuses a conformance list written on a construct family template.
-    fn refuse_family_conformance(&mut self, claimed: &[TraitRef]) {
+    /// Records the contract every construct-backed declaration keeps: its
+    /// family's own `@Required` surface.
+    ///
+    /// A family states requirements the way a trait does, so its declarations
+    /// are conforming types in the same table. Filing them here is what lets
+    /// one pass check both kinds, and what makes `conforms_to` answer for a
+    /// family as well as for a trait.
+    fn record_family_contracts(&mut self) {
+        let sites = self.backed_declaration_sites();
+        let rows: Vec<Conformance> = self
+            .constructs
+            .iter()
+            .filter_map(|(ty, info)| {
+                let (source, span) = sites.get(ty).copied()?;
+                Some(Conformance {
+                    contract: Contract::Family(info.family.clone()),
+                    ty: *ty,
+                    source,
+                    span,
+                    via_family: None,
+                    provided: info.members.clone(),
+                })
+            })
+            .collect();
+        self.conformances.extend(rows);
+    }
+
+    /// Records a construct family's conformance list, from either spelling.
+    ///
+    /// A family is a template rather than a type, so it keeps no promise
+    /// itself: the claim is an obligation on every declaration backed by it,
+    /// and it becomes one conformance per declaration — filed at that
+    /// declaration, which is where a refusal's fix goes. A member the family
+    /// itself provides answers for all of them, which is what makes
+    /// `construct Widget: Hashable` worth writing rather than repeating the
+    /// claim on each declaration.
+    ///
+    /// A declaration that already claims the trait keeps its own conformance:
+    /// the family's claim states what must be true of it, and it is.
+    fn declare_family_conformances(
+        &mut self,
+        claimed: &[TraitRef],
+        family: &str,
+        source: SourceId,
+        presented: &PresentedNames,
+    ) {
+        let variants: Vec<StructId> = self
+            .construct_families
+            .get(family)
+            .map(|info| info.variants.iter().map(|it| it.struct_id).collect())
+            .unwrap_or_default();
+        let sites = self.backed_declaration_sites();
         for entry in claimed {
             let trait_name = self.interner.resolve(entry.name).to_owned();
+            if !self.family_may_claim(&trait_name, family, source, entry.span) {
+                continue;
+            }
+            self.link_type_name(&trait_name, entry.span);
+            for ty in &variants {
+                if self.conforms_to(*ty, &trait_name) {
+                    continue;
+                }
+                let (declared_in, at) = sites.get(ty).copied().unwrap_or((source, entry.span));
+                self.conformances.push(Conformance {
+                    contract: Contract::Trait(trait_name.clone()),
+                    ty: *ty,
+                    source: declared_in,
+                    span: at,
+                    via_family: Some(family.to_owned()),
+                    provided: presented.get(ty).cloned().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    /// Whether a family claim written in `source` may name `trait_name`.
+    ///
+    /// The same two questions a type's own claim answers — is it a trait, and
+    /// is the claim written where both parties can see it — asked once for the
+    /// family rather than once per declaration backed by it.
+    fn family_may_claim(
+        &mut self,
+        trait_name: &str,
+        family: &str,
+        source: SourceId,
+        span: Span,
+    ) -> bool {
+        if is_builtin_trait(trait_name) {
             self.emit(
-                entry.span,
+                span,
                 "KSEM298",
                 format!(
-                    "a construct family cannot claim `{trait_name}`: a family is a template \
-                     rather than a type, so there is no value for the trait's members to run \
-                     on. Claim the trait on each declaration backed by the family."
+                    "a construct family cannot claim `{trait_name}`: it is a compiler-known trait \
+                     about one type's own members, and a family is a template rather than a type. \
+                     Claim it on each declaration backed by `{family}`."
                 ),
             );
+            return false;
         }
+        if !self.traits.contains_key(trait_name) {
+            self.emit(
+                span,
+                "KSEM289",
+                format!(
+                    "`{trait_name}` is not a trait, so construct family `{family}` cannot claim it"
+                ),
+            );
+            return false;
+        }
+        let here = self.imports.package_of(source);
+        let family_package = self
+            .family_source(family)
+            .map(|declared| self.imports.package_of(declared));
+        let trait_package = self
+            .traits
+            .get(trait_name)
+            .map(|declared| self.imports.package_of(declared.source));
+        if Some(here) == family_package || Some(here) == trait_package {
+            return true;
+        }
+        self.emit(
+            span,
+            "KSEM291",
+            format!(
+                "construct family `{family}` may conform to `{trait_name}` only where one of them \
+                 is declared. A conformance written anywhere else would be invisible to every \
+                 other user of both."
+            ),
+        );
+        false
+    }
+
+    /// The file a construct family was declared in.
+    fn family_source(&self, family: &str) -> Option<SourceId> {
+        self.family_declarations()
+            .into_iter()
+            .find(|(_, declaration)| self.interner.resolve(declaration.name) == family)
+            .map(|(source, _)| source)
+    }
+
+    /// Where each construct-backed declaration was written, keyed by its type.
+    fn backed_declaration_sites(&self) -> HashMap<StructId, (SourceId, Span)> {
+        self.backed_declarations()
+            .into_iter()
+            .filter_map(|(source, declaration)| {
+                let name = self.interner.resolve(declaration.name);
+                let id = self.declared_struct(name, source)?;
+                Some((id, (source, declaration.name_span)))
+            })
+            .collect()
     }
 
     /// Records one declaration's conformance list, refusing what it may not
@@ -411,10 +565,11 @@ impl<'a> Analyzer<'a> {
             }
             self.link_type_name(&trait_name, entry.span);
             self.conformances.push(Conformance {
-                trait_name,
+                contract: Contract::Trait(trait_name),
                 ty,
                 source,
                 span: entry.span,
+                via_family: None,
                 provided: presented.get(&ty).cloned().unwrap_or_default(),
             });
         }
@@ -498,7 +653,7 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn conforms_to(&self, ty: StructId, name: &str) -> bool {
         self.conformances
             .iter()
-            .any(|entry| entry.ty == ty && entry.trait_name == name)
+            .any(|entry| entry.ty == ty && entry.contract.trait_name() == Some(name))
     }
 
     /// Adds the callables conformance mints: an impl block's members, and every
@@ -516,11 +671,14 @@ impl<'a> Analyzer<'a> {
             let Some(claimed) = declaration.conforms else {
                 continue;
             };
-            let Some(entry) = self
-                .conformances
-                .iter()
-                .find(|entry| entry.source == source && entry.span == claimed.span)
-            else {
+            // `extend Family: Trait` is a modifier block, whose methods are
+            // registered against the family and reached through the family
+            // value; the conformances it minted are the backed declarations',
+            // and one of those matching this block's span would add a second
+            // callable for one body.
+            let Some(entry) = self.conformances.iter().find(|entry| {
+                entry.via_family.is_none() && entry.source == source && entry.span == claimed.span
+            }) else {
                 continue;
             };
             // A class already collects every `extend <Class>` block's methods
@@ -541,7 +699,11 @@ impl<'a> Analyzer<'a> {
             }
         }
         for entry in &self.conformances {
-            let Some(declared) = self.traits.get(&entry.trait_name) else {
+            let Some(declared) = entry
+                .contract
+                .trait_name()
+                .and_then(|name| self.traits.get(name))
+            else {
                 continue;
             };
             for member in &declared.members {

@@ -53,6 +53,10 @@ extend Plate: Hashable {
 }
 ```
 
+The colon form also reaches a construct family: `construct Widget: Hashable { … }` claims the trait for every declaration backed by the family, and `extend Widget: Hashable { … }` makes the same claim retroactively. A family is a template rather than a type, so it keeps no promise itself — the claim becomes one conformance per backed declaration, filed at that declaration. Members the family provides at its own scope answer for every variant at once, which is what makes claiming on the family worth writing rather than repeating the claim under each declaration. A declaration that already claims the trait in its own colon list keeps its own conformance untouched.
+
+A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, and `Sync` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
+
 A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. A block may carry only members the trait declares (`KSEM294`).
 
 ## Coherence

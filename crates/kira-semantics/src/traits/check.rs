@@ -14,7 +14,22 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 
 use crate::analyze::Analyzer;
+use crate::traits::Contract;
 use crate::traits::markers::Marker;
+
+/// Where one conformance was recorded, and how the type came by it.
+struct ConformanceSite {
+    /// The conforming type.
+    ty: StructId,
+    /// The file the conformance is filed under, which every refusal points
+    /// into.
+    source: SourceId,
+    /// The span a refusal points at.
+    span: Span,
+    /// The construct family whose claim this conformance came from, when the
+    /// declaration did not write it itself.
+    via_family: Option<String>,
+}
 
 /// One requirement's resolved shape, as the trait wrote it.
 struct RequiredShape {
@@ -29,13 +44,35 @@ struct RequiredShape {
 }
 
 impl Analyzer<'_> {
-    /// Checks every declared conformance against the trait it claims.
-    pub(crate) fn check_trait_conformance(&mut self) {
+    /// Checks every conformance the program recorded against the contract it
+    /// keeps.
+    ///
+    /// One loop over one table, whichever kind of contract each row names: a
+    /// declared trait's members, or a construct family's `@Required` surface.
+    pub(crate) fn check_conformances(&mut self) {
         self.check_impl_blocks_declare_only_trait_members();
         for index in 0..self.conformances.len() {
-            let (trait_name, ty, source, span) = {
+            let (contract, site) = {
                 let entry = &self.conformances[index];
-                (entry.trait_name.clone(), entry.ty, entry.source, entry.span)
+                (
+                    entry.contract.clone(),
+                    ConformanceSite {
+                        ty: entry.ty,
+                        source: entry.source,
+                        span: entry.span,
+                        via_family: entry.via_family.clone(),
+                    },
+                )
+            };
+            let ConformanceSite {
+                ty, source, span, ..
+            } = site;
+            let trait_name = match contract {
+                Contract::Trait(name) => name,
+                Contract::Family(family) => {
+                    self.check_family_requirements(&family, &site);
+                    continue;
+                }
             };
             if trait_name == crate::traits::COPYABLE {
                 self.check_copyable_claim(ty, source, span);
@@ -50,8 +87,57 @@ impl Analyzer<'_> {
                 continue;
             };
             for shape in shapes {
-                self.check_member(&trait_name, ty, source, span, &shape);
+                self.check_member(&trait_name, &site, &shape);
             }
+        }
+    }
+
+    /// Checks one backed declaration against its family's `@Required` surface.
+    ///
+    /// A family's requirement is discharged by a member of that name — a
+    /// construction parameter, a stored member, or a method — or by the
+    /// declaration overriding *every* family method: a family member is what
+    /// consumes a requirement, so a declaration that replaced them all left
+    /// nothing to consume it.
+    fn check_family_requirements(&mut self, family: &str, site: &ConformanceSite) {
+        let Some(info) = self.construct_families.get(family) else {
+            // A declaration backed by an unknown family is reported where it
+            // was defined, and there is no surface here to check against.
+            return;
+        };
+        let required = info.required.clone();
+        // A uniform `extend` modifier has one shared body and is never
+        // implemented per variant, so it is not part of the surface a backed
+        // declaration must satisfy.
+        let methods: Vec<String> = info
+            .methods
+            .iter()
+            .filter(|(_, method)| !method.uniform)
+            .map(|(name, _)| name.clone())
+            .collect();
+        let Some(construct) = self.constructs.get(&site.ty) else {
+            return;
+        };
+        let overrides_all_methods =
+            !methods.is_empty() && methods.iter().all(|it| construct.own_methods.contains(it));
+        if overrides_all_methods {
+            return;
+        }
+        let missing: Vec<String> = required
+            .into_iter()
+            .filter(|member| !construct.members.contains(member))
+            .collect();
+        let name = self.program.types.type_name(Type::Struct(site.ty));
+        self.source = site.source;
+        for member in missing {
+            self.emit(
+                site.span,
+                "KSEM201",
+                format!(
+                    "`{name}` does not provide required member `{member}` of construct family \
+                     `{family}`, and does not override every family method that can consume it"
+                ),
+            );
         }
     }
 
@@ -163,14 +249,10 @@ impl Analyzer<'_> {
     }
 
     /// Checks one trait member against what the conforming type presents.
-    fn check_member(
-        &mut self,
-        trait_name: &str,
-        ty: StructId,
-        source: SourceId,
-        span: Span,
-        shape: &RequiredShape,
-    ) {
+    fn check_member(&mut self, trait_name: &str, site: &ConformanceSite, shape: &RequiredShape) {
+        let ConformanceSite {
+            ty, source, span, ..
+        } = *site;
         let type_name = self.program.types.type_name(Type::Struct(ty));
         let qualified = format!("{type_name}.{}", shape.name);
         let candidates: Vec<_> = self
@@ -188,14 +270,32 @@ impl Analyzer<'_> {
             if !shape.required {
                 return;
             }
+            // A family that claims a trait may answer for it: a member the
+            // family declares or an `extend Family` modifier provides is
+            // reachable on every declaration backed by it, so the declaration
+            // owes nothing further.
+            if let Some(family) = &site.via_family
+                && self.family_provides(family, &shape.name)
+            {
+                return;
+            }
+            let claim = match &site.via_family {
+                Some(family) => format!(
+                    "`{type_name}` conforms to `{trait_name}` through construct family \
+                     `{family}`, but presents no `{}`",
+                    shape.name
+                ),
+                None => format!(
+                    "`{type_name}` claims `{trait_name}` but presents no `{}`",
+                    shape.name
+                ),
+            };
             self.emit(
                 span,
                 "KSEM292",
                 format!(
-                    "`{type_name}` claims `{trait_name}` but presents no `{}`: the trait \
-                     requires `{}`. Write it in `{type_name}`'s body or in an \
+                    "{claim}: the trait requires `{}`. Write it in `{type_name}`'s body or in an \
                      `extend {type_name}: {trait_name}` block.",
-                    shape.name,
                     self.requirement_spelling(shape)
                 ),
             );
@@ -244,6 +344,14 @@ impl Analyzer<'_> {
             );
             self.source = source;
         }
+    }
+
+    /// Whether construct family `family` presents `member` on every declaration
+    /// backed by it.
+    fn family_provides(&self, family: &str, member: &str) -> bool {
+        self.construct_families
+            .get(family)
+            .is_some_and(|info| info.methods.contains_key(member))
     }
 
     /// The requirement as a reader would write it, for a diagnostic that has to

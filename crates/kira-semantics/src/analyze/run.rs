@@ -146,7 +146,7 @@ impl<'a> Analyzer<'a> {
         self.check_construct_method_signatures();
         // A claimed conformance is checked against resolved shapes, so it waits
         // for the signatures every implementation and every requirement has.
-        self.check_trait_conformance();
+        self.check_conformances();
         // A `Drop` body is a method, so it has no id until signatures exist; and
         // whether a type runs one decides whether it is released at all, so it
         // is recorded before any body is analyzed.

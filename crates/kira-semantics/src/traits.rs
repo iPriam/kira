@@ -109,11 +109,39 @@ pub(crate) struct TraitMemberInfo<'a> {
     pub(crate) function: &'a Function,
 }
 
-/// One conformance a program declared: a type keeping a trait's promise.
+/// A contract a type can be obliged to keep.
+///
+/// Two kinds, one table. A trait states its requirements as members with no
+/// body; a construct family states them as `@Required` members. Both are "here
+/// is a set of members every conforming type must present", and both are
+/// checked from [`Conformance`] rows rather than from where the declaration
+/// happened to be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Contract {
+    /// A declared trait, by name.
+    Trait(String),
+    /// A construct family's own `@Required` surface, by family name.
+    ///
+    /// Every declaration backed by the family keeps this contract, whether or
+    /// not the family names any trait.
+    Family(String),
+}
+
+impl Contract {
+    /// The trait this contract names, or `None` for a family's own surface.
+    pub(crate) fn trait_name(&self) -> Option<&str> {
+        match self {
+            Contract::Trait(name) => Some(name),
+            Contract::Family(_) => None,
+        }
+    }
+}
+
+/// One conformance a program declared: a type keeping a contract's promise.
 #[derive(Debug, Clone)]
 pub(crate) struct Conformance {
-    /// The trait's name, as written at the conformance site.
-    pub(crate) trait_name: String,
+    /// The contract kept.
+    pub(crate) contract: Contract,
     /// The conforming type.
     pub(crate) ty: StructId,
     /// The file the conformance was declared in, whose package coherence is
@@ -121,6 +149,15 @@ pub(crate) struct Conformance {
     pub(crate) source: SourceId,
     /// Span of the trait name at the conformance site.
     pub(crate) span: Span,
+    /// The construct family that claimed the trait, when this conformance is
+    /// one a backed declaration inherits rather than one it wrote.
+    ///
+    /// A family claiming a trait obliges every declaration backed by it, so one
+    /// written claim becomes one conformance per declaration. The family's name
+    /// travels with each of them: a requirement the family itself answers is
+    /// kept, and a refusal names both the declaration and where the claim was
+    /// written.
+    pub(crate) via_family: Option<String>,
     /// The member names the conforming type presents itself, so a default is
     /// inherited only where the type wrote none.
     ///

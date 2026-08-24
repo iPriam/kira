@@ -264,15 +264,83 @@ fn a_trait_names_no_type() {
     assert!(codes.contains(&"KSEM295".to_owned()), "{items:?}");
 }
 
+/// A family whose declarations each answer for the trait it claims.
+const SHAPES: &str = "trait Sized {\n    function area(borrow self) -> Int\n\
+                      \n    function doubled(borrow self) -> Int { return self.area() * 2 }\n}\n\
+                      construct Shape: Sized {\n    @Required function sides() -> Int\n}\n";
+
 #[test]
-fn a_construct_family_cannot_claim_a_trait() {
-    let items = diagnostics(&program("trait Scored {}\nconstruct Widget: Scored {}\n"));
+fn a_construct_family_may_claim_a_trait_its_declarations_keep() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Square(edge: Int) extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n\
+         \n    function area(borrow self) -> Int {{ return edge * edge }}\n}}\n\
+         function use(value: borrow Square) -> Int {{ return value.doubled() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_declaration_that_does_not_keep_its_familys_claim_names_both() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Bar(width: Int) extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n}}\n"
+    )));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM292"))
+        .unwrap_or_else(|| panic!("expected a KSEM292, got {items:?}"));
+    assert!(refusal.message.contains("`Bar`"), "{refusal:?}");
+    assert!(refusal.message.contains("`Shape`"), "{refusal:?}");
+}
+
+#[test]
+fn a_family_that_answers_the_trait_itself_discharges_it_for_every_declaration() {
+    let items = diagnostics(&program(
+        "trait Named {\n    function label(borrow self) -> String\n\
+         \n    function shout(borrow self) -> String { return self.label() + \"!\" }\n}\n\
+         construct Widget {\n    @Required function sides() -> Int\n}\n\
+         extend Widget: Named {\n\
+         \n    function label(borrow self) -> String { return \"widget\" }\n}\n\
+         construct Panel(size: Int) extends Widget {\n\
+         \n    function sides() -> Int { return 4 }\n}\n",
+    ));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_family_may_not_claim_a_compiler_known_trait() {
+    let items = diagnostics(&program("construct Widget: Copyable {}\n"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM298"))
+        .unwrap_or_else(|| panic!("expected a KSEM298, got {items:?}"));
+    assert!(refusal.message.contains("`Copyable`"), "{refusal:?}");
+}
+
+#[test]
+fn a_family_claiming_something_that_is_not_a_trait_is_refused() {
+    let items = diagnostics(&program(
+        "struct Point {\n    let x: Int\n}\nconstruct Widget: Point {}\n",
+    ));
     let codes: Vec<String> = items
         .iter()
         .filter_map(Diagnostic::code_text)
         .map(str::to_owned)
         .collect();
-    assert!(codes.contains(&"KSEM298".to_owned()), "{items:?}");
+    assert!(codes.contains(&"KSEM289".to_owned()), "{items:?}");
+}
+
+/// A declaration that writes the claim itself keeps its own conformance: the
+/// family's claim states what must be true of it, and it is.
+#[test]
+fn a_declaration_may_also_claim_the_trait_its_family_claims() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Square(edge: Int): Sized extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n\
+         \n    function area(borrow self) -> Int {{ return edge * edge }}\n}}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
 }
 
 #[test]
