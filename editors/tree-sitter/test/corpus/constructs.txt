@@ -1,0 +1,394 @@
+================================================================================
+A construct with no parameter list is the family template
+================================================================================
+
+construct Widget {
+    @Required function render() -> String
+    function announce() -> String {
+        return "<" + render() + ">"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    body: (construct_body
+      (function_definition
+        (attribute
+          name: (identifier))
+        name: (identifier)
+        parameters: (parameters)
+        return_type: (return_type
+          (type_identifier)))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters)
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (binary_expression
+              left: (binary_expression
+                left: (string_literal)
+                right: (call_expression
+                  function: (identifier)
+                  arguments: (arguments)))
+              right: (string_literal))))))))
+
+================================================================================
+A parameter list makes it a backed declaration
+================================================================================
+
+construct Text(content: String) extends Widget {
+    render { return content }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    extends: (extends_list
+      (type_identifier))
+    body: (construct_body
+      (construct_member_shorthand
+        name: (identifier)
+        body: (block
+          (return_statement
+            value: (identifier)))))))
+
+================================================================================
+A construct with no inputs still writes its parentheses
+================================================================================
+
+construct Divider() extends Widget {
+    render { return "---" }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    parameters: (parameters)
+    extends: (extends_list
+      (type_identifier))
+    body: (construct_body
+      (construct_member_shorthand
+        name: (identifier)
+        body: (block
+          (return_statement
+            value: (string_literal)))))))
+
+================================================================================
+Stored, required, and computed members
+================================================================================
+
+construct Panel(scale: Int) extends Widget {
+    let parts: [some Widget]
+    @Required let title: String
+    @Content let extra: Any
+    let node: Any { return parts[0] }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    extends: (extends_list
+      (type_identifier))
+    body: (construct_body
+      (construct_field
+        name: (identifier)
+        type: (array_type
+          (existential_type
+            family: (type_identifier))))
+      (construct_field
+        (attribute
+          name: (identifier))
+        name: (identifier)
+        type: (type_identifier))
+      (construct_field
+        (attribute
+          name: (identifier))
+        name: (identifier)
+        type: (type_identifier))
+      (construct_computed_member
+        name: (identifier)
+        type: (type_identifier)
+        body: (block
+          (return_statement
+            value: (index_expression
+              receiver: (identifier)
+              index: (integer_literal))))))))
+
+================================================================================
+`init` is another way to construct a declaration
+================================================================================
+
+construct Row(value: Int) extends Widget {
+    init(title: String, value: Int) {
+        return
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    extends: (extends_list
+      (type_identifier))
+    body: (construct_body
+      (construct_initializer
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            type: (type_identifier))
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        body: (block
+          (return_statement))))))
+
+================================================================================
+`requires` and `lifecycle` sections
+================================================================================
+
+construct Driver {
+    requires {
+        function label() -> String
+    }
+    lifecycle {
+        onAppear() { return }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    body: (construct_body
+      (requires_section
+        (function_definition
+          name: (identifier)
+          parameters: (parameters)
+          return_type: (return_type
+            (type_identifier))))
+      (lifecycle_section
+        (lifecycle_hook
+          name: (identifier)
+          parameters: (parameters)
+          body: (block
+            (return_statement)))))))
+
+================================================================================
+A construction takes children in a trailing block
+================================================================================
+
+function f() {
+    let node = McxSum(scale: 2) {
+        McxLeaf(n: 3)
+        McxLeaf(n: 5)
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (call_expression
+            function: (identifier)
+            arguments: (arguments
+              (labeled_argument
+                label: (identifier)
+                value: (integer_literal))))
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (labeled_argument
+                    label: (identifier)
+                    value: (integer_literal)))))
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (labeled_argument
+                    label: (identifier)
+                    value: (integer_literal))))))))
+      (return_statement))))
+
+================================================================================
+A `For` builder produces children by control flow
+================================================================================
+
+function f() {
+    let node = McxSum(scale: 2) {
+        For(part in all) {
+            part
+        }
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (call_expression
+            function: (identifier)
+            arguments: (arguments
+              (labeled_argument
+                label: (identifier)
+                value: (integer_literal))))
+          body: (content_block
+            (content_for
+              name: (identifier)
+              iterable: (identifier)
+              body: (content_block
+                (expression_statement
+                  (identifier)))))))
+      (return_statement))))
+
+================================================================================
+A method takes a trailing block with no parentheses
+================================================================================
+
+function f() {
+    let node = McxLeaf(n: 3).paired {
+        McxLeaf(n: 4)
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (field_expression
+            receiver: (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (labeled_argument
+                  label: (identifier)
+                  value: (integer_literal))))
+            field: (identifier))
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (labeled_argument
+                    label: (identifier)
+                    value: (integer_literal))))))))
+      (return_statement))))
+
+================================================================================
+Named child fills close a construction
+================================================================================
+
+function f() {
+    let view = NavigationSplitView { Sidebar() } detail: { Detail() }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments))))
+          fill: (named_fill
+            name: (identifier)
+            value: (content_block
+              (expression_statement
+                (call_expression
+                  function: (identifier)
+                  arguments: (arguments)))))))
+      (return_statement))))
+
+================================================================================
+A construction override is written with `let` or a dotted path
+================================================================================
+
+function f() {
+    let styled = Panel {
+        let spacing = 8
+        title.text: "hi"
+        Leaf()
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (identifier)
+          body: (content_block
+            (variable_declaration
+              name: (identifier)
+              value: (integer_literal))
+            (field_initializer
+              name: (field_expression
+                receiver: (identifier)
+                field: (identifier))
+              value: (string_literal))
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments))))))
+      (return_statement))))

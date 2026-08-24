@@ -1,0 +1,197 @@
+================================================================================
+Array type, nested
+================================================================================
+
+function f(rows: [[Int]]) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (array_type
+          (array_type
+            (type_identifier)))))
+    body: (block)))
+
+================================================================================
+Function type as a parameter and as a result
+================================================================================
+
+function apply(f: borrow (Int) -> Int, x: Int): (Int) -> Int {
+    return f
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (function_type
+          (type_identifier)
+          result: (type_identifier)))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (function_type
+        (type_identifier)
+        result: (type_identifier)))
+    body: (block
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+Generic instantiation, nested through a single `>>`
+================================================================================
+
+function f(r: Result<Result<Int, E>, E>) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (generic_type
+          name: (type_identifier)
+          arguments: (type_arguments
+            (generic_type
+              name: (type_identifier)
+              arguments: (type_arguments
+                (type_identifier)
+                (type_identifier)))
+            (type_identifier)))))
+    body: (block)))
+
+================================================================================
+Module-qualified type
+================================================================================
+
+function f(p: Geo.Point) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (qualified_type_identifier
+          (type_identifier)
+          (type_identifier))))
+    body: (block)))
+
+================================================================================
+`some Family` and `Any Family` name the same type
+================================================================================
+
+function f(one: some Widget, many: [Any Widget]) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (existential_type
+          family: (type_identifier)))
+      (parameter
+        name: (identifier)
+        type: (array_type
+          (existential_type
+            family: (type_identifier)))))
+    body: (block)))
+
+================================================================================
+`Any` alone is the top type
+================================================================================
+
+function f() {
+    let value: Any = 1
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        type: (type_identifier)
+        value: (integer_literal))
+      (return_statement))))
+
+================================================================================
+Ownership prefixes on a parameter's type
+================================================================================
+
+function f(a: borrow Int, b: borrow mut Int, c: move Int, d: copy Int) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (type_identifier)))
+    body: (block)))
+
+================================================================================
+A parameter default
+================================================================================
+
+function step(base: Int, by: Int = 1) -> Int {
+    return base + by
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)
+        default: (integer_literal)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (identifier))))))

@@ -1,0 +1,246 @@
+================================================================================
+Import of a sibling module
+================================================================================
+
+import geometry
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    module: (module_path
+      (identifier))))
+
+================================================================================
+Import of a nested module with an alias
+================================================================================
+
+import shapes.Rect as Rect
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    module: (module_path
+      (identifier)
+      (identifier))
+    alias: (identifier)))
+
+================================================================================
+Struct with members and a default
+================================================================================
+
+struct Box {
+    var origin: Vec3
+    var label: String = "unnamed"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    name: (identifier)
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)
+        default: (string_literal)))))
+
+================================================================================
+Struct with a method
+================================================================================
+
+struct Mesh {
+    let id: Int
+    function scaled(factor: Int) -> Int {
+        return id * factor
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    name: (identifier)
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (binary_expression
+              left: (identifier)
+              right: (identifier))))))))
+
+================================================================================
+Class with parents and overrides
+================================================================================
+
+class Savings extends Account, Ledger {
+    var balance: Int = 100
+    override let rate = 5
+    override function gross() -> Int {
+        return Account.gross()
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (class_declaration
+    name: (identifier)
+    extends: (extends_list
+      (type_identifier)
+      (type_identifier))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)
+        default: (integer_literal))
+      (override_member
+        name: (identifier)
+        default: (integer_literal))
+      (override_member
+        (function_definition
+          name: (identifier)
+          parameters: (parameters)
+          return_type: (return_type
+            (type_identifier))
+          body: (block
+            (return_statement
+              value: (method_call_expression
+                receiver: (identifier)
+                method: (identifier)
+                arguments: (arguments)))))))))
+
+================================================================================
+Enum variants are separated by nothing
+================================================================================
+
+enum Color { Red Green Blue }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    body: (enum_body
+      (enum_variant
+        name: (identifier))
+      (enum_variant
+        name: (identifier))
+      (enum_variant
+        name: (identifier)))))
+
+================================================================================
+Enum payloads, and a payload with a default
+================================================================================
+
+enum Message {
+    Empty
+    Text(String)
+    InvalidFormat: String = "not that format"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    body: (enum_body
+      (enum_variant
+        name: (identifier))
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier))
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier)
+        default: (string_literal)))))
+
+================================================================================
+The enum is the one declaration that takes type parameters
+================================================================================
+
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (identifier)
+      (identifier))
+    body: (enum_body
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier))
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier)))))
+
+================================================================================
+Type alias
+================================================================================
+
+type Byte = U8
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_alias_declaration
+    name: (identifier)
+    target: (type_identifier)))
+
+================================================================================
+Type alias to an array of an alias
+================================================================================
+
+type Matrix = [[Count]]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_alias_declaration
+    name: (identifier)
+    target: (array_type
+      (array_type
+        (type_identifier)))))
+
+================================================================================
+Package declaration
+================================================================================
+
+Package KikHarness {
+    let version = "0.1.0"
+    let kind = .App
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (package_declaration
+    name: (identifier)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (string_literal))
+      (variable_declaration
+        name: (identifier)
+        value: (dot_member_expression
+          name: (identifier))))))

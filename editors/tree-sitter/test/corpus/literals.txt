@@ -188,3 +188,23 @@ function f() {
       (variable_declaration
         name: (identifier)
         value: (integer_literal)))))
+
+================================================================================
+A hexadecimal integer is a bit pattern
+================================================================================
+
+function f() -> Int {
+    return 0xffffffffffffffff
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (integer_literal)))))
