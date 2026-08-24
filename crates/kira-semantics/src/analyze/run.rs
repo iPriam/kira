@@ -45,6 +45,8 @@ impl<'a> Analyzer<'a> {
             construct_family_names: HashMap::new(),
             traits: crate::traits::TraitTable::new(),
             conformances: Vec::new(),
+            drop_extractions: Vec::new(),
+            enum_payload_sites: Vec::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
@@ -148,7 +150,13 @@ impl<'a> Analyzer<'a> {
         // A `Drop` body is a method, so it has no id until signatures exist; and
         // whether a type runs one decides whether it is released at all, so it
         // is recorded before any body is analyzed.
-        self.record_user_drops();
+        self.record_user_drops(&callables);
+        // A crossing is a copy, and a value with a body to run has no copy.
+        self.refuse_drop_across_engines(&callables);
+        // Which payloads run one is answerable only now, and every enum the
+        // declarations wrote exists — an instantiation a body mints is caught
+        // by the second call below.
+        self.refuse_drop_enum_payloads();
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
         // to the entry file rather than to whichever module happened to declare
@@ -168,6 +176,9 @@ impl<'a> Analyzer<'a> {
         // surface to analyze its initializer. Resolve it before the ordinary
         // default pass so construction sites see the inferred field type.
         self.resolve_construct_field_types();
+        // A backed declaration's member may be written without a type, so what
+        // it runs is answerable only once inference has given every member one.
+        self.refuse_drop_construct_declarations();
         // Inference can reveal a by-value edge that was `Error` while the
         // construct header was collected. Re-run the value-cycle break after
         // those edges become concrete, before any instance default is lowered.
@@ -211,6 +222,10 @@ impl<'a> Analyzer<'a> {
         // generic instantiation, and the desugar below is the first pass to ask
         // for a value of a type nobody wrote.
         self.check_enum_terminates();
+        // A default, a modifier body, and a dispatcher arm are analyzed outside
+        // any declared function, so the reads they built are reported here.
+        self.report_drop_extractions();
+        self.refuse_drop_enum_payloads();
         self.finalize_closures();
         // After lifting, not before: a closure's representation struct is only
         // final once every literal of its type has been found, and a callback

@@ -233,6 +233,15 @@ impl Analyzer<'_> {
             }
         };
 
+        // The cursor binds one element per iteration while the array still
+        // holds it, which for a value running a user `Drop` is the second owner
+        // a member read is refused for. Refused here rather than at the
+        // synthesized index read: this desugar builds the read itself, so there
+        // is no enclosing expression to claim it as a borrowed one.
+        if self.program.types.runs_user_drop(element) {
+            self.refuse_drop_extraction(element, cursor_name.span);
+        }
+
         let array_slot = ctx.declare_hidden(array_ty, false);
         let bind_array = self.program.stmts.alloc(HirStmt::Let {
             local: array_slot,

@@ -275,6 +275,22 @@ pub(crate) struct Analyzer<'a> {
     /// Beside the type table rather than in it: conformance is resolved away
     /// before the HIR exists, so nothing downstream carries it.
     pub(crate) conformances: Vec<crate::traits::Conformance>,
+    /// Member and element reads of a value that runs a user `Drop`, waiting for
+    /// the body being analyzed to finish.
+    ///
+    /// A read is refused only if no enclosing expression claimed it as a
+    /// borrowed one, and the enclosing expression is built after the read — so
+    /// the answer is not available until the body is whole. See
+    /// [`crate::traits::drop`].
+    pub(crate) drop_extractions: Vec<crate::traits::drop::DropExtraction>,
+    /// Every enum variant payload the program resolved, as
+    /// `(type, declaring file, span to blame)`.
+    ///
+    /// Kept because whether a payload runs a user `Drop` is a question about a
+    /// conformance, which is collected after every payload is resolved — and
+    /// the span an instantiation should be blamed at is worked out by the
+    /// payload pass and by nothing else.
+    pub(crate) enum_payload_sites: Vec<(Type, SourceId, Span)>,
     /// Reverse lookup from synthesized family enum to source family name.
     pub(crate) construct_family_names: HashMap<EnumId, String>,
     /// The methods each struct and class declares itself, keyed by id.

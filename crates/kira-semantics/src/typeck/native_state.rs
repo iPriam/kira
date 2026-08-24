@@ -51,6 +51,22 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
+        // A boxed value leaves the frame that made it: `nativeStateFree` gives
+        // the box back from wherever a callback happened to be, and the store is
+        // not an engine — there is nothing there to enter a `Drop` body with.
+        if self.program.types.runs_user_drop(ty) {
+            self.emit(
+                span,
+                "KSEM304",
+                format!(
+                    "`nativeState` cannot box `{}`, which runs a user `Drop` body: the box \
+                     outlives the frame that made it and is freed where no engine is running to \
+                     enter the body. Keep the value in a frame, and box what it computes.",
+                    self.type_name(ty)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let Some(type_id) = self.program.types.native_state_type_id(ty) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
@@ -141,6 +157,21 @@ impl Analyzer<'_> {
                 "KSEM214",
                 format!(
                     "`nativeRecover` requires a Kira-owned type, found `{}`",
+                    self.type_name(target)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // Nothing may be boxed that runs a body, so nothing may be recovered as
+        // one either: a recovered view is a value of the target type, and this
+        // is the position that says what that type is.
+        if self.program.types.runs_user_drop(target) {
+            self.emit(
+                span,
+                "KSEM304",
+                format!(
+                    "`nativeRecover` cannot recover `{}`, which runs a user `Drop` body: the box \
+                     it would name is freed where no engine is running to enter the body.",
                     self.type_name(target)
                 ),
             );

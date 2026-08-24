@@ -16,6 +16,7 @@ mod constructs;
 mod conversions;
 mod copyable;
 mod definitions;
+mod drop;
 mod enums;
 mod exports;
 mod ffi_types;

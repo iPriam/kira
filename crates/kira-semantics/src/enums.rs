@@ -291,6 +291,13 @@ impl<'a> Analyzer<'a> {
     /// payload would not own, an in-flight `Task`, and a `NativeState` handle
     /// whose lifetime is the host's.
     fn check_payload_type(&mut self, ty: Type, span: Span) -> Type {
+        // Whether a payload runs a user `Drop` cannot be asked here: a `Drop`
+        // conformance is collected after every payload is resolved. The site is
+        // recorded instead, with the span this pass already worked out — an
+        // instantiation blames the use site — and
+        // [`Analyzer::refuse_drop_enum_payloads`] answers once the conformances
+        // exist.
+        self.enum_payload_sites.push((ty, self.source, span));
         match ty {
             Type::Int(_)
             | Type::Float(_)

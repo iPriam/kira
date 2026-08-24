@@ -348,11 +348,13 @@ impl Analyzer<'_> {
             local,
             ty: Type::Struct(receiver),
         });
-        self.program.exprs.alloc(HirExpr::Field {
+        let read = self.program.exprs.alloc(HirExpr::Field {
             base,
             index: slot,
             ty,
-        })
+        });
+        self.note_drop_extraction(read, span);
+        read
     }
 
     /// Reports a bare member name that several parents declare.

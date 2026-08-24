@@ -81,7 +81,7 @@ impl<'a> Analyzer<'a> {
                 // what makes the transfer visible, and the use-after-move
                 // checker is what makes it safe.
                 if retained.get(index).copied().unwrap_or(false) {
-                    self.require_retained_move(ctx, arg, &name);
+                    self.require_retained_move(ctx, arg, value, &name);
                 }
                 value
             })

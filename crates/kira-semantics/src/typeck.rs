@@ -667,11 +667,17 @@ impl Analyzer<'_> {
                         {
                             self.link_field_name(&owner, &name, field_span);
                         }
-                        self.program.exprs.alloc(HirExpr::Field {
+                        let read = self.program.exprs.alloc(HirExpr::Field {
                             base: base_hir,
                             index,
                             ty,
-                        })
+                        });
+                        // The base is read without being consumed, whatever it
+                        // held; the read itself is a new value of `ty`, which
+                        // is where a user `Drop` body would run a second time.
+                        self.excuse_drop_extraction(base_hir);
+                        self.note_drop_extraction(read, field_span);
+                        read
                     }
                     None => self.program.exprs.alloc(HirExpr::Error),
                 }
@@ -849,7 +855,9 @@ impl Analyzer<'_> {
         let def = self.program.types.structs().get(owner)?;
         let index = def.field_index(name)?;
         let ty = def.field(index)?.ty;
-        Some(self.program.exprs.alloc(HirExpr::Field { base, index, ty }))
+        let read = self.program.exprs.alloc(HirExpr::Field { base, index, ty });
+        self.note_drop_extraction(read, span);
+        Some(read)
     }
 
     /// Analyzes a default initializer in a declaration-owned scope.
