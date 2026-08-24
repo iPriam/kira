@@ -1,0 +1,182 @@
+================================================================================
+Main attribute
+================================================================================
+
+@Main
+function main() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Attributes compose
+================================================================================
+
+@Main @Native
+function main() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Repeating one engine is not a contradiction
+================================================================================
+
+@Native @Native
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Contradictory engines still parse (KPAR005 is a diagnostic, not a parse failure)
+================================================================================
+
+@Runtime @Native
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+An unknown attribute name is consumed silently
+================================================================================
+
+@Whatever
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Attribute arguments are skipped as balanced token soup
+================================================================================
+
+@Native(target: "x86_64", level = 3)
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier)
+      (attribute_arguments
+        (string_literal)))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+A paren inside a string does not unbalance the arguments
+================================================================================
+
+@Deprecated("use bar( instead")
+@Main
+function main() { return }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier)
+      (attribute_arguments
+        (string_literal)))
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (return_statement))))
+
+================================================================================
+An unterminated string in arguments is an error, as the lexer says (KLEX002)
+================================================================================
+
+@Main("abc) function f() { }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (identifier)))
+
+================================================================================
+Attribute arguments nest
+================================================================================
+
+@Foo(a(b(c)))
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier)
+      (attribute_arguments
+        (attribute_arguments
+          (attribute_arguments))))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Empty attribute arguments
+================================================================================
+
+@Foo()
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier)
+      (attribute_arguments))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))

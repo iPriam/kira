@@ -1,0 +1,6 @@
+.DS_Store
+target/
+Cargo.lock
+extension.wasm
+grammars/
+grammars_unused_flint/

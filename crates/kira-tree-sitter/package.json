@@ -1,0 +1,30 @@
+{
+  "name": "tree-sitter-kira",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for Kira",
+  "main": "grammar.js",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  },
+  "types": "bindings/node",
+  "tree-sitter": [
+    {
+      "scope": "source.kira",
+      "injection-regex": "^kira$"
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.11"
+  },
+  "keywords": [
+    "tree-sitter",
+    "kira"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kira-lang-com/kira-tree-sitter.git"
+  },
+  "author": "kira-lang-com",
+  "license": "MIT"
+}

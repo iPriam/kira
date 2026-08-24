@@ -1,0 +1,129 @@
+{
+  "scopeName": "source.kira",
+  "name": "Kira",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#directives" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#literals" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.kira",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "storage.type.annotation.kira",
+          "match": "@(Platforms)\\s*\\(([^)]+)\\)",
+          "captures": {
+            "2": {
+              "patterns": [
+                {
+                  "name": "constant.language.kira",
+                  "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "storage.type.annotation.kira",
+          "match": "@(Native|Runtime)\\b"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.kira",
+          "match": "#platforms\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.kira",
+          "match": "\\b(func|let|return|if|else|import|struct|for|while|break|continue)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.kira",
+          "match": "\\b(int|float|bool|string)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.kira"
+            },
+            "2": {
+              "name": "entity.name.function.kira"
+            }
+          }
+        },
+        {
+          "name": "support.function.builtin.kira",
+          "match": "\\b(printIn)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.kira",
+          "match": "\"[^\"]*\""
+        },
+        {
+          "name": "constant.numeric.kira",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        },
+        {
+          "name": "constant.language.boolean.kira",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.kira",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.kira",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.kira",
+          "match": "(\\.\\.=?)"
+        },
+        {
+          "name": "keyword.operator.kira",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.kira",
+          "match": "="
+        }
+      ]
+    }
+  }
+}

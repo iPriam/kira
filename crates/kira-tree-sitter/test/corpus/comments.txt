@@ -1,0 +1,97 @@
+================================================================================
+Line comment at the top level
+================================================================================
+
+// Recursion and if/else: the classic Fibonacci function.
+function main() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Line comment inside a block
+================================================================================
+
+function f() {
+    // a comment
+    let a = 1 // trailing
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (comment)
+      (variable_declaration
+        name: (identifier)
+        value: (integer_literal))
+      (comment))))
+
+================================================================================
+A comment does not end a continued expression
+================================================================================
+
+function f() -> Int {
+    let a = 5 // still going
+    -2
+    return a
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (binary_expression
+          left: (integer_literal)
+          (comment)
+          right: (integer_literal)))
+      (return_statement
+        value: (identifier)))))
+
+================================================================================
+An empty comment
+================================================================================
+
+//
+function f() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+A comment runs to end of line only
+================================================================================
+
+// function ignored() {}
+function real() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comment)
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))

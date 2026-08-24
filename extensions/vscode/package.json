@@ -1,0 +1,31 @@
+{
+  "name": "kira-language-support",
+  "displayName": "Kira Language Support",
+  "description": "Syntax highlighting and editor support for the Kira programming language",
+  "version": "0.1.0",
+  "publisher": "kira-lang",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "icon": "KiraIcon.png",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "kira",
+        "extensions": [".kira"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kira",
+        "scopeName": "source.kira",
+        "path": "./syntaxes/kira.tmLanguage.json"
+      }
+    ]
+  }
+}

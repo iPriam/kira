@@ -1,0 +1,417 @@
+================================================================================
+Call with no arguments
+================================================================================
+
+function f() {
+    banner()
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments))))))
+
+================================================================================
+print is an ordinary identifier, not a keyword
+================================================================================
+
+function f() {
+    print("hello from Kira")
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (string_literal)))))))
+
+================================================================================
+Call with several arguments and a trailing comma
+================================================================================
+
+function f() {
+    g(1, 2, 3,)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (integer_literal)
+            (integer_literal)
+            (integer_literal)))))))
+
+================================================================================
+Nested calls
+================================================================================
+
+function f() {
+    print(fib(10))
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (integer_literal)))))))))
+
+================================================================================
+Or is the loosest binary operator
+================================================================================
+
+function f(a: Bool, b: Bool, c: Bool) -> Bool {
+    return a || b && c
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (binary_expression
+            left: (identifier)
+            right: (identifier)))))))
+
+================================================================================
+And binds tighter than or, comparison tighter than and
+================================================================================
+
+function f(sum: Int) -> Bool {
+    return sum > 40 && sum < 50
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (binary_expression
+            left: (identifier)
+            right: (integer_literal))
+          right: (binary_expression
+            left: (identifier)
+            right: (integer_literal)))))))
+
+================================================================================
+Multiplication binds tighter than addition
+================================================================================
+
+function f(a: Int, b: Int, c: Int) -> Int {
+    return a + b * c
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (binary_expression
+            left: (identifier)
+            right: (identifier)))))))
+
+================================================================================
+Subtraction is left-associative
+================================================================================
+
+function f() -> Int {
+    return 1 - 2 - 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (binary_expression
+            left: (integer_literal)
+            right: (integer_literal))
+          right: (integer_literal))))))
+
+================================================================================
+Comparisons are left-associative too
+================================================================================
+
+function f(a: Int, b: Int, c: Int) -> Bool {
+    return a < b < c
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (binary_expression
+            left: (identifier)
+            right: (identifier))
+          right: (identifier))))))
+
+================================================================================
+Remainder sits with multiplication
+================================================================================
+
+function f() -> Int {
+    return 1 + 7 % 3 * 2
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (integer_literal)
+          right: (binary_expression
+            left: (binary_expression
+              left: (integer_literal)
+              right: (integer_literal))
+            right: (integer_literal)))))))
+
+================================================================================
+Unary binds tighter than multiplication
+================================================================================
+
+function f(x: Int, y: Int) -> Int {
+    return -x * y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (unary_expression
+            operand: (identifier))
+          right: (identifier))))))
+
+================================================================================
+Unary operators stack
+================================================================================
+
+function f(x: Bool) -> Bool {
+    return !!x
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (unary_expression
+          operand: (unary_expression
+            operand: (identifier)))))))
+
+================================================================================
+Negation stacks
+================================================================================
+
+function f(x: Int) -> Int {
+    return - -x
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (unary_expression
+          operand: (unary_expression
+            operand: (identifier)))))))
+
+================================================================================
+Parentheses regroup
+================================================================================
+
+function f(a: Int, b: Int, c: Int) -> Int {
+    return (a + b) * c
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (parenthesized_expression
+            (binary_expression
+              left: (identifier)
+              right: (identifier)))
+          right: (identifier))))))
+
+================================================================================
+String concatenation and comparison
+================================================================================
+
+function f(greeting: String, subject: String) {
+    print(greeting + " " + subject)
+    print(greeting == "hello")
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (binary_expression
+              left: (binary_expression
+                left: (identifier)
+                right: (string_literal))
+              right: (identifier)))))
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (binary_expression
+              left: (identifier)
+              right: (string_literal))))))))
