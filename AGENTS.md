@@ -20,6 +20,10 @@ Every pre-existing issue is yours to fix. Do not avoid one because it is pre-exi
 
 Every kira syntax/behavior MUST always be in `tests-kik` harness(es), if you find pre-existing syntax or behavior that isn't in there, you MUST add it immediately and not defer it as we have not assured completeness of the harness.
 
+Document user-facing language and toolchain behavior in `sites/docs`, and nowhere else; update it in the same change that alters the behavior.
+
+Update the `editors/tree-sitter` grammar in the same change that alters syntax.
+
 ## Git
 
 Before running or suggesting any Git command except `git diff` or `git status`, read `working-with-git`.
