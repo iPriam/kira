@@ -3,11 +3,10 @@ grammar = "kira"
 path_suffixes = ["kira"]
 line_comments = ["// "]
 autoclose_before = ";:.,=}])> \n\t"
-# No `[` pair: v0 has no arrays and no indexing, so auto-closing one would only
-# help you type something that cannot compile.
 brackets = [
     { start = "{", end = "}", close = true, newline = true },
     { start = "(", end = ")", close = true, newline = false },
+    { start = "[", end = "]", close = true, newline = false },
     { start = "\"", end = "\"", close = true, newline = false, not_in = ["comment", "string"] },
 ]
 tab_size = 4
