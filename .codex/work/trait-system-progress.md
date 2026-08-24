@@ -163,3 +163,13 @@ The rewrite is one head per file-scope line, from column zero to the `{` that
 opens the body, and the parameter list may span lines. Kira source embedded in
 Rust test strings needs the same rewrite; this repository had 169 of those
 beside the 1614 in `.kira` files.
+
+**Migrated 2026-08-24.** All seven sibling repositories are rewritten,
+building, and committed: ui-foundation `128cbcb`, kira-graphics `7016b58`,
+kira-layout `d0cb069`, kira-ui `1c282b9`, ui-motion `baa6a36`, opacity-ui
+`3cc70fc`, project-matter `b384398` (603 heads across 90 files). Two facts
+the migration surfaced, both fixed in this repository alongside it: autobind's
+libclang needed the Apple `-isysroot` exactly as `native_sources` did (dawn's
+webgpu.h found no `<math.h>` once the cache invalidated), and a test package
+now has to own the `Test` family and its collector runner — project-matter's
+harness gained both files and reports 170/170 on the VM driver.

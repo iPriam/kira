@@ -377,6 +377,16 @@ fn clang_arguments(
     if let Some(triple) = clang_triple(&context.target) {
         arguments.push(format!("--target={triple}"));
     }
+    // libclang carries no default sysroot on Apple hosts any more than the
+    // managed driver does (see `native_sources`): without `-isysroot` naming
+    // the active SDK, `<math.h>` and every other C library header is simply
+    // not found and the harvest binds nothing.
+    if matches!(context.target.os(), "macos" | "ios" | "tvos" | "xros")
+        && let Some(sdk) = crate::native_sources::apple_sdk_root()
+    {
+        arguments.push("-isysroot".to_owned());
+        arguments.push(sdk);
+    }
     // Each header's own directory, so a header that includes its neighbour by
     // bare name resolves the way it does when the library is compiled.
     let mut include_dirs: Vec<PathBuf> = headers

@@ -283,7 +283,7 @@ fn tool(variable: &str, managed: Option<PathBuf>, fallback: &str) -> PathBuf {
 /// has active. Returns `None` when `xcrun` is absent or fails, in which case the
 /// compile falls back to whatever default the compiler carries — correct for
 /// Apple's `cc`, and no worse than before for a managed clang.
-fn apple_sdk_root() -> Option<String> {
+pub(crate) fn apple_sdk_root() -> Option<String> {
     let output = Command::new("xcrun")
         .args(["--show-sdk-path"])
         .output()
