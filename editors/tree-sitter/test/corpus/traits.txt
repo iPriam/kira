@@ -1,0 +1,225 @@
+================================================================================
+A trait declares requirements and defaults
+================================================================================
+
+trait Hashable {
+    function hash(borrow self) -> Int
+    function doubled(borrow self) -> Int {
+        return self.hash() * 2
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier)))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (binary_expression
+              left: (method_call_expression
+                receiver: (identifier)
+                method: (identifier)
+                arguments: (arguments))
+              right: (integer_literal))))))))
+
+================================================================================
+A marker trait has no members
+================================================================================
+
+trait Send {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    body: (trait_body)))
+
+================================================================================
+Conformance is a colon list on a struct
+================================================================================
+
+struct Mesh: Hashable, Send {
+    let id: Int
+    function hash(borrow self) -> Int {
+        return id * 7
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier)
+      (type_identifier))
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (binary_expression
+              left: (identifier)
+              right: (integer_literal))))))))
+
+================================================================================
+Traits come first and `extends` second on a class
+================================================================================
+
+class Panel: Hashable extends Surface {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (class_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier))
+    extends: (extends_list
+      (type_identifier))
+    body: (class_body)))
+
+================================================================================
+Conformance on a construct-backed declaration
+================================================================================
+
+construct MyWidget: Hashable extends Widget {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (construct_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier))
+    extends: (extends_list
+      (type_identifier))
+    body: (construct_body)))
+
+================================================================================
+`extend T: Trait` is the impl block
+================================================================================
+
+extend Plate: Hashable {
+    function hash(borrow self) -> Int {
+        return n + 1
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extend_declaration
+    name: (type_identifier)
+    conforms: (conformance_list
+      (type_identifier))
+    body: (extend_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (binary_expression
+              left: (identifier)
+              right: (integer_literal))))))))
+
+================================================================================
+`extend Family` with no colon is the modifier block
+================================================================================
+
+extend McxNode {
+    @Native
+    function paired(with: some McxNode) -> Any McxNode {
+        return McxPair(first: self, second: with)
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extend_declaration
+    name: (type_identifier)
+    body: (extend_body
+      (function_definition
+        (attribute
+          name: (identifier))
+        name: (identifier)
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            type: (existential_type
+              family: (type_identifier))))
+        return_type: (return_type
+          (existential_type
+            family: (type_identifier)))
+        body: (block
+          (return_statement
+            value: (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (labeled_argument
+                  label: (identifier)
+                  value: (identifier))
+                (labeled_argument
+                  label: (identifier)
+                  value: (identifier))))))))))
+
+================================================================================
+Drop is claimed like any other trait
+================================================================================
+
+struct Handle: Drop {
+    let raw: Int
+    function drop(borrow mut self) {
+        closeHandle(raw)
+        return
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier))
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        body: (block
+          (expression_statement
+            (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (identifier))))
+          (return_statement))))))

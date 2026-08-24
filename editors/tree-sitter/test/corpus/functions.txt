@@ -172,3 +172,126 @@ function
     body: (block
       (return_statement
         value: (identifier)))))
+
+================================================================================
+A receiver is a leading `borrow self` parameter
+================================================================================
+
+struct Mesh {
+    function hash(borrow self) -> Int {
+        return 1
+    }
+    function bump(borrow mut self, by: Int) {
+        return
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    name: (identifier)
+    body: (struct_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (integer_literal))))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter)
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        body: (block
+          (return_statement))))))
+
+================================================================================
+`async` marks a body meant to be spawned
+================================================================================
+
+async function total(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (identifier))))))
+
+================================================================================
+An `@FFI.Extern` function is bodyless and ends with `;`
+================================================================================
+
+@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
+function add(a: I32, b: I32) -> I32;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (identifier))))
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))))
+
+================================================================================
+A trait requirement is bodyless with no `;`
+================================================================================
+
+trait Hashable {
+    function hash(borrow self) -> Int
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))))))

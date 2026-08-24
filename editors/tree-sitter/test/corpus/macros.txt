@@ -1,0 +1,209 @@
+================================================================================
+A declarative macro binds fragments and expands a template
+================================================================================
+
+macro square(value: expr) {
+    expand {
+        value * value
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (macro_declaration
+    name: (identifier)
+    parameters: (macro_parameters
+      (macro_parameter
+        name: (identifier)
+        kind: (identifier)))
+    body: (macro_body
+      (expand_block
+        body: (block
+          (expression_statement
+            (binary_expression
+              left: (identifier)
+              right: (identifier))))))))
+
+================================================================================
+A `place` fragment is an assignable lvalue
+================================================================================
+
+macro swap(a: place, b: place) {
+    expand {
+        let temporary = a
+        a = b
+        b = temporary
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (macro_declaration
+    name: (identifier)
+    parameters: (macro_parameters
+      (macro_parameter
+        name: (identifier)
+        kind: (identifier))
+      (macro_parameter
+        name: (identifier)
+        kind: (identifier)))
+    body: (macro_body
+      (expand_block
+        body: (block
+          (variable_declaration
+            name: (identifier)
+            value: (identifier))
+          (assignment_statement
+            left: (identifier)
+            right: (identifier))
+          (assignment_statement
+            left: (identifier)
+            right: (identifier)))))))
+
+================================================================================
+A procedural macro declares its sections and one `expand`
+================================================================================
+
+comptime macro MxFieldCount {
+    kind { derive }
+    appliesTo { struct, enum }
+    replace { true }
+    expand(target: Declaration) -> Syntax {
+        return quote {
+            function mxVecFieldCount() -> Int {
+                return #{count}
+            }
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comptime_macro_declaration
+    name: (identifier)
+    body: (comptime_macro_body
+      (macro_section
+        name: (identifier)
+        (identifier))
+      (macro_section
+        name: (identifier)
+        (identifier)
+        (identifier))
+      (macro_section
+        name: (identifier)
+        (boolean_literal))
+      (expand_function
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (quote_block
+              (quote_body
+                (quote_body
+                  (splice
+                    (identifier)))))))))))
+
+================================================================================
+A quote body splices mid-identifier
+================================================================================
+
+comptime macro mxPrefixed {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        return quote {
+            function mxp_#{name}() -> Int {
+                return 1
+            }
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comptime_macro_declaration
+    name: (identifier)
+    body: (comptime_macro_body
+      (macro_section
+        name: (identifier)
+        (identifier))
+      (expand_function
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (quote_block
+              (quote_body
+                (splice
+                  (identifier))
+                (quote_body)))))))))
+
+================================================================================
+A comptime function is called with no `!`
+================================================================================
+
+comptime function sumTo(limit: Int) -> Int {
+    return limit
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (comptime_function_declaration
+    function: (function_definition
+      name: (identifier)
+      parameters: (parameters
+        (parameter
+          name: (identifier)
+          type: (type_identifier)))
+      return_type: (return_type
+        (type_identifier))
+      body: (block
+        (return_statement
+          value: (identifier))))))
+
+================================================================================
+A macro invocation is an item, a statement, and an expression
+================================================================================
+
+mxBits!(MxRead, MxWrite)
+
+function f() -> Int {
+    mxAssignTen!()
+    return square!(6)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (macro_invocation
+    name: (identifier)
+    arguments: (arguments
+      (identifier)
+      (identifier)))
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (expression_statement
+        (macro_invocation
+          name: (identifier)
+          arguments: (arguments)))
+      (return_statement
+        value: (macro_invocation
+          name: (identifier)
+          arguments: (arguments
+            (integer_literal)))))))

@@ -13,6 +13,7 @@ Provides parsing and syntax highlighting support for editors that use Tree-sitte
 
 - `grammar.js` — Tree-sitter grammar definition
 - `src/parser.c`, `src/grammar.json`, `src/node-types.json` — generated artifacts
+- `test/corpus/*.txt` — the parse tests `tree-sitter test` runs
 - `tree-sitter.json` — metadata, scope `source.kira`
 
 ## Building
@@ -35,8 +36,10 @@ This outputs `tree-sitter-kira.wasm` in the repo root.
 
 1. Edit `grammar.js`
 2. Run `npx tree-sitter generate` to regenerate `src/`
-3. Run `npx tree-sitter build --wasm` to rebuild the WASM artifact
-4. Commit all generated files including `src/parser.c`
+3. Run `npx tree-sitter test` — every corpus case must pass
+4. Run `npx tree-sitter parse` over the `tests-kik` harnesses — no `ERROR` node
+5. Run `npx tree-sitter build --wasm` to rebuild the WASM artifact
+6. Commit all generated files including `src/parser.c`
 
 ## Usage in Zed
 

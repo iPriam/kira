@@ -180,3 +180,193 @@ function f() {}
     name: (identifier)
     parameters: (parameters)
     body: (block)))
+
+================================================================================
+`@FFI.Extern` names a library, a symbol, an ABI, and what C retains
+================================================================================
+
+@FFI.Extern {
+    library: sokol;
+    symbol: sapp_run;
+    abi: c;
+    retains: desc;
+}
+function sappRun(desc: SappDescPtr): Void;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (identifier))))
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))))
+
+================================================================================
+`@FFI.Syscall` names the call and nothing else
+================================================================================
+
+@FFI.Syscall { name: write; }
+function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (identifier))))
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))))
+
+================================================================================
+`@FFI.Struct` and `@FFI.Array` declare C types on a struct
+================================================================================
+
+@FFI.Struct { layout: c; }
+struct FaxSlot { var value: I32 }
+
+@FFI.Array { element: FaxSlot; count: 4; }
+struct FaxSlots {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (identifier))))
+    name: (identifier)
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))))
+  (struct_declaration
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (type_identifier))
+        (attribute_field
+          key: (identifier)
+          value: (integer_literal))))
+    name: (identifier)
+    body: (struct_body)))
+
+================================================================================
+`@FFI.Callback` carries a bracketed parameter list
+================================================================================
+
+@FFI.Callback { abi: c; params: [I32, F32]; result: Void; }
+struct FaxCallback {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (attribute
+      name: (qualified_attribute_name
+        (identifier)
+        (identifier))
+      (attribute_block
+        (attribute_field
+          key: (identifier)
+          value: (identifier))
+        (attribute_field
+          key: (identifier)
+          value: (attribute_type_list
+            (type_identifier)
+            (type_identifier)))
+        (attribute_field
+          key: (identifier)
+          value: (type_identifier))))
+    name: (identifier)
+    body: (struct_body)))
+
+================================================================================
+`@Derive` lists the macros run over a declaration
+================================================================================
+
+@Derive(MxFieldCount, MxSum)
+struct MxVec3 {
+    var x: Int
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (attribute
+      name: (identifier)
+      (attribute_arguments))
+    name: (identifier)
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)))))
+
+================================================================================
+`@Export` marks the consumer-facing surface
+================================================================================
+
+@Export
+class Button {
+    var title: String = ""
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (class_declaration
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)
+        default: (string_literal)))))

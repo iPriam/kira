@@ -415,3 +415,451 @@ function f(greeting: String, subject: String) {
             (binary_expression
               left: (identifier)
               right: (string_literal))))))))
+
+================================================================================
+The conditional is control flow and nests to the right
+================================================================================
+
+function f() -> Int {
+    return a ? 1 : b ? 2 : 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (conditional_expression
+          condition: (identifier)
+          consequence: (integer_literal)
+          alternative: (conditional_expression
+            condition: (identifier)
+            consequence: (integer_literal)
+            alternative: (integer_literal)))))))
+
+================================================================================
+Bitwise operators bind looser than equality
+================================================================================
+
+function f() -> Bool {
+    return flags & 8 == 8
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (binary_expression
+            left: (integer_literal)
+            right: (integer_literal)))))))
+
+================================================================================
+Shifts bind tighter than the orderings and looser than addition
+================================================================================
+
+function f() -> Int {
+    return 1 + 2 << 3
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (binary_expression
+            left: (integer_literal)
+            right: (integer_literal))
+          right: (integer_literal))))))
+
+================================================================================
+Bitwise not is a prefix operator
+================================================================================
+
+function f() -> Int {
+    return ~mask
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (unary_expression
+          operand: (identifier))))))
+
+================================================================================
+Field access chains, and an index walks as deep as the path goes
+================================================================================
+
+function f() {
+    grid[1][1] = b.origin.x
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (assignment_statement
+        left: (index_expression
+          receiver: (index_expression
+            receiver: (identifier)
+            index: (integer_literal))
+          index: (integer_literal))
+        right: (field_expression
+          receiver: (field_expression
+            receiver: (identifier)
+            field: (identifier))
+          field: (identifier)))
+      (return_statement))))
+
+================================================================================
+A method call is a receiver, a name, and arguments
+================================================================================
+
+function f() -> Int {
+    return holder.outers.count
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (field_expression
+          receiver: (field_expression
+            receiver: (identifier)
+            field: (identifier))
+          field: (identifier))))))
+
+================================================================================
+A call argument may carry a label with either binder
+================================================================================
+
+function f() {
+    step(base: 1, tag = 9)
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (labeled_argument
+              label: (identifier)
+              value: (integer_literal))
+            (labeled_argument
+              label: (identifier)
+              value: (integer_literal)))))
+      (return_statement))))
+
+================================================================================
+A leading-dot member resolves against the expected type
+================================================================================
+
+function f() {
+    let c: Color = .Red
+    let r: Result<Int, E> = .Ok(12)
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        type: (type_identifier)
+        value: (dot_member_expression
+          name: (identifier)))
+      (variable_declaration
+        name: (identifier)
+        type: (generic_type
+          name: (type_identifier)
+          arguments: (type_arguments
+            (type_identifier)
+            (type_identifier)))
+        value: (dot_member_expression
+          name: (identifier)
+          arguments: (arguments
+            (integer_literal))))
+      (return_statement))))
+
+================================================================================
+An array literal's separators are optional
+================================================================================
+
+function f() {
+    let xs = [1, 2, 3]
+    let ys = [3 5 7]
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (return_statement))))
+
+================================================================================
+A struct literal binds its fields with `=` or `:`
+================================================================================
+
+function f() {
+    let v = Vec3 { x = 1, y: 2 }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (identifier)
+          body: (content_block
+            (field_initializer
+              name: (identifier)
+              value: (integer_literal))
+            (field_initializer
+              name: (identifier)
+              value: (integer_literal)))))
+      (return_statement))))
+
+================================================================================
+A closure names its parameters before `in`
+================================================================================
+
+function f() {
+    let scale: (Int) -> Int = { v in return v * 2 }
+    let now: () -> Int = { in return 1 }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        type: (function_type
+          (type_identifier)
+          result: (type_identifier))
+        value: (closure_expression
+          parameters: (closure_parameters
+            (identifier))
+          (return_statement
+            value: (binary_expression
+              left: (identifier)
+              right: (integer_literal)))))
+      (variable_declaration
+        name: (identifier)
+        type: (function_type
+          result: (type_identifier))
+        value: (closure_expression
+          (return_statement
+            value: (integer_literal))))
+      (return_statement))))
+
+================================================================================
+A trailing closure is the call's last argument
+================================================================================
+
+function f() {
+    each { value in print(value) }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (trailing_closure_expression
+          function: (identifier)
+          closure: (closure_expression
+            parameters: (closure_parameters
+              (identifier))
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))))
+      (return_statement))))
+
+================================================================================
+`move` and `copy` are operators only when an operand follows
+================================================================================
+
+function f() {
+    print(consume(move v))
+    var w = copy v
+    copy.weight = 999
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (ownership_expression
+                  operand: (identifier)))))))
+      (variable_declaration
+        name: (identifier)
+        value: (ownership_expression
+          operand: (identifier)))
+      (assignment_statement
+        left: (field_expression
+          receiver: (identifier)
+          field: (identifier))
+        right: (integer_literal))
+      (return_statement))))
+
+================================================================================
+`try` binds like a prefix operator
+================================================================================
+
+function f() {
+    attempt {
+        let v = try clamp(n)
+        return v
+    } handle {
+        TooSmall { return 0 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (attempt_statement
+        body: (block
+          (variable_declaration
+            name: (identifier)
+            value: (try_expression
+              value: (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))
+          (return_statement
+            value: (identifier)))
+        (handler_arm
+          pattern: (variant_pattern
+            variant: (identifier))
+          body: (block
+            (return_statement
+              value: (integer_literal))))))))
+
+================================================================================
+A task spawn defers its body
+================================================================================
+
+function f() -> Int {
+    let handle = Task { total(40, 2) }
+    return handle.await
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (construction_expression
+          constructor: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (integer_literal)
+                  (integer_literal)))))))
+      (return_statement
+        value: (field_expression
+          receiver: (identifier)
+          field: (identifier))))))

@@ -352,3 +352,198 @@ function f() -> Int {
           operand: (integer_literal)))
       (return_statement
         value: (identifier)))))
+
+================================================================================
+`for` walks a half-open range
+================================================================================
+
+function f() {
+    for i in 0..5 {
+        print(i)
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (for_statement
+        name: (identifier)
+        iterable: (range_expression
+          start: (integer_literal)
+          end: (integer_literal))
+        body: (block
+          (expression_statement
+            (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (identifier))))))
+      (return_statement))))
+
+================================================================================
+`for` also walks an array
+================================================================================
+
+function f() {
+    for x in xs {
+        print(x)
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (for_statement
+        name: (identifier)
+        iterable: (identifier)
+        body: (block
+          (expression_statement
+            (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (identifier))))))
+      (return_statement))))
+
+================================================================================
+`break` and `continue` leave and skip an iteration
+================================================================================
+
+function f() {
+    while true {
+        if done { break }
+        continue
+    }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (while_statement
+        condition: (boolean_literal)
+        body: (block
+          (if_statement
+            condition: (identifier)
+            consequence: (block
+              (break_statement)))
+          (continue_statement)))
+      (return_statement))))
+
+================================================================================
+A `match` arm takes a block or a single statement
+================================================================================
+
+function f(s: borrow Shade) -> Int {
+    match s {
+        Light -> return 1;
+        Tag(text) -> { print(text) }
+        Dark -> { return 3 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        ownership: (ownership_modifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (match_statement
+        subject: (identifier)
+        (match_arm
+          pattern: (variant_pattern
+            variant: (identifier))
+          body: (return_statement
+            value: (integer_literal)))
+        (match_arm
+          pattern: (variant_pattern
+            variant: (identifier)
+            binding: (identifier))
+          body: (block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier))))))
+        (match_arm
+          pattern: (variant_pattern
+            variant: (identifier))
+          body: (block
+            (return_statement
+              value: (integer_literal))))))))
+
+================================================================================
+`attempt` routes every failure to a `handle` arm
+================================================================================
+
+function f(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        Failed(reason) { return 0 - 2 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (attempt_statement
+        body: (block
+          (variable_declaration
+            name: (identifier)
+            value: (try_expression
+              value: (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))
+          (return_statement
+            value: (binary_expression
+              left: (identifier)
+              right: (integer_literal))))
+        (handler_arm
+          pattern: (variant_pattern
+            variant: (identifier))
+          body: (block
+            (return_statement
+              value: (binary_expression
+                left: (integer_literal)
+                right: (integer_literal)))))
+        (handler_arm
+          pattern: (variant_pattern
+            variant: (identifier)
+            binding: (identifier))
+          body: (block
+            (return_statement
+              value: (binary_expression
+                left: (integer_literal)
+                right: (integer_literal)))))))))
