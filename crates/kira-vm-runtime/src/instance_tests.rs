@@ -580,3 +580,70 @@ fn every_trap_a_validating_module_can_reach_still_balances() {
         assert_eq!(ui.finish().current, 0, "function {function}");
     }
 }
+
+/// A module whose export mints an object owed a user `Drop` body.
+///
+/// Function ids: 0 `main`, 1 `make_handle(title) -> Handle`, 2 the body.
+/// Nothing here is what the frontend produces — a type that runs a body is
+/// refused at the export boundary (`KSEM303`) — which is the point: this is a
+/// module that arrived from somewhere else.
+fn dropping_library() -> Module {
+    let make_handle = func(
+        "make_handle",
+        1,
+        1,
+        vec![
+            I::LoadLocal(0),
+            I::NewStructDropping { fields: 1, glue: 2 },
+            I::Return,
+        ],
+    );
+    let body = func("Handle.drop", 1, 1, vec![I::ReturnVoid]);
+    Module {
+        exports: Default::default(),
+        foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
+        functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), make_handle, body],
+        main: Some(0),
+        strings: vec!["ok".to_owned()],
+    }
+}
+
+/// Releasing a root outside a call gives its storage back rather than parking
+/// it forever.
+///
+/// A release happens where no interpreter is running, so a body owed here can
+/// never be entered. The object is abandoned instead: the alternative is
+/// storage that `finish` reports as live with nothing able to free it.
+#[test]
+fn a_root_owed_a_drop_body_is_abandoned_rather_than_stranded() {
+    let mut host = CapturingHost::new();
+    let mut ui = Instance::load(dropping_library()).expect("a valid module");
+
+    let made = ui
+        .call(&mut host, 1, &[NativeArg::Str("ok")])
+        .expect("clean call");
+    let NativeResult::Handle(handle) = made else {
+        panic!("a class result crosses as a handle, got {made:?}");
+    };
+    assert!(ui.stats().current > 0);
+
+    ui.release(RootId::from_word(handle)).expect("a live root");
+    assert_eq!(ui.live_roots(), 0);
+    assert_eq!(ui.stats().current, 0, "the parked object was given back");
+    assert_eq!(ui.finish().current, 0);
+}
+
+/// The same for the bulk release, which is what `finish` runs.
+#[test]
+fn release_all_abandons_every_body_it_cannot_run() {
+    let mut host = CapturingHost::new();
+    let mut ui = Instance::load(dropping_library()).expect("a valid module");
+    for _ in 0..3 {
+        ui.call(&mut host, 1, &[NativeArg::Str("ok")])
+            .expect("clean call");
+    }
+    assert_eq!(ui.live_roots(), 3);
+    assert_eq!(ui.finish().current, 0);
+}

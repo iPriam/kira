@@ -42,7 +42,7 @@ mod types;
 mod values;
 mod widening;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::CStr;
 use std::path::Path;
 
@@ -549,6 +549,14 @@ pub(crate) struct Codegen<'a> {
     /// Resolved: no `Inherited` survives here, because a backend has to know
     /// where every function actually runs.
     engines: Vec<Execution>,
+    /// The functions that are some type's user `Drop` body.
+    ///
+    /// This module carries one whatever engine owns it. A release happens
+    /// wherever the value dies, and in a hybrid program native code releases
+    /// values whose body the bytecode half also holds — so the body is compiled
+    /// into both halves rather than reached across the bridge from a release
+    /// leaf that has no frame to marshal from.
+    drop_glue: BTreeSet<u32>,
     /// One entry per IR function, in [`IrProgram::functions`] order.
     ///
     /// Only functions this module defines have a real entry; a function that
@@ -641,6 +649,13 @@ impl<'a> Codegen<'a> {
             reachable,
             exports: exports.clone(),
             engines,
+            drop_glue: program
+                .types
+                .structs()
+                .defs()
+                .iter()
+                .filter_map(|def| def.drop_glue)
+                .collect(),
             functions: Vec::with_capacity(program.functions.len()),
             foreign_ffi_descriptors: Vec::with_capacity(program.foreign_imports.len()),
             callback_ffi_descriptors: Vec::with_capacity(program.foreign_callbacks.len()),
@@ -665,7 +680,7 @@ impl<'a> Codegen<'a> {
             // A function that runs on the other engine has no body here; its
             // callers reach it through the bridge, so there is nothing to
             // declare.
-            let declared = if codegen.engine_of(index) == Execution::Native
+            let declared = if codegen.carries_body(index)
                 && codegen.reachable.get(index).copied().unwrap_or(false)
             {
                 Some(codegen.declare_function(index, function)?)
@@ -714,6 +729,17 @@ impl<'a> Codegen<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Whether this module compiles function `index`'s body.
+    ///
+    /// The engine that owns it, plus every user `Drop` body whatever engine
+    /// owns it: a release is emitted from the type rather than from a frame, so
+    /// a release leaf here has no bridge to reach a body in the other half
+    /// with. The body chose no engine — a `Drop` member may not be annotated —
+    /// so compiling it into both halves runs the same source either way.
+    fn carries_body(&self, index: usize) -> bool {
+        self.engine_of(index) == Execution::Native || self.drop_glue.contains(&(index as u32))
     }
 
     /// Which engine owns function `index`.
@@ -773,7 +799,7 @@ impl<'a> Codegen<'a> {
     fn lower_program(&mut self) -> Result<(), LlvmError> {
         let program = self.program;
         for (index, function) in program.functions.iter().enumerate() {
-            if self.engine_of(index) != Execution::Native
+            if !self.carries_body(index)
                 || !self.reachable.get(index).copied().unwrap_or(false)
                 || !self.unit.owns(index)
             {
