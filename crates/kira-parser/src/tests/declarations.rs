@@ -1,7 +1,7 @@
 //! Function, execution annotation, construct, and struct declaration parsing.
 
 use kira_runtime_abi::Execution;
-use kira_syntax_model::ast::{Expr, Item};
+use kira_syntax_model::ast::{ConstructKind, Expr, Item};
 
 use super::{first_stmt, only_function, only_struct, parse_text};
 
@@ -105,6 +105,38 @@ fn a_construct_now_parses_rather_than_reporting_unsupported() {
     assert_eq!(result.tree.items().len(), 2);
     assert!(matches!(result.tree.items()[0], Item::Construct(_)));
     assert!(matches!(result.tree.items()[1], Item::Function(_)));
+}
+
+/// `Family Name { … }` is the bare spelling of a zero-parameter declaration
+/// backed by `Family`: one item, no diagnostics.
+#[test]
+fn a_bare_family_conformance_head_parses_as_a_backed_construct() {
+    let result = parse_text("Widget Text {\n}\n@Main function main() { return }");
+    assert_eq!(result.tree.items().len(), 2, "{:?}", result.diagnostics);
+    let Item::Construct(declaration) = &result.tree.items()[0] else {
+        panic!("expected a construct, got {:?}", result.tree.items()[0]);
+    };
+    let ConstructKind::Backed { family, .. } = declaration.kind else {
+        panic!("expected a backed declaration");
+    };
+    assert_eq!(result.interner.resolve(family), "Widget");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+/// A computed member inside the bare head parses as the computed member it
+/// is — the shape argument-parser's manifests write.
+#[test]
+fn a_bare_head_body_parses_computed_members() {
+    let result = parse_text(
+        "ParsableCommand EmptyCommand {\n    let configuration: CommandConfiguration {\n        return CommandConfiguration(name: \"empty\")\n    }\n}",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let Item::Construct(declaration) = &result.tree.items()[0] else {
+        panic!("expected a construct");
+    };
+    // A computed member is a zero-argument method, not stored state.
+    assert_eq!(declaration.methods.len(), 1);
+    assert_eq!(declaration.fields.len(), 0);
 }
 
 // ----- structs -------------------------------------------------------

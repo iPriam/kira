@@ -5,6 +5,8 @@ description: The construct-family model — extends, property schemas, required 
 
 `construct` defines a **declaration family**: a typed template that other declarations conform to. It is not data (`struct`), not variants (`enum`), and not inheritance-of-behavior (`class`). A construct says *what shape a declaration must have*; concrete declarations headed by the family name (`Widget Button { ... }`) fill that shape in.
 
+The bare head is exactly the spelled-out form: `Widget Button { ... }`, `construct Button() extends Widget { ... }`, and `Widget Button { ... }` with a parameter list all declare one backed declaration of `Widget`. The two-identifier spelling carries no parameter list and no clauses — everything else about the body, including computed members discharging `@Required let`s, is identical.
+
 This is the surface that lets a library define something like a UI framework — `Widget`, `View`, `Route` — in Kira source rather than hardcoding it in the compiler.
 
 ## What executes today

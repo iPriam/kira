@@ -10,7 +10,7 @@
 //! So the app keeps the main thread and the protocol moves off it. The protocol
 //! thread drives a [`RelayHost`], which is a [`RunnerHost`] that does no work
 //! itself: every call becomes a [`Work`] request, and the answer comes back from
-//! the thread that owns the [`DesktopHost`]. Load, link, start, and swap all
+//! the thread that owns the [`BundleHost`]. Load, link, start, and swap all
 //! happen on that one thread, in order, exactly as they would have with no
 //! threads at all.
 //!
@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use kira_live::{AppOutcome, Bundle, RunnerHost};
 
-use crate::host::DesktopHost;
+use crate::host::BundleHost;
 use crate::hotpatch::VmHotPatchStatus;
 
 /// What the protocol thread asks the app thread to do.
@@ -119,7 +119,7 @@ pub fn pair(hotpatch_disabled: bool) -> (RelayHost, AppThread) {
 
 /// Splits a runner while sharing only VM hot-patch status with the protocol
 /// thread. The non-thread-safe controller stays on the app thread, where all
-/// `Session` operations are performed by [`DesktopHost`].
+/// `Session` operations are performed by [`BundleHost`].
 pub fn pair_with_hotpatch(
     hotpatch_disabled: bool,
     hotpatch: VmHotPatchStatus,
@@ -264,7 +264,7 @@ impl AppThread {
     ///
     /// Runs on whichever thread the app is allowed to own, which is the process's
     /// main thread.
-    pub fn serve(self, host: &mut DesktopHost) {
+    pub fn serve(self, host: &mut BundleHost) {
         loop {
             // A closed channel is the protocol thread having finished: the
             // session ended and nothing else will be asked for.

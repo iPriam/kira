@@ -134,6 +134,15 @@ pub struct BuiltWeb {
     pub page: PathBuf,
 }
 
+/// What an exported Web app consists of: the two emscripten outputs an export
+/// ships, copied out of the build directory and into the served tree.
+pub struct ExportedWeb {
+    /// The emscripten loader (`main.js`).
+    pub loader: PathBuf,
+    /// The linked module (`main.wasm`).
+    pub module: PathBuf,
+}
+
 /// Builds a program for `device`: emit the object, link the module and page.
 ///
 /// `foreign_link` are the resolved `wasm32-emscripten` link inputs that satisfy
@@ -167,10 +176,8 @@ pub fn build(
         foreign_link,
         shim.as_deref(),
         &runtime,
-        &[],
-        true,
+        &WebModuleKind::Executable { optimize: false },
     )?;
-
     Ok(BuiltWeb {
         wasm: artifacts.wasm(),
         page: artifacts.page(),
@@ -212,14 +219,29 @@ pub fn build_library(
         foreign_link,
         shim.as_deref(),
         &runtime,
-        &symbols,
-        false,
+        &WebModuleKind::Library { exports: symbols },
     )?;
 
     Ok(BuiltWeb {
         wasm: artifacts.wasm(),
         page: artifacts.page(),
     })
+}
+
+/// What kind of module a Web link produces, and what that asks of `emcc`.
+enum WebModuleKind {
+    /// A program: entered at its C `main`, ended when it returns.
+    Executable {
+        /// Whether to run emscripten's own `-O2` over the link — the JS loader
+        /// minify and the wasm optimize pipeline — which an export asks for
+        /// when its profile is not a development one.
+        optimize: bool,
+    },
+    /// A no-entry library retaining an export surface for its JS loader.
+    Library {
+        /// The symbols emscripten must retain, underscore-prefixed.
+        exports: Vec<String>,
+    },
 }
 
 /// Links one Web object as either an executable page or a no-entry library.
@@ -229,8 +251,7 @@ fn link_web(
     foreign_link: &NativeLinkInputs,
     shim: Option<&Path>,
     runtime: &Path,
-    exports: &[String],
-    executable: bool,
+    kind: &WebModuleKind,
 ) -> Result<(), WebError> {
     let mut command = Command::new("emcc");
     command.arg(artifacts.object());
@@ -244,20 +265,26 @@ fn link_web(
     for argument in foreign_link.driver_arguments() {
         command.arg(argument);
     }
-    if executable {
-        // `main` returning ends the program, exactly as it does on the host;
-        // without this emscripten keeps the runtime alive for a page that may
-        // want callbacks later, which a Kira program has not asked for.
-        command.arg("-sEXIT_RUNTIME=1");
-    } else {
-        command.arg("--no-entry");
-        if !exports.is_empty() {
-            let names = exports
-                .iter()
-                .map(|symbol| format!("_{symbol}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            command.arg(format!("-sEXPORTED_FUNCTIONS={names}"));
+    match kind {
+        WebModuleKind::Executable { optimize } => {
+            // `main` returning ends the program, exactly as it does on the host;
+            // without this emscripten keeps the runtime alive for a page that may
+            // want callbacks later, which a Kira program has not asked for.
+            command.arg("-sEXIT_RUNTIME=1");
+            if *optimize {
+                command.arg("-O2");
+            }
+        }
+        WebModuleKind::Library { exports } => {
+            command.arg("--no-entry");
+            if !exports.is_empty() {
+                let names = exports
+                    .iter()
+                    .map(|symbol| format!("_{symbol}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                command.arg(format!("-sEXPORTED_FUNCTIONS={names}"));
+            }
         }
     }
     if device == WasmDevice::Wasm64 {
@@ -332,6 +359,69 @@ fn build_wasm_shim(
         return Err(WebError::ShimUncompilable);
     }
     Ok(Some(object))
+}
+
+/// Builds a program as an exported Web app under `web_root`.
+///
+/// The export is the app a person ships or serves: the loader and module named
+/// `main.*` in `web_root`, beside the shell page, the generated FFI glue, and
+/// the manifest the CLI writes around them. Everything the link needed on the
+/// way there — the object, the foreign shim — stays in the sibling build
+/// directory, because a directory of web assets must not also be a directory of
+/// build intermediates.
+pub fn build_export_app(
+    ir: &IrProgram,
+    device: WasmDevice,
+    foreign_link: &NativeLinkInputs,
+    web_root: &Path,
+    optimize: bool,
+) -> Result<ExportedWeb, WebError> {
+    let build_directory = web_root.with_file_name(format!(
+        "{}-build",
+        web_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("web")
+    ));
+    std::fs::create_dir_all(&build_directory).map_err(WebError::Artifacts)?;
+    std::fs::create_dir_all(web_root).map_err(WebError::Artifacts)?;
+    // The stem fixes every name emcc bakes into the loader: with it `main`, the
+    // loader resolves its module at `main.wasm` exactly as the export's shell
+    // page and manifest name it.
+    let artifacts = WebArtifacts {
+        directory: build_directory,
+        stem: "main".to_owned(),
+    };
+
+    kira_llvm_backend::build_wasm_object(ir, &artifacts.stem, &artifacts.object(), device)?;
+    let shim = build_wasm_shim(ir, foreign_link, &artifacts)?;
+    let runtime = wasm_runtime_archive(device).ok_or(WebError::RuntimeArchiveMissing {
+        name: runtime_archive_name(device),
+    })?;
+    link_web(
+        &artifacts,
+        device,
+        foreign_link,
+        shim.as_deref(),
+        &runtime,
+        &WebModuleKind::Executable { optimize },
+    )?;
+
+    let loader = copy_into("main.js", &artifacts.directory, web_root)?;
+    let module = copy_into("main.wasm", &artifacts.directory, web_root)?;
+    // A package with declared assets links a preload sidecar named after the
+    // output stem; the page cannot run without it, so it ships too. Absent
+    // when the package declares none.
+    let _ = copy_into("main.data", &artifacts.directory, web_root);
+    Ok(ExportedWeb { loader, module })
+}
+
+/// Copies a file out of the build directory under the same name.
+fn copy_into(name: &str, from: &Path, to: &Path) -> Result<PathBuf, WebError> {
+    let source = from.join(name);
+    let destination = to.join(name);
+    std::fs::copy(&source, &destination).map_err(WebError::Artifacts)?;
+    Ok(destination)
 }
 
 /// Builds a program for `device`, then serves it and opens a browser at it.

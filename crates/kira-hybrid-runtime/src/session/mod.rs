@@ -105,7 +105,11 @@ impl Session {
     /// proven consistent.
     ///
     /// Payload paths are resolved relative to the manifest's own directory
-    /// unless they are absolute, so a built bundle can be moved as a unit.
+    /// unless they are absolute, so a built bundle can be moved as a unit. A
+    /// manifest recording [`SELF_LIBRARY_MARKER`][kira_dynamic_ffi::SELF_LIBRARY_MARKER]
+    /// as its native half binds it from this process image instead — the
+    /// embedded-application layout, where the native code was linked into the
+    /// running binary.
     pub fn load(manifest_path: &Path) -> Result<Session, HybridError> {
         let bytes = read(manifest_path)?;
         let manifest =
@@ -116,7 +120,10 @@ impl Session {
 
         let base = manifest_path.parent().unwrap_or(Path::new("."));
         let bytecode_path = resolve(base, &manifest.bytecode_path);
-        let library_path = resolve(base, &manifest.native_library_path);
+        let self_native_half =
+            manifest.native_library_path == kira_dynamic_ffi::SELF_LIBRARY_MARKER;
+        let library_path =
+            (!self_native_half).then(|| resolve(base, &manifest.native_library_path));
 
         let module_bytes = read(&bytecode_path)?;
         let module = Module::from_bytes(&module_bytes).map_err(|source| HybridError::Bytecode {
@@ -140,7 +147,7 @@ impl Session {
             .all(|function| function.execution == Execution::Runtime)
             .then(|| Mutex::new(NativeStateStore::new()));
         let callbacks = program.module().foreign_callbacks.len();
-        let library = NativeLibrary::load(&library_path, &manifest.functions, callbacks)?;
+        let library = NativeLibrary::load(library_path.as_deref(), &manifest.functions, callbacks)?;
         let mut foreign_paths = Vec::with_capacity(manifest.foreign.len());
         let mut foreign_libraries = Vec::new();
         for import in &manifest.foreign {

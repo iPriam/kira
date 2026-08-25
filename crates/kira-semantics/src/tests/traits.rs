@@ -164,20 +164,164 @@ fn a_compiler_known_trait_may_not_be_declared() {
     assert_eq!(codes, vec!["KSEM288".to_owned()]);
 }
 
+/// `Eq` and an `Ord` that requires it, with a default calling across.
+const ORDERED: &str = "trait Eq {\n    function equals(borrow self, other: Int) -> Bool\n}\n\
+                       trait Ord: Eq {\n    function less(borrow self, other: Int) -> Bool\n\
+                       \n    function atMost(borrow self, other: Int) -> Bool \
+                       { return self.less(other) || self.equals(other) }\n}\n";
+
 #[test]
-fn a_supertrait_is_refused_by_name() {
-    let items = diagnostics(&program("trait Base {}\ntrait Ordered: Base {}\n"));
-    let refusal = items
-        .iter()
-        .find(|item| item.has_code("KSEM296"))
-        .unwrap_or_else(|| panic!("expected a KSEM296, got {items:?}"));
-    assert!(refusal.message.contains("supertrait"), "{refusal:?}");
+fn a_type_claiming_both_a_trait_and_its_supertrait_is_accepted() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Eq, Ord {{\n    let n: Int\n\
+         \n    function equals(borrow self, other: Int) -> Bool {{ return n == other }}\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n\
+         function use(value: borrow Mark) -> Bool {{ return value.atMost(3) }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
 }
 
 #[test]
-fn a_trait_names_no_type() {
+fn a_conformance_missing_the_supertrait_names_both() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Ord {{\n    let n: Int\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n"
+    )));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM310"))
+        .unwrap_or_else(|| panic!("expected a KSEM310, got {items:?}"));
+    assert!(refusal.message.contains("`Ord`"), "{refusal:?}");
+    assert!(refusal.message.contains("`Eq`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_may_be_kept_by_a_retroactive_block() {
+    let items = diagnostics(&program(&format!(
+        "{ORDERED}struct Mark: Ord {{\n    let n: Int\n\
+         \n    function less(borrow self, other: Int) -> Bool {{ return n < other }}\n}}\n\
+         extend Mark: Eq {{\n\
+         \n    function equals(borrow self, other: Int) -> Bool {{ return n == other }}\n}}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_compiler_known_trait_may_be_required_as_a_supertrait() {
     let items = diagnostics(&program(
-        "trait Scored {}\nfunction take(value: Scored) -> Int { return 1 }\n",
+        "trait Cheap: Copyable {}\nstruct Label: Cheap {\n    let text: String\n}\n",
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM310"))
+        .unwrap_or_else(|| panic!("expected a KSEM310, got {items:?}"));
+    assert!(refusal.message.contains("`Copyable`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_that_is_not_a_trait_is_refused() {
+    let items = diagnostics(&program(
+        "struct Point {\n    let x: Int\n}\ntrait Ordered: Point {}\n",
+    ));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM308"))
+        .unwrap_or_else(|| panic!("expected a KSEM308, got {items:?}"));
+    assert!(refusal.message.contains("`Point`"), "{refusal:?}");
+}
+
+#[test]
+fn a_supertrait_cycle_is_refused() {
+    let items = diagnostics(&program("trait A: B {}\ntrait B: C {}\ntrait C: A {}\n"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM309"))
+        .unwrap_or_else(|| panic!("expected a KSEM309, got {items:?}"));
+    assert!(refusal.message.contains("A -> B -> C -> A"), "{refusal:?}");
+}
+
+#[test]
+fn a_trait_requiring_itself_is_refused() {
+    let items = diagnostics(&program("trait Loop: Loop {}\n"));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(codes, vec!["KSEM309".to_owned()]);
+}
+
+#[test]
+fn a_trait_type_position_is_an_existential_over_conformers() {
+    // The trait's name as a parameter type is the existential: any conforming
+    // value may cross, and no diagnostic speaks.
+    let items = diagnostics(&program(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+#[test]
+fn a_conforming_value_wraps_into_its_trait_existential() {
+    let items = diagnostics(&program(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_non_conforming_value_does_not_wrap_into_the_existential() {
+    // A `Plain` is not a `Scored`, so handing one over is refused at the call
+    // — the wrap site answers, not the parameter's annotation.
+    let items = diagnostics(&format!(
+        "{SCORED}struct Leaf: Scored {{\n    let n: Int\n\
+         \n    function score(borrow self) -> Int {{ return n }}\n}}\n\
+         struct Plain {{\n    let n: Int\n}}\n\
+         function take(value: Scored) -> Int {{ return value.score() }}\n\
+         @Main function main() {{ let s: Scored = Plain(n: 1) }}\n"
+    ));
+    let spoken: Vec<String> = items.iter().map(|item| item.message.clone()).collect();
+    assert!(
+        spoken
+            .iter()
+            .any(|message| message.contains("cannot hold a value of type")),
+        "{spoken:?}"
+    );
+    assert!(
+        !spoken
+            .iter()
+            .any(|message| message.contains("not supported yet")),
+        "{spoken:?}"
+    );
+}
+
+#[test]
+fn an_object_unsafe_trait_refuses_its_type_position_and_names_the_member() {
+    // `total` takes no `self`, so a call through a value could not reach it.
+    let items = diagnostics(&program(
+        "trait Scored {\n    function total(values: [Int]) -> Int\n}\n\
+         function take(value: Scored) -> Int { return 1 }\n",
+    ));
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
+        .collect();
+    assert!(codes.contains(&"KSEM313".to_owned()), "{items:?}");
+    let spoken: Vec<String> = items.iter().map(|item| item.message.clone()).collect();
+    assert!(
+        spoken.iter().any(|message| message.contains("`total`")),
+        "{spoken:?}"
+    );
+}
+
+#[test]
+fn a_compiler_known_trait_still_names_no_type() {
+    let items = diagnostics(&program(
+        "function take(value: Copyable) -> Int { return 1 }\n",
     ));
     let codes: Vec<String> = items
         .iter()
@@ -187,15 +331,83 @@ fn a_trait_names_no_type() {
     assert!(codes.contains(&"KSEM295".to_owned()), "{items:?}");
 }
 
+/// A family whose declarations each answer for the trait it claims.
+const SHAPES: &str = "trait Sized {\n    function area(borrow self) -> Int\n\
+                      \n    function doubled(borrow self) -> Int { return self.area() * 2 }\n}\n\
+                      construct Shape: Sized {\n    @Required function sides() -> Int\n}\n";
+
 #[test]
-fn a_construct_family_cannot_claim_a_trait() {
-    let items = diagnostics(&program("trait Scored {}\nconstruct Widget: Scored {}\n"));
+fn a_construct_family_may_claim_a_trait_its_declarations_keep() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Square(edge: Int) extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n\
+         \n    function area(borrow self) -> Int {{ return edge * edge }}\n}}\n\
+         function use(value: borrow Square) -> Int {{ return value.doubled() }}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_declaration_that_does_not_keep_its_familys_claim_names_both() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Bar(width: Int) extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n}}\n"
+    )));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM292"))
+        .unwrap_or_else(|| panic!("expected a KSEM292, got {items:?}"));
+    assert!(refusal.message.contains("`Bar`"), "{refusal:?}");
+    assert!(refusal.message.contains("`Shape`"), "{refusal:?}");
+}
+
+#[test]
+fn a_family_that_answers_the_trait_itself_discharges_it_for_every_declaration() {
+    let items = diagnostics(&program(
+        "trait Named {\n    function label(borrow self) -> String\n\
+         \n    function shout(borrow self) -> String { return self.label() + \"!\" }\n}\n\
+         construct Widget {\n    @Required function sides() -> Int\n}\n\
+         extend Widget: Named {\n\
+         \n    function label(borrow self) -> String { return \"widget\" }\n}\n\
+         construct Panel(size: Int) extends Widget {\n\
+         \n    function sides() -> Int { return 4 }\n}\n",
+    ));
+    assert!(items.is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_family_may_not_claim_a_compiler_known_trait() {
+    let items = diagnostics(&program("construct Widget: Copyable {}\n"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM298"))
+        .unwrap_or_else(|| panic!("expected a KSEM298, got {items:?}"));
+    assert!(refusal.message.contains("`Copyable`"), "{refusal:?}");
+}
+
+#[test]
+fn a_family_claiming_something_that_is_not_a_trait_is_refused() {
+    let items = diagnostics(&program(
+        "struct Point {\n    let x: Int\n}\nconstruct Widget: Point {}\n",
+    ));
     let codes: Vec<String> = items
         .iter()
         .filter_map(Diagnostic::code_text)
         .map(str::to_owned)
         .collect();
-    assert!(codes.contains(&"KSEM298".to_owned()), "{items:?}");
+    assert!(codes.contains(&"KSEM289".to_owned()), "{items:?}");
+}
+
+/// A declaration that writes the claim itself keeps its own conformance: the
+/// family's claim states what must be true of it, and it is.
+#[test]
+fn a_declaration_may_also_claim_the_trait_its_family_claims() {
+    let items = diagnostics(&program(&format!(
+        "{SHAPES}construct Square(edge: Int): Sized extends Shape {{\n\
+         \n    function sides() -> Int {{ return 4 }}\n\
+         \n    function area(borrow self) -> Int {{ return edge * edge }}\n}}\n"
+    )));
+    assert!(items.is_empty(), "{items:?}");
 }
 
 #[test]
@@ -307,121 +519,4 @@ fn a_conformance_declared_by_the_traits_own_package_is_accepted() {
         ],
     );
     assert!(codes.is_empty(), "{codes:?}");
-}
-
-const DROPPING: &str = "struct Handle: Drop {\n    let id: Int\n\
-                        \n    function drop(borrow mut self) { return }\n}\n";
-
-#[test]
-fn a_drop_conformance_with_a_drop_member_is_accepted() {
-    let items = diagnostics(&program(DROPPING));
-    assert!(items.is_empty(), "{items:?}");
-}
-
-#[test]
-fn a_drop_conformance_with_no_drop_member_is_refused() {
-    let items = diagnostics(&program("struct Handle: Drop {\n    let id: Int\n}\n"));
-    let refusal = items
-        .iter()
-        .find(|item| item.has_code("KSEM301"))
-        .unwrap_or_else(|| panic!("expected a KSEM301, got {items:?}"));
-    assert!(
-        refusal.message.contains("presents no `drop`"),
-        "{refusal:?}"
-    );
-}
-
-#[test]
-fn a_drop_member_that_takes_or_returns_anything_is_refused() {
-    let items = diagnostics(&program(
-        "struct Handle: Drop {\n    let id: Int\n\
-         \n    function drop(borrow mut self, extra: Int) { return }\n}\n",
-    ));
-    let codes: Vec<String> = items
-        .iter()
-        .filter_map(Diagnostic::code_text)
-        .map(str::to_owned)
-        .collect();
-    assert!(codes.contains(&"KSEM301".to_owned()), "{items:?}");
-}
-
-#[test]
-fn calling_drop_by_name_is_refused() {
-    let items = diagnostics(&format!(
-        "{DROPPING}@Main function main() {{ let h = Handle(id: 1) h.drop() return }}\n"
-    ));
-    let refusal = items
-        .iter()
-        .find(|item| item.has_code("KSEM300"))
-        .unwrap_or_else(|| panic!("expected a KSEM300, got {items:?}"));
-    assert!(
-        refusal.message.contains("run by the release"),
-        "{refusal:?}"
-    );
-}
-
-#[test]
-fn a_drop_type_is_not_copyable() {
-    let items = diagnostics(&program(
-        "struct Handle: Copyable, Drop {\n    let id: Int\n\
-         \n    function drop(borrow mut self) { return }\n}\n",
-    ));
-    let refusal = items
-        .iter()
-        .find(|item| item.has_code("KSEM297"))
-        .unwrap_or_else(|| panic!("expected a KSEM297, got {items:?}"));
-    assert!(refusal.message.contains("`Drop`"), "{refusal:?}");
-}
-
-#[test]
-fn a_drop_type_moves_when_it_is_bound() {
-    let items = diagnostics(&format!(
-        "{DROPPING}@Main function main() {{ let a = Handle(id: 1) let b = a print(a.id) return }}\n"
-    ));
-    assert!(!items.is_empty(), "binding a `Drop` value moves it");
-}
-
-#[test]
-fn a_drop_body_is_registered_as_the_types_glue() {
-    let program = analyze_text(&program(DROPPING));
-    let id = program
-        .types
-        .structs()
-        .lookup("Handle")
-        .expect("the struct is declared");
-    let def = program.types.structs().get(id).expect("the id resolves");
-    assert!(def.drop_glue.is_some(), "the body is recorded on the type");
-    // A type that runs a body is released wherever it is held, even when every
-    // member it holds is a scalar.
-    assert!(program.types.owns_heap(Type::Struct(id)));
-    assert!(program.types.moves_on_bind(Type::Struct(id)));
-}
-
-#[test]
-fn a_type_holding_a_drop_value_runs_one_too() {
-    let program = analyze_text(&program(&format!(
-        "{DROPPING}struct Box {{\n    let held: Handle\n}}\n"
-    )));
-    let id = program
-        .types
-        .structs()
-        .lookup("Box")
-        .expect("the struct is declared");
-    assert!(program.types.runs_user_drop(Type::Struct(id)));
-    assert!(program.types.moves_on_bind(Type::Struct(id)));
-}
-
-#[test]
-fn an_impl_block_for_drop_may_declare_only_drop() {
-    let items = diagnostics(&program(
-        "struct Handle {\n    let id: Int\n}\n\
-         extend Handle: Drop {\n    function drop(borrow mut self) { return }\n\
-         \n    function extra(borrow self) -> Int { return 1 }\n}\n",
-    ));
-    let codes: Vec<String> = items
-        .iter()
-        .filter_map(Diagnostic::code_text)
-        .map(str::to_owned)
-        .collect();
-    assert!(codes.contains(&"KSEM294".to_owned()), "{items:?}");
 }

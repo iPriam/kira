@@ -41,7 +41,7 @@ fn vm_foreign_bundle(module: &Module) -> Bundle {
 #[test]
 fn a_vm_foreign_bundle_loads_bytecode_entry_and_binding_dependency() {
     let dir = TempDir::new("vm-foreign");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = vm_foreign_bundle(&foreign_module());
 
     assert_eq!(
@@ -70,7 +70,7 @@ fn a_vm_foreign_bundle_loads_bytecode_entry_and_binding_dependency() {
         .link()
         .expect_err("the invalid binding must fail through the direct loader");
     assert!(
-        matches!(error, DesktopRunnerError::ForeignSession(_)),
+        matches!(error, BundleHostError::ForeignSession(_)),
         "got {error:?}"
     );
 }
@@ -80,7 +80,7 @@ fn a_vm_foreign_bundle_loads_bytecode_entry_and_binding_dependency() {
 #[test]
 fn a_vm_import_without_binding_metadata_is_rejected() {
     let dir = TempDir::new("vm-foreign-missing");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = Bundle::build(
         RunnerId::Desktop,
         BuildProfile::Debug,
@@ -96,7 +96,7 @@ fn a_vm_import_without_binding_metadata_is_rejected() {
     host.load(&bundle).expect("the bytecode entry stages");
     assert!(matches!(
         host.link(),
-        Err(DesktopRunnerError::MissingForeignBindings)
+        Err(BundleHostError::MissingForeignBindings)
     ));
 }
 
@@ -104,7 +104,7 @@ fn a_vm_import_without_binding_metadata_is_rejected() {
 #[test]
 fn a_vm_binding_manifest_rejects_path_traversal() {
     let dir = TempDir::new("vm-foreign-traversal");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = Bundle::build(
         RunnerId::Desktop,
         BuildProfile::Debug,
@@ -130,7 +130,7 @@ fn a_vm_binding_manifest_rejects_path_traversal() {
     assert!(
         matches!(
             error,
-            DesktopRunnerError::InvalidForeignBindings { line: 1, .. }
+            BundleHostError::InvalidForeignBindings { line: 1, .. }
         ),
         "got {error:?}"
     );
@@ -140,7 +140,7 @@ fn a_vm_binding_manifest_rejects_path_traversal() {
 #[test]
 fn a_foreign_bindings_payload_is_not_an_entrypoint() {
     let dir = TempDir::new("foreign-bindings-entry");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = Bundle::build(
         RunnerId::Desktop,
         BuildProfile::Debug,
@@ -158,7 +158,7 @@ fn a_foreign_bindings_payload_is_not_an_entrypoint() {
         .expect_err("foreign binding metadata cannot be an entrypoint");
     assert!(matches!(
         error,
-        DesktopRunnerError::UnsupportedEntry {
+        BundleHostError::UnsupportedEntry {
             kind: "foreign-bindings"
         }
     ));

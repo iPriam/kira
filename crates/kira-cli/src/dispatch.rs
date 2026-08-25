@@ -19,7 +19,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Debug => pipeline::debug(args),
         Command::Build => pipeline::build(args),
         Command::Package => pipeline::package(args),
-        Command::Export => pipeline::export(args),
+        Command::Export => crate::export::export(args),
         Command::Check => pipeline::check(args),
         Command::Lint => pipeline::lint(args),
         Command::Test => pipeline::test(args),

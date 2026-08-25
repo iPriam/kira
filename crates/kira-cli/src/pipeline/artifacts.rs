@@ -217,22 +217,38 @@ pub fn build(args: &[String]) -> i32 {
                 }
             }
         }
-        BackendMode::Hybrid => match hybrid::build(
-            ir,
-            std::path::Path::new(&options.path),
-            options.emit_llvm_ir,
-            link,
-        ) {
-            Ok(_) => {
-                out!("Successfully built");
-                EXIT_OK
-            }
-            Err(error) => {
+        BackendMode::Hybrid => {
+            // The bundle is what a session loads; the standalone executable is
+            // what the operating system starts. Both are this build's product:
+            // a hybrid build that left nothing runnable would be the one
+            // backend whose `.kira-build` did not hold a program.
+            if let Err(error) = hybrid::build(
+                ir,
+                std::path::Path::new(&options.path),
+                options.emit_llvm_ir,
+                link,
+            ) {
                 err!("kira: {error}");
                 out!("Failed to build");
-                EXIT_FAILURE
+                return EXIT_FAILURE;
             }
-        },
+            let artifacts = match native::Artifacts::for_source(std::path::Path::new(&options.path))
+            {
+                Ok(artifacts) => artifacts,
+                Err(error) => {
+                    err!("kira: {error}");
+                    out!("Failed to build");
+                    return EXIT_FAILURE;
+                }
+            };
+            if let Err(error) = crate::hybrid_launcher::stage(&artifacts.executable()) {
+                err!("kira: {error}");
+                out!("Failed to build");
+                return EXIT_FAILURE;
+            }
+            out!("Successfully built {}", artifacts.executable().display());
+            EXIT_OK
+        }
     }
 }
 
@@ -265,30 +281,6 @@ pub fn package(args: &[String]) -> i32 {
         err!(
             "kira package: `{}` is an application, not a library; \
              set `let kind = .Library` and provide a consumer-facing package",
-            options.path
-        );
-        return EXIT_FAILURE;
-    }
-    build(args)
-}
-
-/// Runs `kira export`: build a library that actually exposes an embedding API.
-pub fn export(args: &[String]) -> i32 {
-    let (options, compiled) = match command_inputs("export", args) {
-        Ok(inputs) => inputs,
-        Err(code) => return code,
-    };
-    if compiled.ir.main.is_some() {
-        err!(
-            "kira export: `{}` is an application, not a library",
-            options.path
-        );
-        return EXIT_FAILURE;
-    }
-    if compiled.ir.exports.is_empty() {
-        err!(
-            "kira export: `{}` declares no `@Export` functions; add at least one \
-             consumer-facing export before building the wrapper",
             options.path
         );
         return EXIT_FAILURE;

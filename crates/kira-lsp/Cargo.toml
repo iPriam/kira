@@ -20,6 +20,11 @@ kira-semantics.workspace = true
 kira-diagnostics.workspace = true
 kira-source.workspace = true
 kira-syntax-model.workspace = true
+# The manifest path: an open `package.kira` is validated by the same reader
+# the build uses, and its failures carry the cataloged package codes.
+kira-manifest.workspace = true
+kira-diagnostic-messages.workspace = true
+kira-project.workspace = true
 # The server reports the same version string the compiler does; a release
 # increment lives outside the Cargo version, so both read it from one place.
 kira-toolchain.workspace = true

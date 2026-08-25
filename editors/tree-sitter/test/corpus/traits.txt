@@ -40,7 +40,7 @@ trait Hashable {
 A marker trait has no members
 ================================================================================
 
-trait Send {}
+trait Tagged {}
 
 --------------------------------------------------------------------------------
 
@@ -53,7 +53,7 @@ trait Send {}
 Conformance is a colon list on a struct
 ================================================================================
 
-struct Mesh: Hashable, Send {
+struct Mesh: Hashable, Tagged {
     let id: Int
     function hash(borrow self) -> Int {
         return id * 7
@@ -223,3 +223,29 @@ struct Handle: Drop {
               arguments: (arguments
                 (identifier))))
           (return_statement))))))
+
+================================================================================
+A supertrait clause is a conformance list on the trait head
+================================================================================
+
+trait Ordered: Equated {
+    function less(borrow self, other: Int) -> Bool
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier))
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter)
+          (parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (return_type
+          (type_identifier))))))

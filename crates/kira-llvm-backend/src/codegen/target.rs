@@ -231,7 +231,7 @@ impl TargetMachine {
         optimize: bool,
         fast_codegen: bool,
     ) -> Result<Self, LlvmError> {
-        let requested = target.normalized_triple();
+        let requested = target.llvm_triple();
         check_supported(target)?;
 
         // SAFETY: the target initializers are idempotent; the triple is an
@@ -502,7 +502,7 @@ fn relocation_mode(relocation: RelocationModel) -> LLVMRelocMode {
 /// partial file even though the object they produce has the same name.
 fn pending_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".pending-{}", std::process::id()));
+    name.push(format!("{}{}", crate::PENDING_INFIX, std::process::id()));
     path.with_file_name(name)
 }
 

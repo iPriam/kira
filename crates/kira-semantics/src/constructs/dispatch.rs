@@ -52,18 +52,18 @@ struct DispatchArm<'locals> {
 /// Threading them as one value keeps each generator's own parameters to what
 /// actually varies between its calls.
 #[derive(Clone, Copy)]
-struct DispatchMethod<'family> {
+pub(crate) struct DispatchMethod<'family> {
     /// The construct family's declared name, as the generated function names
     /// spell it.
-    family: &'family str,
+    pub(crate) family: &'family str,
     /// The family method's name.
-    method: &'family str,
+    pub(crate) method: &'family str,
     /// The synthesized enum a receiver is erased to.
-    family_id: EnumId,
+    pub(crate) family_id: EnumId,
     /// The method's parameter types, excluding the receiver.
-    params: &'family [Type],
+    pub(crate) params: &'family [Type],
     /// The result every generated function presents.
-    result: Type,
+    pub(crate) result: Type,
 }
 
 impl Analyzer<'_> {
@@ -87,6 +87,11 @@ impl Analyzer<'_> {
         let Some(Type::Enum(expected_family)) = expected else {
             return value;
         };
+        // A trait existential wraps any conforming type, membership decided by
+        // the conformance table; see `crate::traits::existential`.
+        if let Some(wrapped) = self.coerce_trait_existential(value, Type::Enum(expected_family)) {
+            return wrapped;
+        }
         if !self.is_construct_family_type(expected_family) {
             return value;
         }
@@ -588,7 +593,7 @@ impl Analyzer<'_> {
     }
 
     /// Builds one node in a balanced tag selector tree.
-    fn construct_dispatch_tree_function(
+    pub(crate) fn construct_dispatch_tree_function(
         &mut self,
         dispatch: DispatchMethod<'_>,
         arms: &[(ConstructVariant, FuncId)],
@@ -738,7 +743,7 @@ impl Analyzer<'_> {
     /// The VM sees the same HIR operation sequence and therefore keeps the
     /// existing semantics; native code simply gets a real call boundary for
     /// stack-frame sizing.
-    fn construct_dispatch_arm_function(
+    pub(crate) fn construct_dispatch_arm_function(
         &mut self,
         dispatch: DispatchMethod<'_>,
         variant: ConstructVariant,

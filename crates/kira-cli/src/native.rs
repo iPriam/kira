@@ -132,12 +132,13 @@ pub fn direct_foreign_bindings(
     source: &Path,
     foreign_link: &NativeLinkInputs,
 ) -> Result<Vec<kira_main::ForeignBinding>, NativeError> {
-    let static_names: HashSet<&str> = foreign_link
-        .static_archives()
+    let image_names: HashSet<&str> = foreign_link
+        .image_libraries()
         .iter()
-        .map(|(name, _)| name.as_str())
+        .map(String::as_str)
         .collect();
-    let carrier = if program.foreign_imports.is_empty() || static_names.is_empty() {
+    let carrier = if program.foreign_imports.is_empty() || foreign_link.static_archives().is_empty()
+    {
         None
     } else {
         build_ffi_carrier_for_imports(program, source, foreign_link)?
@@ -161,7 +162,7 @@ pub fn direct_foreign_bindings(
                 .map(|(_, path)| loadable_foreign_library_path(path, foreign_link));
             let binding = if entry.import.library() == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
                 kira_main::ForeignBinding::process(entry.import.symbol(), signature)
-            } else if static_names.contains(&entry.import.library()) {
+            } else if image_names.contains(&entry.import.library()) {
                 match carrier.as_ref() {
                     Some(carrier) if carrier.symbols.contains(entry.import.symbol()) => {
                         kira_main::ForeignBinding::dynamic(
@@ -170,10 +171,11 @@ pub fn direct_foreign_bindings(
                             signature,
                         )
                     }
-                    // A static-library row may also declare symbols supplied by
-                    // the host executable, such as live-session telemetry. It
-                    // must not become a carrier export merely because the row
-                    // contains an archive.
+                    // An image-resident row may also declare symbols supplied by
+                    // the host executable or a system library the carrier pulls
+                    // in — live-session telemetry, `objc_msgSend`. It must not
+                    // become a carrier export merely because the row is linked
+                    // in; the host process resolves it.
                     _ => kira_main::ForeignBinding::process(entry.import.symbol(), signature),
                 }
             } else if let Some(path) = path {
@@ -199,10 +201,10 @@ pub fn hybrid_foreign_bindings(
     native_half: &Path,
     foreign_link: &NativeLinkInputs,
 ) -> Vec<kira_main::ForeignBinding> {
-    let static_names: HashSet<&str> = foreign_link
-        .static_archives()
+    let image_names: HashSet<&str> = foreign_link
+        .image_libraries()
         .iter()
-        .map(|(name, _)| name.as_str())
+        .map(String::as_str)
         .collect();
     program
         .foreign_imports
@@ -212,7 +214,7 @@ pub fn hybrid_foreign_bindings(
             // early returns. An address import binds it the same way and differs
             // only in what happens after, so the choice is made once here rather
             // than repeated at each return.
-            let binding = hybrid_binding_target(entry, foreign_link, &static_names, native_half);
+            let binding = hybrid_binding_target(entry, foreign_link, &image_names, native_half);
             if entry.import.abi().answers_an_address() {
                 binding.answering_address()
             } else {
@@ -226,7 +228,7 @@ pub fn hybrid_foreign_bindings(
 fn hybrid_binding_target(
     entry: &kira_ir::IrForeignImport,
     foreign_link: &NativeLinkInputs,
-    static_names: &HashSet<&str>,
+    image_names: &HashSet<&str>,
     native_half: &Path,
 ) -> kira_main::ForeignBinding {
     {
@@ -242,7 +244,7 @@ fn hybrid_binding_target(
             if library == kira_dynamic_ffi::HOST_RUNTIME_LIBRARY {
                 return kira_main::ForeignBinding::process(entry.import.symbol(), signature);
             }
-            if static_names.contains(library) {
+            if image_names.contains(library) {
                 return kira_main::ForeignBinding::dynamic(
                     native_half,
                     entry.import.symbol(),
@@ -267,19 +269,20 @@ fn hybrid_binding_target(
 
 /// Returns explicit foreign library files that a native live bundle must carry.
 ///
-/// Static archives are linked into the native image and do not need to survive
-/// as load-time files. A shared library remains an input to the direct Libffi
-/// call path, so it has to be staged beside the live image.
+/// Image-resident libraries — static archives, and the frameworks and system
+/// libraries linked into the image — are not opened as load-time files. A shared
+/// library remains an input to the direct Libffi call path, so it has to be
+/// staged beside the live image.
 pub(crate) fn dynamic_foreign_library_paths(foreign_link: &NativeLinkInputs) -> Vec<PathBuf> {
-    let static_names: HashSet<&str> = foreign_link
-        .static_archives()
+    let image_names: HashSet<&str> = foreign_link
+        .image_libraries()
         .iter()
-        .map(|(name, _)| name.as_str())
+        .map(String::as_str)
         .collect();
     foreign_link
         .library_paths()
         .iter()
-        .filter(|(name, path)| !static_names.contains(name.as_str()) && path.is_file())
+        .filter(|(name, path)| !image_names.contains(name.as_str()) && path.is_file())
         .map(|(_, path)| loadable_foreign_library_path(path, foreign_link))
         .collect()
 }

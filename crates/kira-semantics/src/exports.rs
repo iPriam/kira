@@ -240,6 +240,23 @@ impl Analyzer<'_> {
         exported_classes: &[StructId],
     ) -> bool {
         let name = self.type_name(ty);
+        // Asked before the shape questions below, because it is not one: a
+        // handle a consumer holds outlives every Kira frame, and the release
+        // that frees it runs outside any engine — there is nothing to enter the
+        // body with. See `Instance::release`.
+        if self.program.types.runs_user_drop(ty) {
+            self.emit(
+                span,
+                "KSEM303",
+                format!(
+                    "`{name}` runs a user `Drop` body, so it cannot be an export {position}: a \
+                     consumer holds it past every Kira frame, and the release that frees it \
+                     happens where no engine is running to enter the body. Every user `Drop` \
+                     body runs before the run that made the value ends."
+                ),
+            );
+            return false;
+        }
         match ty {
             Type::Int(_)
             | Type::Float(_)

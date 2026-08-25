@@ -10,6 +10,11 @@
 //! program has ever asked for. The list is still consumed so the rest of the
 //! declaration parses and the file reports one mistake instead of a cascade.
 //!
+//! A parameter may carry a trait bound (`Value: Scored + Send`). The bound is
+//! recorded on the parameter and discharged by semantics when an instantiation
+//! is minted; the parser only records what was written, so a malformed bound
+//! list is the one mistake it reports here (`KPAR079`).
+//!
 //! # Why `>>` is split rather than rejected
 //!
 //! The lexer has no idea it is inside a type, so `Result<Result<Int, E>, E>`
@@ -21,7 +26,7 @@ use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::Token;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{TypeParamDecl, TypeRef, TypeRefId};
+use kira_syntax_model::ast::{TraitRef, TypeParamDecl, TypeRef, TypeRefId};
 
 use crate::Parser;
 
@@ -33,9 +38,11 @@ impl Parser<'_> {
 
     /// Parses `<A, B>` after a declaration name, with the cursor on `<`.
     ///
-    /// Returns the parameters in written order. An empty list (`<>`) is
-    /// reported and yields no parameters, which makes the declaration an
-    /// ordinary non-generic one rather than a broken generic one.
+    /// Returns the parameters in written order. A parameter may carry a bound
+    /// (`Value: Scored + Send`) — see [`Self::parse_param_bounds`]. An empty
+    /// list (`<>`) is reported and yields no parameters, which makes the
+    /// declaration an ordinary non-generic one rather than a broken generic
+    /// one.
     pub(crate) fn parse_type_params(&mut self) -> Vec<TypeParamDecl> {
         let start = self.current().span;
         self.bump(); // `<`
@@ -46,7 +53,8 @@ impl Parser<'_> {
                 let span = self.current().span;
                 let name = self.intern_span(span);
                 self.bump();
-                params.push(TypeParamDecl { name, span });
+                let bounds = self.parse_param_bounds();
+                params.push(TypeParamDecl { name, span, bounds });
             } else {
                 let span = self.current().span;
                 self.error(
@@ -82,6 +90,42 @@ impl Parser<'_> {
             );
         }
         params
+    }
+
+    /// Parses `: Trait + Trait` after a type-parameter name, or nothing.
+    ///
+    /// The comma is taken: it separates *parameters*, so the traits of one
+    /// parameter's bound are joined with `+`, the way the conformance clause's
+    /// own comma list cannot be reused here. A trailing comma is tolerated as
+    /// it is everywhere else in this grammar; whether each name is a trait at
+    /// all, and whether an argument satisfies it, are semantics' questions —
+    /// every name written is recorded so each of those answers has a span to
+    /// point at.
+    fn parse_param_bounds(&mut self) -> Vec<TraitRef> {
+        let mut bounds = Vec::new();
+        if !self.eat(TokenKind::Colon) {
+            return bounds;
+        }
+        loop {
+            if !self.at(TokenKind::Identifier) {
+                self.error(
+                    self.current().span,
+                    "KPAR079",
+                    "expected a trait name in a type parameter's bound",
+                );
+                break;
+            }
+            let span = self.current().span;
+            bounds.push(TraitRef {
+                name: self.intern_span(span),
+                span,
+            });
+            self.bump();
+            if !self.eat(TokenKind::Plus) {
+                break;
+            }
+        }
+        bounds
     }
 
     /// Consumes and refuses a type-parameter list on a declaration that may not

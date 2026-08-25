@@ -73,8 +73,9 @@ impl Parser<'_> {
             self.bump();
         }
         self.refuse_type_params("trait");
-        // Recorded, not refused here: `trait A: B` is a supertrait clause, and
-        // naming what it asked for is semantics' to do.
+        // `trait A: B` is a supertrait clause, read by the same production a
+        // conformance list uses: both are a list of trait names after a
+        // declaration's own, and whether each names a trait is semantics'.
         let supertraits = self.parse_trait_list();
         let mut members = Vec::new();
         if !self.expect(TokenKind::LBrace) {

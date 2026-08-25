@@ -54,7 +54,7 @@
       "patterns": [
         {
           "name": "keyword.control.kira",
-          "match": "\\b(func|let|return|if|else|import|struct|for|while|break|continue)\\b"
+          "match": "\\b(func|let|return|if|else|import|struct|for|while|break|continue|trait|extend|construct|borrow|move|copy|retains)\\b"
         }
       ]
     },

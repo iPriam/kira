@@ -318,20 +318,30 @@ impl Analyzer<'_> {
             );
             return Type::Error;
         }
-        // A trait classifies types; it is not one. A value that carried its own
-        // dispatch would be a different feature from the static conformance
-        // this language has, so the name is refused here rather than resolved
-        // to something that only looks like it works.
-        if self.traits.contains_key(&text) || crate::traits::is_builtin_trait(&text) {
+        // A trait used as a type is an existential over its conformers: the
+        // value carries which concrete type it was, and member calls dispatch
+        // to that type's implementation. Compiler-known traits stay refused —
+        // they state facts about one type's own members or body, and none of
+        // them classifies values (`Drop` attaches a body; `Copyable`, `Send`,
+        // and `Sync` are checked claims), so there is nothing for a value of
+        // "any `Send`" to be.
+        if crate::traits::is_builtin_trait(&text) {
             self.emit(
                 span,
                 "KSEM295",
                 format!(
-                    "`{text}` is a trait, so it names no value: a trait says what a type \
-                     presents, not what a binding holds. Name the conforming type here."
+                    "`{text}` states something about one type's own members, so it does not \
+                     classify values and has no existential form. Name the concrete type here."
                 ),
             );
             return Type::Error;
+        }
+        if self.traits.contains_key(&text) {
+            let Some(enum_id) = self.reserve_trait_existential(&text, span) else {
+                return Type::Error;
+            };
+            self.link_type_name(&text, span);
+            return Type::Enum(enum_id);
         }
         if let Some(id) = self.visible_struct_qualified(&qualified) {
             self.link_type_name(&text, span);

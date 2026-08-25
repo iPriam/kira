@@ -1,0 +1,22 @@
+[package]
+name = "kira-hybrid-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "kira_hybrid_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kira-hybrid-launcher"
+path = "src/main.rs"
+
+[dependencies]
+kira-hybrid-runtime.workspace = true
+kira-runtime-abi.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -520,7 +520,11 @@ impl Analyzer<'_> {
                     );
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
-                self.analyze_expr_expecting(ctx, arg, Some(expected))
+                let value = self.analyze_expr_expecting(ctx, arg, Some(expected));
+                // A borrowed argument leaves the caller holding the value, so a
+                // member read filling one is not a second owner.
+                self.excuse_drop_extraction(value);
+                value
             }
             OwnershipMode::Copy => {
                 if written == Some(OwnershipOp::Move) {
@@ -574,8 +578,31 @@ impl Analyzer<'_> {
     /// itself and has nothing to spell. What is refused is a *named* binding
     /// passed bare — silently losing one to C would make the use-after-move
     /// checker blind to exactly the reads it exists to stop.
-    pub(crate) fn require_retained_move(&mut self, ctx: &mut FnCtx, arg: ExprId, callee: &str) {
+    pub(crate) fn require_retained_move(
+        &mut self,
+        ctx: &mut FnCtx,
+        arg: ExprId,
+        value: HirExprId,
+        callee: &str,
+    ) {
         let span = self.tree.expr(arg).span();
+        // The retained registry frees what it holds when the heap goes, which is
+        // after the program's last frame — so a value that runs a user `Drop`
+        // would be freed with its body still owed and nothing left to run it.
+        let ty = self.program.expr(value).type_of();
+        if self.program.types.runs_user_drop(ty) {
+            self.emit(
+                span,
+                "KSEM305",
+                format!(
+                    "`{callee}` retains this argument, so it cannot be a `{}`, which runs a user \
+                     `Drop` body: a retained value is freed at teardown, after the last frame, \
+                     where no engine is running to enter the body.",
+                    self.type_name(ty)
+                ),
+            );
+            return;
+        }
         if written_op(self.tree.expr(arg)) == Some(OwnershipOp::Move) {
             return;
         }

@@ -23,7 +23,7 @@ use std::path::Path;
 
 use kira_live::{Bundle, ContentHash, PayloadEntry};
 
-use crate::host::DesktopRunnerError;
+use crate::host::BundleHostError;
 
 /// Empties the runner's cache, refusing to delete anything that is not one.
 ///
@@ -31,32 +31,32 @@ use crate::host::DesktopRunnerError;
 /// manifest — the marker that says a previous stage made this directory and it is
 /// this runner's to reuse. Anything else fails the session instead of taking
 /// somebody's files with it.
-pub fn clear_cache(cache: &Path) -> Result<(), DesktopRunnerError> {
+pub fn clear_cache(cache: &Path) -> Result<(), BundleHostError> {
     if !cache.exists() {
         return Ok(());
     }
     if !cache.is_dir() {
-        return Err(DesktopRunnerError::CacheNotOurs {
+        return Err(BundleHostError::CacheNotOurs {
             path: cache.to_owned(),
             reason: "it is not a directory",
         });
     }
 
     let is_empty = fs::read_dir(cache)
-        .map_err(|source| DesktopRunnerError::Stage {
+        .map_err(|source| BundleHostError::Stage {
             path: cache.to_owned(),
             source,
         })?
         .next()
         .is_none();
     if !is_empty && !cache.join(kira_live::MANIFEST_FILE).is_file() {
-        return Err(DesktopRunnerError::CacheNotOurs {
+        return Err(BundleHostError::CacheNotOurs {
             path: cache.to_owned(),
             reason: "it is not empty and holds no bundle manifest, so it was not staged by a runner",
         });
     }
 
-    fs::remove_dir_all(cache).map_err(|source| DesktopRunnerError::Stage {
+    fs::remove_dir_all(cache).map_err(|source| BundleHostError::Stage {
         path: cache.to_owned(),
         source,
     })
@@ -65,7 +65,7 @@ pub fn clear_cache(cache: &Path) -> Result<(), DesktopRunnerError> {
 /// Writes `bundle` into `cache`, clearing whatever was there.
 ///
 /// For a first load, where nothing is mapped and nothing is worth keeping.
-pub fn stage_fresh(cache: &Path, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+pub fn stage_fresh(cache: &Path, bundle: &Bundle) -> Result<(), BundleHostError> {
     clear_cache(cache)?;
     bundle.write(cache)?;
     Ok(())
@@ -80,9 +80,9 @@ pub fn stage_fresh(cache: &Path, bundle: &Bundle) -> Result<(), DesktopRunnerErr
 /// A payload already on disk is trusted only if it hashes to what the manifest
 /// says. The bundle was verified in memory; the copy on disk could have been
 /// touched by anything since.
-pub fn restage_changed(cache: &Path, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+pub fn restage_changed(cache: &Path, bundle: &Bundle) -> Result<(), BundleHostError> {
     let payload_dir = cache.join(kira_live::PAYLOAD_DIR);
-    fs::create_dir_all(&payload_dir).map_err(|source| DesktopRunnerError::Stage {
+    fs::create_dir_all(&payload_dir).map_err(|source| BundleHostError::Stage {
         path: payload_dir.clone(),
         source,
     })?;
@@ -96,15 +96,15 @@ pub fn restage_changed(cache: &Path, bundle: &Bundle) -> Result<(), DesktopRunne
         }
         let bytes = bundle
             .payload_bytes(index)
-            .ok_or(DesktopRunnerError::NoEntrypoint)?;
-        fs::write(&path, bytes).map_err(|source| DesktopRunnerError::Stage { path, source })?;
+            .ok_or(BundleHostError::NoEntrypoint)?;
+        fs::write(&path, bytes).map_err(|source| BundleHostError::Stage { path, source })?;
     }
 
     // The manifest is small, never mapped, and always rewritten: it is how
     // `clear_cache` recognizes this directory as a runner's own later.
     let manifest_path = cache.join(kira_live::MANIFEST_FILE);
     fs::write(&manifest_path, bundle.manifest().to_bytes()).map_err(|source| {
-        DesktopRunnerError::Stage {
+        BundleHostError::Stage {
             path: manifest_path,
             source,
         }
@@ -186,7 +186,7 @@ mod tests {
 
         let error = clear_cache(&dir.0).expect_err("somebody's directory must be refused");
         assert!(
-            matches!(error, DesktopRunnerError::CacheNotOurs { .. }),
+            matches!(error, BundleHostError::CacheNotOurs { .. }),
             "got {error:?}"
         );
         assert!(precious.is_file(), "a file that was not ours was deleted");

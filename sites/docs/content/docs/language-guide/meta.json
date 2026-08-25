@@ -11,6 +11,7 @@
     "structures-and-types",
     "properties",
     "methods",
+    "traits",
     "annotations",
     "constructs",
     "interop-and-ffi",

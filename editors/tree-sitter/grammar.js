@@ -106,6 +106,7 @@ module.exports = grammar({
         $.enum_declaration,
         $.trait_declaration,
         $.construct_declaration,
+        $.family_conformance_declaration,
         $.extend_declaration,
         $.type_alias_declaration,
         $.package_declaration,
@@ -358,6 +359,9 @@ module.exports = grammar({
       ),
 
     // `enum Name[<A, B>] { <variant>* }`. Variants are separated by nothing.
+    // A parameter may carry trait bounds (`Value: Scored + Send`); the comma
+    // separates parameters, so the traits of one parameter's bound join with
+    // `+`.
     enum_declaration: ($) =>
       seq(
         repeat($.attribute),
@@ -367,7 +371,19 @@ module.exports = grammar({
         field('body', $.enum_body),
       ),
 
-    type_parameters: ($) => seq('<', commaSep1Trailing($.identifier), '>'),
+    type_parameters: ($) => seq('<', commaSep1Trailing($.type_parameter), '>'),
+
+    type_parameter: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq(':', field('bounds', $.bound_traits))),
+      ),
+
+    bound_traits: ($) =>
+      seq(
+        alias($.identifier, $.type_identifier),
+        repeat(seq('+', alias($.identifier, $.type_identifier))),
+      ),
 
     enum_body: ($) => seq('{', repeat(choice($.enum_variant, ';')), '}'),
 
@@ -431,6 +447,17 @@ module.exports = grammar({
         optional(field('parameters', $.parameters)),
         optional(field('conforms', $.conformance_list)),
         optional(field('extends', $.extends_list)),
+        field('body', $.construct_body),
+      ),
+
+    // `Family Name { … }` — the bare head of a zero-parameter declaration
+    // backed by `Family`: the family named first, the declaration second, no
+    // parameter list and no clauses. Same body, same members.
+    family_conformance_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        field('family', $.identifier),
+        field('name', $.identifier),
         field('body', $.construct_body),
       ),
 

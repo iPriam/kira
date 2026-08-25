@@ -7,6 +7,7 @@
 
 pub mod backends;
 pub mod resolved;
+pub mod runner_manifest;
 pub mod web;
 
 pub use backends::{
@@ -17,6 +18,7 @@ pub use resolved::{
     ProfileConfig, ProfileSectionError, ResolvedConfig, RunnerConfig, default_resolved_config,
     validate_profile_section,
 };
+pub use runner_manifest::{RunnerKind, RunnerManifest, RunnerManifestError, RuntimeMode};
 pub use web::{
     WebGraphicsBridge, WebGraphicsCapability, WebRenderingModel, WebSurface,
     WebSurfaceRequirements, web_surface_requirements,

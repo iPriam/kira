@@ -568,3 +568,41 @@ fn a_syntactically_broken_program_still_reports_rather_than_bailing() {
     let analysis = analyze("t.kira", "@Main function main( {");
     assert!(!analysis.diagnostics.is_empty());
 }
+
+/// A `package.kira` buffer is a manifest, not Kira source: the same text the
+/// compiler's manifest reader accepts must analyze clean instead of arriving
+/// as the parser's KSEM900 "not supported yet".
+#[test]
+fn a_package_kira_buffer_is_read_as_a_manifest_not_as_kira() {
+    let dir = TempDir::new("manifest-clean");
+    let path = dir.write("package.kira", "Package p {\n let kind = .Library\n}");
+    let analysis = analyze(
+        path.to_str().expect("utf-8 path"),
+        "Package p {\n let kind = .Library\n}",
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics,
+    );
+}
+
+/// A broken declaration reports the manifest reader's error at KPK002 —
+/// never the parser's unsupported-item message.
+#[test]
+fn a_broken_package_kira_reports_the_reader_not_the_parser() {
+    let dir = TempDir::new("manifest-broken");
+    let path = dir.write("package.kira", "Package p {\n let kind = .Nope\n}");
+    let analysis = analyze(
+        path.to_str().expect("utf-8 path"),
+        "Package p {\n let kind = .Nope\n}",
+    );
+    assert_eq!(analysis.diagnostics.len(), 1, "{:?}", analysis.diagnostics);
+    let diagnostic = &analysis.diagnostics[0];
+    assert!(diagnostic.has_code("KPK002"), "{:?}", diagnostic.message,);
+    assert!(
+        diagnostic.message.contains("not a package kind"),
+        "{}",
+        diagnostic.message,
+    );
+}

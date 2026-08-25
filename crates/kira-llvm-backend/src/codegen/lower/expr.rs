@@ -405,7 +405,10 @@ impl FunctionLowering<'_, '_> {
 
     fn lower_array_len(&mut self, array: IrExprId) -> Result<LLVMValueRef, LlvmError> {
         let array_ty = self.type_of(array);
-        let array_value = self.lower_expr(array)?;
+        // Counting does not consume the array: a local holding one whose
+        // elements run a user `Drop` still holds it afterwards, and the share
+        // this took is what the release below gives back.
+        let array_value = self.lower_borrowed_expr(array)?;
         let len = self.call(self.codegen.runtime.array_len, &mut [array_value], c"len");
         self.drop_value(array_value, array_ty)?;
         Ok(len)
@@ -700,9 +703,6 @@ impl FunctionLowering<'_, '_> {
         index: u32,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
-        if let Some(value) = self.field_of_borrowed_element(base, index, ty)? {
-            return Ok(value);
-        }
         // A base that names storage is read through it. Lowering it as a value
         // first would load the whole struct to reach one field of it, then copy
         // and drop everything else in it — and a generated style struct is
@@ -793,63 +793,24 @@ impl FunctionLowering<'_, '_> {
                     index,
                 )))
             }
+            // An element of a borrowable array is storage this frame reaches
+            // too: the runtime hands back the element's own slot, and a walk
+            // into it is address arithmetic like every other step. Reading
+            // through it is what keeps `rows[i].cell.tag` from copying the
+            // element out — and a copy of a value that runs a user `Drop` would
+            // run its body when the copy died, which is a body the reader never
+            // asked for.
+            IrExpr::Index {
+                base: array,
+                index: at,
+                ty: element,
+            } => {
+                let Some(handle) = self.borrowed_local_handle(array)? else {
+                    return Ok(None);
+                };
+                Ok(Some(self.element_slot(handle, at, element)?))
+            }
             _ => Ok(None),
         }
-    }
-
-    /// Reads one field of an array element without copying the element.
-    ///
-    /// `nodes[i].firstChild` asks for one scalar. Lowered as written it copies
-    /// the whole element out first — every string, array and enum in it cloned
-    /// and then dropped again — to read one word of it. A layout pass walks
-    /// thousands of nodes per frame doing exactly this, so that copy *was* the
-    /// frame.
-    ///
-    /// The element is addressable, so the field is too: walk to the element's
-    /// slot, walk to the field inside it, and copy only what was asked for. The
-    /// array is borrowed rather than cloned, on the same terms as
-    /// [`Self::lower_index`] — this expression does not own it and does not free
-    /// it.
-    ///
-    /// Returns `None` when the base is not an element of a borrowable array, and
-    /// the general path handles it.
-    fn field_of_borrowed_element(
-        &mut self,
-        base: IrExprId,
-        index: u32,
-        ty: Type,
-    ) -> Result<Option<LLVMValueRef>, LlvmError> {
-        let IrExpr::Index {
-            base: array,
-            index: at,
-            ty: element_ty,
-        } = *self.codegen.program.expr(base)
-        else {
-            return Ok(None);
-        };
-        if !matches!(element_ty, Type::Struct(_)) {
-            return Ok(None);
-        }
-        let Some(handle) = self.borrowed_local_handle(array)? else {
-            return Ok(None);
-        };
-        let slot = self.element_slot(handle, at, element_ty)?;
-        let struct_type = self.codegen.llvm_type(element_ty)?;
-        let name = c_string(&format!("elem.field.{index}.ptr"));
-        // SAFETY: `slot` addresses one live element of `struct_type`, bounds
-        // checked by the runtime, and `index` came from that struct's own
-        // definition.
-        let field_ptr = unsafe {
-            LLVMBuildStructGEP2(
-                self.codegen.builder,
-                struct_type,
-                slot,
-                index,
-                name.as_ptr(),
-            )
-        };
-        // The element still owns its field, so the reader gets a copy of that
-        // one field — never of the element around it.
-        Ok(Some(self.read_owned(field_ptr, ty)?))
     }
 }

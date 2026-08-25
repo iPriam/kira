@@ -13,8 +13,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+use kira_bundle_host::BundleHost;
 use kira_bytecode::{FrameRelease, FuncProto, Instruction, Module};
-use kira_desktop_runner::DesktopHost;
 use kira_live::{
     Bundle, LiveEvent, LiveServer, NamedPayload, PayloadKind, RunnerClient, SessionPhase,
 };
@@ -133,7 +133,7 @@ fn a_live_session_reaches_ready() {
     });
 
     let mut client = RunnerClient::connect(address, RunnerId::Desktop).expect("connect");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     client.run_session(&mut host).expect("the session runs");
     client.goodbye().expect("goodbye");
 
@@ -398,7 +398,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
     let session = std::thread::spawn(move || server.serve_once(true, &mut |_| {}));
 
     let mut client = RunnerClient::connect(address, RunnerId::Desktop).expect("connect");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let client_error = client
         .run_session(&mut host)
         .expect_err("a module that cannot link must not run");

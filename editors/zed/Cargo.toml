@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 zed_extension_api = "0.7.0"
+
+# Standalone: built by Zed against wasm32-wasip1, outside the kira workspace.
+[workspace]

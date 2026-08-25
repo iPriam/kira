@@ -1,0 +1,248 @@
+import Foundation
+
+// Generic parameter bounds: a trait named after a type parameter, discharged
+// when the instantiation is minted. Prefix: gbx / Gbx.
+//
+// `enum Boxed<Value: Scored> { … }` admits only arguments that keep `Scored`'s
+// promise; an argument lacking it is refused before anything runs, so every
+// case here is a program that compiles and behaves identically on both
+// engines. The refusals themselves are pinned by the semantics suite.
+//
+// Exercises: an argument conforming in its own body; a scalar through a
+// compiler-known marker bound (`Copyable`, `Send`); two traits joined by `+`
+// on one parameter; one bounded and one unbounded parameter side by side; an
+// argument whose conformance is retroactive; an argument that conforms only
+// because its construct family claimed the trait; a bounded template nested
+// inside another instantiation; values stored in struct fields and array
+// elements then matched.
+
+trait GbxScored {
+    function score(borrow self) -> Int
+    function doubled(borrow self) -> Int {
+        return self.score() * 2
+    }
+}
+
+trait GbxTagged {}
+
+struct GbxMark: GbxScored {
+    let n: Int
+    function score(borrow self) -> Int {
+        return n + 1
+    }
+}
+
+struct GbxTaggedMark: GbxScored, GbxTagged {
+    let n: Int
+    function score(borrow self) -> Int {
+        return n * 10
+    }
+}
+
+enum GbxBoxed<Value: GbxScored> {
+    Held(Value)
+    Empty
+}
+
+enum GbxBoth<Value: GbxScored + GbxTagged> {
+    One(Value)
+}
+
+enum GbxMoved<Value: Copyable + Send> {
+    One(Value)
+    Many([Value])
+}
+
+enum GbxPair<Scored: GbxScored, Raw> {
+    Of(Scored)
+    Plain(Raw)
+}
+
+function gbxUnbox(value: borrow GbxBoxed<GbxMark>) -> Int {
+    match value {
+        Held(m) -> { return m.doubled() }
+        Empty -> { return 0 - 1 }
+    }
+}
+
+construct GbxAConformingArgumentConstructsTheInstantiation() extends Test {
+    test {
+        let held: GbxBoxed<GbxMark> = .Held(GbxMark(n: 6))
+        let bare: GbxBoxed<GbxMark> = .Empty
+        var total = 0
+        match held {
+            Held(m) -> { total = total + m.score() }
+            Empty -> { total = total + 100 }
+        }
+        match bare {
+            Held(_) -> { total = total + 100 }
+            Empty -> { total = total + 7 }
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}
+
+construct GbxAMethodThroughThePayloadRunsTheConformersBody() extends Test {
+    test {
+        let boxed: GbxBoxed<GbxMark> = GbxBoxed.Held(GbxMark(n: 20))
+        match boxed {
+            Held(m) -> { return m.doubled() }
+            Empty -> { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+// `Copyable` and `Send` are compiler-known markers: the bound is answered by
+// the derived fact, so scalars and arrays of them pass without anyone writing
+// a claim.
+construct GbxAMarkerBoundAdmitsAScalar() extends Test {
+    test {
+        let one: GbxMoved<Int> = .One(5)
+        let many: GbxMoved<Int> = .Many([3, 4])
+        var total = 0
+        match one {
+            One(v) -> { total = total + v }
+            Many(_) -> { total = total + 100 }
+        }
+        match many {
+            One(_) -> { total = total + 100 }
+            Many(xs) -> {
+                var i = 0
+                while i < xs.count {
+                    total = total + xs[i]
+                    i = i + 1
+                }
+            }
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct GbxTwoTraitsJoinedByPlusBothHold() extends Test {
+    test {
+        let ok: GbxBoth<GbxTaggedMark> = .One(GbxTaggedMark(n: 4))
+        match ok {
+            One(m) -> { return m.score() }
+        }
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+}
+
+construct GbxOneBoundedAndOneUnboundedParameterSideBySide() extends Test {
+    test {
+        let scored: GbxPair<GbxMark, Int> = .Of(GbxMark(n: 2))
+        let raw: GbxPair<GbxMark, Int> = .Plain(9)
+        var total = 0
+        match scored {
+            Of(m) -> { total = total + m.score() }
+            Plain(v) -> { total = total + v }
+        }
+        match raw {
+            Of(m) -> { total = total + m.score() }
+            Plain(v) -> { total = total + v }
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+// The promise may be kept after the fact, exactly as any retroactive
+// conformance is.
+struct GbxLate {
+    let base: Int
+}
+
+extend GbxLate: GbxScored {
+    function score(borrow self) -> Int {
+        return base * 100
+    }
+}
+
+construct GbxARetroactiveClaimSatisfiesTheBound() extends Test {
+    test {
+        let held: GbxBoxed<GbxLate> = .Held(GbxLate(base: 3))
+        match held {
+            Held(m) -> { return m.doubled() }
+            Empty -> { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(600); return e }
+}
+
+// A family claiming the trait obliges every declaration backed by it, so a
+// declaration that writes nothing itself still keeps the promise its family
+// made — which is what the bound asks of it.
+construct GbxShape: GbxScored {
+    @Required function sides() -> Int
+}
+
+construct GbxSquare(edge: Int): GbxScored extends GbxShape {
+    function sides() -> Int {
+        return 4
+    }
+    function score(borrow self) -> Int {
+        return edge * sides()
+    }
+}
+
+construct GbxAFamilyBackedDeclarationKeepsTheBoundToo() extends Test {
+    test {
+        let held: GbxBoxed<GbxSquare> = .Held(GbxSquare(edge: 3))
+        match held {
+            Held(s) -> { return s.doubled() }
+            Empty -> { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+// A bounded template may sit inside another instantiation: the inner argument
+// substitutes first, and the outer body resolves against the row it minted.
+struct GbxSlot {
+    var held: GbxBoxed<GbxMark>
+}
+
+construct GbxABoundedValueStoredInAFieldMatchesLater() extends Test {
+    test {
+        var slot = GbxSlot(held: .Empty)
+        slot.held = GbxBoxed.Held(GbxMark(n: 5))
+        return gbxUnbox(slot.held)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct GbxAnArrayOfBoundedValuesChurnsClean() extends Test {
+    test {
+        var xs: [GbxBoxed<GbxMark>] = []
+        var i = 0
+        while i < 40 {
+            if (i % 3) == 0 {
+                xs.append(.Empty)
+            } else {
+                xs.append(.Held(GbxMark(n: i)))
+            }
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < xs.count {
+            total = total + gbxUnbox(xs[j])
+            j = j + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1052); return e }
+}
+
+function gbxSection() -> Int {
+    var checksum = 0
+    checksum = checksum * 31 + GbxMark(n: 6).doubled()
+    checksum = checksum * 31 + GbxTaggedMark(n: 4).score()
+    checksum = checksum * 31 + gbxUnbox(GbxBoxed.Held(GbxMark(n: 9)))
+    checksum = checksum * 31 + GbxSquare(edge: 5).score()
+    checksum = checksum * 31 + GbxLate(base: 2).doubled()
+    return checksum
+}

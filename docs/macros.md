@@ -307,6 +307,12 @@ There is deliberately **no** `String → Identifier`. A macro can only obtain an
 identifier from reflection or from a quote, so it cannot fabricate a name from a
 string and use it to capture something at the call site.
 
+The other direction is open. Half of what a macro reflects on arrives as the
+text it was written with, so `String(syntax)` renders that text — original
+spelling preserved, comments included — and `Int(syntax)` reads the same text
+back as an integer. Searching and joining that text is how a lint reasons about
+a declaration's shape without re-parsing it.
+
 ### `quote` and `#{ … }` splicing
 
 `quote { … }` is a compiler intrinsic, not a function: the literal Kira inside

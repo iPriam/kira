@@ -332,11 +332,22 @@ impl<'a> Analyzer<'a> {
         let tree: &'a kira_syntax_model::SyntaxTree = self.tree;
         tree.items_with_source()
             .filter_map(|(source, item)| match item {
-                // `extend T: Trait { … }` is an impl block, not a modifier
-                // block: its members are the trait's members for one type, and
-                // they are registered as that type's methods rather than as a
-                // family's chainable surface. See `crate::traits`.
-                Item::Extend(declaration) if declaration.conforms.is_none() => {
+                // `extend T: Trait { … }` on a *type* is an impl block, not a
+                // modifier block: its members are the trait's members for that
+                // one type, and they are registered as its methods rather than
+                // as a family's chainable surface. See `crate::traits`.
+                //
+                // On a *family* the two coincide. A family cannot present a
+                // member itself — it is a template — so the way it answers a
+                // trait it claims is by carrying the member for every
+                // declaration backed by it, which is exactly what a modifier
+                // is.
+                Item::Extend(declaration)
+                    if declaration.conforms.is_none()
+                        || self
+                            .construct_families
+                            .contains_key(self.interner.resolve(declaration.name)) =>
+                {
                     Some((source, declaration))
                 }
                 _ => None,

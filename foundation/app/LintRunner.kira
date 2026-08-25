@@ -202,110 +202,193 @@ comptime macro LintRunner {
         // All three need the body's *shape* — which statement is last, what is
         // nested, what comes after — so this lint is why declarations carry a
         // structured body at all.
+        //
+        // Every statement of the declaration is judged, nested blocks included,
+        // and each candidate is judged on its own, so two manual loops share
+        // neither a report nor a run: a walk that stopped at the first finding,
+        // or at the body's top level, made `kira lint --fix` surface them one
+        // run at a time.
         if indexLoopOn {
             for target in declarations {
                 if target.family == "Lint" {
                     continue
                 }
-                var seenLoop: Bool = false
-                var counter: String = ""
-                var bound: String = ""
-                var usedAfter: Bool = false
-                var reportAt: Syntax = quote { }
                 // Bound once: reading `target.body` re-parses the declaration,
                 // and this walk looks at every statement twice.
                 let body = target.body
-                for k in 0..body.count {
+                // The whole declaration flattened once, breadth after breadth:
+                // `stmts` holds every statement, `afters` the text written
+                // after it — its later siblings plus everything that follows
+                // every enclosing block — and `prevs` the sibling directly
+                // above it, which is where the counter's initializer lives.
+                var stmts: [Statement] = []
+                var afters: [String] = []
+                var prevs: [String] = []
+                var above: [Statement] = []
+                var suffix: String = ""
+                var k = body.count
+                while k > 0 {
+                    k = k - 1
                     let statement = body[k]
-                    if seenLoop {
-                        // After the loop: is the counter still named?
-                        if statement.syntax.contains(counter) {
+                    var prev: String = ""
+                    var prevAt = statement
+                    if k > 0 {
+                        let before = k - 1
+                        let sibling = body[before]
+                        prev = String(sibling.syntax)
+                        prevAt = sibling
+                    }
+                    stmts.append(statement)
+                    afters.append(suffix)
+                    prevs.append(prev)
+                    above.append(prevAt)
+                    suffix = suffix + String(statement.syntax) + " "
+                }
+                // Expanding and judging share one pass: each entry hands its
+                // children their own tail of what comes after, so a nested
+                // loop is tested against the rest of the declaration, not just
+                // the block that holds it.
+                var i = 0
+                while i < stmts.count {
+                    let statement = stmts[i]
+                    let after = afters[i]
+                    let prev = prevs[i]
+                    let prevAt = above[i]
+                    // Advance before anything else: every guard below skips to
+                    // the next entry, and a step left for the loop's tail would
+                    // be skipped with them.
+                    i = i + 1
+                    let kids = statement.body
+                    var innerSuffix = after
+                    var j = kids.count
+                    while j > 0 {
+                        j = j - 1
+                        let child = kids[j]
+                        var childPrev: String = ""
+                        var childPrevAt = child
+                        if j > 0 {
+                            let childAbove = kids[j - 1]
+                            childPrev = String(childAbove.syntax)
+                            childPrevAt = childAbove
+                        }
+                        stmts.append(child)
+                        afters.append(innerSuffix)
+                        prevs.append(childPrev)
+                        above.append(childPrevAt)
+                        innerSuffix = innerSuffix + String(child.syntax) + " "
+                    }
+                    if statement.kind != "while" {
+                        continue
+                    }
+                    // A compound condition is not a `for`: the extra test is
+                    // an early exit, and a range loop has none.
+                    var compound: Bool = false
+                    if statement.head.contains("&&") {
+                        compound = true
+                    }
+                    if statement.head.contains("||") {
+                        compound = true
+                    }
+                    if compound {
+                        continue
+                    }
+                    if statement.head.contains(".count") == false {
+                        continue
+                    }
+                    var counter: String = ""
+                    var bound: String = ""
+                    for piece in statement.head.split(" < ") {
+                        if counter == "" {
+                            counter = piece
+                        }
+                        bound = piece
+                    }
+                    var last: String = ""
+                    if kids.count > 0 {
+                        let lastAt = kids.count - 1
+                        last = String(kids[lastAt].syntax)
+                    }
+                    // The whole subtree, however deep: a `continue` two blocks
+                    // down skips the manual step exactly as much as one right
+                    // inside the loop.
+                    var jumps: Bool = false
+                    var mutates: Bool = false
+                    var scan = statement.body
+                    var s = 0
+                    while s < scan.count {
+                        let node = scan[s]
+                        if node.kind == "continue" {
+                            jumps = true
+                        }
+                        if node.syntax.contains(".append(") {
+                            mutates = true
+                        }
+                        for deeper in node.body {
+                            scan.append(deeper)
+                        }
+                        s = s + 1
+                    }
+                    if last.contains(" + 1") == false {
+                        continue
+                    }
+                    if jumps {
+                        continue
+                    }
+                    if mutates {
+                        continue
+                    }
+                    // The `var i = 0` sits directly above; span both so the fix
+                    // can collapse them into one `for`.
+                    if prev.contains("var " + counter + " = 0") == false {
+                        continue
+                    }
+                    // After the loop: is the counter named again? Then it cannot
+                    // become the loop's own binding. Matched one whole word at
+                    // a time rather than by substring — `return` holds an `r`
+                    // and `.count` holds a `u`, and neither of those reads the
+                    // counter — but a substring hit never reported, so a word
+                    // match keeps every report the old test kept.
+                    var usedAfter: Bool = false
+                    if counter == "" {
+                        usedAfter = true
+                    }
+                    var words: [String] = [after]
+                    for mark in ["\n", "\t", "\"", "'", "{", "}", "(", ")", "[", "]", "<", ">", "+", "-", "*", "/", "=", "&", "|", "!", ",", ";", ":", ".", "?", "%", "@", "#"] {
+                        var pieces: [String] = []
+                        for piece in words {
+                            for part in piece.split(mark) {
+                                pieces.append(part)
+                            }
+                        }
+                        words = pieces
+                    }
+                    for word in words {
+                        if word == counter {
                             usedAfter = true
                         }
                     }
-                    if seenLoop == false {
-                        if statement.kind == "while" {
-                            // A compound condition is not a `for`: the extra
-                            // test is an early exit, and a range loop has none.
-                            var compound: Bool = false
-                            if statement.head.contains("&&") {
-                                compound = true
-                            }
-                            if statement.head.contains("||") {
-                                compound = true
-                            }
-                            if statement.head.contains(".count") && compound == false {
-                                var name: String = ""
-                                for piece in statement.head.split(" < ") {
-                                    if name == "" {
-                                        name = piece
-                                    }
-                                }
-                                for piece in statement.head.split(" < ") {
-                                    bound = piece
-                                }
-                                var last: String = ""
-                                var jumps: Bool = false
-                                var mutates: Bool = false
-                                for inner in statement.body {
-                                    last = inner.syntax
-                                    if inner.kind == "continue" {
-                                        jumps = true
-                                    }
-                                    if inner.syntax.contains(".append(") {
-                                        mutates = true
-                                    }
-                                    for deeper in inner.body {
-                                        if deeper.kind == "continue" {
-                                            jumps = true
-                                        }
-                                        if deeper.syntax.contains(".append(") {
-                                            mutates = true
-                                        }
-                                    }
-                                }
-                                if last.contains(" + 1") {
-                                    if jumps == false {
-                                        if mutates == false {
-                                            // The `var i = 0` sits directly
-                                            // above; span both so the fix can
-                                            // collapse them into one `for`.
-                                            if k > 0 {
-                                                let declaration = body[k - 1]
-                                                if declaration.syntax.contains("var " + name + " = 0") {
-                                                    seenLoop = true
-                                                    counter = name
-                                                    reportAt = declaration.through(statement)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if usedAfter {
+                        continue
                     }
-                }
-                if seenLoop {
-                    if usedAfter == false {
-                        Diagnostics.warning(
-                            "this `while` counts an index by hand; `for " + counter +
-                                " in 0.." + bound + "` does it for you, and the counter is not read after the loop",
-                            at: reportAt,
-                            code: "KLINT002",
-                            // The replacement is the run itself, edited: the
-                            // declaration and the `while` header collapse into
-                            // the `for`, and the hand-written step goes. Built
-                            // from the real source, so every line inside keeps
-                            // the indentation it was written with.
-                            fix: reportAt
-                                .replace("var " + counter + " = 0\n", "")
-                                .replace(
-                                    "while " + counter + " < " + bound + " {",
-                                    "for " + counter + " in 0.." + bound + " {"
-                                )
-                                .replace(counter + " = " + counter + " + 1\n", "")
-                        )
-                    }
+                    let reportAt = prevAt.through(statement)
+                    Diagnostics.warning(
+                        "this `while` counts an index by hand; `for " + counter +
+                            " in 0.." + bound + "` does it for you, and the counter is not read after the loop",
+                        at: reportAt,
+                        code: "KLINT002",
+                        // The replacement is the run itself, edited: the
+                        // declaration and the `while` header collapse into
+                        // the `for`, and the hand-written step goes. Built
+                        // from the real source, so every line inside keeps
+                        // the indentation it was written with.
+                        fix: reportAt
+                            .replace("var " + counter + " = 0\n", "")
+                            .replace(
+                                "while " + counter + " < " + bound + " {",
+                                "for " + counter + " in 0.." + bound + " {"
+                            )
+                            .replace(counter + " = " + counter + " + 1\n", "")
+                    )
                 }
             }
         }

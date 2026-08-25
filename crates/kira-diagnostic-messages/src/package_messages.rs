@@ -5,6 +5,7 @@ use crate::diagnostic_code::DiagnosticCode;
 use crate::diagnostic_domain::DiagnosticDomain;
 use crate::diagnostic_message::{MessageArgs, build};
 use kira_diagnostics::{Diagnostic, Severity};
+use kira_source::FileSpan;
 
 fn package_error(code: DiagnosticCode, title: &str, message: String, help: &str) -> Diagnostic {
     build(MessageArgs {
@@ -61,6 +62,30 @@ pub fn missing_project_manifest(path: &str) -> Diagnostic {
         ),
         "Run the command from a project root, or pass an explicit manifest path.",
     )
+}
+
+/// Builds KPK002: a `package.kira` declaration could not be read.
+///
+/// Takes the span and label explicitly because the manifest reader reports
+/// messages without offsets — a broken declaration points at the whole file,
+/// and the reader's own wording is the label.
+pub fn invalid_package_declaration(span: FileSpan, detail: String) -> Diagnostic {
+    build(MessageArgs {
+        code: DiagnosticCode::Kpk002InvalidPackageDeclaration,
+        severity: Severity::Error,
+        domain: DiagnosticDomain::Package,
+        phase: Some(CompilerPhase::ProjectDiscovery),
+        title: "invalid package declaration".to_owned(),
+        message: format!("the `package.kira` declaration could not be read: {detail}"),
+        span: Some(span),
+        label: Some(detail),
+        notes: Vec::new(),
+        help: Some(
+            "`package.kira` is read by the manifest reader, never the compiler frontend; \
+             keep the `Package <name> { ... }` shape and check field spelling."
+                .to_owned(),
+        ),
+    })
 }
 
 /// Builds KPK007: the target entrypoint `app/main.kira` is missing under `root`.

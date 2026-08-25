@@ -34,7 +34,7 @@ mod slots;
 mod updates;
 mod value_members;
 
-pub(crate) use dispatch::ConstructCallContent;
+pub(crate) use dispatch::{ConstructCallContent, DispatchMethod};
 
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
@@ -42,6 +42,23 @@ pub(crate) use dispatch::ConstructCallContent;
 pub(crate) struct ConstructInfo {
     /// Computed members read as properties rather than fields.
     pub(crate) computed: HashSet<String>,
+    /// The family this declaration is backed by, as written.
+    pub(crate) family: String,
+    /// Every member name the declaration presents *itself*: its construction
+    /// parameters, its `let` members, and its methods.
+    ///
+    /// This is what discharges a family requirement, and it is recorded here
+    /// rather than recomputed because it is the set as of the moment the
+    /// declaration was defined — before the family's own stored members were
+    /// merged into the struct's fields, which is what keeps an inherited
+    /// default from answering an obligation the declaration owes.
+    pub(crate) members: HashSet<String>,
+    /// The method names the declaration wrote in its own body.
+    ///
+    /// A declaration that overrides every family method consumes nothing the
+    /// family would have consumed, so it owes the family's requirements
+    /// nothing.
+    pub(crate) own_methods: HashSet<String>,
     /// Child slots filled from construction trailing content.
     pub(crate) slots: Vec<ContentSlot>,
     /// The heterogeneous family variants this concrete struct wraps into: the

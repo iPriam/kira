@@ -49,6 +49,62 @@ The design goal is not "Rust but smaller." The design goal is a readable systems
 
 Kira does not use GC or ARC in the core runtime hot path.
 
+## Drop
+
+A type claims `Drop` to run a body when its values are released.
+
+```ts
+struct FileHandle: Drop {
+    let fd: Int
+
+    function drop(borrow mut self) {
+        closeFd(self.fd)
+        return
+    }
+}
+```
+
+The body runs once per value, before the value's own members are released, at every point either engine releases one: a binding leaving scope, a container being freed, a moved value dying in the callee that took it, and a write replacing what a binding, a member, or an element held.
+
+The guarantee: **every user `Drop` body runs before the run that made the value ends.** Nothing can enter a body where no engine is executing, so a type that runs one is refused at each position that would outlive the run.
+
+`drop` is never called by name. `value.drop()` is `KSEM300`; the release is what runs it.
+
+### One owner
+
+A value that runs a body has one owner and no copy. Reading one out of the value that holds it would make a second value with the same body to run, so a read is legal only where it does not take:
+
+| Written | Answer |
+| --- | --- |
+| `pair.first.tag`, `bag.items.count`, `bag.items[0].tag` | Legal. The read walks to the value's own storage. |
+| `read(pair.first)` where `read` borrows | Legal. The caller goes on holding the value. |
+| `pair.first.value()` on a non-mutating method | Legal. The receiver is borrowed. |
+| `let stolen = pair.first`, `let taken = arr[1]` | `KSEM302`. The binding is a second owner. |
+| `pair.first.bump()` on a mutating method | `KSEM302`. A mutating receiver is taken by value. |
+| `for item in items` over `Drop` elements | `KSEM302`. The cursor binds one element per iteration. |
+| `make().held.tag` | `KSEM302`. A temporary is released at the end of the statement. |
+| A closure capturing one | `KSEM302`. A captured `var` is shared with the scope that declared it. |
+
+Bind the owner and read through it, or move the whole owner.
+
+### Refused positions
+
+Each position below outlives the run that made the value, or copies it:
+
+| Position | Code |
+| --- | --- |
+| An `@Export` parameter or result | `KSEM303` |
+| `nativeState` and `nativeRecover` | `KSEM304` |
+| A `retains:` foreign parameter | `KSEM305` |
+| An enum variant payload, including a generic instantiation and a construct-backed declaration | `KSEM306` |
+| A parameter or result of an `@Native` or `@Runtime` function | `KSEM307` |
+
+A `Drop` body itself declares no engine (`KSEM301` if it does): a release happens wherever the value dies, so the body is compiled into both halves of a hybrid build and runs the same source on either one. A value may be built, used, and released inside one half; what may not happen is the crossing, which marshals a copy.
+
+### Teardown
+
+A parked release outside any frame gives its storage back rather than running the body. `Instance::release`, `Instance::release_all`, and `Instance::finish` hold no engine to enter a body with, so a value that reached one is abandoned. Nothing an author can write reaches that path: the refusals above are what make the guarantee hold, and this is what keeps a module built by other means from leaking.
+
 ## Current Limitations
 
 This repo still has important limits, and the docs should stay honest about them:
@@ -57,7 +113,7 @@ This repo still has important limits, and the docs should stay honest about them
 - non-trivial `copy` lowering is not implemented yet
 - field-sensitive partial moves are not complete
 - closure escape borrow analysis is not complete
-- deterministic `deinit` lowering is not finished
+- a `Drop` value cannot be moved out of a member, an element, or an enum payload; the owner moves whole
 - callable-value ownership metadata is not fully propagated through every callback-style API path
 - LLVM ownership ABI details such as broad `readonly` / `noalias` annotation use are still incomplete
 

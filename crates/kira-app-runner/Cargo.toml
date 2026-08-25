@@ -1,0 +1,23 @@
+[package]
+name = "kira-app-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "kira_app_runner"
+path = "src/lib.rs"
+# The static archive is what an exported application links; the rlib exists so
+# this crate's own unit tests run without rebuilding the C entry as a test.
+crate-type = ["staticlib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-bundle-host.workspace = true
+kira-live.workspace = true
+kira-manifest.workspace = true
+kira-native-bridge.workspace = true
+thiserror.workspace = true

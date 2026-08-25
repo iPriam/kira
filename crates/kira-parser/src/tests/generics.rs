@@ -150,3 +150,51 @@ fn an_unclosed_list_is_reported_rather_than_consuming_the_file() {
     // The parser never bails: something still came out of the file.
     assert!(!result.tree.items().is_empty());
 }
+
+#[test]
+fn a_bound_parses_onto_its_parameter() {
+    let result = parse_text("enum Boxed<Value: Scored> { Held(Value) }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let declaration = only_enum(&result);
+    let [param] = &declaration.type_params[..] else {
+        panic!("expected one parameter, got {:?}", declaration.type_params);
+    };
+    assert_eq!(result.interner.resolve(param.name), "Value");
+    let bounds: Vec<String> = param
+        .bounds
+        .iter()
+        .map(|bound| result.interner.resolve(bound.name).to_owned())
+        .collect();
+    assert_eq!(bounds, ["Scored"]);
+}
+
+#[test]
+fn several_bounds_on_one_parameter_are_joined_by_plus() {
+    // The comma is taken: it separates parameters. The traits of one
+    // parameter's bound are joined with `+`.
+    let result = parse_text("enum Boxed<Value: Scored + Send, Rest> { Held(Value) Rest }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let declaration = only_enum(&result);
+    assert_eq!(declaration.type_params.len(), 2);
+    let bounds: Vec<String> = declaration.type_params[0]
+        .bounds
+        .iter()
+        .map(|bound| result.interner.resolve(bound.name).to_owned())
+        .collect();
+    assert_eq!(bounds, ["Scored", "Send"]);
+    // The unbounded second parameter still follows the bounded first.
+    assert!(declaration.type_params[1].bounds.is_empty());
+}
+
+#[test]
+fn a_bound_without_a_trait_name_is_reported() {
+    let result = parse_text("enum Boxed<Value: > { Held(Value) }");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.has_code("KPAR079")),
+        "{:?}",
+        result.diagnostics,
+    );
+}

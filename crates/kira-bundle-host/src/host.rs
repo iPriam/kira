@@ -1,4 +1,5 @@
-//! The desktop [`RunnerHost`]: what load, link, and start actually mean here.
+//! The bundle [`RunnerHost`]: what load, link, and start actually mean for a
+//! runner that hosts a bundle in this process.
 //!
 //! The three steps are kept genuinely separate rather than collapsed into one
 //! "run it" call, because a live session's whole value is saying *which* step
@@ -28,9 +29,9 @@ use crate::VmHotPatch;
 use crate::native::NativeProgram;
 use crate::staged::Staged;
 
-/// Why the desktop runner could not load, link, or start a bundle.
+/// Why the bundle host could not load, link, or start a bundle.
 #[derive(Debug, thiserror::Error)]
-pub enum DesktopRunnerError {
+pub enum BundleHostError {
     /// The bundle could not be written to the runner's cache.
     #[error("could not stage the bundle at `{path}`: {source}")]
     Stage {
@@ -95,7 +96,7 @@ pub enum DesktopRunnerError {
     /// it did not understand would start an app that is missing half of itself
     /// and call the session ready.
     #[error(
-        "the desktop runner cannot host a `{kind}` entrypoint; \
+        "the bundle host cannot host a `{kind}` entrypoint; \
          it hosts `vm-bytecode`, `native-library`, and `hybrid-manifest` entrypoints"
     )]
     UnsupportedEntry {
@@ -110,7 +111,7 @@ pub enum DesktopRunnerError {
     /// A typed error rather than an `unwrap` on the staged state: this crate is
     /// driven by a protocol whose peer is a socket, and a library never gets to
     /// end its caller's process because a message arrived out of order.
-    #[error("the desktop runner was asked to {step} before it had {required}")]
+    #[error("the bundle host was asked to {step} before it had {required}")]
     OutOfOrder {
         /// The step that was asked for.
         step: &'static str,
@@ -131,16 +132,16 @@ impl HostCapabilities for StdoutHost {
     }
 }
 
-/// The desktop runner's host.
+/// The bundle host: the runner-side implementation every Kira runner shares.
 #[derive(Debug)]
-pub struct DesktopHost {
+pub struct BundleHost {
     cache: PathBuf,
     staged: Staged,
     hotpatch_disabled: bool,
     hotpatch: VmHotPatch,
 }
 
-impl DesktopHost {
+impl BundleHost {
     /// A host that stages bundles under `cache`.
     ///
     /// The bundle is written to disk rather than kept in memory because a hybrid
@@ -150,8 +151,8 @@ impl DesktopHost {
     /// The hot-patch kill switch is read here, once, rather than per reload: an
     /// environment variable that can change under a running session is a session
     /// that behaves two ways for one invocation.
-    pub fn new(cache: PathBuf) -> DesktopHost {
-        DesktopHost {
+    pub fn new(cache: PathBuf) -> BundleHost {
+        BundleHost {
             hotpatch: VmHotPatch::new(cache.clone()),
             cache,
             staged: Staged::Empty,
@@ -160,8 +161,8 @@ impl DesktopHost {
     }
 
     /// A host with hot patching explicitly on or off, ignoring the environment.
-    pub fn with_hotpatch_disabled(cache: PathBuf, disabled: bool) -> DesktopHost {
-        DesktopHost {
+    pub fn with_hotpatch_disabled(cache: PathBuf, disabled: bool) -> BundleHost {
+        BundleHost {
             hotpatch: VmHotPatch::new(cache.clone()),
             cache,
             staged: Staged::Empty,
@@ -195,11 +196,11 @@ impl DesktopHost {
     /// anything, which is what a runner needs when the app it is about to start
     /// will outlive the call: whether the app started is reported the moment it
     /// does, so it has to be knowable the moment before.
-    pub fn startable(&self) -> Result<(), DesktopRunnerError> {
+    pub fn startable(&self) -> Result<(), BundleHostError> {
         if self.staged.is_linked() {
             return Ok(());
         }
-        Err(DesktopRunnerError::OutOfOrder {
+        Err(BundleHostError::OutOfOrder {
             step: "start",
             required: required_before_start(&self.staged),
         })
@@ -214,10 +215,10 @@ fn required_before_start(staged: &Staged) -> &'static str {
     }
 }
 
-impl RunnerHost for DesktopHost {
-    type Error = DesktopRunnerError;
+impl RunnerHost for BundleHost {
+    type Error = BundleHostError;
 
-    fn load(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+    fn load(&mut self, bundle: &Bundle) -> Result<(), BundleHostError> {
         self.hotpatch.clear();
         // Staged fresh each time: a leftover payload from a previous bundle must
         // never be what a later `dlopen` resolves against.
@@ -229,7 +230,7 @@ impl RunnerHost for DesktopHost {
         let entry = bundle
             .manifest()
             .entry_payload()
-            .ok_or(DesktopRunnerError::NoEntrypoint)?;
+            .ok_or(BundleHostError::NoEntrypoint)?;
         self.staged = match entry.kind {
             PayloadKind::VmBytecode => Staged::VmLoaded {
                 module: Module::from_bytes(bundle.entry_bytes())?,
@@ -249,13 +250,13 @@ impl RunnerHost for DesktopHost {
             | PayloadKind::ForeignAdapter
             | PayloadKind::NativeDependency
             | PayloadKind::ForeignBindings) => {
-                return Err(DesktopRunnerError::UnsupportedEntry { kind: kind.label() });
+                return Err(BundleHostError::UnsupportedEntry { kind: kind.label() });
             }
         };
         Ok(())
     }
 
-    fn link(&mut self) -> Result<(), DesktopRunnerError> {
+    fn link(&mut self) -> Result<(), BundleHostError> {
         self.staged = match std::mem::replace(&mut self.staged, Staged::Empty) {
             Staged::VmLoaded { module, bindings } => link_vm(module, bindings)?,
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
@@ -276,7 +277,7 @@ impl RunnerHost for DesktopHost {
             | Staged::NativeLinked { .. }
             | Staged::HybridLinked { .. }) => already,
             Staged::Empty => {
-                return Err(DesktopRunnerError::OutOfOrder {
+                return Err(BundleHostError::OutOfOrder {
                     step: "link",
                     required: "loaded a bundle",
                 });
@@ -285,7 +286,7 @@ impl RunnerHost for DesktopHost {
         Ok(())
     }
 
-    fn swap(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+    fn swap(&mut self, bundle: &Bundle) -> Result<(), BundleHostError> {
         if self.hotpatch.has_active_vm() {
             self.hotpatch.swap(bundle)?;
             return Ok(());
@@ -294,7 +295,7 @@ impl RunnerHost for DesktopHost {
         // live: `swap` replaces a linked bundle, and a merely-loaded one has
         // nothing mapped that could survive.
         if !self.staged.is_linked() {
-            return Err(DesktopRunnerError::OutOfOrder {
+            return Err(BundleHostError::OutOfOrder {
                 step: "swap",
                 required: "linked a bundle",
             });
@@ -317,7 +318,7 @@ impl RunnerHost for DesktopHost {
         let entry = bundle
             .manifest()
             .entry_payload()
-            .ok_or(DesktopRunnerError::NoEntrypoint)?;
+            .ok_or(BundleHostError::NoEntrypoint)?;
 
         // The replacement is built *before* the old one is dropped, and this is
         // load-bearing rather than tidy. Dropping the old hybrid session first
@@ -348,7 +349,7 @@ impl RunnerHost for DesktopHost {
             | PayloadKind::ForeignAdapter
             | PayloadKind::NativeDependency
             | PayloadKind::ForeignBindings) => {
-                return Err(DesktopRunnerError::UnsupportedEntry { kind: kind.label() });
+                return Err(BundleHostError::UnsupportedEntry { kind: kind.label() });
             }
         };
 
@@ -365,7 +366,7 @@ impl RunnerHost for DesktopHost {
             .then(kira_live::hotpatch_kill_switch_reason)
     }
 
-    fn start(&mut self) -> Result<(), DesktopRunnerError> {
+    fn start(&mut self) -> Result<(), BundleHostError> {
         match &self.staged {
             Staged::VmLinked { program } => {
                 // The same stack `kira run` puts under a VM program: callback
@@ -389,7 +390,7 @@ impl RunnerHost for DesktopHost {
                 program.run()?;
                 Ok(())
             }
-            not_linked => Err(DesktopRunnerError::OutOfOrder {
+            not_linked => Err(BundleHostError::OutOfOrder {
                 step: "start",
                 required: required_before_start(not_linked),
             }),
@@ -407,7 +408,7 @@ impl RunnerHost for DesktopHost {
 fn foreign_bindings_from_bundle(
     cache: &Path,
     bundle: &Bundle,
-) -> Result<Option<Vec<Option<PathBuf>>>, DesktopRunnerError> {
+) -> Result<Option<Vec<Option<PathBuf>>>, BundleHostError> {
     let payload_directory = cache.join(kira_live::PAYLOAD_DIR);
     let mut manifest_path = None;
     for payload in &bundle.manifest().payloads {
@@ -416,13 +417,13 @@ fn foreign_bindings_from_bundle(
         }
         let path = payload_directory.join(&payload.name);
         if manifest_path.replace(path.clone()).is_some() {
-            return Err(DesktopRunnerError::DuplicateForeignBindings { path });
+            return Err(BundleHostError::DuplicateForeignBindings { path });
         }
     }
     let Some(path) = manifest_path else {
         return Ok(None);
     };
-    let text = std::fs::read_to_string(&path).map_err(|source| DesktopRunnerError::Stage {
+    let text = std::fs::read_to_string(&path).map_err(|source| BundleHostError::Stage {
         path: path.clone(),
         source,
     })?;
@@ -438,7 +439,7 @@ fn foreign_bindings_from_bundle(
             continue;
         }
         if !is_plain_loader_name(line) {
-            return Err(DesktopRunnerError::InvalidForeignBindings {
+            return Err(BundleHostError::InvalidForeignBindings {
                 path: path.clone(),
                 line: line_number,
                 reason: "binding names must be plain file or loader names".to_owned(),
@@ -448,7 +449,7 @@ fn foreign_bindings_from_bundle(
             Some(payload) if payload.kind == PayloadKind::NativeDependency => {
                 let staged = payload_directory.join(line);
                 if !staged.is_file() {
-                    return Err(DesktopRunnerError::InvalidForeignBindings {
+                    return Err(BundleHostError::InvalidForeignBindings {
                         path: path.clone(),
                         line: line_number,
                         reason: format!(
@@ -459,7 +460,7 @@ fn foreign_bindings_from_bundle(
                 Some(staged)
             }
             Some(payload) => {
-                return Err(DesktopRunnerError::InvalidForeignBindings {
+                return Err(BundleHostError::InvalidForeignBindings {
                     path: path.clone(),
                     line: line_number,
                     reason: format!(
@@ -488,7 +489,7 @@ fn is_plain_loader_name(name: &str) -> bool {
 fn link_vm(
     module: Module,
     bindings: Option<Vec<Option<PathBuf>>>,
-) -> Result<Staged, DesktopRunnerError> {
+) -> Result<Staged, BundleHostError> {
     let program = Program::load(module)?;
     if program.module().foreign_imports.is_empty() && program.module().foreign_callbacks.is_empty()
     {
@@ -499,7 +500,7 @@ fn link_vm(
 
     let paths = bindings.unwrap_or_default();
     if paths.len() != program.module().foreign_imports.len() {
-        return Err(DesktopRunnerError::MissingForeignBindings);
+        return Err(BundleHostError::MissingForeignBindings);
     }
     let imports = program
         .module()

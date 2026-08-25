@@ -232,6 +232,45 @@ impl Parser<'_> {
         })
     }
 
+    /// Parses `Family Name { … }`: the bare spelling of a zero-parameter
+    /// declaration backed by `Family`.
+    ///
+    /// The family comes first and the declaration names itself second, with no
+    /// parameter list and no clauses — everything the `construct` spelling
+    /// writes, with the family named where `construct` would be and the
+    /// `extends` clause implied by that position. The body parses exactly as
+    /// the spelled-out form's does, computed members and all.
+    pub(crate) fn parse_construct_bare_head(&mut self) -> Option<ConstructDecl> {
+        let start = self.current().span;
+        let family_span = self.current().span;
+        let family = self.intern_span(family_span);
+        self.bump();
+        let name_span = self.current().span;
+        let name = self.intern_span(name_span);
+        self.bump();
+        let kind = ConstructKind::Backed {
+            family,
+            family_span,
+            params: Vec::new(),
+        };
+        let backing = Some((family, family_span));
+        let mut body = ConstructBody::default();
+        self.parse_construct_body(&mut body, backing);
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(ConstructDecl {
+            kind,
+            name,
+            name_span,
+            traits: Vec::new(),
+            fields: body.fields,
+            methods: body.methods,
+            inits: body.inits,
+            extends: Vec::new(),
+            deferred: body.deferred,
+            span,
+        })
+    }
+
     /// Decides which of the two forms a construct header wrote.
     ///
     /// A parameter list makes it a backed declaration, which is backed by

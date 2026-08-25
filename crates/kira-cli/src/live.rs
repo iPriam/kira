@@ -65,6 +65,9 @@ impl LiveBackend {
 pub struct LiveOptions {
     /// The runner to run on.
     pub runner: RunnerId,
+    /// Which physical kind of an Apple target to run on, when the runner has
+    /// more than one.
+    pub apple_destination: AppleDestination,
     /// The program to run: a `.kira` file, or a package directory.
     pub path: String,
     /// Which backend builds the bundle.
@@ -76,6 +79,20 @@ pub struct LiveOptions {
     /// `None` means until the session ends on its own — which, when watching, is
     /// never: that is the point of watching.
     pub quit_after: Option<Duration>,
+}
+
+/// Whether an Apple runner targets a simulator or a real device.
+///
+/// A live loop belongs where the developer is: the simulator boots in seconds
+/// and needs no signing, so it is the default, and a device is named
+/// explicitly (`kira live ios-device`) because it costs provisioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppleDestination {
+    /// A booted-or-bootable simulator; the default.
+    #[default]
+    Simulator,
+    /// A physical device attached over USB or Wi-Fi.
+    Device,
 }
 
 impl LiveOptions {
@@ -152,6 +169,7 @@ impl LiveOptions {
     /// it.
     pub fn parse_in(args: &[String], interactive: bool) -> Result<LiveOptions, LiveOptionsError> {
         let mut runner = None;
+        let mut apple_destination: Option<AppleDestination> = None;
         let mut path: Option<String> = None;
         let mut backend = LiveBackend::Vm;
         let mut watch = interactive;
@@ -186,19 +204,27 @@ impl LiveOptions {
                 }
                 positional => {
                     // A runner id only in the first positional slot, and only
-                    // when it does not look like a path.
-                    if runner.is_none()
-                        && path.is_none()
-                        && !looks_like_path(positional)
-                        && let Some(named) = RunnerId::parse(positional)
-                    {
-                        runner = Some(named);
-                    } else if let Some(first) = &path {
-                        return Err(LiveOptionsError::TooManyPaths {
-                            first: first.clone(),
-                            second: positional.to_owned(),
-                        });
-                    } else {
+                    // when it does not look like a path. An Apple spelling may
+                    // name its destination as well: `ios-simulator`,
+                    // `ios-sim`, or `ios-device`.
+                    let mut claimed_runner = false;
+                    if runner.is_none() && path.is_none() && !looks_like_path(positional) {
+                        if let Some(destination) = apple_destination_spelling(positional) {
+                            runner = Some(RunnerId::Ios);
+                            apple_destination = Some(destination);
+                            claimed_runner = true;
+                        } else if let Some(named) = RunnerId::parse(positional) {
+                            runner = Some(named);
+                            claimed_runner = true;
+                        }
+                    }
+                    if !claimed_runner {
+                        if let Some(first) = &path {
+                            return Err(LiveOptionsError::TooManyPaths {
+                                first: first.clone(),
+                                second: positional.to_owned(),
+                            });
+                        }
                         path = Some(positional.to_owned());
                     }
                     index += 1;
@@ -210,6 +236,7 @@ impl LiveOptions {
             // Desktop is the default runner: a live session with no runner named
             // is a session on the machine you are sitting at.
             runner: runner.unwrap_or(RunnerId::Desktop),
+            apple_destination: apple_destination.unwrap_or_default(),
             path: path.unwrap_or_else(|| crate::options::DEFAULT_PATH.to_owned()),
             backend,
             watch,
@@ -232,6 +259,19 @@ fn parse_duration(value: &str) -> Result<Duration, LiveOptionsError> {
 /// `kira live ios` means the iOS runner; `kira live ./ios` means the directory.
 fn looks_like_path(value: &str) -> bool {
     value.contains('/') || value.contains('\\') || value.contains('.')
+}
+
+/// Reads an Apple runner spelling that also names its destination.
+///
+/// `RunnerId` collapses `ios`, `ios-simulator`, and `ios-device` into one id —
+/// they are one *runner* — but a live session still has to know which machine
+/// to build for, and this is where the spelling says so.
+fn apple_destination_spelling(value: &str) -> Option<AppleDestination> {
+    match value {
+        "ios" | "ios-sim" | "ios-simulator" => Some(AppleDestination::Simulator),
+        "ios-device" => Some(AppleDestination::Device),
+        _ => None,
+    }
 }
 
 /// An error running a live session.

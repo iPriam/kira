@@ -1,0 +1,13 @@
+[package]
+name = "kira-syscall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The freestanding floor carries no dependency at all — not even this
+# workspace's — because anything above it has to link with nothing else present.
+[dependencies]
+
+[lints]
+workspace = true

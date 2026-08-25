@@ -1,0 +1,13 @@
+[mcp_servers.kira-lldb]
+command = "bash"
+args = ["scripts/lldb-mcp-server.sh"]
+
+[mcp_servers.kira-lldb.env]
+CARGO_TERM_COLOR = "never"
+
+[mcp_servers.kira-toolchain-developer]
+command = "bash"
+args = ["scripts/mcp-server.sh"]
+
+[mcp_servers.kira-toolchain-developer.env]
+CARGO_TERM_COLOR = "never"

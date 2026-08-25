@@ -47,6 +47,38 @@ fn local_locks() -> &'static (Mutex<LocalLocks>, Condvar) {
     LOCKS.get_or_init(|| (Mutex::new(LocalLocks::default()), Condvar::new()))
 }
 
+/// Removes the partial objects an interrupted build abandoned under a directory
+/// this process now holds the lock for.
+///
+/// Called only while the OS lock is held, so nothing here is a live build's
+/// output: a build writes each object as `<name>.pending-<pid>` and renames it
+/// onto the finished path, and only a build killed before that rename leaves the
+/// partial behind. A subdirectory carrying its own [`LOCK_FILE`] is a separate
+/// build root — a cross target's — and is left to whoever locks it, so a
+/// concurrent cross build's partials are never swept from under it.
+fn sweep_orphaned_partials(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            if !path.join(LOCK_FILE).exists() {
+                sweep_orphaned_partials(&path);
+            }
+        } else if entry
+            .file_name()
+            .to_string_lossy()
+            .contains(kira_llvm_backend::PENDING_INFIX)
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 fn report_wait(path: &Path) {
     kira_diagnostics::progress!("waiting for another build of this package");
     eprintln!(
@@ -141,6 +173,11 @@ impl BuildLock {
         let _ = file.set_len(0);
         let _ = writeln!(file, "kira build, pid {}", std::process::id());
         let _ = file.flush();
+        // Now that no other builder can be writing here, sweep the partial
+        // objects a build killed mid-emit left behind. Its rename onto the
+        // finished object never ran, so the `.pending-<pid>` file is dead weight
+        // a person would otherwise delete by hand.
+        sweep_orphaned_partials(&key);
         let locked = Arc::new(LockedFile { file });
 
         let mut state = local.lock().unwrap_or_else(|error| error.into_inner());
@@ -399,6 +436,53 @@ mod tests {
         drop(file);
 
         let lock = BuildLock::acquire(&dir).expect("an abandoned lock file is taken over");
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A build killed mid-emit leaves a `.pending-<pid>` object behind. The next
+    /// builder holds the lock, so it sweeps that partial — including one under a
+    /// same-build subdirectory such as `lib/` — rather than leaving a person to
+    /// delete it by hand.
+    #[test]
+    fn acquiring_sweeps_partials_a_killed_build_left_behind() {
+        let dir = scratch("partials");
+        std::fs::create_dir_all(dir.join("lib")).expect("scratch");
+        let top = dir.join(format!("main.o{}999999", kira_llvm_backend::PENDING_INFIX));
+        let nested = dir.join(format!(
+            "lib/kiratext.o{}999999",
+            kira_llvm_backend::PENDING_INFIX
+        ));
+        let finished = dir.join("main.o");
+        std::fs::write(&top, b"partial").expect("a partial object");
+        std::fs::write(&nested, b"partial").expect("a nested partial object");
+        std::fs::write(&finished, b"object").expect("a finished object");
+
+        let lock = BuildLock::acquire(&dir).expect("the directory locks");
+        assert!(!top.exists(), "the abandoned partial is swept");
+        assert!(!nested.exists(), "a same-build subdirectory is swept too");
+        assert!(finished.exists(), "a finished object is left alone");
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A subdirectory with its own lock is a separate build root — a cross
+    /// target's — and its partials belong to whoever locks it, never to a
+    /// builder that only holds the parent.
+    #[test]
+    fn acquiring_leaves_an_independently_locked_subtree_alone() {
+        let dir = scratch("cross-partials");
+        let cross = dir.join("aarch64-macos-none");
+        std::fs::create_dir_all(&cross).expect("scratch");
+        std::fs::write(cross.join(LOCK_FILE), b"kira build, pid 4242\n").expect("a lock anchor");
+        let guarded = cross.join(format!("app.o{}4242", kira_llvm_backend::PENDING_INFIX));
+        std::fs::write(&guarded, b"partial").expect("a cross partial object");
+
+        let lock = BuildLock::acquire(&dir).expect("the parent locks");
+        assert!(
+            guarded.exists(),
+            "a partial under an independently locked build root is not swept"
+        );
         drop(lock);
         let _ = std::fs::remove_dir_all(&dir);
     }

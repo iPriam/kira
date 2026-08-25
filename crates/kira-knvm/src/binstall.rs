@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kira_toolchain::{
-    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, executable_name,
-    static_archive_name,
+    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, HYBRID_LAUNCHER_BINARY,
+    LANGUAGE_SERVER_BINARY, executable_name, static_archive_name,
 };
 
 use crate::install::{
@@ -156,11 +156,13 @@ pub enum BinstallError {
 /// The desktop runner is here for the same reason and a different one: nothing
 /// depends on it at all, so only naming it builds it, and `kira live` starts it
 /// beside the compiler — a toolchain without it builds a bundle and then has
-/// nowhere to run it.
-const BUILD_PACKAGES: [&str; 6] = [
+/// nowhere to run it. The hybrid launcher is its twin: a hybrid build stages it
+/// beside the compiler as the program's standalone executable.
+const BUILD_PACKAGES: [&str; 7] = [
     "kira-cli",
     "kira-lsp",
     "kira-desktop-runner",
+    "kira-hybrid-launcher",
     "kira-native-bridge",
     "kira-compiler-bridge",
     "kira-libffi",
@@ -233,6 +235,7 @@ pub fn binstall(
     let compiler = built_dir.join(executable_name(PRIMARY_BINARY));
     let language_server = built_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
     let desktop_runner = built_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
+    let hybrid_launcher = built_dir.join(executable_name(HYBRID_LAUNCHER_BINARY));
     // Under the names cargo wrote them: `<name>.lib` under MSVC. The Web
     // archive keeps its Unix spelling on every host, because emscripten wrote
     // that one rather than the host toolchain.
@@ -250,6 +253,7 @@ pub fn binstall(
         &compiler,
         &language_server,
         &desktop_runner,
+        &hybrid_launcher,
         &host_archive,
         &compiler_archive,
         &libffi_archive,
@@ -286,6 +290,14 @@ pub fn binstall(
     let staged_runner = bin.join(executable_name(DESKTOP_RUNNER_BINARY));
     std::fs::copy(&desktop_runner, &staged_runner)
         .map_err(|error| InstallError::io("copy the desktop runner to", &staged_runner, error))?;
+    // A hybrid build stages the launcher from beside itself as the program's
+    // standalone executable, so for the same reason it belongs to the
+    // toolchain: a compiler without it can build a hybrid bundle and has
+    // nothing to stage as the program.
+    let staged_launcher = bin.join(executable_name(HYBRID_LAUNCHER_BINARY));
+    std::fs::copy(&hybrid_launcher, &staged_launcher).map_err(|error| {
+        InstallError::io("copy the hybrid launcher to", &staged_launcher, error)
+    })?;
     // The debug information beside each executable, where a profiler and a
     // debugger look for it.
     //
@@ -299,6 +311,7 @@ pub fn binstall(
         (&compiler, &staged_compiler),
         (&language_server, &staged_server),
         (&desktop_runner, &staged_runner),
+        (&hybrid_launcher, &staged_launcher),
     ] {
         copy_debug_info(built, staged)?;
     }
@@ -518,6 +531,18 @@ mod tests {
             BUILD_PACKAGES.contains(&"kira-desktop-runner"),
             "`kira live` starts the runner from beside the compiler, so the \
              toolchain has to install one"
+        );
+    }
+
+    /// The launcher's rlib *is* inherited, through `kira-cli`; its executable
+    /// is not. A toolchain that stages only the rlib builds hybrid bundles and
+    /// then has nothing to stage as their standalone executable.
+    #[test]
+    fn the_hybrid_launcher_is_built_rather_than_inherited() {
+        assert!(
+            BUILD_PACKAGES.contains(&"kira-hybrid-launcher"),
+            "a hybrid build stages the launcher from beside the compiler, so \
+             the toolchain has to install one"
         );
     }
 }

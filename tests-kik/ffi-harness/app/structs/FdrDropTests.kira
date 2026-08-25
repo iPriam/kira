@@ -1,0 +1,92 @@
+import Foundation
+
+// User `Drop` on both sides of the seam. Prefix: fdr / Fdr.
+//
+// A `Drop` body declares no engine, so it is compiled into both halves of a
+// hybrid build: a value released in `@Native` code and one released in
+// `@Runtime` code run the same source. What may not happen is a crossing — a
+// value that runs a body is refused as a parameter or a result of an annotated
+// function (`KSEM307`), because the seam marshals a copy and a value with a
+// body to run has no copy. So each case here builds, uses, and releases its
+// value inside one half, and crosses only the `Int` it computed.
+
+struct FdrHandle: Drop {
+    var tag: Int
+
+    function drop(borrow mut self) {
+        return
+    }
+
+    function value(borrow self) -> Int {
+        return self.tag
+    }
+}
+
+struct FdrPair {
+    var first: FdrHandle
+    var second: FdrHandle
+}
+
+@Native
+function fdrNativeScope(tag: Int) -> Int {
+    let held = FdrHandle(tag: tag)
+    return held.value() * 2
+}
+
+@Runtime
+function fdrRuntimeScope(tag: Int) -> Int {
+    let held = FdrHandle(tag: tag)
+    return held.value() * 3
+}
+
+// Members and elements read through their owner on either engine.
+@Native
+function fdrNativeReads(tag: Int) -> Int {
+    let pair = FdrPair(first: FdrHandle(tag: tag), second: FdrHandle(tag: tag + 1))
+    let held: [FdrHandle] = [FdrHandle(tag: tag + 2)]
+    return pair.first.tag + pair.second.value() + held.count + held[0].tag
+}
+
+@Runtime
+function fdrRuntimeReads(tag: Int) -> Int {
+    let pair = FdrPair(first: FdrHandle(tag: tag), second: FdrHandle(tag: tag + 1))
+    let held: [FdrHandle] = [FdrHandle(tag: tag + 2)]
+    return pair.first.tag + pair.second.value() + held.count + held[0].tag
+}
+
+// Churned so a half that leaks the value, or releases it twice, scales into the
+// harness leak run rather than hiding in one iteration.
+@Native
+function fdrNativeChurn(rounds: Int) -> Int {
+    var total = 0
+    var index = 0
+    while index < rounds {
+        var held = FdrHandle(tag: index)
+        held = FdrHandle(tag: index + 1)
+        total = total + held.value()
+        index = index + 1
+    }
+    return total
+}
+
+construct FdrANativeScopeReleasesItsOwnValue() extends Test {
+    test { return fdrNativeScope(21) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+construct FdrARuntimeScopeReleasesItsOwnValue() extends Test {
+    test { return fdrRuntimeScope(14) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+// The two halves answer identically, which is what one body compiled for both
+// engines means.
+construct FdrBothHalvesReadThroughTheOwner() extends Test {
+    test { return fdrNativeReads(5) - fdrRuntimeReads(5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+construct FdrANativeChurnLeaksNothing() extends Test {
+    test { return fdrNativeChurn(200) }
+    expect { let e: Result<Int, TestFailure> = .Ok(20100); return e }
+}

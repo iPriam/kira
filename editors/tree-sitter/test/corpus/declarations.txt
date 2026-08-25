@@ -184,8 +184,40 @@ enum Result<Value, Failure> {
   (enum_declaration
     name: (identifier)
     type_parameters: (type_parameters
-      (identifier)
-      (identifier))
+      (type_parameter
+        name: (identifier))
+      (type_parameter
+        name: (identifier)))
+    body: (enum_body
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier))
+      (enum_variant
+        name: (identifier)
+        payload: (type_identifier)))))
+
+================================================================================
+A type parameter may carry trait bounds joined by `+`
+================================================================================
+
+enum Boxed<Value: Scored + Send, Rest> {
+    Held(Value)
+    Rest(Rest)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)
+        bounds: (bound_traits
+          (type_identifier)
+          (type_identifier)))
+      (type_parameter
+        name: (identifier)))
     body: (enum_body
       (enum_variant
         name: (identifier)

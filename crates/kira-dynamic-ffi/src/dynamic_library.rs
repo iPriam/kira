@@ -80,11 +80,7 @@ impl DynamicLibrary {
     /// Open a handle that resolves symbols from the current process image
     /// instead of a separate shared object.
     pub fn open_process() -> DynamicLibrary {
-        let inner = match open_process_image() {
-            Ok(library) => Backend::Process(library),
-            Err(_) => Backend::ProcessUnavailable,
-        };
-        DynamicLibrary { inner }
+        open_process_handle()
     }
 
     /// Resolve `name` to a symbol of type `T`.
@@ -171,15 +167,31 @@ fn open_native(path: &std::path::Path) -> Result<libloading::Library, libloading
     Ok(library.into())
 }
 
+/// Opens the current process image as a shared-library handle.
+///
+/// Public because an embedded application's native half *is* this process:
+/// its hybrid manifest records [`SELF_LIBRARY_MARKER`] instead of a path, and
+/// the hybrid host binds every trampoline and helper out of the running
+/// image. The same export rule applies as for any library opened this way —
+/// symbols only resolve if the image exports them.
+///
+/// # Safety
+/// Opening the process image runs no new initializers and loads no code; the
+/// returned handle aliases what is already executing. Callers keep it alive
+/// only as long as the process itself.
+pub fn open_process_image() -> Result<libloading::Library, FfiError> {
+    process_image()
+}
+
 /// Gets a handle for the current process image without loading a new module.
 #[cfg(unix)]
-fn open_process_image() -> Result<libloading::Library, FfiError> {
+fn process_image() -> Result<libloading::Library, FfiError> {
     Ok(libloading::os::unix::Library::this().into())
 }
 
 /// Gets a handle for the executable that launched the current process.
 #[cfg(windows)]
-fn open_process_image() -> Result<libloading::Library, FfiError> {
+fn process_image() -> Result<libloading::Library, FfiError> {
     libloading::os::windows::Library::this()
         .map(Into::into)
         .map_err(|_| FfiError::ProcessLookupUnavailable)
@@ -187,8 +199,18 @@ fn open_process_image() -> Result<libloading::Library, FfiError> {
 
 /// Process-image lookup is not defined by `libloading` on other targets.
 #[cfg(not(any(unix, windows)))]
-fn open_process_image() -> Result<libloading::Library, FfiError> {
+fn process_image() -> Result<libloading::Library, FfiError> {
     Err(FfiError::ProcessLookupUnavailable)
+}
+
+/// Opens a handle that resolves symbols from the current process image
+/// instead of a separate shared object.
+fn open_process_handle() -> DynamicLibrary {
+    let inner = match process_image() {
+        Ok(library) => Backend::Process(library),
+        Err(_) => Backend::ProcessUnavailable,
+    };
+    DynamicLibrary { inner }
 }
 
 /// The absolute path of the file `path` names, or `None` when it names no file

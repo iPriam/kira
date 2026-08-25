@@ -233,6 +233,16 @@ pub const WINDOWS_STACK_RESERVE: u64 = 32 * 1024 * 1024;
 /// workflow that packages it.
 pub const DESKTOP_RUNNER_BINARY: &str = "kira-desktop-runner";
 
+/// The hybrid launcher a toolchain ships beside its primary.
+///
+/// `kira build --backend hybrid` copies this next to itself as the program's
+/// standalone executable, so it has to be installed with the compiler rather
+/// than left in a checkout's `target/debug`: a toolchain without it can build a
+/// hybrid bundle and has nothing to run it as. One spelling shared by the
+/// compiler that stages it, knvm's staging, and the release workflow that
+/// packages it.
+pub const HYBRID_LAUNCHER_BINARY: &str = "kira-hybrid-launcher";
+
 /// The full path of an installed toolchain's primary binary.
 pub fn managed_primary_binary_path(
     channel: Channel,

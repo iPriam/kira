@@ -186,14 +186,42 @@ impl CrossTarget {
         }
     }
 
+    /// The triple spelling LLVM and clang parse.
+    ///
+    /// Usually [`Self::normalized_triple`] verbatim; the one documented
+    /// divergence is Apple's simulators, where rustc names its std target
+    /// `-ios-sim` but LLVM's environment vocabulary is `-ios-simulator`. A
+    /// triple LLVM cannot parse is not rejected — it is *normalized*, silently,
+    /// to this machine's default Apple platform, which is how an object meant
+    /// for the simulator ends up stamped for macOS and dies in the link with
+    /// "built for 'macOS'". Spelling LLVM's dialect here keeps that failure
+    /// from existing.
+    #[must_use]
+    pub fn llvm_triple(&self) -> String {
+        let arch = self.triple.arch();
+        let abi = self.triple.abi();
+        if abi == "sim" {
+            let os = self.triple.os();
+            if matches!(os, "ios" | "tvos" | "visionos") {
+                return format!("{arch}-apple-{os}-simulator");
+            }
+        }
+        self.normalized_triple()
+    }
+
     /// The `arch-vendor-os-abi` spelling LLVM, clang, and rustc all take.
     ///
     /// The vendor is not information Kira asks anybody for: it follows from the
     /// operating system, and every toolchain agrees on which one goes with
     /// which. Apple's is `apple` and its system is `darwin` rather than
-    /// `macos`; Windows' is `pc`; everything else is `unknown`. Deriving it here
-    /// rather than making a package author write it is what keeps one triple
-    /// spelling in manifests, on the command line, and in diagnostics.
+    /// `macos`; Windows' is `pc`; everything else is `unknown`. An Apple
+    /// *simulator* keeps its own suffix (`aarch64-apple-ios-sim`) rather than
+    /// collapsing into the device triple: rustc has a distinct std target for
+    /// it, its SDK is a different sysroot, and a runtime archive built for one
+    /// is machine-code poison in a link aimed at the other. Deriving all of
+    /// this here rather than making a package author write it is what keeps
+    /// one triple spelling in manifests, on the command line, and in
+    /// diagnostics.
     ///
     /// It is one function and not two because the answer is the same for the
     /// linker driver's `--target=` and for the `cargo build --target` that
@@ -207,7 +235,10 @@ impl CrossTarget {
         let abi = self.triple.abi();
         match self.triple.os() {
             "macos" => format!("{arch}-apple-darwin"),
-            "ios" => format!("{arch}-apple-ios"),
+            os @ ("ios" | "tvos" | "visionos") => match abi {
+                "sim" => format!("{arch}-apple-{os}-sim"),
+                _ => format!("{arch}-apple-{os}"),
+            },
             "windows" => format!("{arch}-pc-windows-{abi}"),
             os => format!("{arch}-unknown-{os}-{abi}"),
         }
@@ -296,6 +327,14 @@ mod tests {
         assert_eq!(
             cross("x86_64-windows-msvc").normalized_triple(),
             "x86_64-pc-windows-msvc"
+        );
+        assert_eq!(
+            cross("aarch64-ios-none").normalized_triple(),
+            "aarch64-apple-ios"
+        );
+        assert_eq!(
+            cross("aarch64-ios-sim").normalized_triple(),
+            "aarch64-apple-ios-sim"
         );
     }
 

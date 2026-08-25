@@ -17,6 +17,7 @@ workspace = true
 kira-debug.workspace = true
 kira-toolchain.workspace = true
 kira-app-generation.workspace = true
+kira-export.workspace = true
 kira-source.workspace = true
 kira-diagnostics.workspace = true
 kira-lexer.workspace = true
@@ -71,6 +72,13 @@ salsa.workspace = true
 # `kira debug --prepare` answers a debugger frontend in JSON, in the same
 # contract `kira-debug` defines and the frontend deserializes.
 serde_json.workspace = true
+# Not called from Rust: `kira build --backend hybrid` stages the launcher
+# binary as the program's executable. This dep only orders the build and ties
+# the versions together — cargo builds a dependency's lib target, never its
+# `[[bin]]`, so this does NOT put `kira-hybrid-launcher` beside `kira`. Only a
+# workspace build does that, which is why a build that cannot find its launcher
+# says so and names the build that would fix it.
+kira-hybrid-launcher.workspace = true
 thiserror.workspace = true
 
 # The build-directory lock is the operating system's, so that a killed build

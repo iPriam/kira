@@ -217,9 +217,9 @@ trait Hashable {
     }
 }
 
-trait Send {}
+trait Tagged {}
 
-struct Mesh: Hashable, Send {
+struct Mesh: Hashable, Tagged {
     let id: Int
     function hash(borrow self) -> Int { return id * 7 }
 }
@@ -256,22 +256,54 @@ declaration's colon list *and* in an `extend` block is `KSEM290`. A block may
 carry only members the trait declares (`KSEM294`), and it may add conformance
 only — never a parent.
 
+A construct family may claim a trait in either spelling — `construct Widget:
+Hashable { … }` or `extend Widget: Hashable { … }`. A family is a template, so
+the claim files one conformance per backed declaration; members the family
+provides answer for every variant at once. A compiler-known trait
+(`Copyable`, `Drop`, `Send`, `Sync`) cannot be claimed by a family (`KSEM298`).
+
 ### Coherence
 
 A conformance may be declared only in the package that declares the type or the
 package that declares the trait. Anywhere else is `KSEM291`: a third package's
 answer would be invisible to every other user of both.
 
+### Supertraits
+
+`trait Ordered: Equated { … }` states that conforming to `Ordered` obliges a
+type to conform to `Equated` too. A supertrait is a requirement rather than an
+inheritance: `Ordered` takes none of `Equated`'s members into itself, and a
+conforming type answers for them through its own `Equated` conformance. A
+default on `Ordered` may still call them on `self`, because the receiver keeps
+both promises by the time it runs.
+
+A conformance keeping the requiring trait but not what it requires is `KSEM310`;
+a supertrait clause naming something that is not a trait is `KSEM308`; a chain
+that returns to where it started is `KSEM309`.
+
 ### Compiler-known traits
 
-`Copyable` and `Drop` exist without a declaration, and declaring either is
-`KSEM288`.
+`Copyable`, `Drop`, `Send`, and `Sync` exist without a declaration, and
+declaring any of them is `KSEM288`.
 
 - **`Copyable`** is a checked assertion, the trait spelling of `@Derive(Copy)`.
   A type whose members do not all copy is `KSEM297`, naming the member that owns
   storage a copy would have to clone.
 - **`Drop`** attaches a body the engines run where they already release the
   value. See [Drop](#drop).
+- **`Send`** says a value may be moved to another thread; **`Sync`** says it may
+  be borrowed from more than one thread at once. Both are derived from the
+  type's members, and a claim the members refute is `KSEM311`. Ownership decides
+  them: a move leaves one holder, and `borrow` is a shared read. So owned heap
+  storage and pointer words carry both, while a function type, a captured `var`,
+  callback state, and a task handle carry neither.
+
+`Copyable`, `Send`, and `Sync` are *derived*, so a supertrait requiring one is
+discharged by the fact rather than by a second spelling of it.
+
+A `Task { … }` spawn is the one boundary a value crosses without its spawner, so
+what the deferred call takes and returns must be `Send` (`KSEM312`). The slot
+rule (`KSEM159`) is narrower today, and every type it admits is `Send`.
 
 ### Receivers
 
@@ -316,10 +348,12 @@ Two rules follow, and neither is optional:
 
 ### What a trait is not
 
-Refused by name rather than half-supported: supertraits (`KSEM296`), a trait in
-a type position (`KSEM295`), a conformance on a construct family (`KSEM298`),
-and type parameters on a trait. A requirement a conforming type never presents
-is `KSEM292`, and one it presents with the wrong shape is `KSEM293`.
+### What a trait is not
+
+Refused by name rather than half-supported: a trait in a type position
+(`KSEM295`) and type parameters on a trait. A requirement a conforming type
+never presents is `KSEM292`, and one it presents with the wrong shape is
+`KSEM293`.
 
 ## Arrays
 

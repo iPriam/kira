@@ -226,6 +226,12 @@ pub(crate) struct Analyzer<'a> {
     /// The type-parameter substitution in force right now, empty outside a
     /// generic enum's body.
     pub(crate) type_bindings: crate::generics::TypeBindings,
+    /// Instantiations whose bounded parameters still owe their discharge, in
+    /// mint order. Answered by
+    /// [`Analyzer::check_pending_generic_bounds`](crate::generics) once the
+    /// conformance table and drop facts are final; see
+    /// [`crate::generics::PendingBoundCheck`].
+    pub(crate) pending_bounds: Vec<crate::generics::PendingBoundCheck>,
     /// How many generic instantiations are open, which is what bounds a
     /// template that grows its own argument.
     pub(crate) instantiation_depth: u32,
@@ -275,8 +281,30 @@ pub(crate) struct Analyzer<'a> {
     /// Beside the type table rather than in it: conformance is resolved away
     /// before the HIR exists, so nothing downstream carries it.
     pub(crate) conformances: Vec<crate::traits::Conformance>,
+    /// Member and element reads of a value that runs a user `Drop`, waiting for
+    /// the body being analyzed to finish.
+    ///
+    /// A read is refused only if no enclosing expression claimed it as a
+    /// borrowed one, and the enclosing expression is built after the read — so
+    /// the answer is not available until the body is whole. See
+    /// [`crate::traits::drop`].
+    pub(crate) drop_extractions: Vec<crate::traits::drop::DropExtraction>,
+    /// Every enum variant payload the program resolved, as
+    /// `(type, declaring file, span to blame)`.
+    ///
+    /// Kept because whether a payload runs a user `Drop` is a question about a
+    /// conformance, which is collected after every payload is resolved — and
+    /// the span an instantiation should be blamed at is worked out by the
+    /// payload pass and by nothing else.
+    pub(crate) enum_payload_sites: Vec<(Type, SourceId, Span)>,
     /// Reverse lookup from synthesized family enum to source family name.
     pub(crate) construct_family_names: HashMap<EnumId, String>,
+    /// Every trait existential reserved so far, keyed by trait name.
+    ///
+    /// See [`crate::traits::existential`].
+    pub(crate) trait_existentials: BTreeMap<String, crate::traits::existential::TraitExistential>,
+    /// Reverse lookup from synthesized existential enum to trait name.
+    pub(crate) existential_traits: HashMap<EnumId, String>,
     /// The methods each struct and class declares itself, keyed by id.
     ///
     /// Kept beside the struct table because a method is not part of a struct's

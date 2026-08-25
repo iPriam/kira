@@ -259,26 +259,44 @@ fn kira_llvm_backend_callback_name(index: usize) -> String {
 }
 
 impl NativeLibrary {
-    /// Loads `path` and binds every symbol the host needs: the string helpers,
-    /// the runtime invoker, one trampoline per native function in `functions`,
-    /// and one callback thunk per callback row.
+    /// Loads `path` — or, for [`None`], binds this process image itself — and
+    /// binds every symbol the host needs: the string helpers, the runtime
+    /// invoker, one trampoline per native function in `functions`, and one
+    /// callback thunk per callback row.
+    ///
+    /// `None` is the embedded-application layout: the native half was linked
+    /// into the running binary and its manifest recorded
+    /// [`SELF_LIBRARY_MARKER`][kira_dynamic_ffi::SELF_LIBRARY_MARKER] rather
+    /// than a file name. Every symbol must therefore be exported by the image,
+    /// which is what an embedded link's `-Wl,-export_dynamic` is for.
     pub fn load(
-        path: &Path,
+        path: Option<&Path>,
         functions: &[HybridFunction],
         callbacks: usize,
     ) -> Result<NativeLibrary, HybridError> {
-        // Through the shared opener rather than `libloading::Library::new`: the
-        // native half may sit beside shared libraries a `runtimeFiles` row put
-        // there, and Windows searches the *calling process*'s directory for
-        // those unless it is told to search the loaded module's. The library is
-        // one this toolchain built and named in a manifest it also wrote; a host
-        // that cannot trust its own build has already lost.
-        let library = Arc::new(
-            kira_dynamic_ffi::open_shared_library(path).map_err(|source| HybridError::Library {
-                path: path.to_path_buf(),
-                source,
-            })?,
-        );
+        let (display_path, library) = match path {
+            Some(path) => {
+                // Through the shared opener rather than `libloading::Library::new`: the
+                // native half may sit beside shared libraries a `runtimeFiles` row put
+                // there, and Windows searches the *calling process*'s directory for
+                // those unless it is told to search the loaded module's. The library is
+                // one this toolchain built and named in a manifest it also wrote; a host
+                // that cannot trust its own build has already lost.
+                let library = Arc::new(kira_dynamic_ffi::open_shared_library(path).map_err(
+                    |source| HybridError::Library {
+                        path: path.to_path_buf(),
+                        source,
+                    },
+                )?);
+                (path.display().to_string(), library)
+            }
+            None => (
+                kira_dynamic_ffi::SELF_LIBRARY_MARKER.to_owned(),
+                Arc::new(kira_dynamic_ffi::open_process_image().map_err(HybridError::SelfLibrary)?),
+            ),
+        };
+        let path = PathBuf::from(display_path);
+        let path = path.as_path();
 
         let str_new = bind(&library, path, STR_NEW)?;
         let str_free = bind(&library, path, STR_FREE)?;

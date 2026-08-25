@@ -37,6 +37,19 @@
 //! building one would be speculative surface; the parser refuses those by name
 //! instead (`KPAR047`).
 //!
+//! # Bounds
+//!
+//! A parameter may carry trait bounds (`enum Boxed<Value: Scored>`), written on
+//! the declaration and discharged at every instantiation: substituting a type
+//! that does not keep the promise is refused, naming the trait and the type
+//! (`KSEM315`). The answer cannot be computed where the row is minted — that
+//! can be long before the conformance table exists — so the check is queued
+//! under the mangled name and answered once the tables it reads are final.
+//! A compiler-known marker (`Copyable`, `Send`, `Sync`, `Drop`) may name a
+//! bound: unlike a type position, a bound classifies nothing — it constrains
+//! which arguments are admitted, and each of those facts is answerable for any
+//! argument.
+//!
 //! # Termination
 //!
 //! Instantiation is recursive: a template's payload may itself be a generic
@@ -45,13 +58,14 @@
 //! cap is what actually terminates it. Hitting the cap is `KSEM175` — a typed
 //! refusal, never a stack overflow.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use kira_semantics_model::{EnumId, Instantiation, Type};
+use kira_semantics_model::{EnumId, Instantiation, StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{EnumDecl, TypeRefId};
 
 use crate::analyze::Analyzer;
+use crate::traits::is_builtin_trait;
 use crate::types::NameContext;
 
 /// How deep a chain of generic instantiations may go before it is refused.
@@ -59,6 +73,26 @@ use crate::types::NameContext;
 /// Nothing legitimate nests this far — the corpus never nests at all — so the
 /// cap only ever fires on a template that grows its own argument.
 const MAX_INSTANTIATION_DEPTH: u32 = 16;
+
+/// One instantiation whose type arguments still owe their parameter bounds.
+///
+/// Recorded when the row is minted and answered once the conformance table and
+/// the drop facts are final, because an instantiation is minted wherever a type
+/// resolves — including declaration passes that run before either table
+/// exists. `key` is the mangled name, so a memo hit never queues twice.
+pub(crate) struct PendingBoundCheck {
+    /// The memo key the entry was recorded under.
+    key: String,
+    /// The template whose parameters carry the bounds.
+    template: String,
+    /// The substituted arguments, in parameter order.
+    args: Vec<Type>,
+    /// The file the instantiation was written in.
+    source: SourceId,
+    /// The span a refusal points at: the instantiation site, which is where
+    /// the fix goes.
+    span: Span,
+}
 
 /// One registered `enum Name<Params>` declaration, waiting for a use site.
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +149,23 @@ impl<'a> Analyzer<'a> {
                 );
                 continue;
             }
-            seen.push(param_name);
+            seen.push(param_name.clone());
+            for bound in &param.bounds {
+                let bound_name = self.interner.resolve(bound.name).to_owned();
+                // A compiler-known trait is known here without a declaration,
+                // so it names a bound the same way it names a conformance.
+                if is_builtin_trait(&bound_name) || self.traits.contains_key(&bound_name) {
+                    continue;
+                }
+                self.emit(
+                    bound.span,
+                    "KSEM289",
+                    format!(
+                        "`{bound_name}` is not a trait, so it cannot bound `{name}`'s type \
+                         parameter `{param_name}`"
+                    ),
+                );
+            }
         }
         if self.generic_enums.contains_key(&name)
             || self.visible_enum(&name).is_some()
@@ -282,6 +332,29 @@ impl<'a> Analyzer<'a> {
             return Type::Error;
         }
 
+        // A bounded parameter's obligation belongs to this site, but the answer
+        // does not exist yet: an instantiation is minted wherever a type
+        // resolves, which can be long before the conformance table and the drop
+        // facts are final. Queued under the mangled name — the same key the
+        // memo above answers — so one row is checked exactly once.
+        if template
+            .decl
+            .type_params
+            .iter()
+            .any(|param| !param.bounds.is_empty())
+        {
+            let fresh = !self.pending_bounds.iter().any(|entry| entry.key == mangled);
+            if fresh {
+                self.pending_bounds.push(PendingBoundCheck {
+                    key: mangled.clone(),
+                    template: text.to_owned(),
+                    args: args.to_vec(),
+                    source: self.source,
+                    span,
+                });
+            }
+        }
+
         let bindings: TypeBindings = template
             .decl
             .type_params
@@ -380,6 +453,153 @@ impl<'a> Analyzer<'a> {
             }
             other => self.type_name(other),
         }
+    }
+
+    /// Answers every queued instantiation's bounds, now that the tables the
+    /// answers read are final.
+    ///
+    /// Called twice per analysis — once after drop recording, once after bodies
+    /// and synthesized functions have finished minting rows — because an
+    /// instantiation can be minted at any point a type resolves. Each entry is
+    /// answered once and dropped; the second call sees only what bodies added.
+    pub(crate) fn check_pending_generic_bounds(&mut self) {
+        if self.pending_bounds.is_empty() {
+            return;
+        }
+        for entry in std::mem::take(&mut self.pending_bounds) {
+            let Some(template) = self.generic_enums.get(&entry.template).copied() else {
+                continue;
+            };
+            let params: Vec<(String, Vec<String>)> = template
+                .decl
+                .type_params
+                .iter()
+                .map(|param| {
+                    (
+                        self.interner.resolve(param.name).to_owned(),
+                        param
+                            .bounds
+                            .iter()
+                            .map(|bound| self.interner.resolve(bound.name).to_owned())
+                            .collect(),
+                    )
+                })
+                .collect();
+            for ((param_name, bounds), &arg) in params.iter().zip(entry.args.iter()) {
+                for bound in bounds {
+                    // A bound whose name resolved to nothing was refused at
+                    // registration; there is nothing to discharge against.
+                    if !is_builtin_trait(bound) && !self.traits.contains_key(bound) {
+                        continue;
+                    }
+                    let Some(reason) = self.bound_unmet(bound, arg) else {
+                        continue;
+                    };
+                    let spelling = self.type_name(arg);
+                    self.source = entry.source;
+                    self.emit(
+                        entry.span,
+                        "KSEM315",
+                        format!(
+                            "type argument `{spelling}` for parameter `{param_name}` of generic \
+                             enum `{}` does not satisfy its bound `{bound}`: {reason}",
+                            entry.template
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Why `arg` fails the bound `bound`, or `None` when it keeps it.
+    ///
+    /// Three kinds of bound, each answered by the machinery that already owns
+    /// the question: a compiler-known derived marker by the structural fact,
+    /// `Drop` by whether the type's release runs a user body, and a declared
+    /// trait by the conformance table plus its supertrait closure — slice 1a's
+    /// answers, reused rather than restated.
+    fn bound_unmet(&self, bound: &str, arg: Type) -> Option<String> {
+        if crate::traits::is_derived_trait(bound) {
+            return self.derived_bound_unmet(bound, arg);
+        }
+        if bound == crate::traits::DROP {
+            let name = self.type_name(arg);
+            return (!self.program.types.runs_user_drop(arg))
+                .then(|| format!("`{name}` runs no user `Drop` body"));
+        }
+        let Type::Struct(id) = arg else {
+            return Some(format!(
+                "only a struct, class, or construct-backed declaration can conform to \
+                 `{bound}`, and `{}` is not one",
+                self.type_name(arg)
+            ));
+        };
+        let name = self.type_name(arg);
+        if !self.conforms_to(id, bound) {
+            return Some(format!(
+                "`{name}` does not conform to `{bound}`; add it to the conformance list, or \
+                 write `extend {name}: {bound} {{ … }}`"
+            ));
+        }
+        self.supertrait_obligation_unmet(bound, id, &mut HashSet::new())
+            .map(|(unmet, reason)| format!("`{bound}` requires `{unmet}`, and {reason}"))
+    }
+
+    /// Why `ty` fails the *derived* marker `bound`, phrased for a use site.
+    fn derived_bound_unmet(&self, bound: &str, ty: Type) -> Option<String> {
+        let claimed = self.type_name(ty);
+        match crate::traits::markers::Marker::from_name(bound) {
+            Some(marker) => self.marker_reason(&claimed, ty, marker),
+            None => self.not_copyable_reason(&claimed, ty, &mut HashSet::new()),
+        }
+    }
+
+    /// The first unmet obligation in `trait_name`'s supertrait closure, with
+    /// the trait that left it on.
+    ///
+    /// Direct obligations first, then theirs: a conformance that is itself
+    /// checked discharges its own closure, so only the unmet leaf needs naming.
+    /// `visited` stops a shared subgraph being walked twice; cycles were
+    /// refused where they were declared (`KSEM309`).
+    fn supertrait_obligation_unmet(
+        &self,
+        trait_name: &str,
+        ty: StructId,
+        visited: &mut HashSet<String>,
+    ) -> Option<(String, String)> {
+        let edges: Vec<String> = self
+            .traits
+            .get(trait_name)?
+            .supertraits
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect();
+        for edge in edges {
+            if !visited.insert(edge.clone()) {
+                continue;
+            }
+            if let Some(reason) = self.single_conformance_unmet(&edge, ty) {
+                return Some((edge, reason));
+            }
+            if let Some(found) = self.supertrait_obligation_unmet(&edge, ty, visited) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Why `ty` does not carry one obligation — a derived marker, `Drop`, or a
+    /// declared trait's row — without walking further.
+    fn single_conformance_unmet(&self, name: &str, ty: StructId) -> Option<String> {
+        let spelled = self.type_name(Type::Struct(ty));
+        if crate::traits::is_derived_trait(name) {
+            return self.derived_trait_unmet(name, ty);
+        }
+        if name == crate::traits::DROP {
+            return (!self.program.types.runs_user_drop(Type::Struct(ty)))
+                .then(|| format!("`{spelled}` runs no user `Drop` body"));
+        }
+        (!self.conforms_to(ty, name)).then(|| format!("`{spelled}` does not conform to `{name}`"))
     }
 }
 

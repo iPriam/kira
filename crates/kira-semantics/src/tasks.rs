@@ -25,6 +25,7 @@ use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, Expr, ExprId, UnaryOp};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::traits::markers::Marker;
 
 /// The scalar types a task body may take and hand back.
 ///
@@ -125,6 +126,13 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         self.link_function(id, callee_span);
+        if let Some(refusal) = self.task_sends_everything_it_crosses(name, &params, return_type) {
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
+            }
+            self.emit(span, "KSEM312", refusal);
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         // A `Void` body joins as `Int` `0`: the join is a sequencing point, and
         // sequencing still has to produce a value.
         let result = match return_type {
@@ -187,6 +195,45 @@ impl Analyzer<'_> {
             args: values,
             ty: Type::Task(result),
         })
+    }
+
+    /// Why a task body may not take or return one of these types, or `None`
+    /// when every value crossing the spawn is `Send`.
+    ///
+    /// A spawn is the one boundary in the language a value crosses without its
+    /// spawner: what goes in is evaluated here and read there, and what comes
+    /// out is read by whoever joins. So both directions must be movable.
+    ///
+    /// Asked of the resolved signature rather than of the arguments, so the
+    /// answer is a fact about the function being spawned. Today the slot
+    /// representation narrows the same signature further ([`Self::refuse_task_body`],
+    /// `KSEM159`), and every type that rule admits is `Send`; this one is what
+    /// stays correct when that narrowing lifts.
+    fn task_sends_everything_it_crosses(
+        &self,
+        name: &str,
+        params: &[Type],
+        result: Type,
+    ) -> Option<String> {
+        let unsendable = |ty: Type| {
+            let type_name = self.program.types.type_name(ty);
+            self.marker_reason(&type_name, ty, Marker::Send)
+                .map(|reason| (type_name, reason))
+        };
+        if let Some((type_name, reason)) = unsendable(result) {
+            return Some(format!(
+                "`{name}` returns `{type_name}`, which cannot cross into a task: {reason}"
+            ));
+        }
+        for param in params {
+            let Some((type_name, reason)) = unsendable(*param) else {
+                continue;
+            };
+            return Some(format!(
+                "`{name}` takes `{type_name}`, which cannot cross into a task: {reason}"
+            ));
+        }
+        None
     }
 
     /// Reports a task body outside the executable slice.

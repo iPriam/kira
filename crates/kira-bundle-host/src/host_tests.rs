@@ -69,7 +69,7 @@ fn vm_bundle(module: &Module) -> Bundle {
 #[test]
 fn loads_links_and_starts_a_vm_bundle() {
     let dir = TempDir::new("vm-happy");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = vm_bundle(&printing_module());
 
     host.load(&bundle).expect("load");
@@ -82,7 +82,7 @@ fn loads_links_and_starts_a_vm_bundle() {
 #[test]
 fn loading_stages_the_bundle_on_disk() {
     let dir = TempDir::new("stage");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
 
     assert!(dir.0.join(kira_live::MANIFEST_FILE).is_file());
@@ -94,7 +94,7 @@ fn loading_stages_the_bundle_on_disk() {
 #[test]
 fn loading_clears_a_previous_bundle() {
     let dir = TempDir::new("restage");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
 
     let stale = dir.0.join(kira_live::PAYLOAD_DIR).join("stale.dylib");
@@ -114,13 +114,13 @@ fn staging_refuses_to_clear_a_directory_it_did_not_stage() {
     let precious = dir.0.join("precious.txt");
     fs::write(&precious, b"work that exists nowhere else").expect("write");
 
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let error = host
         .load(&vm_bundle(&printing_module()))
         .expect_err("staging into somebody's directory must be refused");
 
     assert!(
-        matches!(error, DesktopRunnerError::CacheNotOurs { .. }),
+        matches!(error, BundleHostError::CacheNotOurs { .. }),
         "got {error:?}"
     );
     assert!(
@@ -137,7 +137,7 @@ fn staging_refuses_to_clear_a_directory_it_did_not_stage() {
 #[test]
 fn swapping_replaces_the_linked_program() {
     let dir = TempDir::new("swap");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
     host.link().expect("link");
     host.start().expect("start");
@@ -153,7 +153,7 @@ fn swapping_replaces_the_linked_program() {
 #[test]
 fn swapping_before_linking_is_an_error() {
     let dir = TempDir::new("swap-order");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
 
     let error = host
@@ -162,7 +162,7 @@ fn swapping_before_linking_is_an_error() {
     assert!(
         matches!(
             error,
-            DesktopRunnerError::OutOfOrder {
+            BundleHostError::OutOfOrder {
                 step: "swap",
                 required: "linked a bundle"
             }
@@ -174,12 +174,12 @@ fn swapping_before_linking_is_an_error() {
 #[test]
 fn swapping_with_nothing_loaded_is_an_error() {
     let dir = TempDir::new("swap-empty");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let error = host
         .swap(&vm_bundle(&printing_module()))
         .expect_err("a swap with nothing running must fail");
     assert!(
-        matches!(error, DesktopRunnerError::OutOfOrder { step: "swap", .. }),
+        matches!(error, BundleHostError::OutOfOrder { step: "swap", .. }),
         "got {error:?}"
     );
 }
@@ -191,7 +191,7 @@ fn swapping_with_nothing_loaded_is_an_error() {
 #[test]
 fn swapping_does_not_rewrite_an_unchanged_payload() {
     let dir = TempDir::new("swap-untouched");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
 
     let before = Bundle::build(
         RunnerId::Desktop,
@@ -260,7 +260,7 @@ fn swapping_does_not_rewrite_an_unchanged_payload() {
 #[test]
 fn a_failed_swap_leaves_the_old_program_running() {
     let dir = TempDir::new("swap-fail");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
     host.link().expect("link");
 
@@ -286,14 +286,14 @@ fn a_failed_swap_leaves_the_old_program_running() {
 #[test]
 fn starting_before_linking_is_an_error() {
     let dir = TempDir::new("order-start");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
 
     let error = host.start().expect_err("start before link must fail");
     assert!(
         matches!(
             error,
-            DesktopRunnerError::OutOfOrder {
+            BundleHostError::OutOfOrder {
                 step: "start",
                 required: "linked the bundle"
             }
@@ -305,13 +305,13 @@ fn starting_before_linking_is_an_error() {
 #[test]
 fn linking_before_loading_is_an_error() {
     let dir = TempDir::new("order-link");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
 
     let error = host.link().expect_err("link before load must fail");
     assert!(
         matches!(
             error,
-            DesktopRunnerError::OutOfOrder {
+            BundleHostError::OutOfOrder {
                 step: "link",
                 required: "loaded a bundle"
             }
@@ -324,7 +324,7 @@ fn linking_before_loading_is_an_error() {
 #[test]
 fn an_asset_entrypoint_is_refused() {
     let dir = TempDir::new("bad-entry");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = Bundle::build(
         RunnerId::Desktop,
         BuildProfile::Debug,
@@ -341,10 +341,7 @@ fn an_asset_entrypoint_is_refused() {
         .load(&bundle)
         .expect_err("an asset cannot be an entrypoint");
     assert!(
-        matches!(
-            error,
-            DesktopRunnerError::UnsupportedEntry { kind: "asset" }
-        ),
+        matches!(error, BundleHostError::UnsupportedEntry { kind: "asset" }),
         "got {error:?}"
     );
 }
@@ -354,7 +351,7 @@ fn an_asset_entrypoint_is_refused() {
 #[test]
 fn a_bundle_with_undecodable_bytecode_fails_to_load() {
     let dir = TempDir::new("bad-bytecode");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let bundle = Bundle::build(
         RunnerId::Desktop,
         BuildProfile::Debug,
@@ -369,7 +366,7 @@ fn a_bundle_with_undecodable_bytecode_fails_to_load() {
 
     let error = host.load(&bundle).expect_err("garbage must not load");
     assert!(
-        matches!(error, DesktopRunnerError::Bytecode(_)),
+        matches!(error, BundleHostError::Bytecode(_)),
         "got {error:?}"
     );
 }
@@ -379,7 +376,7 @@ fn a_bundle_with_undecodable_bytecode_fails_to_load() {
 #[test]
 fn an_invalid_module_fails_at_link() {
     let dir = TempDir::new("bad-link");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     let module = Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
@@ -401,7 +398,7 @@ fn an_invalid_module_fails_at_link() {
 
     host.load(&vm_bundle(&module)).expect("load");
     let error = host.link().expect_err("an invalid module must not link");
-    assert!(matches!(error, DesktopRunnerError::Vm(_)), "got {error:?}");
+    assert!(matches!(error, BundleHostError::Vm(_)), "got {error:?}");
 }
 
 /// Linking twice is not an error: it is idempotent, so a retried message
@@ -409,7 +406,7 @@ fn an_invalid_module_fails_at_link() {
 #[test]
 fn linking_twice_is_idempotent() {
     let dir = TempDir::new("relink");
-    let mut host = DesktopHost::new(dir.0.clone());
+    let mut host = BundleHost::new(dir.0.clone());
     host.load(&vm_bundle(&printing_module())).expect("load");
     host.link().expect("link");
     host.link().expect("link again");
@@ -515,7 +512,7 @@ fn a_native_entry_requires_and_loads_its_staged_transitive_sibling_dll() {
     let fixture = NativeClosureFixture::build();
 
     let missing_dir = TempDir::new("native-closure-missing");
-    let mut missing = DesktopHost::new(missing_dir.0.clone());
+    let mut missing = BundleHost::new(missing_dir.0.clone());
     missing
         .load(&fixture.bundle(false))
         .expect("missing-dependency bundle stages");
@@ -523,12 +520,12 @@ fn a_native_entry_requires_and_loads_its_staged_transitive_sibling_dll() {
         .link()
         .expect_err("a missing transitive DLL must fail before the entry runs");
     assert!(
-        matches!(error, DesktopRunnerError::Native(_)),
+        matches!(error, BundleHostError::Native(_)),
         "the loader failure must identify the native artifact: {error:?}"
     );
 
     let complete_dir = TempDir::new("native-closure-complete");
-    let mut complete = DesktopHost::new(complete_dir.0.clone());
+    let mut complete = BundleHost::new(complete_dir.0.clone());
     let bundle = fixture.bundle(true);
     complete.load(&bundle).expect("complete bundle stages");
     assert_eq!(

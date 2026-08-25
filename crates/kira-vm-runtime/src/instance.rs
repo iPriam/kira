@@ -273,6 +273,12 @@ impl Instance {
             .remove(&root)
             .ok_or(VmError::DanglingRoot { root: root.0 })?;
         self.heap.drop_value(value);
+        // A release outside a call has no interpreter to enter a user `Drop`
+        // body with, so a parked object here would sit in the accounting
+        // forever. The frontend refuses such a type at the export boundary
+        // (`KSEM303`), which is what makes "the body always ran" true; this is
+        // what keeps a module that arrived from anywhere else from leaking.
+        self.heap.abandon_pending_drops();
         Ok(())
     }
 
@@ -280,6 +286,7 @@ impl Instance {
     pub fn release_all(&mut self) {
         let rooted = std::mem::take(&mut self.roots);
         self.discard(rooted.into_values());
+        self.heap.abandon_pending_drops();
     }
 
     /// Releases everything and reports the heap's final accounting.

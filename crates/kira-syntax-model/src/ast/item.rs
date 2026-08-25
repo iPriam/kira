@@ -294,14 +294,23 @@ pub struct TypeAliasDecl {
 
 /// One declared type parameter: `Value` in `enum Result<Value, Failure>`.
 ///
-/// A type parameter is a *name only* — this language has no bounds, no
-/// defaults, and no variance annotations, so there is nothing else to record.
+/// A parameter may carry a **bound** (`Value: Scored`), written after its name
+/// as one or more trait names joined by `+`. A bound states what every type
+/// argument for this parameter must conform to; it is discharged when an
+/// instantiation is minted, and names no additional surface on the parameter
+/// itself — see `kira-semantics`'s generics module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeParamDecl {
     /// The parameter's name.
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub span: Span,
+    /// The traits every type argument must conform to, in written order.
+    ///
+    /// Empty for the ordinary unbounded parameter; an unbounded parameter
+    /// carries no restriction and no capability beyond being a name the
+    /// template's body can substitute into.
+    pub bounds: Vec<TraitRef>,
 }
 
 /// An `enum` declaration: a named set of variants, each optionally carrying a
