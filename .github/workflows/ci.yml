@@ -107,6 +107,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # libffi is linked into the compiler statically, so the archive for the
+      # machine being built for has to exist before anything in the workspace
+      # compiles. knvm is the installer that fetches them and does not depend on
+      # the crate that links them, so it builds here without the archive it is
+      # about to install: this provisions libffi exactly as a user does, through
+      # the pin and the checksum verification, rather than through a second copy
+      # of the download open-coded in YAML.
+      - name: Provision the pinned libffi
+        shell: bash
+        run: cargo run -p kira-knvm --bin knvm -- install libffi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       # The shader validators. `crates/kira-cli/tests/shader_validation.rs`
       # puts every backend's output through the compiler that consumes it, and
       # fails rather than skipping when one of these is absent — a shader

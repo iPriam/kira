@@ -123,6 +123,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # libffi is linked into the compiler statically, so the archive for the
+      # machine being built for has to exist before the release binaries
+      # compile. knvm is the installer that fetches them and does not depend on
+      # the crate that links them, so it builds here without the archive it is
+      # about to install: the release is provisioned through the pin and its
+      # checksum verification, the same path a user takes, rather than through a
+      # second copy of the download open-coded in YAML.
+      - name: Provision the pinned libffi
+        run: cargo run -p kira-knvm --bin knvm -- install libffi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Build the release binaries
         run: |
           rustup target add wasm32-unknown-emscripten
