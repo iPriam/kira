@@ -17,7 +17,7 @@ use kira_syntax_model::TokenKind;
 use crate::decl::{self, Declaration};
 use crate::diagnostics::{self, Reporter};
 use crate::edits::EditBuffer;
-use crate::eval::{self, methods};
+use crate::eval::{self, reflection};
 use crate::invoke::{Invocation, Position};
 use crate::ksl::ShaderCompiler;
 use crate::registry::{Procedural, ProceduralKind, Registry, kind_word};
@@ -268,7 +268,7 @@ pub(crate) fn expand_declaration(
                     declared,
                     vec![(
                         parameter(declared, 0),
-                        methods::declaration_value(declaration),
+                        reflection::declaration_value(declaration),
                     )],
                     annotation.span,
                     comptime,
@@ -301,7 +301,7 @@ pub(crate) fn expand_declaration(
                 // `expand(template, template)`. The template itself never
                 // reaches the compiler: it may carry placeholder types.
                 is_template = true;
-                let value = methods::declaration_value(declaration);
+                let value = reflection::declaration_value(declaration);
                 if let Some(output) = run(
                     file,
                     declared,
@@ -425,7 +425,7 @@ fn run_derives(
             declared,
             vec![(
                 parameter(declared, 0),
-                methods::declaration_value(declaration),
+                reflection::declaration_value(declaration),
             )],
             annotation.span,
             comptime,
@@ -474,11 +474,11 @@ fn summon_from_fields(
                     vec![
                         (
                             parameter(declared, 0),
-                            methods::declaration_value(declaration),
+                            reflection::declaration_value(declaration),
                         ),
                         (
                             parameter(declared, 1),
-                            methods::declaration_value(&template.declaration),
+                            reflection::declaration_value(&template.declaration),
                         ),
                     ],
                     annotation.span,
@@ -503,7 +503,7 @@ fn summon_from_fields(
                 declared,
                 vec![(
                     parameter(declared, 0),
-                    methods::declaration_value(declaration),
+                    reflection::declaration_value(declaration),
                 )],
                 annotation.span,
                 comptime,

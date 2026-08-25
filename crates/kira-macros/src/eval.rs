@@ -27,6 +27,7 @@ use crate::quote::{self, Chunk, Template};
 use crate::value::Value;
 
 pub(crate) mod methods;
+pub(crate) mod reflection;
 
 /// The member name `.type` is rewritten to before parsing.
 pub(crate) const FIELD_TYPE: &str = "__kmac_field_type";
