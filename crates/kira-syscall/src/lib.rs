@@ -83,7 +83,10 @@ pub fn decode(raw: isize) -> Result<usize, Errno> {
     }
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 mod imp {
     // The numbers are per architecture and differ even where the names do not;
     // each pair is stated once, beside the assembly that issues them.
@@ -222,7 +225,10 @@ mod imp {
     }
 }
 
-#[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 pub use imp::{exit_group, mmap_anonymous, munmap, write};
 
 #[cfg(test)]

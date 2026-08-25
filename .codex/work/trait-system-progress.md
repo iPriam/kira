@@ -300,6 +300,51 @@ member that takes none.
 
 Harness moved 1308 → 1315 cases, byte-identical VM/LLVM tallies.
 
+### Slice 4 survey — where type parameters exist today
+
+Read before implementing, per the slice's ground rules.
+
+**Declaration forms with type parameters: `enum` only.** `parse_type_params`
+(`crates/kira-parser/src/generics.rs`) is called for real on exactly one path,
+`Parser::parse_enum`. Every other form refuses the list by name with `KPAR047`:
+`struct` (`aggregate.rs`), `class` (`aggregate.rs`), `trait`
+(`traits.rs`), free and method `function` (`item.rs`, `construct/members.rs`).
+A `construct` header has no parameter-list refusal at all — a `<` after its
+name falls into the header-clause skip and dies on the expected `{`; there is
+no generic construct surface to extend. Type *arguments* parse everywhere a
+type does (`Name<Args>` → `TypeRef::Generic`) and in one expression position,
+`nativeRecover<T>` — neither makes a declaration generic.
+
+**Execution model: monomorphization at analysis time, on every engine.** A
+generic enum declares no type; it is registered as a template
+(`Analyzer::generic_enums`). Each written instantiation substitutes the
+arguments into the template's body and declares an ordinary enum row under the
+mangled name `Result<Int, AppError>` (memo key = the name), recorded in
+`EnumTable::instantiations` so widening can find it later. Nothing below
+semantics learns generics exist: both engines see plain enums, dispatch reads
+tags by id, and no opcode, IR node, wire format, or runtime tag carries
+parameters. Erasure happens only at the *use* of a widened value (the
+rebuild-to-`Any` rule), not as the representation of generics.
+
+**Consequences that decide slice 4's shape:**
+
+- Bounds land on enum type parameters, because that is the only place
+  parameters exist. Function-level generics do not exist today and are not
+  grown here; `KPAR047` stays for struct/class/function/trait/construct.
+- A bound discharges at instantiation, inside the existing monomorphizer — no
+  second execution model, no backend work at all.
+- Instantiation can be triggered while declaration passes are still running
+  (a struct field naming `Boxed<Int>` mints during `collect_structs`, before
+  `collect_conformances`), so the discharge check cannot run inline. It is
+  queued at instantiation and answered after the conformance table and drop
+  glue are final — the same record-now/answer-later shape
+  `enum_payload_sites` uses for `KSEM306`.
+- An enum body carries no code over parameter values: the only expressions in
+  a template are variant payload defaults, which *produce* a value rather than
+  hold one, and analyze against the substituted concrete type. So
+  "bound members callable on parameter values inside the scope" has no
+  reachable surface yet; it binds the moment a generic form with bodies lands.
+
 ### The bare family-conformance head is language again
 
 `Family Name { … }` parses as a zero-parameter declaration backed by
