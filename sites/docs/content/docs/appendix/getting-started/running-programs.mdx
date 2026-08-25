@@ -87,15 +87,16 @@ Current output shapes:
 | `build --backend llvm` | host executable plus native object file |
 | `build --backend hybrid` | `generated/<name>.khm` plus `.kbc`, object file, and shared library sidecars |
 
-## When To Use `zig build run -- ...`
+## When You Are Editing The CLI Itself
 
-If you are editing the CLI itself, use:
+Run the checkout rather than whatever is on your `PATH`:
 
 ```bash
-zig build run -- run examples/hello
+cargo run -p kira-cli --bin kira -- run examples/hello
 ```
 
-That keeps you on the freshly rebuilt in-repo CLI instead of whatever launcher is currently on your `PATH`.
+Or install the checkout as the `dev` toolchain once with `knvm binstall`, after
+which plain `kira` is the one you just built.
 
 ## Native Library Imports And `check`
 

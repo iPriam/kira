@@ -71,11 +71,16 @@ kira run examples/ffi_dynamic_vm          # VM dynamic FFI via LibFFI
 
 This lifts the `@Native` requirement on the VM specifically — direct extern calls run there as ordinary VM code. The native-compiling backends keep the `@Native` boundary because they marshal across a real compiled ABI edge.
 
-LibFFI is fetched and pinned (libffi 3.5.2) like the managed LLVM toolchain, through a build step:
+libffi is pinned (libffi 3.5.2) and fetched like the managed LLVM toolchain:
 
 ```bash
-zig build fetch-libffi
+knvm install libffi
 ```
+
+Kira links libffi statically, so the archive is a build-time input for the
+machine being built *for* — the command installs every published target, so a
+cross build has the one it needs. See
+[Installation](/docs/appendix/getting-started/installation).
 
 ## Callback Types
 

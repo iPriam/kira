@@ -1,27 +1,74 @@
 ---
 title: Installation
-description: Install Kira from GitHub Releases, put it on your PATH, verify the toolchain, and then run `check`, `run`, and `build`.
+description: Install the Kira tools with the bootstrap script, select a toolchain with knvm, provision the managed LLVM and libffi, and verify the result.
 ---
 
-## Install From Releases
+## Install The Tools
 
-For Kira 0.1.0 readiness, the normal user install flow is:
+One command puts `knvm` and the `kira` launcher on your `PATH`:
 
 ```bash
-1. Download the latest release from GitHub Releases.
-2. Extract the archive for your platform.
-3. Add the directory containing `kira` to your shell `PATH`.
-4. Open a new terminal.
-5. Run `kira --version`.
+curl -fsSL https://kira-lang.com/install.sh | sh
 ```
 
-The Releases page lives here:
+On Windows, in PowerShell:
 
-[GitHub Releases](https://github.com/kira-lang-com/kira/releases)
+```powershell
+irm https://kira-lang.com/install.ps1 | iex
+```
+
+The bootstrap installs the *tools*, not a compiler: `knvm` is the version
+manager, and `kira` is a launcher that runs whichever toolchain is selected.
+Open a new terminal, then install a toolchain:
+
+```bash
+knvm install latest
+kira --version
+```
+
+`knvm install <version>` also accepts `--channel dev`, which installs from the
+prereleases published between weekly versions.
+
+If you would rather not run a script from a pipe, download the
+`knvm-<version>-<host-key>.tar.gz` archive from
+[GitHub Releases](https://github.com/kira-lang-com/kira/releases), verify it
+against the `.sha256` published beside it, unpack it, and put its `bin/`
+directory on your `PATH`. From there `knvm install latest` provisions
+everything else.
+
+## Provision The Managed Toolchains
+
+Two engines are fetched rather than built, and both are pinned by this
+repository:
+
+```bash
+knvm install-llvm
+knvm install libffi
+```
+
+- **LLVM** backs native builds and the native half of hybrid mode. It is
+  discovered at `KIRA_LLVM_HOME`, then at
+  `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`.
+- **libffi** backs foreign calls. Kira links it statically, so the archive for
+  the machine being *built for* has to be installed — `knvm install libffi`
+  installs every published target, so cross builds work from any host. It is
+  discovered at `KIRA_LIBFFI_HOME`, then at
+  `~/.kira/toolchains/libffi/<libffi-version>/<target>/`.
+
+### Rate Limits
+
+Both fetch from GitHub, which allows sixty unauthenticated API requests an hour
+per address — shared, so an office network or a CI runner can exhaust it on
+somebody else's traffic. `knvm` and the bootstrap scripts send `GH_TOKEN` or
+`GITHUB_TOKEN` when either is set, which raises the limit:
+
+```bash
+export GH_TOKEN="$(gh auth token)"
+```
+
+The token is sent to GitHub's own hosts and nowhere else.
 
 ## Verify The Install
-
-After `kira --version`, validate the basic workflow with a small program:
 
 ```bash
 kira check path/to/main.kira
@@ -29,58 +76,31 @@ kira run path/to/main.kira
 kira build path/to/main.kira
 ```
 
-Those three commands are the minimum "is my install healthy?" smoke test:
+Those three are the minimum "is my install healthy?" check:
 
 - `check` validates the program
-- `run` executes it
-- `build` proves the native backend is available too
+- `run` executes it on the VM
+- `build` proves the native backend and its managed LLVM are usable
 
-## Native / LLVM Support
+## Install From A Checkout
 
-Native builds and the native half of hybrid mode depend on the pinned LLVM toolchain.
-
-Install it with:
-
-```bash
-kira fetch-llvm
-```
-
-or:
+Contributors build the tools from the monorepo with cargo, and land them the
+same way the bootstrap does:
 
 ```bash
-zig build fetch-llvm
+cargo run -p kira-knvm -- sinstall
 ```
 
-LLVM discovery order is:
-
-1. `KIRA_LLVM_HOME`
-2. `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`
-3. older repo-local fallback paths under `.kira/`, if they already exist
-
-If you need to override the managed bundle temporarily:
+That installs `knvm`, `kira`, and `kira-language-server` into `<kira-home>/bin`
+and configures your shell to find them. To make the checkout itself the
+selected toolchain:
 
 ```bash
-export KIRA_LLVM_HOME=/path/to/llvm
+knvm binstall
 ```
 
-## Build From Source
+`binstall` builds the enclosing checkout optimized — `--debug` for the
+unoptimized build — and selects it on the `dev` channel, so `kira` runs what
+you just compiled. Re-running it always replaces the tree.
 
-If you are contributing to the Zig implementation itself, build from this monorepo:
-
-```bash
-zig build
-zig build test
-```
-
-That refreshes the local development snapshot used by `kira`.
-
-The most useful contributor commands are:
-
-```bash
-zig build run -- run examples/hello.kira
-kira check examples/hello.kira
-kira run examples/hello.kira
-kira build examples/hello.kira
-```
-
-`kira new` still scaffolds minimal `kira.toml` + `app/main.kira` starter apps from the managed template.
+`kira new` scaffolds a `kira.toml` and `app/main.kira` starter app.

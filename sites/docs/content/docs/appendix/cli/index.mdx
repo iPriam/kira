@@ -24,7 +24,6 @@ kira <command> [args]
   package pack [path]
   package inspect <archive-path|project-dir>
   new <Name> <destination>
-  fetch-llvm
   help
   version
 ```
@@ -65,17 +64,23 @@ kira build --backend llvm examples/hello
 kira build --backend hybrid examples/hybrid_roundtrip
 ```
 
-## CLI vs `zig build run -- ...`
+## CLI vs A Checkout You Are Changing
 
 Use `kira` when you are exercising the installed or managed toolchain.
 
-Use:
+When you are changing the CLI itself, install the checkout as the `dev`
+toolchain and keep typing `kira`:
 
 ```bash
-zig build run -- ...
+knvm binstall
 ```
 
-when you are actively changing the CLI implementation and want each command to run against the just-built in-repo binary.
+`binstall` builds the enclosing checkout and selects it, so every later `kira`
+runs what you just compiled. To run one command without selecting anything:
+
+```bash
+cargo run -p kira-cli --bin kira -- run examples/hello
+```
 
 ## Logging And Diagnostics
 

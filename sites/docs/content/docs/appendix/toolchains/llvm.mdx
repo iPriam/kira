@@ -8,16 +8,11 @@ Kira ships pinned LLVM bundles so contributors do not need to build LLVM manuall
 ## Install The Bundle
 
 ```bash
-kira fetch-llvm
+knvm install-llvm
 ```
 
-or:
-
-```bash
-zig build fetch-llvm
-```
-
-That flow reads `llvm-metadata.toml` and installs the matching host bundle under:
+Add `--force` to replace a bundle that is already installed. The command reads
+`llvm-metadata.toml` and installs the matching host bundle under:
 
 ```text
 ~/.kira/toolchains/llvm/<llvm-version>/<host-key>/
@@ -34,7 +29,8 @@ It records:
 - supported host keys
 - exact asset filenames
 
-The current repo pin is LLVM `22.1.2`.
+The current repo pin is LLVM `23.1.0-rc3`, published under the release tag
+`llvm-v23.1.0-rc3-kira.1`.
 
 ## Supported Hosts
 
@@ -63,15 +59,24 @@ The same LLVM discovery path is used by:
 
 So if LLVM is not available, both native and hybrid work will fail until you install or override the toolchain.
 
-## No Checksum Verification
+## Checksum Verification
 
-The current LLVM fetch flow intentionally does **not** use checksum verification.
+Each bundle is published with a `.sha256` beside it, and `knvm install-llvm`
+checks the download against it before unpacking — this archive supplies the
+code generator every native artifact is built with, so an archive that is not
+the published one must not reach a build at all. A release that carries no
+sidecar installs with a warning that says the bundle went in unverified.
 
-The source of truth is:
+What names the bundle is:
 
 - the pinned version in `llvm-metadata.toml`
 - the configured release tag
 - the host key
 - the exact asset filename
 
-The docs are spelling that out because it is a real implementation choice in this repo, not an omitted detail.
+`knvm` also reports a bundle whose `llvm-config --targets-built` is missing a
+code generator the pin names, and says what that costs — a missing
+`WebAssembly` generator means the compiler built against it refuses
+`--device wasm32`. Without that report, a real LLVM that cannot emit for a
+device Kira supports fails much later, in whichever suite reached that device
+first.

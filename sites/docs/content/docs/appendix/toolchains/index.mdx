@@ -36,16 +36,17 @@ That is how the launcher knows which real toolchain to launch.
 
 ## Developer Targets
 
-The repo keeps the most common build targets explicit:
+The managed toolchain flow is driven from a checkout with `knvm`:
 
 ```bash
-zig build kirac
-zig build kira-bootstrapper
-zig build install-kirac
-zig build install
+cargo run -p kira-knvm -- sinstall   # knvm and the kira launcher, onto PATH
+knvm binstall                        # this checkout as the dev toolchain
+knvm binstall --debug                # the same, unoptimized
+knvm list                            # what is installed, and what is selected
 ```
 
-Those let you validate the managed toolchain flow without guessing how it is packaged.
+Those exercise the same install pipeline a published release goes through, so
+what you validate locally is what a user gets.
 
 ## Resource Discovery
 

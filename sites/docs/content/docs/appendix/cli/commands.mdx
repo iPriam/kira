@@ -151,17 +151,18 @@ kira export apple|macos|ios|tvos|visionos|windows|android|web|linux [<project-di
 
 Generates platform project/export scaffolds (Xcode workspace, Visual Studio/CMake presets, Gradle, or a Web/WASM bundle). The target defaults to the current project. See [Exports](/docs/appendix/platforms/exports).
 
-## `fetch-llvm`
+## Managed Engines
+
+The compiler CLI does not fetch its own engines; `knvm` does, because it is what
+owns every managed install:
 
 ```bash
-kira fetch-llvm
+knvm install-llvm
+knvm install libffi
 ```
 
-Reads `llvm-metadata.toml`, chooses the host bundle, downloads the pinned release asset, and installs it under:
-
-```text
-~/.kira/toolchains/llvm/<llvm-version>/<host-key>/
-```
+See [LLVM Toolchain](/docs/appendix/toolchains/llvm) for the pin, the discovery
+order, and the install paths.
 
 ## `sync`
 
