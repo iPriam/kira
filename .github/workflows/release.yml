@@ -4,7 +4,8 @@ name: Release
 #
 #   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kira +
 #                                      bin/kira-language-server +
-#                                      bin/kira-desktop-runner + foundation/
+#                                      bin/kira-desktop-runner +
+#                                      bin/kira-hybrid-launcher + foundation/
 #   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira +
 #                                      bin/kira-language-server (launcher alias)
 #   <archive>.sha256                   the digest each archive is verified
@@ -126,7 +127,8 @@ jobs:
         run: |
           rustup target add wasm32-unknown-emscripten
           cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-launcher \
-            -p kira-desktop-runner -p kira-native-bridge -p kira-compiler-bridge
+            -p kira-desktop-runner -p kira-hybrid-launcher -p kira-native-bridge \
+            -p kira-compiler-bridge
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
 
       - name: Package the toolchain and tools archives
@@ -143,6 +145,9 @@ jobs:
           # `kira live` starts the runner client from beside itself, so it
           # ships with the compiler rather than being fetched or built later.
           cp "target/release/kira-desktop-runner$exe" "$stage/bin/"
+          # A hybrid build stages the launcher beside itself as the program's
+          # executable, so for the same reason it ships with the compiler.
+          cp "target/release/kira-hybrid-launcher$exe" "$stage/bin/"
           # The runtime archives ride beside the compiler, where its archive
           # resolution looks; compiler-using programs select the compiler
           # bridge, and the Web one is target-suffixed.

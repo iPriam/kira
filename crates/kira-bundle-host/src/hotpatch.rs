@@ -1,6 +1,6 @@
 //! The VM hot-patch control owned by the app thread.
 //!
-//! A desktop app spends its lifetime inside the native window loop, so the app
+//! An app spends its lifetime inside the native window loop, so the app
 //! thread cannot answer a protocol-thread `swap` request. Its runtime session
 //! is not thread-safe, so the protocol thread receives only an atomic status
 //! and sends swap work back to this controller's owner.
@@ -14,7 +14,7 @@ use kira_bytecode::Module;
 use kira_hybrid_runtime::Session;
 use kira_live::{Bundle, PayloadKind};
 
-use crate::host::DesktopRunnerError;
+use crate::host::BundleHostError;
 
 /// Thread-safe status for the VM hot-patch controller.
 #[derive(Clone, Debug)]
@@ -96,7 +96,7 @@ impl VmHotPatch {
     ///
     /// `None` means this controller does not own the current session, so the
     /// caller should use the ordinary app-thread work queue instead.
-    pub fn swap(&self, bundle: &Bundle) -> Result<Option<u64>, DesktopRunnerError> {
+    pub fn swap(&self, bundle: &Bundle) -> Result<Option<u64>, BundleHostError> {
         let session = self
             .active
             .lock()
@@ -112,10 +112,10 @@ impl VmHotPatch {
             .payloads
             .iter()
             .position(|payload| payload.kind == PayloadKind::VmBytecode)
-            .ok_or(DesktopRunnerError::NoEntrypoint)?;
+            .ok_or(BundleHostError::NoEntrypoint)?;
         let bytecode = bundle
             .payload_bytes(bytecode_index)
-            .ok_or(DesktopRunnerError::NoEntrypoint)?;
+            .ok_or(BundleHostError::NoEntrypoint)?;
         let module = Module::from_bytes(bytecode)?;
         Ok(Some(session.replace_vm_program(module)?))
     }

@@ -43,7 +43,7 @@ impl NativeProgram {
         })
     }
 
-    /// Runs the native entry in the desktop runner process.
+    /// Runs the native entry in this runner process.
     pub fn run(&self) -> Result<(), NativeProgramError> {
         // SAFETY: `entry` was resolved from the library using the backend's
         // fixed `unsafe extern "C" fn() -> i32` contract, and `library` keeps

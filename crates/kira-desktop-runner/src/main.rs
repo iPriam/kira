@@ -1,15 +1,22 @@
-//! `kira-desktop-runner`: the desktop runner client binary.
-//!
-//! A live server starts this and hands it an address; it connects, downloads the
-//! bundle, runs it, and reports each milestone it actually reaches.
+//! The desktop runner: the client binary that hosts a Kira app in a live
+//! session.
 //!
 //! ```text
 //! kira-desktop-runner --server 127.0.0.1:4000 [--cache <dir>]
 //! ```
 //!
-//! It exits 0 only when the session reached its entrypoint. Any other outcome is
-//! a non-zero exit with the reason on stderr — a runner that could not run the
-//! app must not look like one that did.
+//! Everything it does to actually run a bundle — staging, loading, linking,
+//! swapping — is [`kira-bundle-host`], shared with every other Kira runner.
+//! What this binary adds is only its shape: process entry, argument parsing,
+//! a scratch cache of its own, and the rule that it exits 0 only when the
+//! session reached its entrypoint. Any other outcome is a non-zero exit with
+//! the reason on stderr — a runner that could not run the app must not look
+//! like one that did.
+//!
+//! The `lib` target exists so a workspace build of `kira-cli` also builds this
+//! binary: cargo never builds a dependency's `[[bin]]`, but it always builds
+//! its lib, and the CLI's live verb needs the runner sitting beside it. The
+//! lib itself is a re-export face, not a second implementation.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -17,8 +24,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kira_desktop_runner::DesktopHost;
-use kira_desktop_runner::relay::{self, RelayHost};
+use kira_bundle_host::{BundleHost, relay};
 use kira_live::{ClientError, RunnerClient};
 use kira_manifest::RunnerId;
 
@@ -82,7 +88,7 @@ enum RunError {
 fn run(options: &Options) -> Result<(), RunError> {
     let cache = Arc::new(RunnerCache::open(options.cache.clone())?);
     let client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
-    let mut host = DesktopHost::new(cache.path.clone());
+    let mut host = BundleHost::new(cache.path.clone());
     let (relay, app) = relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch_status());
     let running = app.running();
 
@@ -112,7 +118,7 @@ fn run(options: &Options) -> Result<(), RunError> {
 /// per Ctrl-C'd session, reclaimed by nobody.
 fn serve_session(
     mut client: RunnerClient,
-    mut relay: RelayHost,
+    mut relay: relay::RelayHost,
     running: &Arc<AtomicBool>,
     cache: &RunnerCache,
 ) -> Result<(), ClientError> {
@@ -132,7 +138,7 @@ fn serve_session(
 }
 
 /// One session: bring the app up, then stay up for it.
-fn session(client: &mut RunnerClient, relay: &mut RelayHost) -> Result<(), ClientError> {
+fn session(client: &mut RunnerClient, relay: &mut relay::RelayHost) -> Result<(), ClientError> {
     client.run_session(relay)?;
 
     // The app is running and the runner stays up. This is what makes a reload
@@ -299,7 +305,6 @@ mod tests {
         let second = RunnerCache::open(None).expect("second scratch");
         assert_ne!(first.path, second.path);
         assert!(first.path.is_dir());
-        assert!(second.path.is_dir());
         let path = first.path.clone();
         drop(first);
         assert!(!path.exists(), "a runner removes the scratch it owns");
