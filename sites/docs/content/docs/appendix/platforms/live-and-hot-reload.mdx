@@ -33,7 +33,7 @@ kira live <runner> <target?>
 
 - **Desktop** spawns `kira-desktop-runner` beside the compiler: VM bytecode, whole-program native libraries, and hybrid sessions all host in one process.
 - **macOS / iOS / tvOS / visionOS** generate the real Xcode workspace (`exports/apple/`) with `mode = "live"` and this session's port baked into the app's manifest, run `xcodebuild` against the platform SDK or an available simulator, launch the built app, and accept its connection. A reload that changes the embedded native half relaunches through an incremental `xcodebuild` first — restarting a binary whose linked code changed would silently run stale code.
-- **Web** compiles exactly as `kira export web`, serves `exports/web` from a traversal-proof static server with the correct wasm content type, and opens the page.
+- **Web** compiles exactly as `kira export web`, serves `exports/web` from a traversal-proof static server with the correct wasm content type, and opens the page. While watching, every save recompiles and swaps the served module; the page picks it up on its next reload — Kira does not inject a livereload socket into your page.
 - **Windows / Linux** write their CMake scaffolds, audit the tools a local build needs (`cmake`, `ninja`; Visual Studio only exists on Windows hosts), and say precisely which part of the loop this host cannot provide.
 - **Android** has no runner client in this build yet and refuses by name.
 
