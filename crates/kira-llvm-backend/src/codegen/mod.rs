@@ -327,6 +327,28 @@ impl Module {
         module_name: &str,
         unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
+        Self::build_hybrid_for_target(
+            program,
+            module_name,
+            unavailable,
+            ForeignPointerWidth::HOST,
+            NativeTarget::Host,
+        )
+    }
+
+    /// Lowers the native half of a hybrid program for one machine.
+    ///
+    /// The embedded-application build is the caller that needs this: its
+    /// native half is linked *into* an app that runs on another machine, so
+    /// the object must be that machine's — the same lowering, the target's
+    /// data layout, and the target's code generator.
+    pub(crate) fn build_hybrid_for_target(
+        program: &IrProgram,
+        module_name: &str,
+        unavailable: &[usize],
+        pointer_width: ForeignPointerWidth,
+        target: NativeTarget,
+    ) -> Result<Self, LlvmError> {
         Self::lower(
             program,
             module_name,
@@ -339,8 +361,8 @@ impl Module {
                     .collect(),
                 reachable: crate::reachability::hybrid_native_functions(program),
                 exports: &NativeExportSurface::default(),
-                pointer_width: ForeignPointerWidth::HOST,
-                target: CodegenTarget::host(),
+                pointer_width,
+                target: CodegenTarget::Native(target),
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },

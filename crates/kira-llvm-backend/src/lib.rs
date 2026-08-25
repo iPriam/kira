@@ -68,6 +68,15 @@ pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 pub use link::{LinkError, NativeBuildTarget, SYSROOT_VARIABLE, link_ffi_carrier};
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
 
+/// The infix marking a partially written object: `<object>.pending-<pid>`.
+///
+/// A build emits each object under this name and renames it onto the final path,
+/// so the final path only ever holds a finished object. A build killed mid-emit
+/// never runs that rename, leaving the partial behind. Exposed so the builder
+/// that next holds the package's build lock can recognise and sweep the partials
+/// an interrupted build abandoned, rather than a person reaching for `rm`.
+pub const PENDING_INFIX: &str = ".pending-";
+
 /// Reports whether this compiler can emit machine code for `target`.
 ///
 /// What a compiler can emit for is fixed when it is linked: the managed LLVM
@@ -861,24 +870,7 @@ fn build_hybrid_library_inner(
         .shared_library_path
         .clone()
         .ok_or(LlvmError::MissingHybridLibraryPath)?;
-    let module = match debug {
-        Some(debug) => codegen::Module::build_hybrid_debug(
-            program,
-            &options.module_name,
-            &options.unavailable_imports,
-            debug,
-        )?,
-        None => codegen::Module::build_hybrid(
-            program,
-            &options.module_name,
-            &options.unavailable_imports,
-        )?,
-    };
-    if let Some(path) = &options.ir_path {
-        module.write_ir(path)?;
-    }
-    module.emit_object(&options.object_path, options.optimize)?;
-
+    let object_path = emit_hybrid_object(program, options, debug)?;
     let llvm = kira_toolchain::discover(None)?;
     let foreign_link =
         ffi_link_inputs(program, &options.foreign_link, &options.unavailable_imports)?;
@@ -902,7 +894,7 @@ fn build_hybrid_library_inner(
     match debug {
         Some(debug) => link::link_hybrid_library_debug(
             &llvm,
-            &options.object_path,
+            &object_path,
             &options.runtime_archive,
             &foreign_link,
             &retained_symbols,
@@ -911,7 +903,7 @@ fn build_hybrid_library_inner(
         )?,
         None => link::link_hybrid_library(
             &llvm,
-            &options.object_path,
+            &object_path,
             &options.runtime_archive,
             &foreign_link,
             &retained_symbols,
@@ -920,10 +912,67 @@ fn build_hybrid_library_inner(
     }
 
     Ok(HybridArtifacts {
-        object: options.object_path.clone(),
+        object: object_path,
         library,
         exports: exported_trampolines(program),
     })
+}
+
+/// Compiles the native half of a hybrid program to a bare object and links
+/// nothing.
+///
+/// This is the embedded-application form: instead of a self-contained shared
+/// library, the object's trampolines and adapters are linked *into* a host
+/// binary (an exported Xcode app), which also carries the runtime archive the
+/// helpers live in. The returned exports are the full trampoline surface,
+/// because the host's hybrid manifest records it exactly as the library form
+/// does.
+///
+/// Returns the object path and one `(function id, trampoline symbol)` pair
+/// per native function, in manifest order.
+pub fn build_hybrid_object(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+) -> Result<(PathBuf, Vec<(u32, String)>), LlvmError> {
+    let module = codegen::Module::build_hybrid_for_target(
+        program,
+        &options.module_name,
+        &options.unavailable_imports,
+        pointer_width_for(options.target.target()),
+        options.target.target().clone(),
+    )?;
+    if let Some(path) = &options.ir_path {
+        module.write_ir(path)?;
+    }
+    module.emit_object(&options.object_path, options.optimize)?;
+    let object_path = options.object_path.clone();
+    Ok((object_path, exported_trampolines(program)))
+}
+
+/// Lowers and emits the hybrid native half's object, shared by both forms.
+fn emit_hybrid_object(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+    debug: Option<&DebugInfo>,
+) -> Result<PathBuf, LlvmError> {
+    let module = match debug {
+        Some(debug) => codegen::Module::build_hybrid_debug(
+            program,
+            &options.module_name,
+            &options.unavailable_imports,
+            debug,
+        )?,
+        None => codegen::Module::build_hybrid(
+            program,
+            &options.module_name,
+            &options.unavailable_imports,
+        )?,
+    };
+    if let Some(path) = &options.ir_path {
+        module.write_ir(path)?;
+    }
+    module.emit_object(&options.object_path, options.optimize)?;
+    Ok(options.object_path.clone())
 }
 
 /// Selects exactly the body symbols emitted by a debug native module.

@@ -161,7 +161,7 @@ impl NativeBuildTarget {
         let Some(cross) = self.target.cross() else {
             return Vec::new();
         };
-        let mut arguments = vec![format!("--target={}", cross.normalized_triple())];
+        let mut arguments = vec![format!("--target={}", cross.llvm_triple())];
         if let Some(sysroot) = self.sysroot() {
             arguments.push(format!("--sysroot={}", sysroot.display()));
         }
