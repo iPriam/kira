@@ -51,6 +51,7 @@ pub(crate) fn run(options: &crate::live::LiveOptions) -> i32 {
         kira_manifest::RunnerId::Macos => ApplePlatform::Macos,
         kira_manifest::RunnerId::Ios => ApplePlatform::Ios,
         kira_manifest::RunnerId::Tvos => ApplePlatform::Tvos,
+        kira_manifest::RunnerId::Visionos => ApplePlatform::Visionos,
         _ => unreachable!("the caller routes only Apple runners here"),
     };
 
