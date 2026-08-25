@@ -46,6 +46,11 @@ fn write_package(name: &str, files: &[(&str, &str)]) -> PathBuf {
 /// Pinned for the same reason `tests_verb` pins it: these are about the runner
 /// Foundation ships here, not about whichever toolchain was last installed.
 fn kira_lint(root: &Path) -> std::process::Output {
+    kira_lint_with(root, &[])
+}
+
+/// The same run, with extra arguments after the path (`--fix`).
+fn kira_lint_with(root: &Path, extra: &[&str]) -> std::process::Output {
     let foundation = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../foundation")
         .canonicalize()
@@ -53,6 +58,7 @@ fn kira_lint(root: &Path) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_kira"))
         .env("KIRA_FOUNDATION_HOME", foundation)
         .args(["lint", root.to_str().expect("a utf-8 path")])
+        .args(extra)
         .output()
         .expect("run kira")
 }
@@ -97,6 +103,186 @@ const FILE_LENGTH_AT_40: &str = "import Foundation\n\n\
      \x20   let enabled: Bool = true\n\
      \x20   let limit: Int = 40\n\
      }\n";
+
+const MANUAL_INDEX_ON: &str = "import Foundation\n\n\
+     construct ManualIndexLoop() extends Lint {\n\
+     \x20   let code: String = \"KLINT002\"\n\
+     \x20   let severity: String = \"warning\"\n\
+     \x20   let enabled: Bool = true\n\
+     }\n";
+
+/// Three manual index loops. Two sit in ONE declaration; the third's counter
+/// is a single letter that every later line spells somewhere (`acc` holds the
+/// `a`, `return` holds the `r`), which is the shape of text that defeated a
+/// substring test for "the counter is read after the loop".
+const MANUAL_LOOP_FIXTURE: &str = r#"import Foundation
+
+@Main function main() {
+    print(bothLoops() + tally())
+}
+
+function bothLoops() -> Int {
+    let ys = [5, 6]
+    let zs = [7, 8]
+    var left = 0
+    var m = 0
+    while m < ys.count {
+        left = left + ys[m]
+        m = m + 1
+    }
+    var right = 0
+    var d = 0
+    while d < zs.count {
+        right = right + zs[d]
+        d = d + 1
+    }
+    return left + right
+}
+
+function tally() -> Int {
+    let xs = [1, 2, 3]
+    var acc = 0
+    var a = 0
+    while a < xs.count {
+        acc = acc + xs[a]
+        a = a + 1
+    }
+    return acc
+}
+"#;
+
+#[test]
+fn every_manual_loop_reports_the_first_time_not_one_fix_later() {
+    // The regression this pins: a walk that stopped at each declaration's
+    // first finding reported one loop per run, so `kira lint` said eight and
+    // only `--fix` plus a re-run admitted the ninth. All three findings above
+    // must land in the first report.
+    let root = write_package(
+        "lint_manual_all",
+        &[
+            ("linter.kira", MANUAL_INDEX_ON),
+            ("app/main.kira", MANUAL_LOOP_FIXTURE),
+        ],
+    );
+    let output = kira_lint(&root);
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert_eq!(text.matches("KLINT002").count(), 3, "{text}");
+    assert!(text.contains("3 report(s) from 1 lint(s)"), "{text}");
+    // Both loops inside one declaration, named by their own counters.
+    assert!(text.contains("`for m in 0..ys.count`"), "{text}");
+    assert!(text.contains("`for d in 0..zs.count`"), "{text}");
+    // The letter-collision loop, which an after-read test keyed on substrings
+    // suppresses forever because `return acc` holds both letters.
+    assert!(text.contains("`for a in 0..xs.count`"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn fixing_every_manual_loop_converges_in_one_pass() {
+    // `--fix` writes all three rewrites and a second look finds nothing: no
+    // finding may wait behind another to be discovered.
+    let root = write_package(
+        "lint_manual_fix",
+        &[
+            ("linter.kira", MANUAL_INDEX_ON),
+            ("app/main.kira", MANUAL_LOOP_FIXTURE),
+        ],
+    );
+    let applied = kira_lint_with(&root, &["--fix"]);
+    let text = String::from_utf8_lossy(&applied.stdout).into_owned()
+        + &String::from_utf8_lossy(&applied.stderr);
+    assert!(text.contains("applied 3 fix(es)"), "{text}");
+    let again = kira_lint(&root);
+    let text = String::from_utf8_lossy(&again.stdout).into_owned()
+        + &String::from_utf8_lossy(&again.stderr);
+    assert!(!text.contains("KLINT002"), "{text}");
+    assert!(text.contains("nothing found"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A manual loop inside an `if` and one in its `else`, beside a top-level one:
+/// nesting hides neither, and each carries its own initializer above it.
+const NESTED_LOOP_FIXTURE: &str = r#"import Foundation
+
+@Main function main() {
+    print(pick(true) + plain())
+}
+
+function pick(flag: Bool) -> Int {
+    let xs = [4, 5, 6]
+    var chosen = 0
+    if flag {
+        var i = 0
+        while i < xs.count {
+            chosen = chosen + xs[i]
+            i = i + 1
+        }
+    } else {
+        var j = 0
+        while j < xs.count {
+            chosen = chosen + xs[j] * 2
+            j = j + 1
+        }
+    }
+    return chosen
+}
+
+function plain() -> Int {
+    let ys = [1, 2]
+    var sum = 0
+    var p = 0
+    while p < ys.count {
+        sum = sum + ys[p]
+        p = p + 1
+    }
+    return sum
+}
+"#;
+
+#[test]
+fn a_loop_nested_in_a_block_reports_like_a_top_level_one() {
+    // The pre-fix walk only looked at a declaration's top-level statements, so
+    // a loop inside `if` was invisible no matter how many times `kira lint`
+    // ran. Depth is not a hiding place.
+    let root = write_package(
+        "lint_manual_nested",
+        &[
+            ("linter.kira", MANUAL_INDEX_ON),
+            ("app/main.kira", NESTED_LOOP_FIXTURE),
+        ],
+    );
+    let output = kira_lint(&root);
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert_eq!(text.matches("KLINT002").count(), 3, "{text}");
+    assert!(text.contains("`for i in 0..xs.count`"), "{text}");
+    assert!(text.contains("`for j in 0..xs.count`"), "{text}");
+    assert!(text.contains("`for p in 0..ys.count`"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn fixing_a_nested_loop_converges_and_keeps_the_programs_meaning() {
+    // The fix writes into the middle of a file (the loop sits inside a block),
+    // so the spans have to land exactly; the re-run must find nothing.
+    let root = write_package(
+        "lint_manual_nested_fix",
+        &[
+            ("linter.kira", MANUAL_INDEX_ON),
+            ("app/main.kira", NESTED_LOOP_FIXTURE),
+        ],
+    );
+    let applied = kira_lint_with(&root, &["--fix"]);
+    let text = String::from_utf8_lossy(&applied.stdout).into_owned()
+        + &String::from_utf8_lossy(&applied.stderr);
+    assert!(text.contains("applied 3 fix(es)"), "{text}");
+    let again = kira_lint(&root);
+    let text = String::from_utf8_lossy(&again.stdout).into_owned()
+        + &String::from_utf8_lossy(&again.stderr);
+    assert!(!text.contains("KLINT002"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
 
 #[test]
 fn reports_a_file_past_the_configured_ceiling() {

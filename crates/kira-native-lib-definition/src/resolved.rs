@@ -122,6 +122,30 @@ impl ResolvedTargetRow {
     pub fn link_mode(&self) -> LinkMode {
         self.link_mode
     }
+
+    /// The static archive this row is linked from, when it resolves to one.
+    ///
+    /// A `Static` row always is. A `Dynamic` row is too where a platform ships
+    /// no shared library and hands the linker a `.a` directly — Apple publishes
+    /// Dawn only as `libwebgpu_dawn.a` — so the artifact's shape decides, not the
+    /// declared mode.
+    pub fn static_archive(&self) -> Option<&Path> {
+        let artifact = self.artifact.as_deref()?;
+        (self.link_mode == LinkMode::Static || is_static_archive(artifact)).then_some(artifact)
+    }
+
+    /// Whether this row's symbols resolve from the image it is linked into
+    /// rather than from a file opened at run time.
+    ///
+    /// A static archive is linked in. So is a `Dynamic` row that names no file
+    /// at all — Apple frameworks and system libraries such as `objc` reach the
+    /// program through the image, not a `dlopen` of a name that is not a path. A
+    /// `Runtime` row is the opposite: nothing links, and the loader opens it by
+    /// name on first call.
+    pub fn is_image_resident(&self) -> bool {
+        self.static_archive().is_some()
+            || (self.artifact.is_none() && self.link_mode != LinkMode::Runtime)
+    }
 }
 
 /// A native library whose per-target rows have all been located.
@@ -191,6 +215,7 @@ impl ResolvedNativeLibrary {
 pub struct NativeLinkInputs {
     library_paths: Vec<(String, PathBuf)>,
     static_archives: Vec<(String, PathBuf)>,
+    image_libraries: Vec<String>,
     archives: Vec<PathBuf>,
     frameworks: Vec<String>,
     system_libs: Vec<String>,
@@ -224,6 +249,7 @@ impl NativeLinkInputs {
     pub const EMPTY: Self = Self {
         library_paths: Vec::new(),
         static_archives: Vec::new(),
+        image_libraries: Vec::new(),
         archives: Vec::new(),
         frameworks: Vec::new(),
         system_libs: Vec::new(),
@@ -265,10 +291,14 @@ impl NativeLinkInputs {
     ) {
         let name = name.into();
         self.push_library_path(name.clone(), path);
-        if row.link_mode() == LinkMode::Static
-            && let Some(archive) = row.artifact()
-        {
-            push_unique(&mut self.static_archives, (name, archive.to_path_buf()));
+        if let Some(archive) = row.static_archive() {
+            push_unique(
+                &mut self.static_archives,
+                (name.clone(), archive.to_path_buf()),
+            );
+        }
+        if row.is_image_resident() {
+            push_unique(&mut self.image_libraries, name);
         }
         self.push_row(row);
     }
@@ -293,7 +323,8 @@ impl NativeLinkInputs {
     /// Adds a named static archive that a thin carrier must retain.
     pub fn push_static_archive(&mut self, name: impl Into<String>, path: PathBuf) {
         let name = name.into();
-        push_unique(&mut self.static_archives, (name, path.clone()));
+        push_unique(&mut self.static_archives, (name.clone(), path.clone()));
+        push_unique(&mut self.image_libraries, name);
         self.push_archive(path);
     }
 
@@ -335,6 +366,17 @@ impl NativeLinkInputs {
         &self.static_archives
     }
 
+    /// The libraries whose symbols resolve from the image they are linked into
+    /// rather than from a file opened at run time.
+    ///
+    /// Static archives and framework/system-library-only rows both belong here:
+    /// each contributes only a link input, so an engine that binds foreign calls
+    /// out of a carrier or a native half binds theirs there, never `dlopen`ing a
+    /// name that names no file.
+    pub fn image_libraries(&self) -> &[String] {
+        &self.image_libraries
+    }
+
     /// The selected Apple frameworks, in first-use order.
     pub fn frameworks(&self) -> &[String] {
         &self.frameworks
@@ -372,6 +414,16 @@ impl NativeLinkInputs {
         arguments.extend(self.linker_flags.iter().cloned());
         arguments
     }
+}
+
+/// Whether a located artifact is a Unix static archive (`lib*.a`).
+///
+/// A `Dynamic` row that resolves to one is static in every way linking cares
+/// about: it is linked into the consuming image and never opened at run time.
+/// `.lib` is deliberately excluded — on MSVC it is the import library for a
+/// DLL, which is a genuine runtime dependency the loader resolves.
+fn is_static_archive(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("a")
 }
 
 /// Appends `value` unless the list already holds it.
@@ -541,5 +593,68 @@ mod tests {
         // A compiler flag is not a link argument; it reaches the driver through
         // the compile step that consumes the library's own sources.
         assert_eq!(inputs.compiler_flags(), ["--use-port=emdawnwebgpu"]);
+    }
+
+    /// The Dawn/macOS shape: declared `Dynamic`, but resolved to a static
+    /// archive because Apple ships no shared library. It links into the image,
+    /// so it is a static archive and image-resident, never opened at run time.
+    #[test]
+    fn a_dynamic_row_resolving_to_an_archive_links_into_the_image() {
+        let mut inputs = NativeLinkInputs::default();
+        let row = row(
+            Some("/pkg/libwebgpu_dawn.a"),
+            NativeLinkAttributes::default(),
+        )
+        .with_link_mode(LinkMode::Dynamic);
+        inputs.push_library("dawn", PathBuf::from("/pkg/libwebgpu_dawn.a"), &row);
+
+        assert_eq!(
+            inputs.static_archives(),
+            [("dawn".to_owned(), PathBuf::from("/pkg/libwebgpu_dawn.a"))]
+        );
+        assert_eq!(inputs.image_libraries(), ["dawn"]);
+    }
+
+    /// The `kira_metal` shape: declared `Dynamic`, naming no file at all, only
+    /// frameworks and system libraries. Its symbols reach the program through
+    /// the image it is linked into, so it is image-resident and not a runtime
+    /// library to open by a name that is not a path.
+    #[test]
+    fn a_dynamic_row_naming_no_file_is_image_resident() {
+        let mut inputs = NativeLinkInputs::default();
+        let row = row(
+            None,
+            NativeLinkAttributes {
+                frameworks: vec!["Metal".to_owned()],
+                system_libs: vec!["objc".to_owned()],
+                ..NativeLinkAttributes::default()
+            },
+        )
+        .with_link_mode(LinkMode::Dynamic);
+        inputs.push_library("kira_metal", PathBuf::from("objc"), &row);
+
+        assert!(inputs.static_archives().is_empty());
+        assert_eq!(inputs.image_libraries(), ["kira_metal"]);
+    }
+
+    /// A `Dynamic` row resolving to a real shared library is opened at run time,
+    /// not linked into the image, so it is neither a static archive nor
+    /// image-resident.
+    #[test]
+    fn a_dynamic_row_with_a_shared_library_stays_a_runtime_library() {
+        let mut inputs = NativeLinkInputs::default();
+        let row = row(
+            Some("/pkg/libwebgpu_dawn.so"),
+            NativeLinkAttributes::default(),
+        )
+        .with_link_mode(LinkMode::Dynamic);
+        inputs.push_library("dawn", PathBuf::from("/pkg/libwebgpu_dawn.so"), &row);
+
+        assert!(inputs.static_archives().is_empty());
+        assert!(inputs.image_libraries().is_empty());
+        assert_eq!(
+            inputs.library_paths(),
+            [("dawn".to_owned(), PathBuf::from("/pkg/libwebgpu_dawn.so"))]
+        );
     }
 }

@@ -129,8 +129,9 @@ impl Command {
             Self::Lint | Self::Sync | Self::Update => " [file|dir]",
             Self::Ffi => " [file|dir] [--device host|wasm32|wasm64] [--target arch-os-abi]",
             Self::Profile => " record|report|annotate|script|stat|diff [...]",
-            Self::Package | Self::Export => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]"
+            Self::Package => " [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]",
+            Self::Export => {
+                " <apple|macos|ios|tvos|visionos|windows|android|web|linux> [dir] [--profile debug|profiler|release] [--surface dom|webgpu|hybrid]"
             }
             Self::Add => " <name> (--path <dir>|--version <version>|--git <url>) [dir]",
             Self::Remove => " <name> [dir]",
@@ -167,7 +168,7 @@ impl Command {
             Self::Package => "build a library package for distribution",
             Self::MigrateManifest => "upgrade a manifest to the current format",
             Self::Live => "run with live reload",
-            Self::Export => "build a library export surface for embedding",
+            Self::Export => "generate a per-platform project (Xcode, CMake, web)",
             Self::Help => "print this message",
             Self::Version => "print the version",
         }

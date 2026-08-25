@@ -173,3 +173,186 @@ libclang needed the Apple `-isysroot` exactly as `native_sources` did (dawn's
 webgpu.h found no `<math.h>` once the cache invalidated), and a test package
 now has to own the `Test` family and its collector runner — project-matter's
 harness gained both files and reports 170/170 on the VM driver.
+
+# Trait system, phase 3
+
+## Slice status
+
+- Slice 1a, supertraits — committed `6cd9027`.
+- Slice 1b, `Send`/`Sync` compiler-known markers — committed `67a94dd`.
+- Slice 2, constructs re-anchored on the conformance table — this commit.
+- Slice 3, trait existentials — next.
+- Slice 4, generic bounds — after 3.
+
+## Design decisions taken here
+
+### A supertrait is an obligation, discharged once
+
+`trait Ordered: Equated { … }` makes conforming to `Ordered` demand an
+`Equated` conformance from the same type — written in its colon list or an
+`extend` block, or discharged structurally when the supertrait is one of the
+compiler-known derived markers. Defaults may call supertrait members on `self`,
+because by the time a default runs the receiver keeps both promises. Cycles are
+`KSEM309`; a clause naming a non-trait is `KSEM308`.
+
+### `Send` and `Sync` are derived facts about a shape
+
+Both join `Copyable` as compiler-known derived markers: a written claim is a
+checked assertion against the type's own members (`KSEM311`), never data
+inheritance. The base facts, reasoned from what each leaf actually is:
+
+| Leaf | Send | Sync | Why |
+| --- | --- | --- | --- |
+| aggregate (struct/class/enum/construct-backed) | all fields Send | all fields Sync | structural, like `Copyable` |
+| capture cell (`var` capture) | no | no | the language's shared mutable box; both engines write through it without a lock |
+| native-state token | no | no | names a store the minting engine owns; elsewhere it is a number |
+| task handle | no | no | a row in an executor's table, which no other thread holds |
+| C block | yes | no | uniquely owned foreign storage: movable, but a second concurrent holder would be a second owner of storage the foreign side may have freed |
+| `RawPtr` / `ForeignPtr` | yes | yes | an opaque word Kira never dereferences, frees, or computes on; thread-safety of the pointee is the foreign declaration's contract, stated where the call is |
+| function type | no | no | its fields are the program-wide join over closure captures, not final until every literal is lifted — a type that cannot promise what its values kept promises neither |
+
+The VM's `Rc` internals are deliberately absent from the table: they are
+engine-internal bookkeeping, and a rule that read them would deny a plain
+`Point` the right to cross a thread.
+
+The concurrency seam layered on top is today's narrow task surface: creating a
+task checks that everything it captures and returns is `Send` (`KSEM312`),
+beside the existing `KSEM159` restrictions. The check reads only the trait
+table, so it stays correct if the task surface widens; the current interaction
+is pinned by tests rather than redesigned away.
+
+### A family claim files per-declaration conformances
+
+`construct Widget: Hashable { … }` and `extend Widget: Hashable { … }` both
+record one [`Conformance`] per backed declaration, tagged `via_family`, filed
+at that declaration — where a refusal's fix goes. Members the family provides
+at its own scope satisfy the variants at once. A declaration's own colon-list
+claim wins over the family's. The family's contract half (`@Required`) now
+records its rows in the same table traits use, so one engine answers "does this
+type satisfy the surface" for both. `KSEM298` survives narrowed: it is now the
+diagnostic for a claim that cannot conform at all, chiefly a compiler-known
+trait claimed by a template that has no members of its own.
+
+## New diagnostic codes
+
+| Code | Meaning |
+| --- | --- |
+| `KSEM308` | A supertrait clause naming something that is not a trait. |
+| `KSEM309` | A cycle of supertrait clauses. |
+| `KSEM310` | A claimed trait whose supertrait obligation is unmet. |
+| `KSEM311` | A `Send`/`Sync` claim the type's own members refute. |
+| `KSEM312` | A task boundary crossing a value that is not `Send`. |
+
+## Test counts
+
+Harness moved 1300 → 1308 cases, byte-identical tallies on VM and LLVM; ffi
+harness steady at 274. Semantics unit suite at 747.
+
+## Gate note
+
+`kira_dev_validate` (MCP) is unavailable in this session; the gate was run as
+the four CLI gates from AGENTS.md — `cargo build --workspace`, `cargo test`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` —
+plus the kik harness parity runs (VM vs LLVM checksums, ffi on hybrid) and
+`KIRA_FOUNDATION_HOME=$PWD/foundation kira lint ../ui-foundation`.
+
+### Slice 3 — trait existentials
+
+A trait's name in a type position (`let x: Scored`, parameters, results,
+array elements) is an **existential over its conformers**. The representation
+generalizes the construct-family machinery rather than inventing a second box:
+analysis synthesizes `some Scored = Leaf(Leaf) | Token(Token) | …` — one
+variant per distinct conforming type, in first-recording order from the
+conformance table — and a member call through the value lowers to the same
+balanced tag-tree dispatcher families build, each arm calling the concrete
+implementation that type's conformance provided. No new opcodes, tags, or wire
+surface: both engines execute ordinary enum projection, branching, and direct
+calls, unchanged.
+
+Decisions taken here:
+
+- *Membership is the table.* A variant exists exactly when the conformance
+  table has a row for `(trait, type)` — direct claims, impl blocks, and family
+  claims alike. Supertrait discharge is answered by the checker on demand
+  (`KSEM310`) and does not mint rows, so membership stays "what was written".
+- *Object safety.* Every member must be reachable through a value: a trait
+  whose member takes no `self` is refused at the type position with `KSEM313`
+  naming the first offending member. A member's parameters may themselves be
+  other existentials; nothing else restricts the shape.
+- *Compiler-known traits have no existential.* `Copyable`/`Drop`/`Send`/`Sync`
+  state facts about one type's own members or body and classify no values, so
+  their names in type positions keep `KSEM295`, reworded for the new rule.
+- *Equality.* An existential compares as the enum it is: same concrete variant
+  and equal payloads are equal; different conformers are unequal even when
+  their payloads compare equal. Same rule families already follow.
+- *Drop.* The existential IS an enum value, so single-owner enum rules apply
+  untouched: wrapping moves, the payload releases once through the ordinary
+  enum path. Sound without a refusal; `KSEM303` is left exactly as it was.
+- *Reservation is lazy, fill is two-phase, dispatchers fixpoint.* The enum id
+  is minted the first time the name resolves in a type position (signatures
+  resolve before conformances), variants and member shapes fill after
+  `collect_conformances`, and a reservation that lands later (a body that
+  mentions the trait first) fills itself at its first call or coercion.
+
+New codes: `KSEM313` object-unsafe trait in type position; `KSEM314` unknown
+member on an existential; `KSEM278` reused verbatim for trailing-content on a
+member that takes none.
+
+Harness moved 1308 → 1315 cases, byte-identical VM/LLVM tallies.
+
+### Slice 4 survey — where type parameters exist today
+
+Read before implementing, per the slice's ground rules.
+
+**Declaration forms with type parameters: `enum` only.** `parse_type_params`
+(`crates/kira-parser/src/generics.rs`) is called for real on exactly one path,
+`Parser::parse_enum`. Every other form refuses the list by name with `KPAR047`:
+`struct` (`aggregate.rs`), `class` (`aggregate.rs`), `trait`
+(`traits.rs`), free and method `function` (`item.rs`, `construct/members.rs`).
+A `construct` header has no parameter-list refusal at all — a `<` after its
+name falls into the header-clause skip and dies on the expected `{`; there is
+no generic construct surface to extend. Type *arguments* parse everywhere a
+type does (`Name<Args>` → `TypeRef::Generic`) and in one expression position,
+`nativeRecover<T>` — neither makes a declaration generic.
+
+**Execution model: monomorphization at analysis time, on every engine.** A
+generic enum declares no type; it is registered as a template
+(`Analyzer::generic_enums`). Each written instantiation substitutes the
+arguments into the template's body and declares an ordinary enum row under the
+mangled name `Result<Int, AppError>` (memo key = the name), recorded in
+`EnumTable::instantiations` so widening can find it later. Nothing below
+semantics learns generics exist: both engines see plain enums, dispatch reads
+tags by id, and no opcode, IR node, wire format, or runtime tag carries
+parameters. Erasure happens only at the *use* of a widened value (the
+rebuild-to-`Any` rule), not as the representation of generics.
+
+**Consequences that decide slice 4's shape:**
+
+- Bounds land on enum type parameters, because that is the only place
+  parameters exist. Function-level generics do not exist today and are not
+  grown here; `KPAR047` stays for struct/class/function/trait/construct.
+- A bound discharges at instantiation, inside the existing monomorphizer — no
+  second execution model, no backend work at all.
+- Instantiation can be triggered while declaration passes are still running
+  (a struct field naming `Boxed<Int>` mints during `collect_structs`, before
+  `collect_conformances`), so the discharge check cannot run inline. It is
+  queued at instantiation and answered after the conformance table and drop
+  glue are final — the same record-now/answer-later shape
+  `enum_payload_sites` uses for `KSEM306`.
+- An enum body carries no code over parameter values: the only expressions in
+  a template are variant payload defaults, which *produce* a value rather than
+  hold one, and analyze against the substituted concrete type. So
+  "bound members callable on parameter values inside the scope" has no
+  reachable surface yet; it binds the moment a generic form with bodies lands.
+
+### The bare family-conformance head is language again
+
+`Family Name { … }` parses as a zero-parameter declaration backed by
+`Family` — the same tree `construct Name() extends Family { … }` produces,
+with the family named where the keyword would be and the clause implied by
+the position. The parser turns any two-identifier-plus-body head into the
+backed form; a pair carrying a parameter list stays refused, because a
+parameter list is what makes the spelled-out form's kind decidable. Computed
+members discharge `@Required let`s through it unchanged. Grammar gained
+`family_conformance_declaration` with its corpus case; harness pins the
+discharge end to end.

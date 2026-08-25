@@ -699,6 +699,26 @@ impl Analyzer<'_> {
             );
             return Captured::Refused;
         }
+        // Said before the general answer below, which would name the cell type
+        // rather than the value with the body: a captured `var` travels as a
+        // share of its box, and every read out of that box is a value of what
+        // the box holds. A value that runs a user `Drop` has no second copy.
+        if let Some(inner) = self.program.types.cell_inner(ty)
+            && self.program.types.runs_user_drop(inner)
+        {
+            self.emit(
+                span,
+                "KSEM302",
+                format!(
+                    "closure captures `{name}`, which is a `{}` and runs a user `Drop` body: a \
+                     captured `var` is shared with the scope that declared it, and every read \
+                     out of that share is a second value with the same body to run. Keep the \
+                     value in its scope and capture what the closure needs from it.",
+                    self.type_name(inner)
+                ),
+            );
+            return Captured::Refused;
+        }
         if !self.capture_is_trivially_copyable(ty) {
             self.emit(
                 span,

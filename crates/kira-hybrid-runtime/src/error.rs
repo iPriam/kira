@@ -53,6 +53,9 @@ pub enum HybridError {
         #[source]
         source: libloading::Error,
     },
+    /// A self-hosted native half could not be bound from this process image.
+    #[error("cannot bind the native half from this process image: {0}")]
+    SelfLibrary(#[source] kira_dynamic_ffi::FfiError),
     /// A declared foreign library or bundled Libffi runtime could not be loaded.
     #[error(transparent)]
     Foreign(#[from] kira_dynamic_ffi::ForeignLibraryError),

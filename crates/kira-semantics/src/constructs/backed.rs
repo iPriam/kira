@@ -118,6 +118,12 @@ impl Analyzer<'_> {
             }
         }
 
+        // The set as of *now*: the declaration's own parameters, members, and
+        // methods, before the family's stored members join the field list
+        // below. That is what a family requirement is discharged by, and the
+        // conformance engine reads it from here rather than from the finished
+        // struct.
+        let members = seen.clone();
         let family_surface = self.construct_families.get(&family_name).map(|info| {
             // A uniform `extend` modifier has one shared body and is never
             // implemented per variant, so it is not part of the conformance
@@ -136,29 +142,10 @@ impl Analyzer<'_> {
                 "KSEM200",
                 format!("`{name}` is backed by unknown construct family `{family_name}`"),
             ),
-            Some((required, methods, stored_fields)) => {
+            Some((_, methods, stored_fields)) => {
                 for (method, is_computed) in &methods {
                     if !own_methods.contains(method) && *is_computed {
                         computed.insert(method.clone());
-                    }
-                }
-                let overrides_all_methods = !methods.is_empty()
-                    && methods
-                        .iter()
-                        .all(|(method, _)| own_methods.contains(method));
-                if !overrides_all_methods {
-                    for required in required {
-                        if !seen.contains(&required) {
-                            self.emit(
-                                declaration.name_span,
-                                "KSEM201",
-                                format!(
-                                    "`{name}` does not provide required member `{required}` of \
-                                     construct family `{family_name}`, and does not override every \
-                                     family method that can consume it"
-                                ),
-                            );
-                        }
                     }
                 }
                 // Family stored members are real fields of every concrete
@@ -227,6 +214,9 @@ impl Analyzer<'_> {
             id,
             ConstructInfo {
                 computed,
+                family: family_name,
+                members,
+                own_methods,
                 slots,
                 families,
             },

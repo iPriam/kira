@@ -190,11 +190,17 @@ impl Analyzer<'_> {
             }
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        self.program.exprs.alloc(HirExpr::Index {
+        let read = self.program.exprs.alloc(HirExpr::Index {
             base: base_hir,
             index: index_hir,
             ty: element,
-        })
+        });
+        // Indexing reads the array without consuming it, and produces a new
+        // value of the element type — which is where a user `Drop` body would
+        // run a second time for storage the array still owns.
+        self.excuse_drop_extraction(base_hir);
+        self.note_drop_extraction(read, span);
+        read
     }
 
     /// Type-checks `base[index]` as a call to the base type's `subscript`
@@ -235,17 +241,20 @@ impl Analyzer<'_> {
         // ownership effects left behind by this probe.
         let mark = self.diagnostics.len();
         let ownership = ctx.ownership_snapshot();
+        let extractions = self.drop_extraction_snapshot();
         let base_hir = self.analyze_expr(ctx, base);
         let base_ty = self.program.expr(base_hir).type_of();
         let Type::Struct(_) = base_ty else {
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);
+            self.restore_drop_extractions(extractions);
             return None;
         };
         let qualified = format!("{}.{SUBSCRIPT_MEMBER}", self.type_name(base_ty));
         if self.lookup_function(&qualified).is_none() {
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);
+            self.restore_drop_extractions(extractions);
             return None;
         }
         let arg = CallArg {
@@ -296,6 +305,9 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         if name == "count" {
+            // Counting reads the array without consuming it, so a member read
+            // that produced it is not a second owner.
+            self.excuse_drop_extraction(array);
             return self.program.exprs.alloc(HirExpr::ArrayLen { array });
         }
         if name == "append" {

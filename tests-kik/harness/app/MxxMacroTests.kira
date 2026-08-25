@@ -415,3 +415,33 @@ construct MxxWrappedPropertyIsANamedArgumentLabel() extends Test {
     test { return MxLabelledCall().total() }
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
 }
+
+// --- String(syntax): a macro reads its input as plain text -------------------
+// Reflection hands a macro its input as syntax; `String` renders the text it
+// was written with, so a lint or generator can search and join it.
+
+comptime macro mxMarkerText {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let text: String = String(input)
+        var answer: Int = 0
+        if text.contains("marker") {
+            answer = answer + 1
+        }
+        if text.contains("+") {
+            answer = answer + 10
+        }
+        return quote {
+            function mxMarkerTextResult() -> Int {
+                return #{answer}
+            }
+        }
+    }
+}
+
+mxMarkerText!(let marker = 7 + 2)
+
+construct MxxStringOfSyntax() extends Test {
+    test { return mxMarkerTextResult() }
+    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+}

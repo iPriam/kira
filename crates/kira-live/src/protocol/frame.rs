@@ -11,6 +11,7 @@
 //! panic.
 
 use std::io::{Read, Write};
+use std::time::Duration;
 
 use super::{Message, ProtocolError};
 
@@ -39,10 +40,62 @@ pub fn write_message<W: Write, M: Message>(
     // A write to a peer that already left is that peer having left, not a
     // broken stream — the same event `read_message` reports, arriving from the
     // other direction because nothing had read since it went.
-    sent(writer.write_all(&len.to_le_bytes()))?;
-    sent(writer.write_all(&body))?;
+    write_all_retrying(writer, &len.to_le_bytes())?;
+    write_all_retrying(writer, &body)?;
     sent(writer.flush())?;
     Ok(())
+}
+
+/// Writes every byte, waiting out transport congestion rather than dying of it.
+///
+/// macOS answers an over-large or crowded loopback write with `ENOBUFS`, some-
+/// times immediately rather than after the socket's send timeout, where Linux
+/// would queue the bytes or block; a non-blocking socket answers `WouldBlock`.
+/// Treating either as fatal killed whole sessions over congestion one more
+/// attempt clears, so those outcomes park briefly and try again — writing from
+/// where the last attempt stopped, since a large frame rarely goes out in one
+/// piece. Every attempt still runs under the socket's send timeout, so a peer
+/// that genuinely stopped reading stays bounded by it. Any other error, and an
+/// error that survives the retries, is mapped exactly as a single write was.
+fn write_all_retrying<W: Write>(writer: &mut W, mut bytes: &[u8]) -> Result<(), ProtocolError> {
+    let mut pauses = 0;
+    while !bytes.is_empty() {
+        match writer.write(bytes) {
+            Ok(0) => return Err(ProtocolError::Io(std::io::ErrorKind::WriteZero.into())),
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if congested(&error) && pauses < WRITE_RETRY_LIMIT => {
+                pauses += 1;
+                std::thread::sleep(WRITE_RETRY_PAUSE);
+            }
+            Err(error) => return sent(Err(error)),
+        }
+    }
+    Ok(())
+}
+
+/// How many times a congested write may park and try again.
+///
+/// Pauses are short and writes between them are not free — each blocked
+/// attempt already spent up to the socket's send timeout inside the kernel —
+/// so this bounds the pathological case without making any real transfer think
+/// about it.
+const WRITE_RETRY_LIMIT: u32 = 200;
+
+/// How long one retry parks before trying again.
+const WRITE_RETRY_PAUSE: Duration = Duration::from_millis(25);
+
+/// Whether this write error is transport congestion rather than bad news.
+fn congested(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    // ENOBUFS: Darwin spells it 55, Linux 105. Matched by number because the
+    // kind both platforms report is `Other`, which would match everything.
+    match error.raw_os_error() {
+        Some(errno) if cfg!(target_os = "macos") => errno == 55,
+        Some(errno) if cfg!(target_os = "linux") => errno == 105,
+        _ => false,
+    }
 }
 
 /// Maps a write's outcome, treating a vanished peer as a disconnect.

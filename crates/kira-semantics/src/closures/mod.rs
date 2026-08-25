@@ -235,6 +235,16 @@ impl crate::analyze::Analyzer<'_> {
     /// convert it back inside the body — is the same copy written where the type
     /// system cannot see it.
     pub(crate) fn capture_is_trivially_copyable(&self, ty: Type) -> bool {
+        // A cell holding a value that runs a user `Drop` is the one cell that
+        // is not a share of something the copy owns nothing new of: every read
+        // out of a cell hands back a value of what it holds, and a value with a
+        // body to run has no second copy — that copy's release would run the
+        // body for storage that goes away once.
+        if let Some(inner) = self.program.types.cell_inner(ty)
+            && self.program.types.runs_user_drop(inner)
+        {
+            return false;
+        }
         is_trivially_copyable(ty)
             || self.as_function_type(ty).is_some()
             || self.enum_is_trivially_copyable(ty, &mut std::collections::HashSet::new())

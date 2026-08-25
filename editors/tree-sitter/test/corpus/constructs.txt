@@ -392,3 +392,48 @@ function f() {
                 function: (identifier)
                 arguments: (arguments))))))
       (return_statement))))
+
+================================================================================
+Family conformance bare head
+================================================================================
+
+ParsableCommand EmptyCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(name: "empty")
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        return 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (family_conformance_declaration
+    family: (identifier)
+    name: (identifier)
+    body: (construct_body
+      (construct_computed_member
+        name: (identifier)
+        type: (type_identifier)
+        body: (block
+          (return_statement
+            value: (call_expression
+              function: (identifier)
+              arguments: (arguments
+                (labeled_argument
+                  label: (identifier)
+                  value: (string_literal)))))))
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (parameter
+            name: (identifier)
+            ownership: (ownership_modifier)
+            type: (type_identifier)))
+        return_type: (return_type
+          (type_identifier))
+        body: (block
+          (return_statement
+            value: (integer_literal)))))))

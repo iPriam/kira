@@ -12,6 +12,7 @@ use std::process::{Command, Output};
 use kira_backend_api::BackendMode;
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
+use kira_manifest::RunnerId;
 
 use super::execute::{
     build_native, refuse_syscalls_on_the_vm, run_hybrid, run_native, run_on_vm, run_vm_module_file,
@@ -679,6 +680,24 @@ pub fn live(args: &[String]) -> i32 {
             return EXIT_USAGE;
         }
     };
+    // Each runner family owns its session shape: the desktop hosts in a spawned
+    // client, an exported Xcode app builds and launches itself, the Web serves
+    // a page, and scaffolds are audited where no loop exists yet.
+    match options.runner {
+        RunnerId::Macos | RunnerId::Ios | RunnerId::Tvos | RunnerId::Visionos => {
+            return crate::live_apple::run(&options);
+        }
+        RunnerId::Web => return crate::live_web::run(&options),
+        RunnerId::Windows | RunnerId::Linux => return crate::live_scaffold::run(&options),
+        RunnerId::Android => {
+            err!(
+                "kira live: the `android` runner has no runner client in this build yet; \
+                 export the Gradle project with `kira export android` and install it by hand"
+            );
+            return EXIT_FAILURE;
+        }
+        RunnerId::Desktop => {}
+    }
     // Two paths, because a package is a tree and a build has one entry. The
     // watched path is what the user named — for a package, the whole directory,
     // so a save anywhere in `app/` reloads. The source is the entry package
@@ -726,7 +745,7 @@ pub fn live(args: &[String]) -> i32 {
         Ok(Some(crate::supervisor::LiveBuild { bundle, watch_set }))
     };
 
-    match crate::supervisor::run(&options, &mut rebuild) {
+    match crate::supervisor::run_desktop(&options, &mut rebuild) {
         Ok(()) => EXIT_OK,
         Err(error) => {
             err!("kira live: {error}");

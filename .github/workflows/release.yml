@@ -4,7 +4,8 @@ name: Release
 #
 #   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kira +
 #                                      bin/kira-language-server +
-#                                      bin/kira-desktop-runner + foundation/
+#                                      bin/kira-desktop-runner +
+#                                      bin/kira-hybrid-launcher + foundation/
 #   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira +
 #                                      bin/kira-language-server (launcher alias)
 #   <archive>.sha256                   the digest each archive is verified
@@ -126,8 +127,17 @@ jobs:
         run: |
           rustup target add wasm32-unknown-emscripten
           cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-launcher \
-            -p kira-desktop-runner -p kira-native-bridge -p kira-compiler-bridge
+            -p kira-desktop-runner -p kira-hybrid-launcher -p kira-native-bridge \
+            -p kira-compiler-bridge
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
+          # Apple export links a per-slice runner-support archive; release
+          # toolchains carry them beside the compiler in the per-triple
+          # layout `locate_support_archive` searches, so exported projects
+          # build without a source checkout. visionOS has no stable Rust
+          # std target yet; its slices report themselves unavailable.
+          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
+            cargo build --release -p kira-app-runner --target "$triple"
+          done
 
       - name: Package the toolchain and tools archives
         run: |
@@ -143,6 +153,9 @@ jobs:
           # `kira live` starts the runner client from beside itself, so it
           # ships with the compiler rather than being fetched or built later.
           cp "target/release/kira-desktop-runner$exe" "$stage/bin/"
+          # A hybrid build stages the launcher beside itself as the program's
+          # executable, so for the same reason it ships with the compiler.
+          cp "target/release/kira-hybrid-launcher$exe" "$stage/bin/"
           # The runtime archives ride beside the compiler, where its archive
           # resolution looks; compiler-using programs select the compiler
           # bridge, and the Web one is target-suffixed.
@@ -160,6 +173,12 @@ jobs:
           fi
           cp target/wasm32-unknown-emscripten/release/libkira_native_bridge.a \
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
+          # The app-runner support archives ride in their per-triple
+          # directories, which is where Apple export's archive lookup looks.
+          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
+            mkdir -p "$stage/bin/$triple"
+            cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
+          done
           cp -R foundation "$stage/foundation"
           mkdir -p dist
           tar -czf "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "kira-$KIRA_VERSION"

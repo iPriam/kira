@@ -14,11 +14,12 @@
 //! IR here would make the server depend on a backend crate to learn nothing.
 
 use kira_diagnostics::Diagnostic;
+use kira_project::package_discovery::DECLARATION_MANIFEST_FILE_NAME;
 use kira_semantics::{
     BuildKind, DefinitionAccumulator, DefinitionLink, DiagnosticAccumulator, FILE_SOURCE_ID,
     ModuleSource, SourceProgram, module_source_id,
 };
-use kira_source::{SourceFile, SourceId};
+use kira_source::{FileSpan, SourceFile, SourceId, Span};
 use salsa::Setter;
 
 /// The query database every analysis in this server runs against.
@@ -159,6 +160,16 @@ pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 /// typed in.
 pub fn analyze(session: &mut AnalysisSession, path: &str, text: &str) -> Analysis {
     let entry = std::path::Path::new(path);
+    // A document named `package.kira` is not Kira source and never reaches the
+    // frontend. The manifest reader owns that shape — `kira-manifest` parses
+    // `Package <name> { … }` deliberately outside the grammar — so routing the
+    // buffer through would answer every keystroke with the parser's KSEM900
+    // "not supported yet" against a file the compiler itself reads fine. The
+    // reader validates instead: a valid manifest analyzes clean, and a broken
+    // one reports the reader's own error at KPK002.
+    if entry.file_name().and_then(|name| name.to_str()) == Some(DECLARATION_MANIFEST_FILE_NAME) {
+        return analyze_manifest(path, text);
+    }
     let (modules, build_kind) = match kira_program_graph::load_program(entry, text) {
         Ok(assembled) => (assembled.modules, assembled.build_kind),
         Err(_) => (
@@ -213,6 +224,34 @@ pub fn analyze(session: &mut AnalysisSession, path: &str, text: &str) -> Analysi
         file: SourceFile::new(DOCUMENT_SOURCE, path.to_owned(), text.to_owned()),
         definitions,
         files,
+    }
+}
+
+/// Analyzes a `package.kira` buffer through the manifest reader.
+///
+/// No salsa input is set: a manifest contributes no modules and no semantics,
+/// so there is nothing for the frontend to memoize. The reader's errors carry
+/// no offsets, so the one diagnostic — when there is one — labels the whole
+/// file with the reader's own wording.
+fn analyze_manifest(path: &str, text: &str) -> Analysis {
+    let file = SourceFile::new(DOCUMENT_SOURCE, path.to_owned(), text.to_owned());
+    let diagnostics = match kira_manifest::declaration_loader::load(text) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![
+            kira_diagnostic_messages::package_messages::invalid_package_declaration(
+                FileSpan::new(
+                    DOCUMENT_SOURCE,
+                    Span::new(0, u32::try_from(text.len()).unwrap_or(u32::MAX)),
+                ),
+                error.to_string(),
+            ),
+        ],
+    };
+    Analysis {
+        diagnostics,
+        file: SourceFile::new(DOCUMENT_SOURCE, path.to_owned(), text.to_owned()),
+        definitions: Vec::new(),
+        files: vec![file],
     }
 }
 

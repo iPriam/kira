@@ -9,7 +9,7 @@ Kira currently has three execution targets.
 | --- | --- | --- |
 | VM | bytecode under `kira_vm_runtime` | the simplest runnable subset |
 | LLVM/native | native object + host executable | fully native proof targets |
-| hybrid | bytecode plus native shared library | mixed `@Runtime` and `@Native` programs |
+| hybrid | bytecode, native shared library, and a standalone executable | mixed `@Runtime` and `@Native` programs |
 
 ## VM
 
@@ -69,6 +69,28 @@ native main
 runtime helper
 native helper
 ```
+
+### Standalone programs
+
+`kira build --backend hybrid` produces something the operating system starts, not just a bundle for `kira` to host. The deployment is four files in `.kira-build/`:
+
+```text
+.kira-build/<name>            the standalone executable
+.kira-build/<name>.khm        the manifest tying the halves together
+.kira-build/<name>.kbc        the bytecode half
+.kira-build/lib<name>.dylib   the native half (.so on Linux, .dll on Windows)
+```
+
+The executable is a copy of Kira's hybrid launcher: it loads the manifest beside itself and runs the program through both engines exactly as `kira run --backend hybrid` does in-process. Run it directly:
+
+```bash
+./.kira-build/<name>              # uses the .khm beside it
+./.kira-build/<name> other.khm    # or name a manifest explicitly
+```
+
+Everything after an explicit `.khm` path is passed to the program as its arguments; with no path argument, the launcher uses the one `.khm` beside the executable.
+
+The directory is the deployment unit: move the four files together — under any names — and the program still runs. If several `.khm` files sit beside the executable, pass the one you mean; if none does, the launcher says so rather than guessing.
 
 ## Debug Trace
 

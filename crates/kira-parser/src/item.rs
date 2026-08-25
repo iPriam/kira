@@ -122,6 +122,16 @@ impl Parser<'_> {
                     self.items.push(Item::Extend(declaration));
                 }
             }
+            // `Family Name { … }` leads with two identifiers and a body: the
+            // bare spelling of a zero-parameter declaration backed by
+            // `Family`, the same declaration `construct Name() extends
+            // Family { … }` writes with the family named first instead of in
+            // an `extends` clause.
+            TokenKind::Identifier if self.at_family_conformance_head() => {
+                if let Some(declaration) = self.parse_construct_bare_head() {
+                    self.items.push(Item::Construct(declaration));
+                }
+            }
             TokenKind::Identifier => self.parse_unsupported_item(),
             _ => {
                 // Stray token at top level: skip it with a diagnostic.
@@ -143,6 +153,13 @@ impl Parser<'_> {
     /// named `async` and a call to `async(…)` still parse as they always did.
     fn at_async_function(&self) -> bool {
         self.text_of(self.current().span) == "async" && self.peek(1).kind == TokenKind::Function
+    }
+
+    /// Whether the cursor sits on `Family Name {` — two identifiers and a body
+    /// brace, the bare spelling of a zero-parameter declaration backed by the
+    /// family the first identifier names.
+    fn at_family_conformance_head(&self) -> bool {
+        self.peek(1).kind == TokenKind::Identifier && self.peek(2).kind == TokenKind::LBrace
     }
 
     fn parse_annotated_item(&mut self) {

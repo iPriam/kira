@@ -200,17 +200,32 @@ impl Analyzer<'_> {
         // the probe's move is undone before it runs.
         let mark = self.diagnostics.len();
         let ownership = ctx.ownership_snapshot();
+        let extractions = self.drop_extraction_snapshot();
         let receiver_hir = self.analyze_expr(ctx, receiver);
         let receiver_ty = self.program.expr(receiver_hir).type_of();
 
         if receiver_ty.is_array() {
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);
+            self.restore_drop_extractions(extractions);
             // An array builtin binds its argument by shape, not by a parameter
             // name, so a label on one is a mistake.
             let name = self.interner.resolve(method).to_owned();
             let values = Self::argument_values(args);
             return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
+        }
+        if let Type::Enum(existential_id) = receiver_ty
+            && self.is_trait_existential_type(existential_id)
+        {
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_trait_existential_call(
+                ctx,
+                receiver_hir,
+                existential_id,
+                &name,
+                crate::constructs::ConstructCallContent { args, children },
+                method_span,
+            );
         }
         if let Type::Enum(family_id) = receiver_ty
             && self.is_construct_family_type(family_id)
@@ -347,6 +362,13 @@ impl Analyzer<'_> {
             &trailing,
             method_span,
         );
+        // A method that does not mutate borrows its receiver, so a member read
+        // filling one is not a second owner. A mutating method is the opposite:
+        // it takes the receiver by value and writes it back, which for a value
+        // that runs a user `Drop` is exactly the second owner this refuses.
+        if !self.callee_mutates(call) {
+            self.excuse_drop_extraction(receiver_hir);
+        }
         // When the method mutates its receiver, the written receiver is resolved
         // as a mutable place so the mutation lands back in the caller's storage.
         self.record_mut_receiver(ctx, call, receiver);

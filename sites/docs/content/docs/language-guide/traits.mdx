@@ -1,0 +1,163 @@
+---
+title: Traits
+description: "Named sets of members a type promises to present: requirements, defaults, supertraits, retroactive conformance, and the traits the compiler knows without a declaration."
+---
+
+A trait names a set of members a type may promise to present. A member with no body is a **requirement** every conforming type must present. A member with a body is a **default** a conforming type inherits unless it writes its own. A trait with no members is a **marker**: it classifies without obliging.
+
+```ts
+trait Hashable {
+    function hash(borrow self) -> Int
+
+    function doubled(borrow self) -> Int {
+        return self.hash() * 2
+    }
+}
+
+trait Tagged {}
+
+struct Mesh: Hashable, Tagged {
+    let id: Int
+
+    function hash(borrow self) -> Int {
+        return id * 7
+    }
+}
+```
+
+`:` is always conformance and `extends` is always a parent. Both clauses follow the declaration's name, traits first.
+
+```ts
+class Panel: Hashable extends Surface { }
+```
+
+A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement's parameters or result is `KSEM293`.
+
+## Dispatch
+
+Dispatch on a concrete type is static. `mesh.hash()` resolves to the implementation at type-check time and lowers to an ordinary direct call, so a conforming value costs nothing a hand-written method would not.
+
+## Retroactive Conformance
+
+`extend T: Trait { … }` implements a trait for a type declared elsewhere. It is the impl block; `extend Family { … }` without a colon stays the fluent modifier block construct families use.
+
+```ts
+struct Plate {
+    let n: Int
+}
+
+extend Plate: Hashable {
+    function hash(borrow self) -> Int {
+        return n + 1
+    }
+}
+```
+
+The colon form also reaches a construct family: `construct Widget: Hashable { … }` claims the trait for every declaration backed by the family, and `extend Widget: Hashable { … }` makes the same claim retroactively. A family is a template rather than a type, so it keeps no promise itself — the claim becomes one conformance per backed declaration, filed at that declaration. Members the family provides at its own scope answer for every variant at once, which is what makes claiming on the family worth writing rather than repeating the claim under each declaration. A declaration that already claims the trait in its own colon list keeps its own conformance untouched.
+
+A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, and `Sync` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
+
+A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. A block may carry only members the trait declares (`KSEM294`).
+
+## Coherence
+
+A conformance may be declared only in the package that declares the type or the package that declares the trait. Anywhere else is `KSEM291`: a third package's answer would be invisible to every other user of both.
+
+## Supertraits
+
+A trait may require another. `trait Ordered: Equated { … }` says that conforming to `Ordered` obliges a type to conform to `Equated` too.
+
+```ts
+trait Equated {
+    function equals(borrow self, other: Int) -> Bool
+}
+
+trait Ordered: Equated {
+    function less(borrow self, other: Int) -> Bool
+
+    function atMost(borrow self, other: Int) -> Bool {
+        return self.less(other) || self.equals(other)
+    }
+}
+
+struct Mark: Equated, Ordered {
+    let n: Int
+
+    function equals(borrow self, other: Int) -> Bool {
+        return n == other
+    }
+
+    function less(borrow self, other: Int) -> Bool {
+        return n < other
+    }
+}
+```
+
+A supertrait is a **requirement**, not an inheritance. `Ordered` does not take `Equated`'s members into itself; it obliges each conforming type to answer for them through its own `Equated` conformance, written in the colon list or in an `extend` block. A default declared on `Ordered` may still call across to them on `self`, because by the time the default runs the receiver is a type that keeps both promises.
+
+- A conformance that keeps the requiring trait but not what it requires is `KSEM310`.
+- A supertrait clause naming something that is not a trait is `KSEM308`.
+- A chain of supertraits that returns to where it started is `KSEM309`: an obligation that comes back around can never be discharged.
+
+## Compiler-Known Traits
+
+Some traits exist without a declaration, because what they mean is decided by a type's own members rather than by a written body. Declaring one is `KSEM288`.
+
+| Trait | What claiming it means |
+| --- | --- |
+| `Copyable` | The type copies rather than moves. Checked against the type's members; one that owns storage a copy would have to clone is `KSEM297`. |
+| `Drop` | The type attaches a body the engines run where they already release the value. See [Memory and Safety](/docs/language-guide/memory-and-safety). |
+| `Send` | A value of the type may be moved to another thread. |
+| `Sync` | A value of the type may be borrowed from more than one thread at once. |
+
+`Copyable`, `Send`, and `Sync` are **derived**: the fact belongs to every type whether or not anyone writes it down, and writing it is an assertion checked against the type's members. A `Send` or `Sync` claim the members refute is `KSEM311`.
+
+A compiler-known trait may be required as a supertrait, and a derived one is discharged by the fact rather than by a second spelling of it:
+
+```ts
+trait Portable: Send {
+    function ferry(borrow self) -> Int
+}
+
+struct Crate: Portable {          // no `: Send` needed; `Crate` carries it
+    let id: Int
+
+    function ferry(borrow self) -> Int {
+        return id * 3
+    }
+}
+```
+
+### What Carries `Send` and `Sync`
+
+Ownership decides both. A move leaves exactly one holder, so a value whose storage travels with it may cross a thread boundary; `borrow` is a shared read and `borrow mut` is exclusive, so concurrent borrows of one value observe storage nothing may write.
+
+| Type | `Send` | `Sync` | Why |
+| --- | --- | --- | --- |
+| `Int`, `Float`, `Bool`, `Void` | yes | yes | A word, with no storage behind it. |
+| `String`, arrays, structs, classes, enums, `Any` | yes | yes | Owned storage with a single owner. How an engine accounts for a copy is its own business. |
+| `RawPtr`, `@FFI.Pointer` | yes | yes | Kira never dereferences a pointer word. What the storage at the other end allows is the foreign library's contract, stated where the call is declared. |
+| A function type | no | no | Its values are closures, and a closure may have captured a `var`. The type names the shape a closure has, not the box a particular closure kept. |
+| A captured `var` | no | no | The one shared mutable box the language has: every holder writes through it. |
+| Callback state (`nativeState`) | no | no | A handle to a store the engine that minted it owns. |
+| A task handle | no | no | A row in the executor's table, which no other thread has. |
+
+An aggregate carries a marker exactly when everything it holds does, following fields, variant payloads, and array elements.
+
+### Tasks
+
+`Task { … }` is the one boundary a value crosses without its spawner: what goes in is evaluated at the spawn and read by the task, and what comes back is read by whoever joins. Both directions must be `Send`, and a deferred call that takes or returns something that is not is `KSEM312`.
+
+A task slot is one machine word, so today a narrower rule sits in front of that one: a task body is a call to a named function taking `Int`/`Float` and returning `Int`, `Float`, or nothing (`KSEM159`). Every type that rule admits is `Send`.
+
+## Receivers
+
+A method's receiver is written as a leading `self` parameter, or left out.
+
+```ts
+function hash(borrow self) -> Int          // reads the receiver
+function bump(borrow mut self, by: Int)    // writes through it
+function label() -> String                 // the same as `borrow self`
+```
+
+A bare `self` is `KPAR075`: it reads like a consuming receiver, which this language does not have. A receiver on a declaration that is not a method is `KSEM299`.

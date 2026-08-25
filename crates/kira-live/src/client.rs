@@ -383,13 +383,20 @@ impl RunnerClient {
             // sends arrives here as `ConnectionAborted` or `ConnectionReset`.
             // Reporting it as a socket failure made the runner exit non-zero for
             // a session that ran to completion, depending on which the OS chose.
+            //
+            // macOS adds a third spelling: a reset that lands between this
+            // peek and the kernel reaping the connection makes `peek` answer
+            // `EINVAL`. Nothing else in this call can produce one — the buffer
+            // is ours — so it is the same "the peer is gone" event, and the
+            // read that follows reports it properly.
             Err(error)
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::ConnectionAborted
                         | std::io::ErrorKind::ConnectionReset
                         | std::io::ErrorKind::BrokenPipe
-                ) =>
+                ) || cfg!(target_os = "macos")
+                    && error.raw_os_error() == Some(22) =>
             {
                 Ok(true)
             }

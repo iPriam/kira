@@ -46,9 +46,9 @@ pub struct TraitDecl {
     pub name_span: Span,
     /// Trait names written after the declaration's own name.
     ///
-    /// Supertraits are not part of this phase, so every entry here is refused
-    /// by name in semantics. They are recorded rather than dropped so the
-    /// refusal points at the trait the author wrote.
+    /// A supertrait is a *requirement*: conforming to this trait obliges a type
+    /// to conform to each of these too. It is not inheritance — this trait
+    /// takes none of their members into itself.
     pub supertraits: Vec<TraitRef>,
     /// The members, in declaration order.
     pub members: Vec<TraitMember>,

@@ -16,8 +16,9 @@ import Foundation
 // on a class, including a subclass inheriting the implementation; conformance
 // on a construct-backed declaration; the compiler-known `Copyable` claim; a
 // default that calls a requirement and so runs the conforming type's body; a
-// receiver written `borrow self`; and a `borrow mut self` receiver that writes
-// through to the caller's storage.
+// receiver written `borrow self`; a `borrow mut self` receiver that writes
+// through to the caller's storage; and a supertrait clause, whose default calls
+// across to the required trait's members.
 
 trait TrxScored {
     function score(borrow self) -> Int
@@ -82,7 +83,9 @@ class TrxDerived: TrxScored extends TrxBase {
     }
 }
 
-construct TrxShape {
+// A family may claim a trait: every declaration backed by it must keep the
+// promise, and one that writes the claim itself keeps its own conformance.
+construct TrxShape: TrxScored {
     @Required function sides() -> Int
 }
 
@@ -231,6 +234,195 @@ construct TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(4000); return e }
 }
 
+// Supertraits: `trait Ord: Eq { … }` states that conforming to `TrxOrdered`
+// obliges a type to conform to `TrxEquated` too. It is a requirement rather
+// than an inheritance — the members come from the supertrait's own conformance
+// — so a default declared here may call across to them on `self`, and the call
+// resolves statically on the concrete type exactly as any other does.
+
+trait TrxEquated {
+    function equals(borrow self, other: Int) -> Bool
+}
+
+trait TrxOrdered: TrxEquated {
+    function less(borrow self, other: Int) -> Bool
+    function atMost(borrow self, other: Int) -> Bool {
+        return self.less(other) || self.equals(other)
+    }
+    function rank(borrow self, other: Int) -> Int {
+        if self.less(other) {
+            return 0
+        }
+        if self.equals(other) {
+            return 1
+        }
+        return 2
+    }
+}
+
+struct TrxMark: TrxEquated, TrxOrdered {
+    let n: Int
+    function equals(borrow self, other: Int) -> Bool {
+        return n == other
+    }
+    function less(borrow self, other: Int) -> Bool {
+        return n < other
+    }
+}
+
+// The supertrait is kept retroactively; the declaration claims only the
+// requiring trait.
+struct TrxLateMark: TrxOrdered {
+    let n: Int
+    function less(borrow self, other: Int) -> Bool {
+        return n * 2 < other
+    }
+}
+
+extend TrxLateMark: TrxEquated {
+    function equals(borrow self, other: Int) -> Bool {
+        return n * 2 == other
+    }
+}
+
+construct TrxADefaultCallsAcrossToASupertraitMember() extends Test {
+    test {
+        let mark = TrxMark(n: 4)
+        if mark.atMost(4) && mark.atMost(5) && !mark.atMost(3) {
+            return 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+construct TrxASupertraitDefaultRanksAcrossBothMembers() extends Test {
+    test {
+        let mark = TrxMark(n: 4)
+        return mark.rank(9) * 100 + mark.rank(4) * 10 + mark.rank(1)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct TrxARetroactiveSupertraitConformanceIsEnough() extends Test {
+    test {
+        let mark = TrxLateMark(n: 3)
+        return mark.rank(7) * 10 + mark.rank(6)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+// `Send` and `Sync` are compiler-known markers derived from a type's members,
+// the way `Copyable` is. A claim is a checked assertion and adds no member and
+// no representation, so a claiming type behaves exactly as it did without one —
+// which is what these cases show on both engines. Owning heap storage does not
+// stop a value crossing a thread boundary: one owner moves, and the receiving
+// side is then the only holder.
+
+struct TrxParcel: Send, Sync {
+    let label: String
+    let weights: [Int]
+    function total(borrow self) -> Int {
+        var sum = 0
+        var i = 0
+        while i < weights.count {
+            sum = sum + weights[i]
+            i = i + 1
+        }
+        return sum + label.count
+    }
+}
+
+// A declared trait may require a marker; the obligation is discharged by the
+// derived fact rather than by writing the marker out a second time.
+trait TrxPortable: Send {
+    function ferry(borrow self) -> Int
+}
+
+struct TrxCrate: TrxPortable {
+    let id: Int
+    function ferry(borrow self) -> Int {
+        return id * 3
+    }
+}
+
+construct TrxAMarkerClaimLeavesAHeapOwningTypeAlone() extends Test {
+    test {
+        let parcel = TrxParcel(label: "ab", weights: [3, 4, 5])
+        return parcel.total()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+}
+
+construct TrxATraitRequiringSendIsKeptByTheDerivedFact() extends Test {
+    test {
+        let box = TrxCrate(id: 7)
+        return box.ferry()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+}
+
+// A declaration that never writes the trait in its own head still keeps it,
+// because the family it is backed by claimed it.
+construct TrxHex(edge: Int) extends TrxShape {
+    function sides() -> Int {
+        return 6
+    }
+    function score(borrow self) -> Int {
+        return edge * 6
+    }
+}
+
+// A family may also *answer* a trait it claims, once, for every declaration
+// backed by it: an `extend Family: Trait` block carries the member on the
+// family value, so no declaration owes it.
+trait TrxTitled {
+    function title(borrow self) -> String
+    function shout(borrow self) -> String {
+        return self.title() + "!"
+    }
+}
+
+construct TrxPane {
+    @Required function depth() -> Int
+}
+
+extend TrxPane: TrxTitled {
+    function title(borrow self) -> String {
+        return "pane"
+    }
+}
+
+construct TrxSidebar(width: Int) extends TrxPane {
+    function depth() -> Int {
+        return width
+    }
+}
+
+construct TrxAFamilyClaimBindsEveryDeclarationBackedByIt() extends Test {
+    test {
+        let hex = TrxHex(edge: 2)
+        return hex.doubled() + hex.sides()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+}
+
+construct TrxADeclarationMayAlsoWriteTheClaimItsFamilyMade() extends Test {
+    test {
+        let square = TrxSquare(edge: 2)
+        return square.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+}
+
+construct TrxAFamilyMayAnswerTheTraitForEveryDeclaration() extends Test {
+    test {
+        let bar = TrxSidebar(width: 3)
+        return bar.shout()
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("pane!"); return e }
+}
+
 function trxSection() -> Int {
     var checksum = 0
     checksum = checksum + TrxLeaf(n: 6).doubled()
@@ -239,5 +431,121 @@ function trxSection() -> Int {
     checksum = checksum * 31 + TrxDerived().doubled()
     checksum = checksum * 31 + TrxSquare(edge: 3).doubled()
     checksum = checksum * 31 + TrxNamed(name: "abcd").doubled()
+    checksum = checksum * 31 + TrxMark(n: 4).rank(9)
+    checksum = checksum * 31 + TrxMark(n: 4).rank(4)
+    checksum = checksum * 31 + TrxLateMark(n: 3).rank(6)
+    checksum = checksum * 31 + TrxParcel(label: "ab", weights: [3, 4, 5]).total()
+    checksum = checksum * 31 + TrxCrate(id: 7).ferry()
+    checksum = checksum * 31 + TrxHex(edge: 2).doubled()
+    checksum = checksum * 31 + TrxSidebar(width: 3).shout().count
     return checksum
+}
+
+// ----- trait existentials -------------------------------------------------
+//
+// A trait's name used as a type holds "a value of some conforming type". The
+// value carries which concrete type it was, member calls dispatch to that
+// type's implementation, and a `Drop` body on the concrete type still runs —
+// exactly once — when the existential dies.
+
+struct TrxKey: TrxScored {
+    let n: Int
+
+    function score(borrow self) -> Int {
+        return n
+    }
+}
+
+struct TrxToken: TrxScored {
+    let n: Int
+
+    function score(borrow self) -> Int {
+        return n * 10
+    }
+}
+
+function trxScoreAny(value: TrxScored) -> Int {
+    return value.score()
+}
+
+construct TrxAnExistentialBindingWrapsAndDispatches() extends Test {
+    test {
+        let any: TrxScored = TrxKey(n: 3)
+        return any.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+construct TrxASecondConformerIsADifferentVariantOfTheSameExistential() extends Test {
+    test {
+        let other: TrxScored = TrxToken(n: 4)
+        return other.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+}
+
+construct TrxAParameterSpelledWithTheTraitAcceptsEitherConformer() extends Test {
+    test {
+        return trxScoreAny(value: TrxKey(n: 9)) + trxScoreAny(value: TrxToken(n: 7))
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(79); return e }
+}
+
+construct TrxAnArrayOfExistentialsHoldsHeterogeneousConformers() extends Test {
+    test {
+        let both: [TrxScored] = [TrxKey(n: 2), TrxToken(n: 30)]
+        var total = 0
+        for item in both {
+            total = total + item.score()
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(302); return e }
+}
+
+construct TrxADefaultRunsThroughAnExistential() extends Test {
+    test {
+        let any: TrxScored = TrxKey(n: 6)
+        return any.doubled()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct TrxTwoExistentialValuesCompareByTheirConcreteValue() extends Test {
+    test {
+        let a: TrxScored = TrxKey(n: 5)
+        let b: TrxScored = TrxKey(n: 5)
+        let c: TrxScored = TrxToken(n: 5)
+        if a != b {
+            return 0
+        }
+        if a == c {
+            return 0
+        }
+        return a.score() + b.score() + c.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}
+
+// ----- bare family-conformance head ---------------------------------------
+//
+// `Family Name { … }` spells a zero-parameter declaration backed by `Family`
+// without the `construct` keyword or an `extends` clause. Computed members
+// discharge the family's `@Required let`s exactly as the spelled-out form
+// does.
+
+construct TrxBare { @Required function bare(borrow self) -> Int }
+
+TrxBare TrxBareHeadCase {
+    function bare(borrow self) -> Int {
+        return 77
+    }
+}
+
+construct TrxBareHeadIsCollected() extends Test {
+    test {
+        let head = TrxBareHeadCase()
+        return head.bare()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
 }

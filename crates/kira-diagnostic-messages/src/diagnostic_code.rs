@@ -16,6 +16,8 @@ pub enum DiagnosticCode {
     Ktc001MissingLlvmToolchain,
     /// KPK001 — no project manifest was found.
     Kpk001MissingProjectManifest,
+    /// KPK002 — a `package.kira` declaration could not be read.
+    Kpk002InvalidPackageDeclaration,
     /// KPK007 — the target entrypoint source file is missing.
     Kpk007MissingSourceFile,
     /// KPK010 — a library target has no buildable source files.
@@ -59,6 +61,7 @@ impl DiagnosticCode {
             DiagnosticCode::Kbe001UnsupportedBackendFeature => "KBE001",
             DiagnosticCode::Ktc001MissingLlvmToolchain => "KTC001",
             DiagnosticCode::Kpk001MissingProjectManifest => "KPK001",
+            DiagnosticCode::Kpk002InvalidPackageDeclaration => "KPK002",
             DiagnosticCode::Kpk007MissingSourceFile => "KPK007",
             DiagnosticCode::Kpk010NoBuildableTarget => "KPK010",
             DiagnosticCode::Kcl001UnknownCommand => "KCL001",

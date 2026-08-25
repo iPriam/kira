@@ -130,6 +130,126 @@ construct DrxChurningADropTypeLeaksNothing() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(124750); return e }
 }
 
+// A `Drop` type with methods. A method that only reads borrows its receiver; a
+// mutating one takes the receiver and writes it back, which is one value either
+// way.
+struct DrxCounter: Drop {
+    var tag: Int
+
+    function drop(borrow mut self) {
+        print(self.tag)
+        return
+    }
+
+    function bump(borrow mut self) {
+        self.tag = self.tag + 1
+        return
+    }
+
+    function value(borrow self) -> Int {
+        return self.tag
+    }
+}
+
+// Writable members, so a write can replace one.
+struct DrxSlots {
+    var first: DrxTrace
+    var second: DrxTrace
+}
+
+struct DrxCell {
+    var held: DrxCounter
+}
+
+struct DrxBag {
+    var items: [DrxTrace]
+}
+
+function drxTick(held: borrow mut DrxCounter) {
+    held.bump()
+    return
+}
+
+function drxBagTotal(bag: borrow DrxBag) -> Int {
+    var total = 0
+    var index = 0
+    while index < bag.items.count {
+        total = total + bag.items[index].tag
+        index = index + 1
+    }
+    return total
+}
+
+// A member read leaves the value where it was: the base of a further read, an
+// argument a callee borrows, and a non-mutating receiver all read through the
+// owner rather than taking a second value out of it.
+construct DrxAMemberReadLeavesTheValueWithItsOwner() extends Test {
+    test {
+        let pair = DrxPair(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
+        return pair.first.tag * 100 + drxRead(pair.first) + pair.second.tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+}
+
+construct DrxOverwritingABindingKeepsOneValue() extends Test {
+    test {
+        var held = DrxTrace(tag: 1)
+        held = DrxTrace(tag: 2)
+        return held.tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+construct DrxWritingAMemberKeepsOneValue() extends Test {
+    test {
+        var slots = DrxSlots(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
+        slots.first = DrxTrace(tag: 3)
+        return slots.first.tag + slots.second.tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+construct DrxWritingAnElementKeepsOneValue() extends Test {
+    test {
+        var elements: [DrxTrace] = [DrxTrace(tag: 1), DrxTrace(tag: 2)]
+        elements[0] = DrxTrace(tag: 3)
+        return elements[0].tag + elements[1].tag
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+// Counting and indexing an array of `Drop` values reads through it: neither
+// takes the array out of the struct that holds it, and neither runs a body.
+construct DrxAnArrayOfDropValuesReadsWithoutTaking() extends Test {
+    test {
+        let bag = DrxBag(items: [DrxTrace(tag: 3), DrxTrace(tag: 4)])
+        return bag.items.count * 100 + drxBagTotal(bag)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(207); return e }
+}
+
+// A mutating method, direct and through a `borrow mut` parameter: the receiver
+// is taken and written back, so the write-back replaces nothing.
+construct DrxAMutatingMethodKeepsOneValue() extends Test {
+    test {
+        var counter = DrxCounter(tag: 5)
+        counter.bump()
+        drxTick(counter)
+        return counter.value()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+// Reading a member of an array element copies no element: the read walks to the
+// element's own storage and takes the one member it was asked for.
+construct DrxAnElementMemberReadCopiesNothing() extends Test {
+    test {
+        let cells: [DrxCell] = [DrxCell(held: DrxCounter(tag: 8)), DrxCell(held: DrxCounter(tag: 9))]
+        return cells[1].held.tag - cells[0].held.value()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
 // The order, printed. Every line here is one body running, and the sequence is
 // what the cross-backend byte comparison pins.
 function drxSection() -> Int {
@@ -151,6 +271,29 @@ function drxSection() -> Int {
     print(named.tag)
     let late = DrxLate(tag: 14)
     print(late.tag)
+    // A write replaces one value with another, and the replaced body runs at
+    // the write rather than at the end of the scope. A binding, a member, and
+    // an element follow the one rule.
+    var slot = DrxTrace(tag: 20)
+    slot = DrxTrace(tag: 21)
+    var slots = DrxSlots(first: DrxTrace(tag: 22), second: DrxTrace(tag: 23))
+    slots.first = DrxTrace(tag: 24)
+    var elements: [DrxTrace] = [DrxTrace(tag: 25)]
+    elements[0] = DrxTrace(tag: 26)
+    // Reads: counting an array, indexing one, walking to a member of an
+    // element, and lending one to a callee all leave every value where it was,
+    // so nothing is printed between these lines.
+    let bag = DrxBag(items: [DrxTrace(tag: 27), DrxTrace(tag: 28)])
+    print(bag.items.count)
+    print(bag.items[1].tag)
+    print(drxBagTotal(bag))
+    // A mutating method takes its receiver and writes it back, directly and
+    // through a `borrow mut` parameter: one value, no replaced one to release.
+    var counter = DrxCounter(tag: 29)
+    counter.bump()
+    drxTick(counter)
+    print(counter.value())
     print(701)
     return 7
 }
+

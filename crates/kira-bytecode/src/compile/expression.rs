@@ -205,7 +205,10 @@ impl FnCompiler<'_> {
             }
             IrExpr::ArrayLen { array } => {
                 let array = *array;
-                self.compile_expr(array)?;
+                // Counting an array does not consume it, so the base is
+                // borrowed: taking it would move an array of `Drop` elements
+                // out of its local and release it at the end of the count.
+                self.compile_borrowed_expr(array)?;
                 self.code.push(Instruction::ArrayLen);
             }
             IrExpr::StringLen { text } => {
@@ -491,8 +494,14 @@ impl FnCompiler<'_> {
             .engines
             .get(index as usize)
             .is_some_and(|engine| *engine == Execution::Native);
-        for &arg in args {
-            self.compile_expr(arg)?;
+        for (position, &arg) in args.iter().enumerate() {
+            let written = writebacks
+                .iter()
+                .any(|writeback| writeback.param as usize == position);
+            match written {
+                true => self.compile_writeback_argument(arg)?,
+                false => self.compile_expr(arg)?,
+            }
         }
         let mut targets = Vec::with_capacity(writebacks.len());
         for writeback in writebacks {
@@ -523,6 +532,31 @@ impl FnCompiler<'_> {
                 targets,
             }),
         }
+        Ok(())
+    }
+
+    /// Compiles the argument of a written-through parameter.
+    ///
+    /// A local whose type runs a user `Drop` is *taken* here even when
+    /// [`Self::local_is_taken`] would leave it alone, because the call writes
+    /// the value back into the same storage: a store into a slot that still
+    /// holds the old value releases it, which would run the body on the value
+    /// the call is about to hand back. Emptying the slot first is what makes
+    /// the write-back a return of the value rather than a replacement of it.
+    fn compile_writeback_argument(&mut self, arg: IrExprId) -> Result<(), CompileError> {
+        let IrExpr::Local(slot) = *self.program.expr(arg) else {
+            return self.compile_expr(arg);
+        };
+        let runs_drop = self
+            .function
+            .locals
+            .get(slot as usize)
+            .is_some_and(|&ty| self.program.types.runs_user_drop(ty));
+        if !runs_drop {
+            return self.compile_expr(arg);
+        }
+        let slot = self.local_slot(slot)?;
+        self.code.push(Instruction::TakeLocal(slot));
         Ok(())
     }
 
