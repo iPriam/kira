@@ -49,6 +49,20 @@ pure + tested); `export` verb repurposed; windows/linux wired; apple/web/android
   discovers 1325 — the uncommitted GbxGenericBoundTests.kira (+9 cases) from the trait
   stream must bump the pin in its own commit.
 
+## Release-candidate arc (evening)
+- All streams' work committed in 8 logical commits + 2 codex-finding fix commits +
+  1 transport-hardening commit; everything on fork main, signed, GitHub-verified.
+- Upstream PR: kira-lang-com/kira#2 (head iPriam:main). @codex completed there via
+  its earlier fork run (6 findings: 5 P1, 1 P2 — all fixed, verified against real
+  runs); CodeRabbit skipped twice on the repo's 100-file OSS floor — house-rule bar
+  met by @codex completion alone.
+- Transport hardening landed after both load-flakes reproduced and were traced:
+  ENOBUFS retry loop in frame write path; macOS EINVAL-on-reset read as peer-left.
+  Vanish test 5/5 green post-fix; knvm binstall gate failure was self-inflicted
+  (pkill race), passes solo and in full-binary runs.
+- Test runner of record: cargo nextest (user directive).
+- Final full nextest workspace gate running; result appended when done.
+
 ## Scope outcome (user arbitration)
 Two concurrent writer sessions converged on the same task. User split: this session
 stands down to **web export only** (landed, verified). Apple orchestration + runners
@@ -138,3 +152,18 @@ verified; the remaining workspace-gate failures are in YOUR in-flight surface:
 - Remaining for whoever lands last: workspace-wide gate once the hybrid-launcher
   refactor settles; iOS-sim runtime launch once CoreSimulator un-wedges
   (`xcrun simctl shutdown all`, reboot host if needed) — its xcodebuild link is proven.
+
+## Release pipeline repair (2026-08-26)
+- v1.8.3 was tagged upstream (ab303e9) but published no release: every platform
+  failed `kira-libffi`'s build script because neither workflow provisioned libffi.
+  Both now run `knvm install libffi` before building.
+- CI was red underneath that on `cargo fmt --check` (export_apple, live_web,
+  client) -- unformatted code merged with the release candidate.
+- knvm and both bootstrap scripts read the LLVM bundle releases as Kira versions,
+  so `install latest` resolved `llvm-v23.1.0-rc3-kira.1`. Feed reading now keeps
+  only Kira's own tags.
+- The vanish-test flake's remaining half: EINVAL was handled on the peek but not
+  on the two mode changes around it. Full workspace gate green, 3776 passed.
+- v1.8.3 cannot be republished from its own tag, since the fix postdates it. The
+  next release of this week's line is `1.8.3.1` -- the fourth component the
+  release workflow already documents for a second release in one week.
