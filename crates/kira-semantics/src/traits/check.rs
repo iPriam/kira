@@ -32,15 +32,15 @@ struct ConformanceSite {
 }
 
 /// One requirement's resolved shape, as the trait wrote it.
-struct RequiredShape {
+pub(crate) struct RequiredShape {
     /// The member's name.
-    name: String,
+    pub(crate) name: String,
     /// The written parameters, receiver excluded.
-    params: Vec<Type>,
+    pub(crate) params: Vec<Type>,
     /// The written result, `Void` when the declaration wrote none.
-    result: Type,
+    pub(crate) result: Type,
     /// Whether the member has no body, so the type must present one itself.
-    required: bool,
+    pub(crate) required: bool,
 }
 
 impl Analyzer<'_> {
@@ -217,7 +217,7 @@ impl Analyzer<'_> {
     ///
     /// Resolved against the *trait's* file: the signature is what the trait
     /// wrote, so the names in it mean what they mean there.
-    fn required_shapes(&mut self, name: &str) -> Option<Vec<RequiredShape>> {
+    pub(crate) fn required_shapes(&mut self, name: &str) -> Option<Vec<RequiredShape>> {
         let (source, members) = {
             let declared = self.traits.get(name)?;
             let members: Vec<(String, bool, &Function)> = declared
