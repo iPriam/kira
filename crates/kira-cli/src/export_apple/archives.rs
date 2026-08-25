@@ -29,7 +29,7 @@ pub(crate) fn libffi_archive_for_slice(
     slice: &slices::ArchSlice,
     work_root: &Path,
 ) -> Result<PathBuf, String> {
-    let source = managed_libffi_archive()?;
+    let source = managed_libffi_archive(slice.arch)?;
     if slice.os == "macos" {
         return Ok(source);
     }
@@ -105,8 +105,12 @@ pub(crate) fn libffi_archive_for_slice(
     Ok(dest)
 }
 
-/// The managed arm64/x86_64 macOS libffi archive this host has installed.
-fn managed_libffi_archive() -> Result<PathBuf, String> {
+/// The managed macOS libffi archive for one slice architecture.
+///
+/// Keyed by the *slice's* architecture, not the host's: an x86_64 Mac
+/// exporting iOS still links arm64 slices, and Mach-O restamping rewrites
+/// platform metadata but cannot translate machine code.
+fn managed_libffi_archive(arch: &str) -> Result<PathBuf, String> {
     if let Some(home) = std::env::var_os("KIRA_LIBFFI_HOME") {
         let named = PathBuf::from(home);
         let archive = named
@@ -121,7 +125,7 @@ fn managed_libffi_archive() -> Result<PathBuf, String> {
         ));
     }
     let version = kira_toolchain::libffi_pinned_version().map_err(|error| error.to_string())?;
-    let key = format!("macos-{}", kira_export_key_arch());
+    let key = format!("macos-{arch}");
     let home =
         kira_toolchain::managed_libffi_home(version, &key).map_err(|error| error.to_string())?;
     let archive = home
@@ -134,14 +138,6 @@ fn managed_libffi_archive() -> Result<PathBuf, String> {
         "no managed libffi for `{key}` at `{}`; install it with `knvm install libffi`",
         archive.display()
     ))
-}
-
-/// This machine's architecture in a managed-home key.
-fn kira_export_key_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        _ => "aarch64",
-    }
 }
 
 /// Runs a tool, turning failure into a message naming it.

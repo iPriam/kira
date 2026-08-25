@@ -130,6 +130,14 @@ jobs:
             -p kira-desktop-runner -p kira-hybrid-launcher -p kira-native-bridge \
             -p kira-compiler-bridge
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
+          # Apple export links a per-slice runner-support archive; release
+          # toolchains carry them beside the compiler in the per-triple
+          # layout `locate_support_archive` searches, so exported projects
+          # build without a source checkout. visionOS has no stable Rust
+          # std target yet; its slices report themselves unavailable.
+          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
+            cargo build --release -p kira-app-runner --target "$triple"
+          done
 
       - name: Package the toolchain and tools archives
         run: |
@@ -165,6 +173,12 @@ jobs:
           fi
           cp target/wasm32-unknown-emscripten/release/libkira_native_bridge.a \
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
+          # The app-runner support archives ride in their per-triple
+          # directories, which is where Apple export's archive lookup looks.
+          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
+            mkdir -p "$stage/bin/$triple"
+            cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
+          done
           cp -R foundation "$stage/foundation"
           mkdir -p dist
           tar -czf "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "kira-$KIRA_VERSION"

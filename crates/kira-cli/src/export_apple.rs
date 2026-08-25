@@ -102,7 +102,10 @@ pub(crate) fn run(
         return EXIT_FAILURE;
     }
 
-    write_tree(&mut context, &specs);
+    if let Err(error) = write_tree(&mut context, &specs) {
+        err!("kira export: {error}");
+        return EXIT_FAILURE;
+    }
 
     out!(
         "exported Apple Xcode workspace at {}",
@@ -330,17 +333,48 @@ pub(crate) fn hybrid_embedded_payloads(
 }
 
 /// Stores the embedded bundle's payloads on the first slice that gets here.
+///
+/// Later slices must agree byte-for-byte: one `Bundles/` directory is shared
+/// by every target, so a slice whose hybrid manifest or foreign paths name
+/// its own architecture's artifacts cannot reuse the first slice's copy —
+/// shipping it would point another slice's app at the wrong native half.
+/// The export refuses instead of guessing which slice is right.
 fn assemble_bundle_once(
     context: &mut BuildContext<'_>,
     payloads: Vec<NamedPayload>,
 ) -> Result<(), String> {
-    if context.bundle_payloads.is_some() {
-        return Ok(());
+    match &context.bundle_payloads {
+        Some(stored) => {
+            if payload_digest(stored) != payload_digest(&payloads) {
+                return Err(
+                    "slices compiled different embedded bundles (their manifests or \
+                     foreign dependencies are architecture-specific), so they cannot \
+                     share one `Resources/Bundles`; export each platform separately \
+                     or make the native-library rows identical across device and \
+                     simulator triples"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        }
+        None => {
+            // Hashing and validation happen when the bundle is assembled for
+            // embedding; until then the payloads are simply the bundle's
+            // future contents.
+            context.bundle_payloads = Some(payloads);
+            Ok(())
+        }
     }
-    // Hashing and validation happen when the bundle is assembled for embedding;
-    // until then the payloads are simply the bundle's future contents.
-    context.bundle_payloads = Some(payloads);
-    Ok(())
+}
+
+/// One digest over every payload's name and bytes, in bundle order.
+fn payload_digest(payloads: &[NamedPayload]) -> String {
+    use std::fmt::Write as _;
+    let mut digest = String::new();
+    for payload in payloads {
+        let _ = write!(digest, "{}:{};", payload.name, kira_live::ContentHash::of(&payload.bytes));
+    }
+    digest
 }
 
 /// The `[paths]` foreign rows an embedded manifest records.
@@ -493,15 +527,19 @@ fn embed_bundle(context: &mut BuildContext<'_>) -> Option<String> {
 }
 
 /// Writes the generated tree and embeds the bundle beneath it.
-fn write_tree(context: &mut BuildContext<'_>, specs: &[project::PlatformSpec]) {
+///
+/// The error is the caller's to turn into a failed exit: a workspace that
+/// could not be written must never be reported as exported.
+fn write_tree(
+    context: &mut BuildContext<'_>,
+    specs: &[project::PlatformSpec],
+) -> Result<(), kira_export::ExportError> {
     context.healthy_platform = specs.first().map(|spec| spec.platform);
     let khm_hash = embed_bundle(context);
     // Every spec this module produces is hybrid-shaped, so the generator
     // requires the manifest text even when no bundle could be assembled.
     let text = runner_manifest_text(context, khm_hash.as_deref().unwrap_or(""));
-    if let Err(error) = project::project_files(specs, Some(&text)).write_to(context.apple_root) {
-        err!("kira export: {error}");
-    }
+    project::project_files(specs, Some(&text)).write_to(context.apple_root)
 }
 
 /// Rebuilds the artifacts one Xcode SDK's Run Script asks for.
