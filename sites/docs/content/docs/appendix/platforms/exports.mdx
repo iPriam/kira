@@ -19,41 +19,54 @@ kira export linux
 
 ## Apple
 
-Apple export writes a merged workspace with targets and schemes for macOS, iOS, tvOS, and visionOS (Debug, Profiler, Release):
+Apple export cross-builds every platform it addresses — macOS for this machine's architecture, iOS/tvOS/visionOS as device *and* simulator slices — and links each slice into its platform target through `OTHER_LDFLAGS`. A hybrid app's native half is compiled to a bare object and linked **into the application binary**; its bundle records `@kira-self` as the native half, so the running image is the program's own machine code.
 
 ```text
 exports/apple/
-  KiraApp.xcworkspace
-  KiraApp.xcodeproj
-  Shared/
-    KiraRuntime/
-    KiraLiveClient/
-    KiraBundleLoader/
-    Assets.xcassets/
-  macOS/
-  iOS/
-  tvOS/
-  visionOS/
+  KiraApp.xcworkspace                 wraps the single project
+  KiraApp.xcodeproj                   one target + shared scheme per platform
+  Sources/main.m                      reads KiraRunner.toml, enters the runner
+  Sources/native_link_stub.c          keeps native targets linking
+  Resources/<Platform>-Info.plist     per-platform plists (ProMotion on iOS, …)
+  Resources/KiraRunner.toml           runner manifest: mode, server, bundle ids
+  Resources/Bundles/<id>.klbundle     embedded bytecode/hybrid bundle
+  build/<slice>/                      per-architecture objects and archives
 ```
 
-The macOS/iOS scaffolds build with Xcode command-line tools; device installation still requires valid user signing/provisioning.
+The app itself hosts the session through a static runner archive (`libkira_app_runner.a`), located beside the compiler or under cargo's per-target layout. When an archive for a slice has not been built, the command says so exactly:
+
+```bash
+cargo build -p kira-app-runner --target aarch64-apple-ios-sim   # example slice
+```
+
+A platform whose slices cannot all be built still opens in Xcode: its target compiles with a `KIRA_TARGET_UNAVAILABLE` guard and names the reason in the export report. Nothing is silently dropped.
+
+Exported apps carry a Run Script build phase (`Rebuild Kira`) that invokes `kira export apple <root> --xcode-rebuild $PLATFORM_NAME`, so editing Kira source and pressing Build in Xcode regenerates that SDK's artifacts before linking.
 
 ## Windows, Linux, Android
 
-- **Windows** export writes a Visual Studio / CMake Presets scaffold.
-- **Linux** export writes a CMake/Ninja scaffold.
-- **Android** export writes a Gradle scaffold and intentionally does **not** install Android Studio. Command-line SDK/Gradle/NDK setup can be installed separately and validated without changing that exception.
+- **Windows** export writes a Visual Studio / CMake Presets scaffold and notes whether `cmake` is available to drive it.
+- **Linux** export writes a CMake/Ninja scaffold (debug and release Ninja presets) and audits `cmake` and `ninja`.
+- **Android** is modeled but not wired in this toolchain build yet; the command refuses by name rather than emitting a project no build produced.
 
 ## Web
 
-Web export writes a full browser bundle:
+`kira export web` compiles the package to a wasm32-emscripten module (the same LLVM codegen `kira build --device wasm32` runs) and wraps it in a servable browser bundle:
 
 ```text
-index.html
-kira-browser-ffi.generated.js
-kira-wasm.js
-kira-app.wasm
-manifest.json
+exports/web/
+  index.html                      the shell page: captures app stdout, emits
+                                  kira.wasm.module_loaded / kira.runtime.started /
+                                  kira.app.main_returned from real emscripten callbacks
+  kira-browser-ffi.generated.js   the generated Foundation.Web binding surface
+                                  (callback registry, DOM/console/timers, WebGPU detection)
+  main.js                         the emscripten loader
+  main.wasm                       the compiled module
+  manifest.json                   runner/artifact/surface facts for consumers
 ```
+
+Link intermediates stay out of the served tree under `exports/web-build/`. `--surface dom` is the default; `--surface webgpu` records the graphics-canvas model, canvas requirement, and WebGPU capability in `manifest.json`; `--surface hybrid` is refused until the browser VM/native boundary runner exists. `--profile release` or `--profile profiler` asks emscripten to optimize at link time; the development profile keeps the faster unoptimized link.
+
+Because the exported loader is a plain emscripten module, the bundle also runs headlessly: `node exports/web/main.js` executes the app and prints its output, which is how the export is tested without a browser.
 
 See [Web & WASM](/docs/appendix/platforms/web-and-wasm) for what the generated module proves today and what remains host-only.

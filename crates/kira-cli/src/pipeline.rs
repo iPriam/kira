@@ -51,7 +51,7 @@ mod commands;
 mod execute;
 mod lint;
 
-pub use artifacts::{build, export, package};
+pub use artifacts::{build, package};
 pub use commands::{check, debug, live, run, test};
 /// The interpreter's system-call gate, for the commands that start a VM outside
 /// this module. `debug` builds its own VM target, so it has to ask the same

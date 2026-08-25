@@ -24,12 +24,10 @@ kira run [--backend vm|llvm|hybrid] [--trace-execution] [--offline] [--locked] [
 ## `live`
 
 ```bash
-kira live [desktop|ios|ios-simulator|ios-device] <target> [--quit-after <duration>] [--run-for <duration>] [--kill-after] [--headless] [--device auto]
-kira live <target> --quit-after <duration>
-kira live runners list|build|clean <target>
+kira live [desktop|macos|ios|ios-simulator|ios-device|tvos|visionos|web|windows|linux] [<target>] [--backend vm|llvm|hybrid] [--watch|--no-watch] [--quit-after <duration>]
 ```
 
-Starts a networked live server/client session for an app or example and hot-restarts the entrypoint when source changes. `--quit-after` bounds the session without bypassing the live handshake; `--headless` is for non-window reload tests. The desktop runner is the complete path today; see [Live & Hot Reload](/docs/appendix/platforms/live-and-hot-reload). Library roots are rejected with `KCL020`/`KCL021`.
+Starts a networked live server/client session: the program builds into a `.klbundle`, a runner downloads and hosts it, and saved source rebuilds into the running app. `--quit-after` bounds the session without bypassing the live handshake; watching is automatic at a terminal. Desktop is complete; macOS/iOS run inside an exported Xcode app; web serves the built page; other platforms are audited honestly. See [Live & Hot Reload](/docs/appendix/platforms/live-and-hot-reload).
 
 ## `build`
 
@@ -39,9 +37,9 @@ kira build [--backend vm|llvm|hybrid|wasm32-emscripten] [--target wasm32-emscrip
 
 Libraries are validated as package roots; apps and examples emit backend artifacts. Current output conventions:
 
-- VM: writes `generated/<name>.kbc`
+- VM: writes `<name>.kbc`
 - LLVM/native: writes a host executable plus its object file
-- hybrid: writes `generated/<name>.khm`, `generated/<name>.kbc`, a native object file, and a shared library sidecar
+- hybrid: writes `<name>.khm`, `<name>.kbc`, a native object file, and a shared library sidecar, and stages the standalone executable as `.kira-build/<name>`
 - `wasm32-emscripten`: lowers through the LLVM backend to a WASM module
 
 ## `test`

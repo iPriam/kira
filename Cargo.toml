@@ -45,6 +45,7 @@ kira-vm-runtime = { path = "crates/kira-vm-runtime" }
 kira-native-bridge = { path = "crates/kira-native-bridge" }
 kira-compiler-bridge = { path = "crates/kira-compiler-bridge" }
 kira-hybrid-runtime = { path = "crates/kira-hybrid-runtime" }
+kira-hybrid-launcher = { path = "crates/kira-hybrid-launcher" }
 kira-debug = { path = "crates/kira-debug" }
 kira-llvm-backend = { path = "crates/kira-llvm-backend" }
 kira-manifest = { path = "crates/kira-manifest" }
@@ -58,7 +59,10 @@ kira-profile = { path = "crates/kira-profile" }
 kira-linter = { path = "crates/kira-linter" }
 kira-doc = { path = "crates/kira-doc" }
 kira-app-generation = { path = "crates/kira-app-generation" }
+kira-export = { path = "crates/kira-export" }
 kira-live = { path = "crates/kira-live" }
+kira-app-runner = { path = "crates/kira-app-runner" }
+kira-bundle-host = { path = "crates/kira-bundle-host" }
 kira-desktop-runner = { path = "crates/kira-desktop-runner" }
 kira-cli = { path = "crates/kira-cli" }
 kira-main = { path = "crates/kira-main" }
