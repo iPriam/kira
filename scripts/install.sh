@@ -16,6 +16,7 @@
 #   KIRA_VERSION   which release to install (default: the newest)
 #   KIRA_REPO      the repository to fetch from (default: kira-lang-com/kira)
 #   KIRA_NO_MODIFY_PATH   set to any value to skip editing a startup file
+#   GH_TOKEN, GITHUB_TOKEN   sent to GitHub, for the authenticated rate limit
 
 set -eu
 
@@ -47,14 +48,44 @@ host_key() {
     esac
 }
 
-# The newest release tag, read from the releases API. Only the first
-# `tag_name` is taken, and the API returns releases newest first.
+# Unauthenticated GitHub allows sixty API requests an hour per address, which
+# is shared: behind one office address or on a CI runner, this bootstrap fails
+# on traffic that is not yours. Every such environment already has a token, and
+# the two variables read here are the ones `gh` itself resolves, in its order.
+# Only GitHub is sent it: `curl` drops the header when a download redirects to
+# the storage host that serves an asset's bytes.
+token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if [ -n "$token" ]; then
+    set -- -H "Authorization: Bearer $token"
+else
+    set --
+fi
+
+# The newest Kira release, read from the releases API, which returns releases
+# newest first.
+#
+# The feed carries every release this repository publishes, and the managed
+# LLVM bundles are published here too, under `llvm-v<version>-kira.<n>` tags.
+# Taking the newest `tag_name` outright resolved one of those and then asked for
+# a Kira archive underneath it, which 404s — so the tag has to be one of Kira's
+# own: `v` and a dotted number. That also excludes `v1.8.0-dev5` and its kind,
+# for the reason `knvm install latest` defaults to the release channel.
+#
+# `grep -o` puts one tag on each line before any of that is decided, because the
+# API answers with the whole feed on one line and a greedy `.*` across it names
+# whichever release happens to be last.
+#
+# The authorization arguments are passed in rather than read from the script's
+# positional parameters: inside a function `$@` is the function's own argument
+# list, so a header set at script scope would silently not be sent.
 newest_version() {
     curl -fsSL \
         -H 'User-Agent: kira-install' \
         -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/$repo/releases?per_page=10" |
-        sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' |
+        "$@" \
+        "https://api.github.com/repos/$repo/releases?per_page=100" |
+        grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' |
+        sed -n 's/.*"v\([0-9][0-9.]*\)"$/\1/p' |
         head -1
 }
 
@@ -71,7 +102,7 @@ digest_of() {
 }
 
 key="$(host_key)"
-version="${KIRA_VERSION:-$(newest_version)}"
+version="${KIRA_VERSION:-$(newest_version "$@")}"
 [ -n "$version" ] || fail "could not resolve the newest release from $repo"
 
 asset="knvm-$version-$key.tar.gz"
@@ -82,10 +113,10 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 
 say "downloading $asset"
-curl -fsSL --max-time 300 -o "$work/$asset" "$base/$asset" ||
+curl -fsSL --max-time 300 "$@" -o "$work/$asset" "$base/$asset" ||
     fail "could not download $base/$asset"
 
-if curl -fsSL --max-time 60 -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
+if curl -fsSL --max-time 60 "$@" -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
     published="$(cut -d' ' -f1 <"$work/$asset.sha256")"
     actual="$(digest_of "$work/$asset")"
     if [ -z "$actual" ]; then

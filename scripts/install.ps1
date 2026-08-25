@@ -12,6 +12,8 @@
 #   KIRA_VERSION          which release to install (default: the newest)
 #   KIRA_REPO             the repository to fetch from
 #   KIRA_NO_MODIFY_PATH   set to any value to skip editing the user PATH
+#   GH_TOKEN, GITHUB_TOKEN   sent to the GitHub API, for the authenticated
+#                            rate limit
 
 $ErrorActionPreference = 'Stop'
 
@@ -29,11 +31,30 @@ if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64
 }
 $key = 'x86_64-windows-msvc'
 
+# Unauthenticated GitHub allows sixty API requests an hour per address, and it
+# is shared: behind one office address this bootstrap fails on traffic that is
+# not yours. The variables are the ones `gh` resolves, in its order. The header
+# goes on the API call alone — `Invoke-WebRequest` forwards headers across the
+# redirect that serves an asset's bytes, and the storage host rejects a request
+# carrying two credentials.
+$headers = @{ 'User-Agent' = 'kira-install'; 'Accept' = 'application/vnd.github+json' }
+$token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
+if ($token) { $headers['Authorization'] = "Bearer $token" }
+
 $version = $env:KIRA_VERSION
 if (-not $version) {
-    $feed = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=10" `
-        -Headers @{ 'User-Agent' = 'kira-install'; 'Accept' = 'application/vnd.github+json' }
-    $version = ($feed | Select-Object -First 1).tag_name -replace '^v', ''
+    $feed = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=100" `
+        -Headers $headers
+    # The feed carries every release this repository publishes, and the managed
+    # LLVM bundles are published here too, under `llvm-v<version>-kira.<n>`
+    # tags. Taking the newest release outright resolved one of those and then
+    # asked for a Kira archive underneath it, which 404s — so the tag has to be
+    # one of Kira's own: `v` and a dotted number. That also excludes
+    # `v1.8.0-dev5` and its kind, for the reason `knvm install latest` defaults
+    # to the release channel.
+    $version = ($feed |
+        Where-Object { $_.tag_name -match '^v[0-9][0-9.]*$' } |
+        Select-Object -First 1).tag_name -replace '^v', ''
 }
 if (-not $version) { Fail "could not resolve the newest release from $repo" }
 
