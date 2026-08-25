@@ -226,6 +226,12 @@ pub(crate) struct Analyzer<'a> {
     /// The type-parameter substitution in force right now, empty outside a
     /// generic enum's body.
     pub(crate) type_bindings: crate::generics::TypeBindings,
+    /// Instantiations whose bounded parameters still owe their discharge, in
+    /// mint order. Answered by
+    /// [`Analyzer::check_pending_generic_bounds`](crate::generics) once the
+    /// conformance table and drop facts are final; see
+    /// [`crate::generics::PendingBoundCheck`].
+    pub(crate) pending_bounds: Vec<crate::generics::PendingBoundCheck>,
     /// How many generic instantiations are open, which is what bounds a
     /// template that grows its own argument.
     pub(crate) instantiation_depth: u32,

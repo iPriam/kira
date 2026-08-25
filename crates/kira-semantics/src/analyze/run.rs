@@ -35,6 +35,7 @@ impl<'a> Analyzer<'a> {
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
             type_bindings: crate::generics::TypeBindings::new(),
+            pending_bounds: Vec::new(),
             instantiation_depth: 0,
             payload_blame: None,
             aliases: AliasTable::new(),
@@ -157,6 +158,11 @@ impl<'a> Analyzer<'a> {
         // whether a type runs one decides whether it is released at all, so it
         // is recorded before any body is analyzed.
         self.record_user_drops(&callables);
+        // A parameter bound names a conformance and, for `Drop` and
+        // `Copyable`, a drop fact — both final only now. Every instantiation
+        // the declarations minted is queued by here; bodies will add more,
+        // and those are answered after they run.
+        self.check_pending_generic_bounds();
         // A crossing is a copy, and a value with a body to run has no copy.
         self.refuse_drop_across_engines(&callables);
         // Which payloads run one is answerable only now, and every enum the
@@ -233,6 +239,9 @@ impl<'a> Analyzer<'a> {
         // any declared function, so the reads they built are reported here.
         self.report_drop_extractions();
         self.refuse_drop_enum_payloads();
+        // Bodies and synthesized functions mint instantiations of their own;
+        // their bounds are answered here.
+        self.check_pending_generic_bounds();
         self.finalize_closures();
         // After lifting, not before: a closure's representation struct is only
         // final once every literal of its type has been found, and a callback

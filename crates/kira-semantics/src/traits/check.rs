@@ -204,7 +204,7 @@ impl Analyzer<'_> {
 
     /// Why `ty` does not carry the derived trait `name`, or `None` when it
     /// does.
-    fn derived_trait_unmet(&self, name: &str, ty: StructId) -> Option<String> {
+    pub(crate) fn derived_trait_unmet(&self, name: &str, ty: StructId) -> Option<String> {
         let type_name = self.program.types.type_name(Type::Struct(ty));
         match Marker::from_name(name) {
             Some(marker) => self.marker_reason(&type_name, Type::Struct(ty), marker),

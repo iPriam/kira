@@ -359,6 +359,9 @@ module.exports = grammar({
       ),
 
     // `enum Name[<A, B>] { <variant>* }`. Variants are separated by nothing.
+    // A parameter may carry trait bounds (`Value: Scored + Send`); the comma
+    // separates parameters, so the traits of one parameter's bound join with
+    // `+`.
     enum_declaration: ($) =>
       seq(
         repeat($.attribute),
@@ -368,7 +371,19 @@ module.exports = grammar({
         field('body', $.enum_body),
       ),
 
-    type_parameters: ($) => seq('<', commaSep1Trailing($.identifier), '>'),
+    type_parameters: ($) => seq('<', commaSep1Trailing($.type_parameter), '>'),
+
+    type_parameter: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq(':', field('bounds', $.bound_traits))),
+      ),
+
+    bound_traits: ($) =>
+      seq(
+        alias($.identifier, $.type_identifier),
+        repeat(seq('+', alias($.identifier, $.type_identifier))),
+      ),
 
     enum_body: ($) => seq('{', repeat(choice($.enum_variant, ';')), '}'),
 

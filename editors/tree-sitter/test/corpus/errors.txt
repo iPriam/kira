@@ -26,9 +26,11 @@ func f() {}
 --------------------------------------------------------------------------------
 
 (source_file
-  (ERROR
-    (identifier)
-    (identifier)))
+  (family_conformance_declaration
+    family: (identifier)
+    name: (identifier)
+    (ERROR)
+    body: (construct_body)))
 
 ================================================================================
 A statement is not an item
