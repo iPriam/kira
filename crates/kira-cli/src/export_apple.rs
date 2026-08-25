@@ -372,7 +372,12 @@ fn payload_digest(payloads: &[NamedPayload]) -> String {
     use std::fmt::Write as _;
     let mut digest = String::new();
     for payload in payloads {
-        let _ = write!(digest, "{}:{};", payload.name, kira_live::ContentHash::of(&payload.bytes));
+        let _ = write!(
+            digest,
+            "{}:{};",
+            payload.name,
+            kira_live::ContentHash::of(&payload.bytes)
+        );
     }
     digest
 }
