@@ -69,6 +69,11 @@ impl Codegen<'_> {
             // name, instead of resolving the old code under the new ABI and
             // corrupting memory at run time.
             self.call_runtime(self.runtime.abi_marker, &mut [], c"");
+            // A native archive may serve more than one hybrid run on this
+            // thread. Match the VM's per-run TaskExecutor before entering the
+            // program rather than letting handles and queued work leak across
+            // entrypoints.
+            self.call_runtime(self.runtime.task_reset, &mut [], c"");
 
             let name = if main_function.return_type == Type::Void {
                 c"".as_ptr()

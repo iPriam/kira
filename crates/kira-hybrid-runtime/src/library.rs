@@ -75,6 +75,7 @@ type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type HeapReportFn = unsafe extern "C" fn();
+type TaskResetFn = unsafe extern "C" fn();
 type LiveReloadMarkFn = unsafe extern "C" fn();
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
 type StateNode = *mut c_void;
@@ -145,6 +146,7 @@ const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
 const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 /// Optional, unlike the rest: an older library simply has no accounting.
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
+const TASK_RESET: &[u8] = b"kira_rt_task_reset\0";
 const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
 const STATE_VALUE_ANY: &[u8] = b"kira_rt_native_value_any\0";
 const STATE_VALUE_READ_ANY_TYPE: &[u8] = b"kira_rt_native_value_read_any_type\0";
@@ -204,6 +206,8 @@ pub struct NativeLibrary {
     str_new: StrNewFn,
     /// Reports the native half.s heap balance; absent in an older library.
     heap_report: Option<HeapReportFn>,
+    /// Starts and ends the native task table's per-run scope.
+    task_reset: TaskResetFn,
     str_free: StrFreeFn,
     str_data: StrDataFn,
     str_len: StrLenFn,
@@ -307,6 +311,7 @@ impl NativeLibrary {
         // Optional: a library built before heap accounting existed simply has
         // no such symbol, and that is not a reason to refuse to load it.
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
+        let task_reset = bind(&library, path, TASK_RESET)?;
         let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
         let state_value_any = bind(&library, path, STATE_VALUE_ANY)?;
         let state_value_read_any_type = bind(&library, path, STATE_VALUE_READ_ANY_TYPE)?;
@@ -390,6 +395,7 @@ impl NativeLibrary {
             callbacks: callback_entries,
             str_new,
             heap_report,
+            task_reset,
             str_free,
             str_data,
             str_len,
@@ -447,6 +453,13 @@ impl NativeLibrary {
         // SAFETY: the symbol was bound from this library, which is still
         // loaded, and it takes and returns nothing.
         unsafe { report() };
+    }
+
+    /// Starts or ends the task scope associated with the current host thread.
+    pub fn reset_tasks(&self) {
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self` and has no arguments or return value.
+        unsafe { (self.task_reset)() };
     }
 
     /// Marks the next graphics callback as a VM reload boundary.

@@ -168,6 +168,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_live_mark_reload",
     "kira_live_take_reload",
     "kira_rt_heap_report",
+    "kira_rt_task_reset",
     "kira_rt_native_value_int",
     "kira_rt_native_value_any",
     "kira_rt_native_value_read_any_type",
