@@ -1,183 +1,88 @@
 ---
 title: Interop and FFI
-description: "The current compiler-visible FFI surface: extern declarations, callbacks, pointers, structs, aliases, arrays, and generated bindings."
+description: Calling prebuilt C functions with no @Native and no glue, the exact-width type surface, CString and RawPtr, foreign lifetimes and retains, and how one declaration serves every backend.
 ---
 
-Kira's native interop surface is explicit and compiler-visible.
+Kira calls prebuilt C functions with no `@Native` and no glue: a package lists its native libraries, declares bodyless `@FFI.Extern` functions, and calls them like any other Kira function. The same package runs identically on the VM, on LLVM/native, and on both halves of hybrid, and links for wasm.
 
-## Compiler-Meaning FFI Annotations
+`examples/ffi` is the worked example. [FFI Workflows](/docs/appendix/ffi-workflows) covers manifests, generated bindings, C-layout structs, callbacks, and system calls.
 
-Generated and handwritten interop code uses these annotation families today:
+## Declaring an Extern
 
-- `@FFI.Extern`
-- `@FFI.Callback`
-- `@FFI.Pointer`
-- `@FFI.Struct`
-- `@FFI.Alias`
-- `@FFI.Array`
+An `@FFI.Extern` declaration names the native library, the C symbol, and the C ABI, and its function has an exact-width signature and no body.
 
-## Extern Functions
+```kira
+@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
+function add(a: I32, b: I32) -> I32;
 
-Extern functions are declarations terminated with `;`:
-
-```ts
-@FFI.Extern { library: callbacks; symbol: kira_invoke_callback; abi: c; }
-function kira_invoke_callback(callback: kira_i64_callback, user_data: RawPtr, value: I64): I64;
+@Main function main() { print(add(20, 22)) return }
 ```
 
-The semantics layer enforces that `@FFI.Extern` functions must be declarations rather than block-bodied functions.
+The three fields are required exactly once, and `abi` must be `c`. Repeatable `retains: <parameter>;` fields mark parameters whose C callee keeps pointers after the call. A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
 
-## Native Boundary Rule
+## The Supported Type Surface
 
-On the native-compiling backends (LLVM/native and hybrid), **direct FFI usage requires `@Native`**. The VM is different: it executes direct FFI through **LibFFI** (see [VM Dynamic FFI](#vm-dynamic-ffi-libffi) below), so the `@Native` requirement does not apply there.
+Parameters and results may be `Void`, `Int` and the narrower integers `I8`/`I16`/`I32` and `U8`/`U16`/`U32`/`U64`, `Bool`, `Float` and `F32`, and `RawPtr`.
 
-That rule applies at the declaration that actually touches the FFI-bound symbol:
+`Int` crosses as `int64_t` and `Float` as `double`. They *are* the 64-bit types, so nothing is left unsaid by writing them, and a narrower C type still names its width. A Kira `String` in a signature is refused.
 
-```ts
-@Native
-function createPipelineNative(desc: sg_pipeline_desc) -> sg_pipeline {
-    return sg_make_pipeline(desc)
+### `CString`
+
+`CString` is C text, and how long its storage lives depends on where it is written.
+
+As a **parameter**, a call passes a Kira `String` (the one implicit coercion), and the bytes are copied into transient NUL-terminated storage for the duration of the call. The caller keeps its `String`, and an interior NUL byte is a typed trap rather than a truncated string. `CString` is illegal in an ordinary Kira local or function parameter.
+
+As a **result**, the seam copies the returned `const char*` into an owned Kira `String` while the pointer is valid, so no C storage crosses the result boundary.
+
+As a **member of a C-layout struct**, it is an owning C-block slot. The block is cloned when the value is copied, moved when the value is bound, and freed when the value dies. A member left out of the literal zero-fills to `NULL`, which is different from a pointer to `""`.
+
+### `RawPtr`
+
+`RawPtr` is an opaque target-width word. Kira may store it, return it, and pass it back to C, but never dereferences it, does arithmetic on it, or frees it: a library that allocates must expose an explicit free extern. A null pointer is just data and round-trips like any other word.
+
+## Foreign Lifetimes
+
+Foreign parameters borrow by default. Storage materialized for a `CString`, a C-layout image, or an array buffer stays live through the call and is freed when its owning value dies, so a per-frame descriptor releases its C blocks every frame.
+
+Use `retains:` only when C keeps pointers after return.
+
+```kira
+@FFI.Extern {
+    library: sokol;
+    symbol: sapp_run;
+    abi: c;
+    retains: desc;
 }
+function sappRun(desc: SappDescPtr): Void;
+
+let desc = SappDesc { windowTitle = "Kira" }
+sappRun(move desc)
 ```
 
-The rule is deliberately not transitive. A regular Kira declaration may call a Kira helper that is already `@Native`:
+A retained named argument requires `move`. The call transfers its complete C-block ownership tree to the engine registry. VM storage is released with the instance; hybrid storage is released when the native session closes; a whole-process native program leaves it to process teardown. Retained roots and their child blocks are reported by native heap accounting.
 
-```ts
-function createPipeline(desc: sg_pipeline_desc) -> sg_pipeline {
-    return createPipelineNative(desc)
-}
-```
+C blocks are uniquely owned and have no share count. C-layout values move on binding, while an explicit copy builds independent blocks and rewrites every embedded child address.
 
-The direct native edge stays small and honest, while higher-level Kira code can remain ordinary runtime code when it is only orchestrating Kira helpers or moving handles around.
+## How One Declaration Serves Every Backend
 
-That rule is deliberately narrow:
+Every backend reaches C through one generated **adapter** per import: a uniform `extern "C"` entry point that validates the argument tags, narrows and sign- or zero-extends at the C boundary, rounds `F32`, builds and frees transient `CString` storage, calls the real C symbol, and writes back a checked result.
 
-- direct FFI usage requires `@Native`
-- indirect usage remains allowed
-- `@Runtime` code may still call `@Native` Kira helpers, construct native-annotated values, mutate them, and pass them back through hybrid honestly
-- `@Native` code may call back into `@Runtime` helpers through the same bridge
-
-Native-annotated structs and classes are still ordinary Kira values. Outside direct FFI edges, they are meant to move through runtime/native code naturally rather than forcing transitive `@Native` contagion on the surrounding API.
-
-Today, direct FFI usage includes direct calls or references to `@FFI.Extern` functions. On the native-compiling backends Kira reports `KSEM093` when a non-`@Native` declaration directly uses one. The diagnostic points at the FFI-bound symbol and asks you to mark the declaration `@Native` or move the direct extern call into a small native helper.
-
-## VM Dynamic FFI (LibFFI)
-
-The VM can invoke native functions **without a precompiled native backend and without `@Native`**, using a LibFFI-driven dynamic call path (the `kira_dynamic_ffi` package). The compiler carries FFI call signatures in bytecode metadata, the VM loads the target library, builds a LibFFI call interface from the signature, and dispatches the call at runtime.
-
-```bash
-kira run examples/ffi_dynamic_vm          # VM dynamic FFI via LibFFI
-```
-
-This lifts the `@Native` requirement on the VM specifically — direct extern calls run there as ordinary VM code. The native-compiling backends keep the `@Native` boundary because they marshal across a real compiled ABI edge.
-
-libffi is pinned (libffi 3.5.2) and fetched like the managed LLVM toolchain:
-
-```bash
-knvm install libffi
-```
-
-Kira links libffi statically, so the archive is a build-time input for the
-machine being built *for* — the command installs every published target, so a
-cross build has the one it needs. See
-[Installation](/docs/appendix/getting-started/installation).
-
-## Callback Types
-
-Callback signatures are first-class enough to validate:
-
-```ts
-@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
-struct kira_i64_callback {}
-```
-
-The fail corpus also proves `KSEM045` ("invalid callback signature") when a Kira callback does not match the expected FFI callback type.
-
-## Pointer, Struct, Alias, and Array Types
-
-The current generated/native examples also prove:
-
-- borrowed pointer wrappers
-- C-layout structs
-- alias carrier structs for enum-like native values
-- array metadata in generated bindings
-
-Examples:
-
-```ts
-@FFI.Struct { layout: c; }
-struct app_state {
-    var viewport_width: I32
-}
-
-@FFI.Pointer { target: app_state; ownership: borrowed; }
-struct app_state_ptr {}
-```
-
-## C-Layout Struct Construction
-
-For `@FFI.Struct { layout: c; }`, explicit construction is zero-filled before Kira applies the fields you provide:
-
-```ts
-let desc = sapp_desc {
-    init_userdata_cb: init
-    frame_userdata_cb: frame
-    cleanup_userdata_cb: cleanup
-    user_data: state
-    width: 640
-    height: 480
-    window_title: "Kira Sokol Triangle"
-}
-```
-
-`sapp_desc()` follows the same rule and produces a fully zeroed C-layout value.
-
-This does not change declaration semantics. `var desc: sapp_desc` is still an uninitialized local declaration, not a zero-filled value.
+- **LLVM/native** links the selected C archive into the executable and calls the adapter directly.
+- **The VM** stays a portable core: it marshals a foreign call to borrowed arguments and asks its host, loading and linking nothing itself. A VM build emits a one-file adapter *sidecar*, the adapters plus the C archive, and the CLI's native-capable host answers `call_foreign` out of it.
+- **Hybrid** links the C archive and the adapters into its one native half. A `@Runtime` function's foreign call runs through the VM half's `call_foreign` and a `@Native` function's runs as machine code, and both reach the *same* copy of the C library, never a second `dlopen`. The example's counter proves it: a runtime-half call and a native-half call count 1 then 2, not 1 then 1.
 
 ## Opaque Callback State
 
-Kira now supports a first-class callback-state flow for native APIs that carry `void*` or userdata tokens:
+For a native API that carries a `void*` userdata token, three intrinsics move Kira-owned state across it without exposing a layout.
 
-```ts
-struct CounterState {
-    var count: Int
-    var total: Int
-}
+| Written | What it does |
+| --- | --- |
+| `nativeState(value)` | Boxes a Kira value into stable callback-state storage. |
+| `nativeUserData(state)` | Exports the opaque `RawPtr` token native code carries around. |
+| `nativeRecover(token)` | Turns the token back into typed mutable Kira access. |
 
-var state = nativeState(CounterState {
-    count: 0
-    total: 0
-})
+Repeated `nativeUserData` calls on one handle return the same token, and recovery gives access to the stored state rather than a copy. This is not `@FFI.Struct { layout: c; }`: that is a real memory-layout contract, while this is opaque transport whose layout native code is never meant to know.
 
-var token = nativeUserData(state)
+## Deferred Shapes
 
-@Native
-function onValue(value: I64, user_data: RawPtr) -> I64 {
-    var state = nativeRecover(user_data)
-    state.count = state.count + 1
-    state.total = state.total + value
-    return value + state.count
-}
-```
-
-Use each piece for a specific job:
-
-- `nativeState(value)` boxes a Kira-owned value into stable callback-state storage
-- `nativeUserData(state)` exports the opaque `RawPtr` token that native code can carry around
-- `nativeRecover(any)` turns the token back into typed mutable Kira access
-
-This is intentionally different from `@FFI.Struct { layout: c; }`:
-
-- `@FFI.Struct { layout: c; }` is a real native memory-layout contract
-- `nativeState`/`nativeUserData`/`nativeRecover(any)` is opaque userdata transport
-- native code is not supposed to know the Kira object layout behind that token
-- the feature exists so callback-driven interop does not have to fall back to globals
-
-Current lifetime model:
-
-- callback state is Kira-managed heap storage
-- it currently lives for the lifetime of the process
-- repeated `nativeUserData(state)` calls on the same handle return the same token
-- recovery gives access to the original stored state, not a copy
-
-This chapter explains the language-visible surface. For the workflow side of manifests, autobinding generation, and examples, continue in [FFI Workflows](/docs/appendix/ffi-workflows).
+Payload-carrying Kira enums as direct C values, direct `@FFI.Array` values in parameter or result positions, aggregate callback results, non-C ABIs, variadics, generic externs, and dynamic-only C libraries. Payload-less enums cross as C enum integers. Each deferred shape is refused with a typed diagnostic rather than mislowered.

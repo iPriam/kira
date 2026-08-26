@@ -1,118 +1,74 @@
 ---
 title: Running Programs
-description: Use the current CLI to run, inspect, check, and build Kira source files.
+description: The everyday commands, choosing a backend, where artifacts land, and running the checkout you are editing.
 ---
 
-## Start With A Small Example
-
-The normal first run is:
+## The Everyday Commands
 
 ```bash
-kira run examples/hello
+kira run          # compile and run, on the VM by default
+kira check        # analyze without running
+kira test         # build and run the package's tests
+kira build        # compile to an artifact
+kira lint         # report what the package's linter.kira asks about
+kira doc          # render documented declarations as Markdown
 ```
 
-On the current repo state, that prints:
+Every one of them takes an optional `[file|dir]`. Omitting it means the package directory you are standing in, so `kira check` inside an app is `kira check .`. A directory holding no `package.kira` is refused by name.
 
-```text
-geometry demo
-20
-12
-30
-25
-hello
-Color(r: 255, g: 0, b: 0)
-```
+A bare `.kira` file with no manifest above it is a program, which is why one handed to the compiler still reports a missing `@Main`.
 
-## Core Commands
-
-Use these first:
+## Choosing a Backend
 
 ```bash
-kira run examples/hello
-kira check examples/hello
-kira tokens examples/hello
-kira ast examples/hello
+kira run --backend vm app.kira        # interpreted bytecode
+kira run --backend llvm app.kira      # machine code
+kira run --backend hybrid app.kira    # both, in one process
+kira build --device wasm32 app.kira   # a wasm32-emscripten module
 ```
 
-What they do:
+The VM is the default because it needs no linker. `--backend llvm` and `--backend hybrid` both need the managed LLVM. See [Execution Model](/docs/language-guide/execution-model).
 
-- `run` executes the default VM backend unless you choose another backend
-- `check` parses, resolves imports, prepares matching native libraries, runs autobinding when needed, and validates semantics
-- `tokens` dumps lexer tokens
-- `ast` dumps the parsed AST
+## Where Artifacts Land
 
-The default VM path now prints richer runtime values than the earlier bootstrap subset, including named struct values.
-
-## Choose A Backend Explicitly
-
-The CLI supports three execution targets:
-
-```bash
-kira run --backend vm examples/hello
-kira run --backend llvm examples/callbacks
-kira run --backend hybrid examples/hybrid_roundtrip
-```
-
-The repo currently proves all three paths:
-
-- VM: `examples/hello`, `examples/arithmetic`, `examples/imports_demo`, and similar subset programs
-- LLVM/native: native callbacks and Sokol proofs
-- hybrid: mixed `@Runtime` and `@Native` programs plus hybrid FFI tests
-
-Today, the broadest `print(...)` surface lives on the VM/default execution path. Native and hybrid backends still have a narrower runtime print surface while their lowering/runtime support catches up.
-
-For backend debugging, `run` also supports:
-
-```bash
-kira run --backend hybrid --trace-execution examples/hybrid_roundtrip
-```
-
-That debug-only flag writes trace lines to stderr so you can see VM/native/bridge transitions, callback entry/return flow, and print ownership while a mixed program runs.
-
-## Build Artifacts
-
-`build` writes artifacts into `generated/` by default:
-
-```bash
-kira build examples/hello
-kira build --backend llvm examples/hello
-kira build --backend hybrid examples/hybrid_roundtrip
-```
-
-Current output shapes:
+Everything goes under `.kira-build/`.
 
 | Command | Primary output |
 | --- | --- |
-| `build` | `generated/<name>.kbc` |
-| `build --backend llvm` | host executable plus native object file |
-| `build --backend hybrid` | `generated/<name>.khm` plus `.kbc`, object file, and shared library sidecars |
+| `build` | `.kira-build/<name>.kbc` |
+| `build --backend llvm` | a host executable |
+| `build --backend hybrid` | `<name>`, `<name>.khm`, `<name>.kbc`, and the native half |
+| `build` in a library package | the artifact plus a generated Rust crate under `.kira-build/rust/` |
+| `build --target <triple>` | `.kira-build/<toolchain-triple>/`, so a cross build never overwrites a host one |
 
-## When You Are Editing The CLI Itself
+## Passing Arguments
 
-Run the checkout rather than whatever is on your `PATH`:
+Everything after `--` goes to the program rather than to `kira`.
+
+```bash
+kira run app.kira -- --verbose input.txt
+```
+
+## Inspecting the Frontend
+
+```bash
+kira tokens app.kira    # the lexical tokens
+kira ast app.kira       # the syntax tree
+kira ffi                # inspect and bind native libraries
+```
+
+Use them when a parse failure is not obvious from the diagnostic.
+
+## Running the Checkout You Are Editing
+
+Install the checkout as the `dev` toolchain once, and keep typing `kira`:
+
+```bash
+knvm binstall
+```
+
+To run one command without selecting anything:
 
 ```bash
 cargo run -p kira-cli --bin kira -- run examples/hello
 ```
-
-Or install the checkout as the `dev` toolchain once with `knvm binstall`, after
-which plain `kira` is the one you just built.
-
-## Native Library Imports And `check`
-
-`check` is also the first cheap way to verify FFI setup.
-
-For example:
-
-```bash
-kira check examples/sokol_triangle
-```
-
-That succeeds only after Kira has:
-
-- resolved the imported binding module name
-- found the matching manifest under a nearby `native_libs/`
-- resolved the native library for the host
-- generated the binding module when required
-
-So `check` is a practical way to validate your native library description before you ask for a full native or hybrid build.

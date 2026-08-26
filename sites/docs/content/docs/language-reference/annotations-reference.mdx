@@ -1,109 +1,50 @@
 ---
 title: Annotations Reference
-description: Annotation declarations, parameter schemas, use-site validation, construct allowlists, and compiler-reserved annotation families.
+description: Every annotation the compiler answers to, where it is legal, and what it refuses.
 ---
 
-## Annotation Declarations
+An annotation is `@Name`, optionally with a `{ key: value; … }` block or a parenthesized list. There is no `annotation` declaration form; a program adds annotation-shaped surface through a [macro](/docs/macros) instead.
 
-Annotations are declared at top level:
+## Compiler Annotations
 
-```ts
-annotation Name {
-}
+| Annotation | Target | Payload | Meaning |
+| --- | --- | --- | --- |
+| `@Main` | function | none | The entrypoint. One per application (`KSEM011`), none in a library (`KSEM255`), no parameters. |
+| `@Runtime` | function | none | On a hybrid build, this body stays bytecode. |
+| `@Native` | function | none | On a hybrid build, this body compiles to machine code. |
+| `@Export` | function, class | none | The consumer-facing surface of a library package. `@Export` on a `struct` is `KPAR043`, in an application package `KSEM256`, on a method `KSEM167`, and with a payload `KSEM166`. |
+| `@Derive(A, B)` | declaration | a name list | Runs each named derive macro over the declaration. `@Derive(X)` where `X` is not a derive-kind macro is `KMAC011`. |
 
-annotation Attribute {
-    parameters {
-        index: Int
-    }
-}
-```
+`@Derive(Copy)` is answered by the compiler rather than by a macro: it generates nothing and asserts that the type is structurally copyable, reporting `KIR005` when a member or variant payload is not.
 
-The supported v1 declaration body is optional `parameters { ... }`.
+## Construct Member Annotations
 
-Parameter forms:
+Legal only inside a `construct` body. Any other name there is `KPAR061`.
 
-- `name: Type`
-- `name: Type = value`
+| Annotation | Target | Meaning |
+| --- | --- | --- |
+| `@Required` | `let` | A value obligation a backed declaration discharges with a field or a computed member. A body on it is `KPAR062`. |
+| `@Required` | `function` | A bodyless signature. A body on it is `KPAR065`. |
+| `@Content` | `let` | A child slot filled by a construction's trailing block. Identical to writing the type `some X`. |
+| `@Consuming` | `function` | A method that consumes its receiver. |
+| `@Comptime` | a `lifecycle` hook | The hook runs during compilation instead of at run time. |
 
-Supported parameter types and default value kinds:
-
-- `Bool`
-- `Int`
-- `Float`
-- `String`
-
-Annotation declarations are symbols. Duplicate annotation declarations are rejected, duplicate parameter names are rejected, and invalid default values are rejected.
-
-## Annotation Use Syntax
-
-The frontend understands these use forms:
-
-- bare annotations such as `@Main`
-- namespaced annotations such as `@FFI.Pointer`
-- positional argument annotations such as `@Attribute(0)`
-- named argument annotations such as `@InputMapping(priority: 10)`
-- FFI metadata bodies such as `@FFI.Callback { abi: c; ... }`
-
-For user-defined annotation schemas, parameters are passed with parentheses. The semantics layer validates:
-
-- annotation existence
-- argument count
-- argument names
-- argument types
-- default argument filling
-
-## Execution Annotations
-
-These annotations carry direct execution meaning:
-
-- `@Main`
-- `@Runtime`
-- `@Native`
-
-Important current rules:
-
-- `@Main` must identify the single entrypoint
-- duplicate `@Main` is rejected
-- conflicting execution annotations are rejected
-- direct FFI usage requires `@Native`; calling a Kira helper that is already `@Native` does not force the caller to be `@Native`
-
-## Documentation Comments
-
-Documentation uses `///` comments rather than annotations:
-
-```ts
-/// Horizontal position in points.
-var x: Float = 0.0
-```
-
-Construct definitions can declare which annotations are valid in their forms through an `annotations { ... }` section, but each listed annotation must resolve to an annotation declaration or an existing compiler-reserved annotation.
-
-## Construct Integration
-
-Construct allowlists are the domain validation mechanism:
-
-```ts
-annotation State {
-}
-
-construct Widget {
-    annotations {
-        @State;
-    }
-}
-```
-
-The `annotation` declaration defines identity and parameter schema. The `construct` declaration decides whether that annotation is valid and meaningful inside that construct domain.
-
-Annotations may declare readable target restrictions with `targets: class`, `targets: struct`, `targets: function`, `targets: construct`, or `targets: field`. Reusable generated behavior belongs in `capability` declarations and is composed into annotations with `uses CapabilityName`.
+`@Required` on anything but a `let` or a `function` is `KPAR060`; `@Content` on anything but a `let` is `KPAR063`; `@Consuming` on anything but a `function` is `KPAR064`.
 
 ## FFI Annotations
 
-These annotations have compiler meaning in the current interop path:
+| Annotation | Target | Required fields |
+| --- | --- | --- |
+| `@FFI.Extern` | bodyless function | `library`, `symbol`, `abi: c`. Repeatable `retains: <parameter>`. |
+| `@FFI.Syscall` | bodyless function | `name`, written as `man 2` writes it. `library`, `symbol`, and `abi` are refused rather than ignored. |
+| `@FFI.Struct` | struct | `layout: c` |
+| `@FFI.Pointer` | struct | `target`, `ownership` |
+| `@FFI.Array` | struct | `element`, `count` |
+| `@FFI.Callback` | struct | `abi`, `params`, `result` |
+| `@FFI.Alias` | struct | the aliased type |
 
-- `@FFI.Extern`
-- `@FFI.Callback`
-- `@FFI.Pointer`
-- `@FFI.Struct`
-- `@FFI.Alias`
-- `@FFI.Array`
+A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
+
+## Documentation
+
+Documentation is not an annotation. Consecutive `///` comments above a declaration are its documentation, rendered by `kira doc`.

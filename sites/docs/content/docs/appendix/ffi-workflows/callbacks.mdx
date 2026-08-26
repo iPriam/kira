@@ -1,105 +1,67 @@
 ---
 title: Callbacks
-description: Callback signatures, `RawPtr` user data, and the current native/hybrid callback rules.
+description: "`@FFI.Callback` types, a Kira function as a C callback, the generated entry thunk, and a struct C passes by value into one."
 ---
 
-Callbacks are a supported part of the current FFI design.
+A `@FFI.Callback` declares a C function-pointer type. Its value can be a C function pointer or a named top-level Kira function, and it crosses both as a struct member and on its own.
 
-## Current Rules
+```kira
+@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
+struct Adder {}
 
-- callback typedefs lower to real native function pointers
-- callback arguments can be passed directly to native or extern functions
-- callback targets must currently resolve to `@Native` functions or extern callback symbols
-- user data/context is passed explicitly as `RawPtr`
-- captured closures do not cross the ABI boundary
-- Kira-owned persistent callback state uses `nativeState`, `nativeUserData`, and `nativeRecover(any)`
-
-## Minimal Example
-
-From `examples/callbacks/app/main.kira`:
-
-```ts
-import callbacks as cb
-
-struct CounterState {
-    var count: Int
-    var total: Int
+@FFI.Struct { layout: c; }
+struct Hooks {
+    var add: Adder
+    var scale: I32
 }
 
-@Main
-function main() {
-    print("callbacks")
-
-    var state = nativeState(CounterState {
-        count: 0
-        total: 0
-    })
-    var token = nativeUserData(state)
-
-    print(run_native(token, 5))
-    print(run_native(token, 7))
-
-    var recovered = nativeRecover(token)
-    print(recovered.count)
-    print(recovered.total)
-    return
-}
-
-@Native
-function run_native(user_data: RawPtr, value: I64) -> I64 {
-    return cb.kira_invoke_callback(add_and_track, user_data, value)
-}
-
-@Native
-function add_and_track(value: I64, user_data: RawPtr) -> I64 {
-    var state = nativeRecover(user_data)
-    state.count = state.count + 1
-    state.total = state.total + value
-    return value + state.count
-}
+@FFI.Extern { library: demo; symbol: run_hooks; abi: c; }
+function runHooks(h: Hooks, a: I32, b: I32) -> I32;
 ```
 
-That flow matters because it proves a real opaque-userdata contract:
+A pointer C hands out can be stored and passed back. A named top-level Kira function fills one: `Hooks { add = combine, scale = 2 }`. C then calls into Kira through the generated entry.
 
-- Kira owns the callback state storage
-- native code only carries a `RawPtr` token
-- the callback recovers the original typed state instead of reaching for globals
-- repeated callback invocations mutate the same persistent stored state
+## The Entry Thunk
 
-It is backed by a small C header and implementation:
+- The value is the address of a generated entry thunk, one per (function, signature) pair, named `kira_ffi_callback_<i>`.
+- On a native build the thunk calls the compiled function directly. Under the VM it reaches the interpreter through the adapter sidecar, on the same door the hybrid native half uses to call a `@Runtime` function. **C cannot tell the two apart, which is the point.**
+- The function's declared types must match the callback's, position for position, under the same exact-width rule the extern seam applies: a bare `Int` is not a callback parameter any more than it is an extern one.
+- A bare top-level function name is accepted only where a C callback is expected. Function-typed closure values are a separate `@Native`/`@Runtime` bridge feature, and a local of the same name wins.
 
-- a callback typedef
-- a function that accepts the callback and invokes it
+Zero-fill gives a callback member `NULL`, so `Hooks {}` is the no-callback case and C sees it as null.
 
-## Signature Checking
+## What a Signature May Carry
 
-Kira validates callback signatures at semantic-analysis time.
+A callback signature may carry fixed-width scalars, `Bool`, `RawPtr`, `CString`, and a `@FFI.Struct { layout: c }` that C passes by value. Its result may be a scalar or nothing.
 
-If the target function does not match the required callback type exactly, the repo currently raises:
+Aggregate callback results remain unsupported: a parameter is storage C already owns, but a result would require the seam to build and return C-layout bytes.
 
-- `KSEM045`
-- title: `invalid callback signature`
+A generated binding may declare a callback shape the seam cannot carry, or has not seen defined; handing a Kira function to that shape is refused with `KSEM245`.
 
-The checks include:
+The closure bridge currently covers scalar `let` captures. It does not make a closure or a method a `@FFI.Callback` value, and aggregate captures remain outside this path.
 
-- parameter count
-- parameter types
-- result type
-- execution compatibility
+## A Struct C Passes by Value
 
-Runtime functions cannot currently be converted into native callback targets.
+A C callback may receive a C-layout struct by value. Kira receives it **as a pointer to the struct**, the way a `const sapp_event*` argument does.
 
-## Native And Hybrid Support
+```kira
+@FFI.Struct { layout: c; }
+struct FfiView {
+    let data: CString
+    let length: U64
+}
 
-The callback path is proved in both:
+@FFI.Pointer { target: FfiView; ownership: borrowed; }
+struct FfiViewPtr {}
 
-- native-only execution
-- hybrid execution
+@FFI.Callback { abi: c; params: [I32, FfiView]; result: Int; }
+struct Viewer {}
 
-That is why the repo carries both:
+function onView(tag: I32, view: FfiViewPtr) -> Int { return view.length }
+```
 
-- `tests/pass/run/ffi_callback_native`
-- `tests/pass/run/ffi_callback_hybrid`
-- `tests/pass/run/ffi_callback_state_parity`
+Kira never classifies the by-value parameter, exactly as it never classifies a by-value argument. The address C holds is a generated C entry that takes the struct by value, so the target's own C compiler decides how it arrives, and calls the thunk with `&param`. The pointer is good for the call, which is the lifetime a callback argument has, so members are read through it rather than kept.
 
-For hybrid mode, the callback still crosses a native boundary. The runtime/native bridge handles marshalling around that call path.
+## Opaque State
+
+For an API that carries a `void*` userdata token, `nativeState`, `nativeUserData`, and `nativeRecover` move Kira-owned state across it without exposing a layout. See [Interop and FFI](/docs/language-guide/interop-and-ffi#opaque-callback-state).

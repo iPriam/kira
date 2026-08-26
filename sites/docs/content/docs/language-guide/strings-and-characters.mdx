@@ -1,49 +1,58 @@
 ---
 title: Strings and Characters
-description: String literals, the builtin String type, documentation strings, and the current lack of a separate character surface.
+description: The String value, its byte-oriented surface, literal escapes and line continuation, the two scalar-aware operations, and the traps that make an out-of-range index a stop.
 ---
 
-Kira's current checked and runnable examples use **string literals** and the builtin `String` type.
+A Kira `String` is a value: it owns its bytes, a copy is independent, and `+` builds a fresh one. On top of that it answers one property and a handful of operations, and every one of them works in **bytes**.
 
-## String Literals
+| Written | Result | Meaning |
+| --- | --- | --- |
+| `s.count` | `Int` | length in bytes |
+| `s.charAt(i)` | `Int` | the byte at index `i` |
+| `s.substring(a, b)` | `String` | the half-open byte range `a ..< b` |
+| `s.indexOf(needle)` | `Int` | the first byte index of `needle`, or `-1` |
+| `String(x)` | `String` | a scalar rendered as text |
+| `s.dropLastScalar()` | `String` | `s` without its last Unicode scalar |
+| `scalarText(c)` | `String` | the text of the Unicode scalar at code point `c` |
 
-Strings use double quotes:
+Bytes rather than characters is the choice these operations make together. A program that carves text at a delimiter it located itself hands the index it got back to the operation that slices, so the index has to mean the same thing to both, and a character count beside a byte index would not. `"café".count` is 5 and `"中文".count` is 6, because that is how many bytes those strings hold.
 
-```ts
-print("hello from kira");
-print("callbacks")
+`String(x)` renders exactly what `print` would, so a value printed and a value converted never disagree: `String(2.0)` is `"2"`, `String(1.0 / 3.0)` is `"0.3333333333333333"`, `String(true)` is `"true"`.
+
+An empty needle matches at the front, so `s.indexOf("")` is `0`.
+
+## Writing a Literal
+
+A literal resolves seven escapes: `\n`, `\t`, `\r`, `\e`, `\0`, `\"`, and `\\`. A backslash before anything else is `KLEX003` rather than the character itself, so a Windows path written with single backslashes is caught where it is written instead of arriving somewhere as text nobody meant.
+
+A backslash before a **newline** continues the literal on the next line:
+
+```kira
+let message = "this compositor offers no wl_compositor or no \
+               xdg_wm_base, and a window needs both"
 ```
 
-The lexer also treats `//` comments and string delimiters as first-class syntax, which is why generated bindings and documentation annotations can use normal source text cleanly.
+That is one string with no newline in it. The line break and the indentation lining the second line up under the first are layout for whoever reads the source; neither reaches the value. The space before the backslash is ordinary text and is kept, which is where the one between `no` and `xdg_wm_base` comes from. A continuation written without one joins the halves directly:
 
-## The `String` Type
-
-`String` is a builtin type recognized by the current semantics layer:
-
-```ts
-struct RevenueSnapshot {
-    let monthLabel: String
-}
+```kira
+let joined = "un\
+              split"          // "unsplit"
 ```
 
-It also appears in:
+This is the only escape whose meaning is *produce nothing*, and it is why a message too long for a line does not have to be concatenated out of pieces.
 
-- `///` documentation comments
-- struct/class fields and method signatures
-- the current proven `print(...)` contract
+## The Two Operations That Count Scalars
+
+`dropLastScalar` and `scalarText` are the exceptions, and they exist because backspace is not a byte operation. `"kirä".substring(0, 3)` cuts the `ä` in half and leaves bytes that are no longer UTF-8; `"kirä".dropLastScalar()` is `"kir"`, and `"A😀".dropLastScalar()` is `"A"` though the emoji is four bytes.
+
+`scalarText` is the inverse, and the reason a text field needs no C helper: a key press arrives as a code point, and `base + scalarText(code)` appends it. A code point outside Unicode, or a surrogate half, names no scalar and renders as the empty string rather than trapping. There is no wrong answer to give, and a trap would make a keyboard event able to end a program.
+
+## Out of Range Is a Trap
+
+`charAt` and `substring` **trap** rather than clamping or returning a sentinel. An index below zero or at or past the end, a `substring` whose start is past its end, and a range that would split a multi-byte character are all failures with no answer, so a program that walks off the end of a string stops, identically on the VM, the LLVM backend, and the hybrid split, instead of producing a value only one of them agrees with.
+
+That is a usable property as well as a safe one. Foundation's `@Derive(Deserializable)` relies on it: every structural violation in a wire string drives an out-of-range `charAt` or an inverted `substring`, which is what makes malformed input a deterministic stop rather than a partial parse. See [Derives](/docs/macros/derives) for the format.
 
 ## Characters
 
-This repository does **not** currently document a separate character literal or `Character` type surface.
-
-The Swift-style chapter name stays useful because strings are real Kira syntax today, but the current book should be read literally: Kira documents string behavior here, not a wider character model.
-
-## Current Status
-
-The proven cross-backend string path today is straightforward:
-
-- string literals parse and type-check
-- `print("...")` is proven in the checked-in runnable examples
-
-Do not assume that every future string API or text-processing abstraction already exists just because `String` is a builtin name.
-
+There is no `Char` type and no character literal. A code point is an `Int`, and `scalarText` is how one becomes text.

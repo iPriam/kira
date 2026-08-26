@@ -1,70 +1,98 @@
 ---
 title: Statements
-description: Let, assignment, return, expression, block, if, for, while, break, continue, switch, and match statements in the current Kira grammar.
+description: Local declarations, assignment, return, expression statements, blocks, if, while, for, break, continue, match, and attempt/try/handle.
 ---
 
 ## Statement Forms
 
-The current parser models these statement families:
-
-- local declaration statements with `let` or `var`
-- assignment statements
+- `let` and `var` local declarations
+- assignment
 - `return`
 - expression statements
-- block statements
-- `if`
-- `for`
+- blocks
+- `if` / `else if` / `else`
 - `while`
-- `break`
-- `continue`
-- `switch`
+- `for`
+- `break`, `continue`
 - `match`
+- `attempt` / `handle`
+
+There is no `switch`, no `case`, and no `default`.
 
 ## Local Declarations
 
-```ts
-let total = left + right;
-let result: I64 = callbacks.kira_invoke_callback(add_two, 0, 5)
+```kira
+let total = left + right     // inferred
+var label: String            // declared, uninitialized
+var ratio: Float = 0.8       // the initializer must already match
 ```
 
-## Assignment Statements
+A declaration with no initializer is real but not readable until an assignment gives it a value. An annotated initializer is strict, so `var ratio: Float = 0` is rejected.
 
-Assignments are statements, not general expressions:
+## Assignment
 
-```ts
-state.viewport_width = 128
+The left side names a place: a local, a field path, or an index expression.
+
+```kira
+state.width = 128
+b.origin.x = 100
+values[index] = next
 ```
 
-Current semantic validation only allows assignment targets that resolve to:
+Writing through a path requires `var` at every step, not just the last.
 
-- locals
-- fields
-- array index expressions
+## Loops
 
-## Control Flow Statements
+`for i in a..b` walks a half-open integer range; `for x in xs` walks an array's elements. The bound expressions are evaluated once. The loop variable is a fresh immutable binding per iteration, scoped to the body.
 
-`if`, `else if`, `for`, `while`, `break`, `continue`, `switch`, and `match` are accepted in statement position. Builder/content blocks currently use `if`, `else if`, `for`, and `switch`.
+A `for` is rewritten into a `while` during analysis, and `continue` still advances the loop because the rewrite steps the cursor before the body rather than after it.
 
-The current executable boundary is narrower than the full frontend surface, so treat those forms according to the status notes in the guide and the execution matrix in this reference.
+`break` and `continue` outside a loop are reported rather than ignored.
 
-## Match Statements
+## Match
 
-`match` dispatches over enum variants and is exhaustive:
-
-```ts
-match parsed {
-    Ok(value) -> print(value);
-    Error(error) -> print(error);
+```kira
+match subject {
+    Light -> return 1;
+    Tag(text) -> { print(text) }
 }
 ```
 
-Important current rules:
+An arm takes a single statement or a block. Variants are unqualified. A parenthesized name binds the payload as an owned immutable copy, visible only in its own arm.
 
-- variant patterns are unqualified inside `match`
-- every enum variant must be covered
-- there is no wildcard `_` arm and no `else` arm
-- duplicate variant coverage is rejected
-- arms may list multiple patterns separated by commas
-- patterns may destructure nested enum payloads and may bind with `as`
+| Rule | Code |
+| --- | --- |
+| Every variant covered | `KSEM129` |
+| No variant matched twice | `KSEM127` |
+| The subject is an enum | `KSEM125` |
 
-Non-exhaustive matches raise `KSEM100`. Duplicate match arms raise `KSEM101`.
+There is no wildcard arm and no `else` arm. An exhaustive `match` whose arms all return is a definite return. A `break` inside an arm belongs to the enclosing loop.
+
+## Attempt
+
+```kira
+attempt {
+    let v = try fallible()
+    return v * 2
+} handle {
+    TooSmall { return 0 - 1 }
+    TooBig(reason) { return reason.count }
+}
+```
+
+`try` is accepted in exactly one position: as the whole initializer of a `let` directly inside an `attempt` body (`KSEM137` elsewhere). A handler arm is `Variant { … }` with no arrow.
+
+| Rule | Code |
+| --- | --- |
+| Every reachable failure variant handled | `KSEM139` |
+| An arm names a variant of the failure enum | `KSEM140` |
+| No failure handled twice | `KSEM142` |
+| Every `try` in one `attempt` fails with the same enum | `KSEM141` |
+| The `try` subject is `Result`-shaped | `KSEM138` |
+| An `attempt` contains at least one `try` | `KSEM143` |
+
+Statements after a `try` run only when it succeeded.
+
+## Return
+
+A function with a declared result type must definitely return one. An exhaustive `match` or a fully covered `attempt` counts.

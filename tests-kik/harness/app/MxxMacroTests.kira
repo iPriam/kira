@@ -269,7 +269,7 @@ construct MxxEnumDerive() extends Test {
 // `projectedValue`, and generates free query functions (name-glued to the type via mid-identifier
 // splice) reporting that conformance. Kira `extend` applies only to *constructs* and there is no
 // `static`, so conformance is surfaced as generated free functions rather than the
-// `extend T: Conformance { static let ... }` sketch in docs/macros.md. The missing-`wrappedValue`
+// `extend T: Conformance { static let ... }` sketch in the property-wrapper docs. The missing-`wrappedValue`
 // diagnostic path (KMAC021) is covered by tests/fail/semantics/macro_property_wrapper_missing.
 
 comptime macro MxPropertyWrapper {

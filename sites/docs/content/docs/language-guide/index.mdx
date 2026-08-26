@@ -1,29 +1,9 @@
 ---
 title: Language Guide
-description: A guided walkthrough of the current Kira language surface, from entrypoints and operators to constructs, FFI, and execution.
+description: A walkthrough of the Kira language in reading order, from entrypoints and operators to construct families, interop, and ownership.
 ---
 
-The Language Guide explains Kira in reading order.
-
-Use it when you want to understand how the language fits together rather than look up one rule in isolation.
-
-## What the Guide Assumes
-
-This guide stays grounded in repo-proven source material:
-
-- runnable examples such as `examples/hello`, `examples/arithmetic`, and `examples/imports_demo`
-- check-only construct coverage such as `examples/complex_language_showcase`
-- corpus cases that prove both successful and failing behavior
-
-## What It Emphasizes
-
-Every chapter keeps the same distinction in view:
-
-- what the frontend parses
-- what semantics validates
-- what the current backends run
-
-When a feature crosses those boundaries, the chapter calls it out explicitly.
+Read the guide in order to understand how the language fits together. Use the [Language Reference](/docs/language-reference) when you want one rule.
 
 ## Chapters
 
@@ -34,10 +14,17 @@ When a feature crosses those boundaries, the chapter calls it out explicitly.
 5. [Control Flow](/docs/language-guide/control-flow)
 6. [Functions](/docs/language-guide/functions)
 7. [Structures and Types](/docs/language-guide/structures-and-types)
-8. [Properties](/docs/language-guide/properties)
-9. [Methods](/docs/language-guide/methods)
+8. [Methods](/docs/language-guide/methods)
+9. [Traits](/docs/language-guide/traits)
 10. [Annotations](/docs/language-guide/annotations)
 11. [Constructs](/docs/language-guide/constructs)
-12. [Interop and FFI](/docs/language-guide/interop-and-ffi)
-13. [Execution Model](/docs/language-guide/execution-model)
-14. [Memory and Safety](/docs/language-guide/memory-and-safety)
+12. [Concurrency](/docs/language-guide/concurrency)
+13. [Interop and FFI](/docs/language-guide/interop-and-ffi)
+14. [Execution Model](/docs/language-guide/execution-model)
+15. [Memory and Safety](/docs/language-guide/memory-and-safety)
+
+Macros have their own section: [Macros](/docs/macros). The standard library has [Foundation](/docs/foundation).
+
+## What the Guide Assumes
+
+Every form shown here is one a checked-in program runs. When a shape is refused, the guide names the diagnostic that refuses it and says which alternative the language takes instead.

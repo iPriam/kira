@@ -1,4 +1,12 @@
 {
   "title": "FFI Workflows",
-  "pages": ["index", "manifests", "autobindings", "callbacks"]
+  "pages": [
+    "index",
+    "manifests",
+    "c-layout-values",
+    "callbacks",
+    "autobindings",
+    "syscalls",
+    "wasm"
+  ]
 }

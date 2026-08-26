@@ -1,116 +1,167 @@
 ---
 title: Structures and Types
-description: Named structs, classes, builtin types, and generated FFI shapes in Kira.
+description: Structs and their value semantics, classes and flattening, enums and generic enums, type aliases, and the boundary rules each type carries.
 ---
 
-Kira names data shapes with `struct`, inheritable declarations with `class`, and tagged unions with `enum`.
+## Structs
 
-## Builtin Types
+A `struct` is a non-inheriting value shape. Members are written with `let` or `var` and may carry a default, which fills the member wherever a literal leaves it out.
 
-The semantics layer resolves these builtin names today:
-
-| Group | Names |
-| --- | --- |
-| General | `Void`, `Int`, `Float`, `Bool`, `String` |
-| Fixed-width integers | `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `U64` |
-| Native/FFI helpers | `RawPtr`, `CString`, `CBool` |
-
-## Declaring a Struct
-
-```ts
-struct RevenueSnapshot {
-    let monthLabel: String
-    let gross: Int
-    let net: Int
+```kira
+struct Vec3 {
+    var x: Int
+    var y: Int
+    var z: Int
 }
+
+struct Box {
+    var origin: Vec3
+    var label: String = "unnamed"
+}
+
+let v = Vec3 { x = 1, y = 2, z = 3 }
+var b = Box { origin = v }   // `label` takes its default
+b.origin.x = 100             // a nested write lands in place
+var copy = b                 // a deep copy, strings included
 ```
 
-Structs are value-oriented declarations. They can contain:
+`=` is the canonical field binder; `:` is accepted and the two may be mixed in one literal. Both spellings normalize to one node, so nothing downstream can tell which was written.
 
-- stored members
-- default values
-- methods
-- methods declared directly inside the body
-- function-typed fields when an API needs non-capturing callback storage
+Assigning to a place requires `var` at *every* step, not just the last. Writing `b.origin.x` rewrites the contents of `origin`, so a `let` anywhere along the path makes the write illegal.
 
-```ts
-struct Point {
-    let x: Float = 0.0
-    let y: Float = 0.0
-    let zero: Point = Point { x: 0.0, y: 0.0 }
+### The Memberwise Constructor
 
-    function distanceTo(other: Point) -> Float {
-        return x + other.x
+A struct is also constructed by naming it. `Vec3(1, 2, 3)` fills the fields in declaration order and `Vec3(x: 1, y: 2, z: 3)` binds each by name, the two spellings the literal already had. A field the call does not reach takes its declared default, so a struct whose fields all default is built by `Type()`. The constructor lowers to the same struct value a literal produces.
+
+### Field Order and Cycles
+
+**Field type order does not matter.** Struct collection declares every name before resolving any field, so a field may name a struct declared later in the file or in another file of the same package. A by-value cycle still has no finite size: analysis detects it, reports `KSEM052`, and breaks the closing field to `Error` so recursive layout, copy, and drop walks stay total.
+
+Defaults that recursively construct each other have no finite value and are refused with `KSEM213` rather than recursing during analysis.
+
+### Defaults Are a Frontend Concern
+
+After function signatures exist, analysis resolves every field default once, in the file the field was declared in. Its qualified names therefore use that file's imports, a bare named function becomes a typed function value there, and a genuinely undefined name is reported even when no construction omits the field. Local scope stays empty, so a default cannot capture a construction site's bindings. Every construction reuses the resolved expression, with one initializer per field in declaration order.
+
+### Printing
+
+**`print(someStruct)` is rejected (`KSEM081`).** What `print` renders for a struct is pinned nowhere in the language corpus, so any text chosen here would be inventing language surface. Print the fields. The VM traps rather than printing something made up, which is the runtime restating what analysis already refused.
+
+## Classes
+
+A class is a struct that inherits. It has everything a struct has, plus `extends`, `override`, and parent-qualified access.
+
+```kira
+class Account {
+    var balance: Int = 100
+    let rate: Int = 2
+
+    function gross() -> Int { return self.balance * self.rate }
+}
+
+class Savings extends Account {
+    override let rate = 5                       // the same slot, a new default
+
+    function bonus() -> Int {
+        return Account.gross() + self.balance   // this is how "super" is spelled
     }
 }
+
+print(Account().gross())    // 200
+print(Savings().gross())    // 500, the inherited method reads the new default
 ```
 
-Named struct literals are part of the current language surface:
+A class is **built by calling it**, not with a `{ }` literal. Arguments fill the fields that declare no default, in flattened order; every field with a default takes it. A class is a value, like a struct: `var b = a` copies, and mutating the copy leaves the original alone.
 
-```ts
-let rect = Rect {
-    x: 0.0
-    y: 0.0
-    width: 10.0
-    height: 20.0
-}
-```
+`extends` takes a comma-separated list, and may name a `struct` as readily as a class. Two parents declaring the same name keeps **both**, as separate fields and separate methods, so the bare name is ambiguous (`KSEM067` for a method, `KSEM068` for a field) and qualifying it says which was meant.
 
-Classes are the richer form when you need inheritance:
+Nothing below semantics learns classes exist. A class flattens into an ordinary struct, and each class gets its **own copy** of every method it inherits, with `self` typed as that class. Since `self` is always statically the concrete class, an inherited method calling `self.m()` reaches the override identically on every backend, with no run-time dispatch.
 
-```ts
-class StoryLane {
-    let width: Float
-    let height: Float
-
-    function area() -> Float {
-        return width * height
-    }
-}
-```
-
-## Type Execution Annotations
-
-`@Native` and `@Runtime` may appear on type declarations too.
-
-- `struct` is reserved for execution-boundary typing plus compiler FFI annotations
-- ordinary annotated structs should use only `@Native` or `@Runtime`
-- `class` keeps its broader annotation flexibility
-
-That means the execution model can be expressed on value shapes directly without turning `@Native` into a usability quarantine for the rest of the language.
+**There is no subtyping.** A `Savings` is not assignable to an `Account` binding or parameter (`KSEM063`). Every class instance's static type is its dynamic type, and admitting otherwise is precisely what would reintroduce the dispatch question the flattening removes. To hold a heterogeneous collection, use a [trait](/docs/language-guide/traits) or a [construct family](/docs/language-guide/constructs).
 
 ## Enums
 
-Enums declare a closed set of variants:
+An `enum` is a value that is one of a fixed set of named variants, each optionally carrying a single payload. Variants are separated by newlines or spaces, never commas.
 
-```ts
-enum ParseError {
-    InvalidFormat: String = "bad"
-    UnexpectedEnd
-    EmptyInput
+```kira
+enum Color { Red Green Blue }
+
+enum Message {
+    Empty
+    Text(String)                              // a payload
+    InvalidFormat: String = "not that format" // a payload with a default
 }
 ```
 
-Each variant may have no payload, one associated payload type, or a default payload value. Generic enum declarations are also supported, but this guide avoids placeholder generic examples and focuses on the concrete runnable surface.
+A variant is written with a **leading dot**, and what it resolves against is the type *expected* at that position: a `let` annotation, a parameter, a return type, a struct field, or the other side of a comparison. So `.Red` alone is not a value; `let c: Color = .Red` is. A dot against a non-enum type, or in a position with no expected type, is refused (`KSEM119`).
 
-Foundation provides a `Result` enum alongside the `Printable` construct. Import the whole library and use the global name.
+`==` and `!=` compare **discriminants**, so `c == .Red` asks which variant `c` is. Reading a payload back out is [`match`](/docs/language-guide/control-flow#match).
 
-Match over enum values with exhaustive `match` statements.
+Like an array, an enum is a heap value that **moves on binding** and is not trivially copyable: a named enum needs `move` into an owned parameter, while a fresh `.Variant` needs nothing.
 
-## FFI-Generated Types
+A payload may be `Int`, `Float`, `Bool`, `String`, an array, a struct, another enum, or `Any`. `Void`, `CString`, `RawPtr`, and runtime handles are refused (`KSEM118`) because the enum box cannot own those values. A nested enum is admitted because a `Result`-shaped value's `Error` variant carries the failure enum.
 
-Generated bindings use `struct`, often with compiler-meaning annotations:
+**`print(someEnum)` is rejected (`KSEM081`)**, for the reason a struct is.
 
-```ts
-@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
-struct kira_i64_callback {}
+### Generic Enums
 
-@FFI.Pointer { target: app_state; ownership: borrowed; }
-struct app_state_ptr {}
+An enum may take **type parameters**, which is what lets the standard library declare `Result` once.
+
+```kira
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
 ```
 
-That is why the guide treats named types as a shared surface for both app code and generated interop code.
+That declaration names no type. Each written instantiation does: `Result<Int, AppError>` substitutes the arguments into the variants and produces an ordinary enum. Two writings of the same arguments name the same type; different arguments name different types and do not assign to each other.
 
-## What This Chapter Does Not Claim
+Substitution happens during analysis, so nothing below semantics learns that generics exist: no opcode, no IR node, no wire format. A monomorphized `Result` is `Result`-shaped, so [`attempt`/`try`](/docs/language-guide/control-flow#attempt-try-and-handle) unwrap it with nothing added.
 
-This repository does not currently document a protocol-oriented type system. The present Kira story is concrete: `struct` is the value-type surface, `class` is the inheritable declaration form, and `enum` is the closed tagged-union form.
+The **enum is the only declaration that takes type parameters**. A generic `struct`, `class`, or `function` is refused by name (`KPAR047`). The other edges are typed diagnostics too: an arity mismatch is `KSEM174`, a generic enum written bare is `KSEM172`, type arguments on a non-generic type are `KSEM173`, and a template that grows its own argument without end is `KSEM175` rather than a stack overflow.
+
+### Widening
+
+An instantiation reaches another instantiation of the same template when every type argument either stays as it was or becomes `Any`. `Result<Int, TestFailure>` therefore fills a `Result<Any, TestFailure>` position. Nothing about that rule knows the name `Result`, so a user's own `enum Crate<Held>` widens by the identical path.
+
+The boundary is that the arguments widen and a position that merely *contains* one does not: `[Result<Int, TestFailure>]` is not `[Result<Any, TestFailure>]`, for the same reason `[Int]` is not `[Any]`.
+
+## `Any`
+
+`Any` is Kira's top type. A value crosses into it and is stored, copied, passed, returned, and released; nothing reads it back. The language has no `is`, no `as`, and no downcast form, so a value in an `Any` is reached through the declaration that produced it rather than through the `Any`.
+
+## Type Aliases
+
+`type Name = Target` binds a name to a written type. It is a **spelling, not a new type**: `Count` and `Int` below are the same type, so a value of one goes anywhere the other does and no backend ever learns the alias existed.
+
+```kira
+type Count = Int
+type Buffer = [Count]
+type Matrix = [Buffer]
+```
+
+The target is an ordinary type reference, so an alias names anything a type position can. Aliases chain in either declaration order, because resolution is lazy rather than order-dependent the way a struct field's type is.
+
+A chain that comes back to where it started has no type at the end of it and is refused (`KSEM157`). A name that already means something, a builtin or a struct or an enum or an earlier alias, may not be claimed (`KSEM130`): a silently ignored `type Int = Float` would keep type-checking as `Int` and give a wrong answer instead of an error.
+
+## Crossing the Native Seam
+
+A struct, an array, and a payload-carrying enum cross the `@Native`/`@Runtime` boundary as a **copy**, in either direction, by value or by `borrow mut`.
+
+A `BridgeValue` is one tag and one word of payload, which none of them fits, so what crosses is a pointer to a tree of nodes carrying the whole value however deeply nested. Ownership is transferred: **the side that reads the strings frees them**, exactly once, as it decodes. Neither engine touches the other's heap, which is the only arrangement available.
+
+A payload-less enum *is* its variant number, so the number crosses and the far side rebuilds its own value from it.
+
+`borrow mut` is that copy made twice. There is no pointer to lend, because the caller's storage belongs to the other engine. The value goes over as a tree, and the callee's final value comes back in the slot the argument arrived in. The caller stores what comes back into the place its own signature names, dropping what was there, which is what an assignment does, so a `borrow mut` parameter behaves the same across the seam as within one engine.
+
+Narrower things still cannot cross, each for a reason of its own rather than for want of a layout: `Any`, a C string, a task handle, a capture cell, and a callback-state handle. A read-only `borrow` of a `String` is refused too, because the callee frees every string it owns and a lent one would be freed twice.
+
+## Representation
+
+The VM is **structurally typed**: a struct is a tuple of values on the same heap as strings, sharing one pair of allocation counters. Field names never reach the runtime, because the compiler resolved them to indices, so a bytecode module carries no struct table at all and a nested write mutates in place rather than rebuilding the enclosing value.
+
+The native backend uses a **real LLVM struct with real field layout**, not a boxed or tagged value. Copies and drops are walked field by field, inline, which costs more to build but is what `@FFI.Struct { layout: c; }` needs underneath it. Copies and drops mirror the VM instruction for instruction: a local read copies; a field read copies the field out *before* dropping the base, since the base owns the storage the field names; a store drops what the location held after computing the new value, which is what makes `s = s + "x"` work.
+
+The wasm backend gives a struct an address in linear memory, with fields laid out consecutively at natural alignment. Its heap never frees, so aliasing is invisible for anything a program cannot mutate, which is why a `String` is shared and costs nothing to copy. A struct is not: `p.x = 1` writes through the address, so it is deep-copied wherever the VM copies one, through a helper generated per struct. Only the mutable spine is duplicated; the strings inside are still shared.
+
+All three are held to the same answers by `crates/kira-cli/tests/backend_parity/`, which runs each case on the VM, on LLVM/native, and on hybrid and requires identical output.

@@ -1,61 +1,86 @@
 ---
-title: Live & Hot Reload
-description: Kira Live — the networked server/client session behind `kira live`, the `.klbundle` artifact boundary, the per-platform runners, and the observable live event sequence.
+title: Live and Hot Reload
+description: "`kira live` as a server and a client, the flags, what each backend bundles, the desktop runner and the thread it gives the app, what is watched, and the session's limits."
 ---
 
-Kira Live is a **networked server/client system**. `kira live` builds your program into a `.klbundle`, serves it over TCP, and connects a runner that downloads it, hosts it, and takes new bundles as you save. The **desktop runner is complete**; macOS and the iOS simulator run the same protocol inside an exported Xcode app; the Web serves a page; Windows, Linux, and Android are audited honestly where no loop exists yet.
+`kira live [file|dir]` builds a program into a `.klbundle`, serves it over a loopback socket, and starts a runner client that downloads it, loads it, links it, and starts it. With `--watch`, every save rebuilds and the change goes into the app that is already running.
+
+**It is a server and a client, not a rebuild loop.** The app is hosted somewhere that outlives the compiler and can take a new bundle later, which is the whole reason reload is possible at all.
+
+An unwatched session lasts as long as the app does. A program that prints and returns ends it in milliseconds; an app ends it when its window closes. The two are the same wait, which is what makes `kira live` a way to run an app and not only a way to start one.
 
 ```bash
-kira live                          # this package, on the desktop runner
-kira live desktop app.kira         # same runner, named
-kira live macos                    # exported Xcode app, launched live
-kira live ios                      # iOS simulator via the exported workspace
-kira live ios-device               # refused with its provisioning prerequisite
-kira live web                      # build + serve exports/web, open a browser
+kira live                                      # the package you are standing in
+kira live app.kira                             # the VM backend
+kira live --backend llvm app.kira              # the whole native program
+kira live --backend hybrid app.kira            # the VM/native hybrid
+kira live --watch app.kira                     # reload on every save
+kira live --watch --quit-after 30s app.kira    # bounded, for scripts and CI
+kira live ios app.kira                         # a runner with no client yet: says so
 ```
 
-Useful flags: `--watch`/`--no-watch` (watching is automatic at a terminal), `--backend vm|llvm|hybrid` for the bundle's engines, and `--quit-after 5s` to bound a session without bypassing the handshake.
+A path is optional, and naming none means the package you are standing in, the same default `run`, `build`, and `check` take.
 
-## Flow
+| Flag | Meaning |
+| --- | --- |
+| `--backend vm\|llvm\|hybrid` | The VM, whole-native, or hybrid bundle shape. `vm` by default. |
+| `--watch` / `--no-watch` | Rebuild and reload on every save. Watching is automatic at a terminal. |
+| `--quit-after <5s\|500ms\|2m>` | Shut the session down cleanly after this long. |
 
-```text
-kira live <runner> <target?>
-  -> compile the program into a .klbundle
-  -> start the live server (127.0.0.1, OS-assigned port)
-  -> bring up the runner, pointed at that address
-  -> runner connects, downloads the bundle
-  -> runner loads, links, and starts the entrypoint
-  -> source change rebuilds a fresh bundle
-  -> hot patch when safe, relaunch when not
-```
+## What Each Backend Bundles
 
-## The runners
+A program that calls C gets a generated adapter sidecar on the VM backend: `@FFI.Extern` reaches a C symbol through that sidecar, while the bytecode payload remains the bundle entrypoint.
 
-- **Desktop** spawns `kira-desktop-runner` beside the compiler: VM bytecode, whole-program native libraries, and hybrid sessions all host in one process.
-- **macOS / iOS / tvOS / visionOS** generate the real Xcode workspace (`exports/apple/`) with `mode = "live"` and this session's port baked into the app's manifest, run `xcodebuild` against the platform SDK or an available simulator, launch the built app, and accept its connection. A reload that changes the embedded native half relaunches through an incremental `xcodebuild` first — restarting a binary whose linked code changed would silently run stale code.
-- **Web** compiles exactly as `kira export web`, serves `exports/web` from a traversal-proof static server with the correct wasm content type, and opens the page. While watching, every save recompiles and swaps the served module; the page picks it up on its next reload — Kira does not inject a livereload socket into your page.
-- **Windows / Linux** write their CMake scaffolds, audit the tools a local build needs (`cmake`, `ninja`; Visual Studio only exists on Windows hosts), and say precisely which part of the loop this host cannot provide.
-- **Android** has no runner client in this build yet and refuses by name.
+The LLVM backend compiles the whole program into one native library with a fixed runner entry symbol and stages its foreign archives and runtime files beside it.
 
-## The `.klbundle` boundary
+The hybrid backend carries a hybrid manifest, bytecode, and a native library.
 
-The `.klbundle` directory is the **runner artifact boundary**. Runners consume bundle manifests, bytecode/hybrid payloads, foreign-binding manifests, and staged dependencies — they never reach into compiler internals. Reload tiers are decided by comparing manifests: identical is nothing to do; VM-only sessions can swap bytecode at a frame boundary; anything else relaunches, loudly, rather than crossing an unproven ABI.
+## The Runners
 
-## Observable events
+**Desktop** is the client that ships today. `kira-desktop-runner` hosts VM bytecode, a whole-program native library, and a hybrid entrypoint, loading the LLVM live library and calling its fixed entry symbol in the runner process. Running a bundle needs no LLVM; only building one does.
 
-A live session emits a precise event sequence, which is what tests assert against rather than relying on "a window opened":
+**Apple** targets generate the real Xcode workspace under `exports/apple/` with `mode = "live"` and this session's port baked into the app's manifest, run `xcodebuild` against the platform SDK or an available simulator, launch the built app, and accept its connection. A reload that changes the embedded native half relaunches through an incremental `xcodebuild` first: restarting a binary whose linked code changed would silently run stale code.
 
-```text
-live.server.started        live.bundle.built          live.client.connected
-live.bundle.requested      live.bundle.sent           live.bundle.received
-live.bundle.loaded         live.bundle.linked         live.entrypoint.started
-live.frame.presented       live.session.ready         live.watch.started
-live.source.changed        live.bundle.rebuilt        live.reload.notified
-live.reload.staged         live.reload.applied        live.reload.completed
-live.reload.rejected       live.app.exited            live.runner.relaunched
-live.shutdown.started      live.shutdown.finished
-```
+**Web** compiles exactly as `kira export web`, serves `exports/web` from a traversal-proof static server with the correct wasm content type, and opens the page. While watching, every save recompiles and swaps the served module; the page picks it up on its next reload. Kira does not inject a livereload socket into your page.
 
-## Physical devices
+**Windows and Linux** write their CMake scaffolds, audit the tools a local build needs, and say precisely which part of the loop this host cannot provide.
 
-A device target costs signing and provisioning that no toolchain can automate from here: attach the device, open the generated Xcode project once, and let Xcode trust it. `kira live ios-device` says exactly that instead of pretending a simulator run proved a phone.
+**Android** has no runner client in this build and refuses by name.
+
+A device target costs signing and provisioning that no toolchain can automate: attach the device, open the generated Xcode project once, and let Xcode trust it. `kira live ios-device` says exactly that instead of pretending a simulator run proved a phone.
+
+## The App Gets the Main Thread
+
+A Kira app is not a function that returns, and a runner that started one on the thread holding the socket would never hear another word from the server, so `entrypoint started` could only ever be reported by an app that had already exited, which is to say never by an app.
+
+So the app keeps the main thread, which is also what macOS requires of a window's run loop, and the protocol runs beside it. Load, link, start, and swap all still happen on that one thread, in order: the protocol thread asks and the app's thread answers. The only call whose meaning changes is `start`, which is answered when the entrypoint is *running*, and answered a second time, for the reload path, when it returns.
+
+## Finding the Runner
+
+The runner is resolved beside `kira` rather than from `PATH`, so a session never picks up a runner from a different build than the bundle it is about to serve.
+
+An installed toolchain ships one in its `bin/`. In a checkout it is `cargo build --workspace` that puts one in `target/debug`: nothing depends on the runner, and cargo builds a dependency's lib target and never its `[[bin]]`, so `cargo build -p kira-cli` leaves none. A session that cannot find its runner says so, and names both routes.
+
+## Watching
+
+The watch set is the path the invocation named: one file for a standalone program, and the whole directory for a package, so a save anywhere under `app/` reloads rather than only a save to the entry.
+
+The interesting part is what is *not* watched. A watcher that sees its own build output rebuilds forever, and an editor writing `app.kira~` and `.app.kira.swp` on the way to saving would trigger three rebuilds per save, two of them of an unchanged program.
+
+| Ignored | |
+| --- | --- |
+| Directories | `.kira-build`, `exports`, `generated`, `target`, and every dot-directory |
+| Files | Dotfiles, and anything ending `~`, `.swp`, `.swx`, `.tmp` |
+
+Both lists are matched on every host rather than the one that produces them: a session runs on a machine whose editor and toolchain are not knowable in advance. Dot-directories go wholesale because naming `.git`, `.svn`, and each editor's private directory one at a time is a list that is always one entry out of date.
+
+The watcher polls every 150ms and compares modification time and size. Polling is unglamorous and portable, and a burst of saves during a build collapses into one rebuild rather than queueing three.
+
+A save that changes nothing does nothing. A save that does not compile prints its diagnostics and leaves the running app alone: killing a working app over a half-typed line would make watching worse than not watching.
+
+## Limits
+
+- **A session's own bar is the entrypoint.** It stops at `live.entrypoint.started` and never claims `live.frame.presented`. An app hosted here does present frames, but the milestone belongs to the end that can observe it, and this repository owns neither the window nor the swapchain.
+- **The session socket is unauthenticated.** It is loopback and first-come, so any local process that wins the accept gets the bundle.
+- **`--quit-after` bounds the session, not a rebuild.** A save landing near the deadline can overshoot it by however long the rebuild and reload take.
+- **Every wait is bounded except one.** Reads, writes, and the accept each have a 30-second timeout; waiting for the next save is deliberately unbounded, because a runner that killed itself for the crime of a developer thinking is a runner whose app is gone by the time they save. A dead server closes the socket, and a closed socket is a read of zero bytes rather than a hang.

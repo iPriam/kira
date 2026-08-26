@@ -1,0 +1,61 @@
+---
+title: Editors
+description: The language server, what it answers, how it analyzes a document, and the Zed extension.
+---
+
+## The Language Server
+
+`kira-lsp` builds `kira-language-server`, the binary editors talk to. An installed toolchain ships one in its `bin/`, and the `kira` launcher's multi-call alias of the same name dispatches to the selected toolchain's copy, so the server an editor finds on `PATH` always matches the selected compiler.
+
+From a checkout:
+
+```bash
+cargo install --path crates/kira-lsp
+```
+
+It lands in `~/.cargo/bin`. The server speaks LSP over stdio and takes no CLI arguments.
+
+## What It Answers
+
+| Request | Answer |
+| --- | --- |
+| `initialize`, `didOpen`, `didChange`, `didClose` | The document lifecycle. |
+| Diagnostics | Published per document. |
+| Go to definition and declaration | Resolved through the frontend. |
+| Hover | The declaration's source line and its file, when the name resolves. |
+| Completion | Replaces the identifier prefix under the cursor. |
+
+An unsupported request gets `MethodNotFound` rather than a guessed answer.
+
+## How a Document Is Analyzed
+
+Analysis is **per-document, whole-program**: each open document is analyzed as the *entry* file of a program, and every module it imports is read off disk and analyzed with it. So a name a sibling module declares resolves in the editor, and an `import` that names no file squiggles.
+
+Two consequences are worth knowing.
+
+- Modules are read **from disk**, not from open editor buffers, so an unsaved edit in `support.kira` is not what `main.kira` is checked against.
+- Diagnostics are published for one document at a time. An error inside an imported module is reported when you open *that* file, not as a squiggle on the file that imported it, and nothing is reported for a file that is not open.
+
+The server runs the same frontend `kira check` does, so an editor squiggle and a command-line error are the same computation rather than two implementations that agree until they do not.
+
+## Zed
+
+The [Kira Zed extension](https://github.com/kira-lang-com/kira-zed-extension) provides Tree-sitter syntax highlighting plus diagnostics from the server above.
+
+Install the server first: the extension does not bundle it and, since `kira-lsp` is unpublished, cannot download it. The extension finds the binary on the worktree's `PATH`. To point at a specific build instead, set an explicit path in Zed's `settings.json`:
+
+```jsonc
+{
+  "lsp": {
+    "kira-lsp": {
+      "binary": { "path": "/absolute/path/to/kira-language-server" }
+    }
+  }
+}
+```
+
+Restart Zed after installing or replacing the binary.
+
+## Syntax Highlighting Elsewhere
+
+The Tree-sitter grammar lives in `editors/tree-sitter/` in this repository and is the same grammar the Zed extension consumes. It moves in the same change that alters Kira's syntax.

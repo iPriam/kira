@@ -1,154 +1,73 @@
 ---
 title: Expressions
-description: Literal, unary, binary, conditional, call, member, array, struct-literal, indexing, and namespaced expression forms in current Kira.
+description: Literals, operators and precedence, calls and labeled arguments, trailing blocks, member access, indexing, struct literals, enum variants, closures, quote and splice.
 ---
 
-## Primary Expression Forms
+## Primary Forms
 
-The current frontend understands these expression families:
+- Integer, float, string, and boolean literals.
+- Identifiers and qualified names (`Geo.Point`, `bindings.callbacks`).
+- Grouped expressions.
+- Array literals: `[1, 2, 3]`. Commas are optional where a newline separates the elements.
+- Struct literals: `Vec3 { x = 1, y = 2, z = 3 }`. `:` is accepted for the field binder and the two may be mixed.
+- Enum variants with a leading dot: `.Red`, `.Text("hi")`.
+- Constructions: `Vec3(1, 2, 3)`, `Vec3(x: 1, y: 2)`, `Account()`, `Text(content: "hi")`.
+- Closures: `{ value in return value + 1 }`, `{ in return 1 }`.
+- `Task { call(args) }`.
+- `quote { … }` and `#{ value }`, inside a `comptime macro` only.
+- `nativeState(v)`, `nativeUserData(s)`, `nativeRecover(t)`.
 
-- integer, float, string, and boolean literals
-- identifiers and qualified names
-- grouped expressions
-- array literals
-- named and nested struct literals
-- `nativeState(value)`
-- `nativeUserData(state)`
-- `nativeRecover(any)`
-- member access
-- indexing
-- call expressions
+## Operators
 
-## Unary and Binary Expressions
-
-Supported operator families include:
-
-- unary `-` and `!`
-- arithmetic `+ - * / %`
-- comparison `== != < <= > >=`
-- logical `&& ||`
-
-Current semantic rules:
-
-- arithmetic requires matching numeric operand types
-- comparison requires matching operand types
-- logical operators require booleans
-
-## Conditional Expressions
-
-The parser accepts conditional expressions:
-
-```ts
-condition ? thenValue : elseValue
+```text
+? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
 ```
 
-Current status:
+Loosest to tightest, exactly C's ladder. Unary `-`, `!`, and `~` bind tighter than every binary operator. The conditional nests to the right.
 
-- parsed by the frontend
-- semantically checked
-- part of the current lowered scalar/pointer subset
+`move x` and `copy x` are prefix operators, recognized only when an operand follows. A range `a..b` is not an expression: it appears only in a `for` header.
 
-## Calls and Member Access
+## Calls
 
-Call expressions support argument lists, labeled arguments, and direct trailing callbacks:
-
-```ts
+```kira
 helper()
-Rect(x: 0.0, y: 0.0)
-callbacks.kira_invoke_callback(add_two, 0, 5)
-app.onFrame { frame in renderFrame(frame) }
+step(base: 1, tag: 9)                  // labeled, omitting a defaulted parameter
+callbacks.invoke(add, 0, 5)            // through a namespace root
+handler(0.016)                         // through a function-typed local
 ```
 
-Member access uses `.` and is part of ordinary source and generated/native interop examples.
+A positional call fills omitted trailing arguments from parameter defaults; a labeled call may omit any defaulted parameter.
 
-Enum variants are constructed with the enum name outside `match`:
+### Trailing Blocks
 
-```ts
-let invalid = ParseError.InvalidFormat
-let ended = ParseError.UnexpectedEnd
-let empty = ParseError.EmptyInput
+A `{ … }` after a call is either a closure argument or a content block, decided by shape.
+
+```kira
+each { value in print(value) }          // a closure: it has an `in`
+Row(gap: 8) { Text("a") Text("b") }     // a content block: bare children
+doThing { return 1 } second: { return 2 } third: { return 3 }
 ```
 
-Struct literals provide the readable field-initialization surface for descriptor-style code:
+A block with an `in` is a closure. A block whose first item is `name =` or `name :` is a struct literal. Everything else after a construction or a call with a content parameter is a content block, whose items are bare child expressions plus the `For(x in xs) { … }` and `if` builders. Later closures are labeled with the parameter name.
 
-```ts
-let rect = Rect {
-    x: 0.0
-    y: 0.0
-    width: 10.0
-    height: 20.0
-}
+## Member Access and Indexing
 
-let pass = RenderPassDescriptor {
-    label: "swapchain-pass"
-    clearColor: Float4 { r: 0.04, g: 0.05, b: 0.08, a: 1.0 }
-}
+```kira
+rect.width
+event.touches[index].pos_y
+values[index]
+values[index] = next
+grid[1][1] = 77
 ```
 
-For `@FFI.Struct { layout: c; }`, both `Type()` and `Type { ... }` begin from a zeroed C-layout value, then write the explicit fields you provide:
+Member access with no parentheses invokes a computed construct member, so `widget.node` reads the accessor and chains compose.
 
-```ts
-let desc = sapp_desc()
+A `.count` on a `String` or an array is a property, never `.count()`.
 
-let shaderSampler = sg_shader_sampler {
-    stage: stageValue
-    sampler_type: samplerTypeValue
-}
-```
+## Enum Variant Resolution
 
-Omitted fields remain zero in those C-layout FFI construction forms. That rule belongs to construction only. A declaration such as `var desc: sapp_desc` is still just an uninitialized local declaration.
+A leading-dot variant resolves against the type expected at that position: a `let` annotation, a parameter, a return type, a struct field, or the other side of a comparison. In a position with no expected type, or against a non-enum type, it is `KSEM119`. Inside a `match`, variants are written unqualified.
 
-Native callback-state expressions are separate:
+## Assignment
 
-```ts
-var state = nativeState(CounterState { count: 0 })
-var token = nativeUserData(state)
-var recovered = nativeRecover(token)
-```
-
-Those forms are for opaque callback userdata transport. They do not promise that ordinary Kira structs use C layout.
-
-Member access uses dot syntax:
-
-```ts
-let width = rect.width
-```
-
-Indexing uses `[]`:
-
-```ts
-let value = values[index]
-values[index] = nextValue
-```
-
-Function values use the current readable surface:
-
-```ts
-let handler: (Float) -> Void = update
-handler(0.016)
-```
-
-Inline callback blocks use `{ params in ... }` and require an expected function type:
-
-```ts
-let handler: (Float) -> Void = { dt in
-    update(dt)
-}
-
-registerFrameHandler { frame, data in
-    return
-}
-```
-
-Current status for function values:
-
-- function types are valid in parameters, locals, and fields
-- named function references and non-capturing inline callback literals are lowered across the shared executable backends
-- callable-value invocations through locals and fields are part of the current lowered subset
-- callback block parameters are inferred from the expected function type and must match its arity
-- callback blocks are non-capturing; reading an outer local from the surrounding function is rejected with a callback-capture diagnostic
-
-Current callback/block distinction:
-
-- ordinary calls with a final function-typed parameter bind trailing blocks as callbacks
-- construct-driven builder/content blocks preserve child-tree structure instead of lowering to opaque callbacks
+Assignment is a statement, not an expression. See [Statements](/docs/language-reference/statements).

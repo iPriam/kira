@@ -1,43 +1,53 @@
 ---
-title: Web & WASM
-description: The Kira Wasm web runner — the difference between Kira Wasm and Kira Web, typed web surfaces (dom/webgpu/hybrid), Foundation.Web FFI bindings, and the honest line between host probes and Kira runtime success.
+title: Web and WASM
+description: The Kira Wasm runner, the three typed web surfaces, what a built module proves, and the line between a host probe and Kira runtime success.
 ---
 
-The `web` runner id maps to **Kira Wasm**, the web runner/runtime backend. Kira Wasm is **not** Kira Web:
+The `web` runner id maps to **Kira Wasm**, the web runner and runtime backend. Kira Wasm is not Kira Web:
 
-- **Foundation** provides low-level platform APIs, including `Foundation.Web`.
-- **Kira Wasm** is the runner/runtime backend for browsers.
-- **Kira Web** is reserved for a future React-alternative framework.
-- Kira UI / UI Foundation / Kira Graphics are separate from Kira Web.
+- **Foundation** provides the low-level platform APIs, including `Foundation.Web`.
+- **Kira Wasm** is the runner and runtime backend for browsers.
+- **Kira Web** is reserved for a future framework and does not exist yet.
+- Kira UI, UI Foundation, and Kira Graphics are separate from all of them.
 
-## Web surfaces
-
-Web surfaces are typed:
-
-| Surface | Meaning | Status |
-| --- | --- | --- |
-| `dom` | DOM rendering | Host-surface probe today (`HOST_*` markers) |
-| `webgpu` | Graphics canvas; requires a canvas + browser WebGPU capability | Host capability evidence only (canvas + WGSL triangle host render pass) |
-| `hybrid` | Browser VM/native boundary runner | Rejected with a precise diagnostic until a runner exists |
-
-`kira build --target wasm32-emscripten` lowers a target through the LLVM backend to WASM; Emscripten-backed WASM tests are enabled in the repo.
-
-## Commands
+## Building for the Web
 
 ```bash
-kira check examples/web_dom
-kira run web examples/web_dom --quit-after 1s
-kira live web examples/web_dom --surface dom --quit-after 10s
-kira export web examples/web_dom --surface dom
-kira export web examples/web_dom --surface webgpu
+kira build --device wasm32 app.kira      # a wasm32-emscripten module
+kira export web app.kira                 # a servable browser bundle
+kira live web app.kira                   # build, serve, and open a browser
 ```
 
-## Foundation.Web bindings
+The Web target runs the same LLVM lowering the host does, through emscripten. `crates/kira-cli/tests/end_to_end/web.rs` builds a module and compares its output against the VM's under node, so a layout mistake shows up as a wrong value rather than hiding.
 
-`Foundation.Web` browser APIs are FFI-backed. The generated binding surface includes DOM node handles, console logging, navigator/location access, attributes/styles/classes, stable callback registration/invocation/removal, DOM event hooks, timers, callback cleanup, and WebGPU capability detection. Generated JS glue lives in web exports as `kira-browser-ffi.generated.js`.
+Because the exported loader is a plain emscripten module, the bundle also runs headlessly: `node exports/web/main.js` executes the app and prints its output, which is how the export is tested without a browser.
 
-`examples/web_dom` creates DOM elements, sets text, appends children, logs `HOST_BROWSER_API_CALL_SUCCEEDED`, shows location/user-agent data, and updates text to `Kira DOM updated`.
+## Web Surfaces
 
-## What is true today
+Surfaces are typed and selected with `--surface`.
 
-The generated `kira-app.wasm` is a real WASM module with exported probes, loaded through `WebAssembly.instantiate`. **Only module-load capability is true** in this generated host module — deeper Kira-owned runtime/app/UI/layout/render probes remain false until a real backend path produces them. The host browser may load WASM, provide imports, create surfaces, forward events, and report errors, but it must not pretend to be the Kira renderer. The web runner no longer emits an 8-byte header-only placeholder and does not require `emcc` for this generated-runtime path.
+| Surface | Meaning | State |
+| --- | --- | --- |
+| `dom` (default) | DOM rendering | Host-surface probe, reported with `HOST_*` markers |
+| `webgpu` | A graphics canvas, requiring a canvas and browser WebGPU capability | Host capability evidence only |
+| `hybrid` | A browser VM/native boundary runner | Refused with a precise diagnostic until a runner exists |
+
+`--surface webgpu` records the graphics-canvas model, the canvas requirement, and the WebGPU capability in the export's `manifest.json`.
+
+## `Foundation.Web`
+
+`Foundation.Web` browser APIs are FFI-backed. The generated binding surface includes DOM node handles, console logging, navigator and location access, attributes, styles, classes, stable callback registration and removal, DOM event hooks, timers, callback cleanup, and WebGPU capability detection. The generated JS glue ships in a web export as `kira-browser-ffi.generated.js`.
+
+`Foundation.Web` itself is named in Foundation rather than shipped: the DOM bindings it needs are still being built, and a file that compiles and does nothing is worse than an import that fails.
+
+## What Is True Today
+
+The generated module is a real WASM module with exported probes, loaded through the emscripten loader. **Only module-load capability is asserted** in the generated host module: deeper Kira-owned runtime, app, UI, layout, and render probes stay false until a real backend path produces them.
+
+The host browser may load WASM, provide imports, create surfaces, forward events, and report errors, but it must not pretend to be the Kira renderer.
+
+## The Portable VM Core
+
+Separately from the emscripten path, `kira-vm-runtime` and everything below it take no filesystem, process, thread, or dynamic-loading dependency and must compile for `wasm32-unknown-unknown`. The VM consumes bytes and reaches the world only through its host capabilities.
+
+That is what lets a Kira library's generated Rust crate run inside a browser tab with no linker at all, and it is why a host that grants no filesystem simply refuses rather than failing to build.

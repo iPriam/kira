@@ -1,0 +1,67 @@
+---
+title: Reflection, Quote, and Splice
+description: The compiler reflection API a comptime macro reads, the span edits it makes, and how `quote` and `#{ … }` build the syntax it returns.
+---
+
+## The Reflection API
+
+```kira
+struct Syntax {
+    function identifiers() -> [Identifier]
+    static function join(items: [Syntax], separator: String) -> Syntax
+    // Declaration-shaped Syntax only (a value derived from `target.syntax`):
+    function dropField(name: Identifier) -> Syntax
+    function rewriteProperty(name: Identifier, read: Syntax, writeCallee: Syntax) -> Syntax
+    function replaceIdentifier(from: String, to: String) -> Syntax
+}
+
+struct Identifier { function asString() -> String }
+struct TypeRef    { function asSyntax() -> Syntax }
+
+struct Declaration {
+    var name: Identifier
+    var fields: [Field]
+    var syntax: Syntax        // the declaration's exact source text
+}
+
+struct Field {
+    var name: Identifier
+    var type: TypeRef
+    var initializer: Syntax   // source of the initial-value expression ("" when absent)
+    var syntax: Syntax        // the whole field declaration, annotations included
+    function hasAnnotation(name: String) -> Bool
+}
+
+struct Diagnostics { static function error(message: String, at: Syntax) }
+```
+
+An enum's variants surface through `target.fields`: `field.name` is the variant name and `field.type` its payload type, or empty. Both payload forms read the same way, so `Rank(Int)` and `Rank: Int = 0` each give one field named `Rank` with type `Int`. One derive macro walks a struct and an enum with the same loop.
+
+## Span Edits
+
+`dropField`, `rewriteProperty`, and `replaceIdentifier` are span edits over the declaration's original source, so untouched source survives byte for byte, comments included.
+
+`rewriteProperty` walks every member body with full lexical-scope tracking: a read is rewritten only where the property is not shadowed by a local binding, a parameter, a `for` binding, or a `match` binding. Assigning *through* a wrapped property (`name.x = v`, `name[i] = v`) is `KMAC027`: the proxy has no place to write through, so read the value, change the copy, and assign it back.
+
+## No String to Identifier
+
+There is deliberately **no** `String` to `Identifier` conversion. A macro can only obtain an identifier from reflection or from a quote, so it cannot fabricate a name from a string and use it to capture something at the call site.
+
+The other direction is open. Half of what a macro reflects on arrives as the text it was written with, so `String(syntax)` renders that text with the original spelling and comments preserved, and `Int(syntax)` reads the same text back as an integer. Searching and joining that text is how a lint reasons about a declaration's shape without re-parsing it.
+
+## `quote` and `#{ … }`
+
+`quote { … }` is a compiler intrinsic, not a function: the literal Kira inside the braces becomes a `Syntax` value instead of running. Inside a quote, `#{ value }` splices a value in, and **what it splices to is chosen by the static type of the value, not by where it sits**.
+
+| Static type | Splices as |
+| --- | --- |
+| `Syntax` | the syntax, as-is |
+| `Identifier` | a bare name |
+| `TypeRef` | the written type |
+| `String` | a quoted string literal |
+| `Int` / `Bool` | its literal |
+| `[T]` of any of the above | each element, one per line |
+
+Anything else is `KMAC009`. The same source expression splices two ways by type: `target.name` is an `Identifier` and splices bare as `Player`, while `target.name.asString()` is a `String` and splices as `"Player"`.
+
+Splices glue by source adjacency, so `mxp_#{name}` with no space before `#{` renders as the single identifier `mxp_Foo` while `a + b` keeps its spaces. Array splicing puts one element per line, which is right for statement lists and declaration bodies; a comma-separated list is built explicitly with `Syntax.join(items, separator: ", ")` and spliced as one `Syntax`.

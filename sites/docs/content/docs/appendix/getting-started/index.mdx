@@ -1,49 +1,38 @@
 ---
 title: Getting Started
-description: What Kira is, what it prioritizes, and what is currently implemented in this repo.
+description: What to install, what to run first, and where to go next.
 ---
 
-Kira is a compiler and bootstrap toolchain that is trying to keep a few boundaries clear:
+Two steps put a working toolchain on a machine.
 
-- readable source comes first
-- inference is welcome, but only when it is unambiguous
-- library and framework behavior should live in Kira code when possible
-- the Zig implementation should provide language mechanisms, runtime machinery, and build orchestration without hardcoding every high-level library feature
+```bash
+curl -fsSL https://kira-lang.com/install.sh | sh   # the tools
+knvm install latest                                # a compiler
+```
 
-## Kira's Current Shape
+Then:
 
-In this repository, Kira is not only a parser or an early language sketch. It already includes:
+```bash
+kira new hello
+cd hello
+kira run
+```
 
-- `kira_source`, `kira_lexer`, `kira_parser`, `kira_semantics`, and `kira_ir`
-- `kira_bytecode` and `kira_vm_runtime` for VM execution
-- `kira_llvm_backend` and `kira_native_bridge` for native output
-- `kira_hybrid_runtime` and `kira_hybrid_definition` for mixed runtime/native execution
-- `kira_build`, `kira_toolchain`, `kira_bootstrapper`, and `kira_cli` for packaging and command flow
-- a first real FFI system based on per-library TOML manifests and generated Kira bindings
+[Installation](/docs/appendix/getting-started/installation) covers the Windows route, the managed LLVM and libffi bundles, and installing from a checkout. [Running Programs](/docs/appendix/getting-started/running-programs) covers the commands you will use every day.
 
-## What Lives In Kira vs Zig
+## What You Get
 
-Today the repo draws this line:
+`kira` is a launcher. It resolves the selected toolchain and hands the process over, so `kira --version` reports the compiler and `knvm list` reports what is installed.
 
-- Zig owns the compiler pipeline, runtime plumbing, toolchain management, native linking, and generated binding pipeline.
-- Kira source owns the app code, generated bindings, construct-defined library shapes, and higher-level patterns built on top of the language surface.
+A toolchain is one directory holding the compiler, the language server, the live runner, the runtime archives, and Foundation. Moving it moves all of them together, and a version-skewed pairing of one toolchain's compiler with another's standard library is unreachable.
 
-This matters most in the frontend:
+## Where to Go Next
 
-- the compiler understands constructs, annotations, builder/content blocks, lifecycle hooks, and namespaced references
-- that does **not** mean the Zig implementation is hardcoding a full UI framework
-- examples like `examples/complex_language_showcase` and `examples/ui_library` show the intended split: the language machinery is in the compiler, while framework behavior stays library-side
-
-## Project Status
-
-Kira currently has two important truths at once:
-
-1. The frontend understands more than the executable backends lower today.
-2. The executable subset is already real enough to run VM, LLVM/native, hybrid, callbacks, and Sokol proof programs.
-
-That is why the docs separate:
-
-- frontend/reference material
-- runnable backend behavior
-
-Read [The Basics](/docs/language-guide/the-basics) next if you want the exact boundary between the broader frontend surface and today's runnable subset.
+| You want | Read |
+| --- | --- |
+| The language, in order | [Language Guide](/docs/language-guide) |
+| One rule, quickly | [Language Reference](/docs/language-reference) |
+| Every command | [Command Reference](/docs/appendix/cli/commands) |
+| To add a dependency | [Libraries and Packages](/docs/appendix/cli/packages) |
+| To call a C library | [FFI Workflows](/docs/appendix/ffi-workflows) |
+| To ship to a platform | [Platforms and Runners](/docs/appendix/platforms) |

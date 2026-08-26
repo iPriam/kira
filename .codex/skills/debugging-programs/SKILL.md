@@ -41,4 +41,4 @@ Evaluating a target function at a stop is unreliable on the same LLDB. `evaluate
 
 A Kira breakpoint is a condition on the VM probe, so it costs nothing until reached. A session with no breakpoints installs no probe at all, which is why an unbroken run is as fast as an ordinary one.
 
-`KIRA_EXECUTABLE` selects the compiler the server builds with, and `KIRA_LLDB_DAP` the adapter it drives. `docs/debugging.md` covers the mechanism, and `kira debug --prepare` is the contract underneath it.
+`KIRA_EXECUTABLE` selects the compiler the server builds with, and `KIRA_LLDB_DAP` the adapter it drives. `sites/docs/content/docs/appendix/debugging.mdx` covers the mechanism, and `kira debug --prepare` is the contract underneath it.

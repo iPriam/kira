@@ -1,0 +1,115 @@
+---
+title: Procedural Macros
+description: "`comptime macro`: the four kinds, appliesTo, field triggers and replace mode, expansion ordering, and the function/attribute/derive call shapes."
+---
+
+```kira
+comptime macro Name {
+    kind { function }                       // or: attribute | derive | wrapper
+    appliesTo { struct, class, enum, form } // required except for `function`
+    trigger { field }                       // optional: auto-apply from a field
+    replace { true }                        // optional: output REPLACES the declaration
+
+    expand(input: Syntax) -> Syntax {       // function:  (Syntax)      -> Syntax
+        body                                // attribute: (Declaration) -> Syntax
+    }                                       // derive:    (Declaration) -> Syntax
+}                                           // wrapper:   (Declaration, Declaration) -> Syntax
+```
+
+`kind` is required and fixed to one of the four words; it determines both the call syntax and the signature of `expand`. `appliesTo` lists the declaration kinds the macro is legal on and is required for everything but `function`; `form` admits construct-backed declarations. `expand` is the one member every `comptime macro` must define, and its body is ordinary Kira run at compile time.
+
+## Field Triggers and Replace Mode
+
+Two opt-in members extend attribute macros.
+
+`trigger { field }` auto-applies the macro to a whole declaration whenever one of its *fields* carries an annotation matching the macro's name. That is the property-wrapper shape: the macro sees the full declaration and the field annotation is only the trigger. A field-triggered macro must also be `replace { true }` (`KMAC029`), since its purpose is rewriting the declaration that carries the field.
+
+`replace { true }` makes the macro's output take the annotated declaration's place instead of being appended alongside it. At most one replace-mode macro may apply to a declaration (`KMAC028`): a second replacer would have no original left to observe.
+
+## Expansion Ordering
+
+Every attribute and derive macro observes the **original** declaration; no macro ever sees another macro's output. Outputs are concatenated with the original in the source order of the annotations. Because no macro sees another's output, sibling-generated blocks can never form an ordering dependency on each other.
+
+## Function-Like Macros
+
+The case a declarative `macro` cannot reach is one where the output size depends on the input.
+
+```kira
+comptime macro bitflags {
+    kind { function }
+
+    expand(input: Syntax) -> Syntax {
+        let names: [Identifier] = input.identifiers()
+        var constants: [Syntax] = []
+        var value: Int = 1
+        for name in names {
+            constants.append(quote { function #{name}() -> Int { return #{value} } })
+            value = value * 2
+        }
+        return quote { #{constants} }
+    }
+}
+
+bitflags!(Read, Write, Execute)
+```
+
+A `function` macro works in all three positions. At file scope its expansion must be declarations; in statement position it must parse as statements (`KMAC016`); in expression position it must be a single expression (`KMAC017`).
+
+## Attribute and Derive Macros
+
+Both attach to one declaration, see only that declaration, and return syntax added alongside it. They differ only in how they are written: `@Name` for an attribute, `@Derive(Name, …)` for a derive, which is list-friendly.
+
+```kira
+comptime macro MemberwiseInit {
+    kind { derive }
+    appliesTo { struct }
+
+    expand(target: Declaration) -> Syntax {
+        var parameters: [Syntax] = []
+        var assignments: [Syntax] = []
+        for field in target.fields {
+            parameters.append(quote { #{field.name}: #{field.type.asSyntax()} })
+            assignments.append(quote { self.#{field.name} = #{field.name} })
+        }
+        let parameterList: Syntax = Syntax.join(parameters, separator: ", ")
+        return quote {
+            extend #{target.name} {
+                init(#{parameterList}) { #{assignments} }
+            }
+        }
+    }
+}
+```
+
+`@Derive(X)` where `X` is not a derive-kind macro is `KMAC011`, and applying a macro to a declaration kind outside its `appliesTo` is `KMAC007`.
+
+## Naming a Program's Enums
+
+A macro body may name any enum the program declares, and gets a case back.
+
+```kira
+enum ShaderBackend { Msl Wgsl Glsl Hlsl Spirv }
+
+comptime macro pick {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let target = ShaderBackend.Glsl
+        match target {
+            Msl -> { return quote { "metal" } }
+            Wgsl -> { return quote { "webgpu" } }
+            Glsl -> { return quote { "opengl" } }
+            Hlsl -> { return quote { "d3d" } }
+            Spirv -> { return quote { "vulkan" } }
+        }
+    }
+}
+```
+
+The evaluator reads the program's enum declarations, so `ShaderBackend.Glsl` is the case rather than a field of some value called `ShaderBackend`. A case the enum does not have is refused by name, and the refusal lists the ones it does:
+
+```text
+error[KMAC020]: … does not support `ShaderBackend.Gsl`, because `ShaderBackend`
+has no case `Gsl` — it has `.Msl`, `.Wgsl`, `.Glsl`, `.Hlsl`, `.Spirv`
+```
+
+That is the whole reason to prefer a case over a string here. A misspelled or renamed string is a value like any other: it travels, and fails wherever it is finally compared. A case fails at the line that writes it.

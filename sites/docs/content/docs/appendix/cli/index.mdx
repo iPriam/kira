@@ -1,100 +1,61 @@
 ---
 title: CLI Overview
-description: The real `kira` command surface and the normal developer workflows around it.
+description: The `kira` verbs, the default path argument, and the difference between the installed toolchain and the checkout you are editing.
 ---
 
-The repo currently exposes the toolchain through `kira`.
-
-The live help text is:
+`kira` is a launcher over the selected toolchain. `kira help` prints the verb list.
 
 ```text
-kira <command> [args]
-  run [--backend vm|llvm|hybrid] [path]
-  build [--backend vm|llvm|hybrid] [path]
-  check [path]
-  tokens [path]
-  ast [path]
-  shader check [file.ksl]
-  shader ast [file.ksl]
-  shader build [file.ksl]
-  sync [path]
-  add <Package>
-  remove <Package>
-  update [path]
-  package pack [path]
-  package inspect <archive-path|project-dir>
-  new <Name> <destination>
-  help
-  version
+kira run                compile and run a program on the VM
+kira debug              run a program under the debugger
+kira tokens             print a file's lexical tokens
+kira ast                print a file's syntax tree
+kira doc                render documented declarations as Markdown
+kira check              analyze a program without running it
+kira lint               report what a package's `linter.kira` asks about
+kira test               build and run a program's tests
+kira build              compile to an application or library artifact
+kira ffi                inspect and bind native libraries
+kira profile            record and read a sampled profile of a run
+kira shader             build every KSL shader and report what each target emitted
+kira new                scaffold a new project
+kira sync               write `kira.lock` from the package manifests
+kira add                add a dependency
+kira remove             remove a dependency
+kira update             update dependencies
+kira package            build a library package for distribution
+kira migrate-manifest   upgrade a manifest to the current format
+kira live               run with live reload
+kira export             generate a per-platform project (Xcode, CMake, web)
+kira --version          print the version
 ```
 
-## Everyday Flow
+`--version` is a flag rather than a verb, because that is the spelling every tool teaches a caller's fingers.
 
-For source iteration:
+## The Path Argument
 
-```bash
-kira run examples/hello
-kira check examples/hello
-kira run
-kira check
-```
+`run`, `build`, `check`, `test`, `debug`, `lint`, `doc`, `sync`, and `update` all take an optional `[file|dir]`. Omitting it means the package directory you are standing in. A directory holding no `package.kira` is refused by name rather than searched upward from.
 
-When no path is provided, `run`, `build`, `check`, `tokens`, and `ast` use the current directory and prefer `kira.toml`, then legacy `project.toml`.
+Everything after `--` goes to the program rather than to `kira`.
 
-For backend-specific execution:
+## Provisioning Is knvm's Job
 
-```bash
-kira run --backend llvm examples/callbacks
-kira run --backend hybrid examples/hybrid_roundtrip
-```
+`kira` does not fetch its own engines. `knvm install-llvm` and `knvm install libffi` do, because `knvm` is what owns every managed install, and because a `kira` that could fetch LLVM would be a binary that had to exist before the thing it installs. See [Toolchains](/docs/appendix/toolchains).
 
-For shader work:
+## The Checkout You Are Editing
 
-```bash
-kira shader check examples/shaders/textured_quad.ksl
-kira shader ast examples/shaders/textured_quad.ksl
-kira shader build examples/shaders/textured_quad.ksl
-```
-
-For artifact creation:
-
-```bash
-kira build examples/hello
-kira build --backend llvm examples/hello
-kira build --backend hybrid examples/hybrid_roundtrip
-```
-
-## CLI vs A Checkout You Are Changing
-
-Use `kira` when you are exercising the installed or managed toolchain.
-
-When you are changing the CLI itself, install the checkout as the `dev`
-toolchain and keep typing `kira`:
+Install it as the `dev` toolchain and keep typing `kira`:
 
 ```bash
 knvm binstall
 ```
 
-`binstall` builds the enclosing checkout and selects it, so every later `kira`
-runs what you just compiled. To run one command without selecting anything:
+Or run one command without selecting anything:
 
 ```bash
 cargo run -p kira-cli --bin kira -- run examples/hello
 ```
 
-## Logging And Diagnostics
+## Diagnostics
 
-The CLI writes structured KiraLog lines such as:
-
-```text
-[info] frontend.started: Frontend compilation started. command=run path=examples/hello/app/main.kira
-```
-
-When compilation fails, the CLI renders Kira-native diagnostics with:
-
-- a diagnostic code
-- a title
-- the source location and caret
-- optional help and notes
-
-That is a deliberate design choice: invalid Kira input should fail as Kira, not as a raw Zig panic or linker crash.
+A failing command renders Kira-native diagnostics with a code, a title, the source location and caret, and any help or notes. Invalid Kira fails as Kira, at the pass that found it, rather than as an internal panic or a raw linker message. See [Diagnostics](/docs/appendix/diagnostics).

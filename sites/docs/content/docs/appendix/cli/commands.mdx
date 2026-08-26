@@ -1,249 +1,180 @@
 ---
 title: Command Reference
-description: Command-by-command behavior for the current `kira` CLI.
+description: Every `kira` verb, its arguments, and what it does.
 ---
+
+Every verb that takes `[file|dir]` defaults to the package directory you are standing in. Everything after `--` goes to the program.
 
 ## `run`
 
 ```bash
-kira run [--backend vm|llvm|hybrid] [--trace-execution] [--offline] [--locked] [--timings] [--quit-after <duration>] [<project-dir|kira.toml|project.toml>]
+kira run [file|dir] [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
+         [--release] [--emit-llvm-ir] [--quit-after 5s] [--timings] [--show-notes]
+         [-- <args...>]
 ```
 
-- default backend: VM
-- `--backend llvm`: builds and runs a native executable
-- `--backend hybrid`: builds a hybrid manifest, bytecode sidecar, and native shared library, then runs the mixed module
-- `--trace-execution`: debug-only stderr trace for VM/native/bridge/trampoline transitions during `run`
-- `--quit-after`: bound the run (`5s`, `5000ms`, or `5`), useful for smoke tests of long-running apps
-- `--offline`: use only cached dependencies
-- `--locked`: require the existing lockfile state
-- when no path is given, Kira uses the current directory and prefers `kira.toml`, then legacy `project.toml`
-- the default VM path can print scalar values plus named struct values
+Reports diagnostics, then executes a clean program in this process. `--backend vm` is the default.
 
-`--trace-execution` is meant for backend debugging. In hybrid mode it makes bridge entry, callback return, struct/class materialization, copy-back, and print-side ownership visible without changing normal program output.
+A wasm device does not run on this machine: it builds a module and serves it to a browser, which is what running a Kira program on the Web means.
 
-## `live`
+`--quit-after` ends the process that long after the program starts. The engines run the program in this process, and a program that owns a window returns only when a person closes it, so the deadline is the process's rather than a callee's.
 
-```bash
-kira live [desktop|macos|ios|ios-simulator|ios-device|tvos|visionos|web|windows|linux] [<target>] [--backend vm|llvm|hybrid] [--watch|--no-watch] [--quit-after <duration>]
-```
-
-Starts a networked live server/client session: the program builds into a `.klbundle`, a runner downloads and hosts it, and saved source rebuilds into the running app. `--quit-after` bounds the session without bypassing the live handshake; watching is automatic at a terminal. Desktop is complete; macOS/iOS run inside an exported Xcode app; web serves the built page; other platforms are audited honestly. See [Live & Hot Reload](/docs/appendix/platforms/live-and-hot-reload).
+`run` refuses a cross `--target`: it has to start what it built.
 
 ## `build`
 
 ```bash
-kira build [--backend vm|llvm|hybrid|wasm32-emscripten] [--target wasm32-emscripten] [--offline] [--locked] [--timings] [<project-dir|kira.toml|project.toml>]
+kira build [file|dir] [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
+           [--target arch-os-abi] [--sysroot <dir>]
+           [--relocation-model pic|static] [--linkage dynamic|static]
+           [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]
 ```
 
-Libraries are validated as package roots; apps and examples emit backend artifacts. Current output conventions:
-
-- VM: writes `<name>.kbc`
-- LLVM/native: writes a host executable plus its object file
-- hybrid: writes `<name>.khm`, `<name>.kbc`, a native object file, and a shared library sidecar, and stages the standalone executable as `.kira-build/<name>`
-- `wasm32-emscripten`: lowers through the LLVM backend to a WASM module
-
-## `test`
-
-```bash
-kira test [--backend vm] [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
-```
-
-Builds a target in test mode and executes its `comptime Test { ... }` declarations.
+Compiles to an application or library artifact under `.kira-build/`. See [Running Programs](/docs/appendix/getting-started/running-programs#where-artifacts-land) for the output shapes and [Cross Compilation](/docs/appendix/toolchains/cross-compilation) for the target flags.
 
 ## `check`
 
 ```bash
-kira check [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
+kira check [file|dir] [--device host|wasm32|wasm64] [--target arch-os-abi]
+           [--timings] [--show-notes]
 ```
 
-`check` does more than syntax-only validation. It currently:
+Reports diagnostics and never executes. It runs the whole frontend, which includes resolving imports, preparing native libraries, and generating autobindings.
 
-- lexes and parses the file
-- resolves imports
-- prepares matching native libraries for imported autobinding modules
-- runs autobinding generation when those imports require it
-- runs semantic analysis
+The machine matters even though nothing is emitted: autobind generates per target and native-library rows are selected per target, so a program that checks clean for this machine can fail for another one on a library it declares no row for. `kira check --target aarch64-linux-gnu` is exactly that question.
 
-Successful output is simply:
-
-```text
-check passed
-```
-
-## `tokens`
+## `test`
 
 ```bash
-kira tokens [<project-dir|kira.toml|project.toml>]
+kira test [file|dir] [--backend vm|llvm|hybrid] [-- <args...>]
 ```
 
-Prints lexer tokens with:
+The same pipeline `run` drives, with one difference: the entrypoint is the generated `kiraTestMain` rather than `@Main`. A suite therefore needs no `@Main` of its own, and one that has an application entrypoint keeps it, so `kira run` on the same package still runs that.
 
-- token kind
-- lexeme
-- byte range
+The compiler knows neither the `Test` family nor the protocol behind that entrypoint: both are Kira source in the test package. See [Testing](/docs/foundation/testing).
 
-When no path is given, Kira uses the current directory and prefers `kira.toml`, then legacy `project.toml`.
-
-This is useful when you are adjusting syntax or trying to understand a parser failure.
-
-## `ast`
+## `debug`
 
 ```bash
-kira ast [<project-dir|kira.toml|project.toml>]
+kira debug [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch]
+           [--lldb|--lldb-dap] [--dap-continues n] [--prepare] [-- <args...>]
 ```
 
-Prints the parsed AST from `kira_syntax_model`.
+Stops a running program and shows what it is doing, on all three backends. See [Debugging](/docs/appendix/debugging).
 
-Use it when you want to confirm that the parser understood a construct, annotation, or content block the way you expect.
-
-When no path is given, Kira uses the current directory and prefers `kira.toml`, then legacy `project.toml`.
-
-## `shader check`
+## `profile`
 
 ```bash
-kira shader check [<file.ksl>]
+kira profile record|report|annotate|script|stat|diff [...]
 ```
 
-Runs the dedicated `.ksl` shader lexer, parser, import loader, semantic pass, and typed shader IR validation.
+Records where a program spends its time and reads the recording back. Recordings default to `kira.profile` in the working directory. See [Profiling](/docs/appendix/profiling).
 
-## `shader ast`
+## `live`
 
 ```bash
-kira shader ast [<file.ksl>]
+kira live [runner] [file|dir] [--backend vm|llvm|hybrid] [--watch|--no-watch]
+          [--quit-after 5s]
 ```
 
-Dumps the parsed KSL module shape without routing through the executable `.kira` frontend.
+Builds the program into a `.klbundle`, serves it over a loopback socket, and runs it on a runner client. Unlike `run`, it does not execute the program in this process: the app is hosted somewhere that can outlive the compiler and take a new bundle later.
 
-## `shader build`
+Runner ids: `desktop`, `macos`, `ios`, `ios-simulator`, `ios-device`, `tvos`, `visionos`, `windows`, `android`, `web`, `linux`. The first positional is a runner id if it names one and a path otherwise, so `kira live ios` is the iOS runner and `kira live ./ios` is a directory.
 
-```bash
-kira shader build [<file.ksl>] [--out-dir <dir>]
-```
-
-- with an explicit `.ksl` file, emits GLSL 330 vertex/fragment source plus reflection JSON into `generated/shaders/` by default
-- with no explicit file, discovers top-level PascalCase `*.ksl` entry shaders under `Shaders/` in the current project root and writes outputs to `generated/Shaders/`
-- `--target glsl_330|wgsl|hlsl|msl|spirv` selects the backend; all five emit graphics shader source (SPIR-V as textual assembly), with GLSL 330 as the default
-- compute shaders are part of the source language and semantic model, but the current graphics backends reject them intentionally with a clear diagnostic
-
-See [KSL Shaders](/docs/appendix/shaders) for the language surface.
-
-## `ffi`
-
-```bash
-kira ffi autobind [--backend vm|llvm|hybrid|wasm32-emscripten] [--offline] [--locked] [<project-dir|kira.toml|source>]
-```
-
-Regenerates native FFI bindings explicitly, instead of doing heavy autobinding during normal `check`/`build`/`run` flows.
-
-## `instruments`
-
-```bash
-kira instruments run <target> --backend runtime|llvm|hybrid --track memory|cpu --duration <time> --sample-rate <rate> [--fail-on-growth <bytes>] [--json-out <path>]
-```
-
-Runs a target under process instrumentation, sampling memory and/or CPU. `--fail-on-growth` turns sustained memory growth into a non-zero exit, which is useful for leak regression gates.
+See [Live and Hot Reload](/docs/appendix/platforms/live-and-hot-reload).
 
 ## `export`
 
 ```bash
-kira export apple|macos|ios|tvos|visionos|windows|android|web|linux [<project-dir|kira.toml>] [--profile debug|profiler|release] [--surface dom|webgpu|hybrid]
+kira export <apple|macos|ios|tvos|visionos|windows|android|web|linux> [dir]
+            [--profile debug|profiler|release] [--surface dom|webgpu|hybrid]
 ```
 
-Generates platform project/export scaffolds (Xcode workspace, Visual Studio/CMake presets, Gradle, or a Web/WASM bundle). The target defaults to the current project. See [Exports](/docs/appendix/platforms/exports).
+Generates a per-platform project: an Xcode workspace, a Visual Studio or CMake preset set, a Gradle scaffold, or a servable Web bundle. Everything lands under `exports/`. The command needs a package to build from. See [Exports](/docs/appendix/platforms/exports).
 
-## Managed Engines
-
-The compiler CLI does not fetch its own engines; `knvm` does, because it is what
-owns every managed install:
+## `shader`
 
 ```bash
-knvm install-llvm
-knvm install libffi
+kira shader build [--target <name>] [--emit <name>]
 ```
 
-See [LLVM Toolchain](/docs/appendix/toolchains/llvm) for the pin, the discovery
-order, and the install paths.
+Builds every `.ksl` file in the package for all five targets and reports what each emitted, writing the sources into `generated/shaders/`.
 
-## `sync`
+A build alone cannot answer that question: a target that cannot express a shader leaves empty sources plus a note rather than failing, so a shader can build clean, hand the driver an empty string, and fail at shader creation with an empty info log. This verb makes that visible.
+
+`--emit <target>` prints one target's source instead of the summary. See [KSL Shaders](/docs/appendix/shaders).
+
+## `ffi`
 
 ```bash
-kira sync [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
+kira ffi [file|dir] [--device host|wasm32|wasm64] [--target arch-os-abi]
 ```
 
-Resolves registry, path, and pinned git dependencies, verifies registry archive checksums, fills the local package cache, and refreshes `kira.lock`.
+Inspects and binds native libraries, regenerating autobindings explicitly rather than as a side effect of a `check` or `build`.
 
-## `add`
+## `lint`
 
 ```bash
-kira add <Package>
-kira add --git <url> --rev <commit> <Package>
+kira lint [file|dir]
 ```
 
-Adds a dependency to `kira.toml`, then resolves and locks the graph.
+Reports what the package's own `linter.kira` asks about.
 
-## `remove`
+## `doc`
 
 ```bash
-kira remove <Package>
+kira doc [file|dir]
 ```
 
-Removes a dependency from the manifest and refreshes the lockfile.
+Renders documented declarations as Markdown, reading the consecutive `///` lines above each one.
 
-## `update`
+## `tokens` and `ast`
 
 ```bash
-kira update [<project-dir|kira.toml|project.toml>]
+kira tokens <file>
+kira ast <file>
 ```
 
-Refreshes exact registry versions in the manifest, then re-syncs the lockfile.
-
-## `package pack`
-
-```bash
-kira package pack [<project-dir|kira.toml|project.toml>]
-```
-
-Writes a validated source-only `.tar` archive into `generated/`.
-
-## `package inspect`
-
-```bash
-kira package inspect <archive-path|project-dir>
-```
-
-Prints package metadata and archive contents in a human-readable form.
+Print a file's lexical tokens and its syntax tree.
 
 ## `new`
 
 ```bash
-kira new <Name> <destination>
-kira new --lib <Name> <destination>
+kira new [--app|--library] <dir>
 ```
 
-Scaffolds either an app or a library package.
+Scaffolds a project into an empty directory: `package.kira`, `app/main.kira` (or `app/<name>.kira` for a library), and a README. The package name is the directory's name.
 
-- `kira new DemoApp generated/DemoApp` creates an app template
-- `kira new --lib GraphicsKit generated/GraphicsKit` creates a library template
-
-The library scaffold includes:
-
-- `kira.toml`
-- `kind = "library"`
-- `module_root = "GraphicsKit"`
-- `app/graphicskit.kira` as the root module file
-
-## `version`
+## `sync`, `add`, `remove`, `update`
 
 ```bash
-kira version
+kira sync [file|dir]
+kira add <name> (--path <dir>|--version <version>|--git <url>) [dir]
+kira remove <name> [dir]
+kira update [file|dir]
 ```
 
-Prints the launcher identity and version string.
+`sync` resolves the package graph and writes `kira.lock`. `add` and `remove` edit `package.kira` and refresh the lockfile. `update` re-resolves the graph and re-syncs; it fetches nothing, because only path dependencies resolve. See [Libraries and Packages](/docs/appendix/cli/packages).
 
-## `help`
+## `package`
 
 ```bash
-kira help
+kira package [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]
 ```
 
-Prints the command summary and current install notes.
+The distribution-facing library build. It refuses an application by name, then delegates to the same build paths `kira build` uses, so a package cannot accidentally be published with an entrypoint in it.
+
+## `migrate-manifest`
+
+```bash
+kira migrate-manifest [dir]
+```
+
+Parses a legacy `kira.toml`, `project.toml`, or `Kira.toml` and renders it as a `package.kira` declaration. The source TOML stays in place so migration is recoverable and a package can compare the two files before removing the old one. It refuses to overwrite an existing `package.kira`.
+
+## `help` and `--version`
+
+```bash
+kira help [all]
+kira --version
+```

@@ -1,0 +1,31 @@
+---
+title: Where Releases Come From
+description: The release source abstraction, the GitHub and directory transports, the offline install route, and what publishing a tag runs.
+---
+
+Everything downstream of the transport, extract, validate, move, select, is one code path, reached through a `ReleaseSource` trait with two operations: list the versions on a channel, and materialize one version's archive locally.
+
+## The Two Sources
+
+**`GitHubReleaseSource`** is the default. It reads the releases API of `kira-lang-com/kira` and picks the asset named `kira-<version>-<host-key>.tar.gz`, where the host key is the same set `kira-toolchain` already uses for LLVM bundles: `aarch64-macos`, `x86_64-linux-gnu`, `x86_64-windows-msvc`.
+
+Transport is a single isolated `curl` subprocess rather than an HTTP crate, which keeps the workspace's external dependencies frozen. `curl` ships with macOS, Linux distributions, and modern Windows, and its absence is a typed error rather than a panic.
+
+Both fetch routes send `GH_TOKEN` or `GITHUB_TOKEN` when either is set, which raises GitHub's unauthenticated rate limit. The token goes to GitHub's own hosts and nowhere else.
+
+**`DirectoryReleaseSource`** reads a directory laid out as `<root>/<channel>/<version>/kira-<version>-<host-key>.tar.gz` and copies the file. Setting `KNVM_RELEASE_DIR` points the binary at one, which is both the offline-install route and what the tests drive: they build a fixture toolchain, archive it with `tar`, and install it, exercising the shipped pipeline with only the transport substituted.
+
+## Publishing
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds each supported host and attaches two archives per platform to a GitHub release, each with its `.sha256` beside it:
+
+- the toolchain archive, named exactly as asset selection expects;
+- `knvm-<version>-<host-key>.tar.gz`, holding `bin/knvm`, `bin/kira`, and the launcher's `bin/kira-language-server` alias.
+
+The second is what the bootstrap scripts and `self-update` fetch, and it is the one manual download: unpack it, put its `bin` on `PATH`, and `knvm install latest` provisions the rest. A `-dev` tag publishes as a GitHub prerelease, which is the `dev` channel.
+
+The LLVM bundles are published separately, once per pin, by `release-llvm-toolchains.yml` under the release tag `llvm-metadata.toml` names, also with a `.sha256` each.
+
+## The Verify Step
+
+Nothing uploads until the same job has installed from the just-packed archive with the just-built `knvm` (`KNVM_RELEASE_DIR`, throwaway `KIRA_HOME`) and run the installed compiler through the `kira` launcher on an `import Foundation` program. A tag that would publish a broken toolchain fails in that step instead of shipping.

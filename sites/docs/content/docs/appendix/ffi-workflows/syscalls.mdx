@@ -1,0 +1,71 @@
+---
+title: System Calls
+description: "`@FFI.Syscall`: one instruction, no library, why the compiler owns the number, the register-word signature, and which calls a host may serve under the interpreter."
+---
+
+`@FFI.Extern`'s sibling, and the one member of the family that names no library.
+
+```kira
+@FFI.Syscall { name: write; }
+function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+
+@FFI.Syscall { name: exit_group; }
+function sysExit(status: Int);
+```
+
+It lowers to one instruction, `svc #0` on AArch64 and `syscall` on x86-64, with the call number and the arguments in the registers the kernel reads them out of. Nothing is bound, nothing is looked up, and no libc is involved.
+
+That is the whole point: the program this exists for is PID 1 in an initramfs with no dynamic loader, and a `write` that resolves through a shared object is a program that never starts. `packages/linux` is the typed surface over it, and `tests-kik/syscall-harness` is the suite.
+
+## The Program Names the Call and the Compiler Owns the Number
+
+That is not a convenience. `write` is 64 on AArch64 and 1 on x86-64, and Kira has no conditional compilation and no way for a program to ask what machine it is being built for, so a number written in Kira source would have to be wrong on one of them. Naming the call keeps the source arch-neutral and lets an unsupported call or an unsupported machine be refused *by name*, at compile time, instead of entering the kernel with a number that means something else there.
+
+The block carries one field, `name`, written the way `man 2` writes it, `exit_group` rather than `exitGroup`, so a declaration is something a reader can look up. `library`, `symbol`, and `abi` are refused rather than ignored: an author who wrote `library: libc` believes the call goes through libc, and it does not.
+
+The calls the compiler has numbers for are `read`, `write`, `mount`, `umount2`, `reboot`, `execve`, `wait4`, `exit_group`, and `sync`. Any other name is `KSEM279`, which lists them.
+
+## The Signature Is Register Words
+
+At most six arguments (`KSEM282` for a seventh, because there is no register for it), and each of them an integer of any width, a `RawPtr`, or, as an argument only, a `CString`, whose transient NUL-terminated copy is what the pointer register receives. A `Float` has no register in the sequence and an aggregate has no single word, so both are `KSEM283`.
+
+A declaration's written width is what reaches the register: `fd: I32` arrives sign-extended exactly as it would through an `@FFI.Extern`, so one annotation never disagrees with the other about the same signature.
+
+`exit_group` does not return, and the compiler knows: a declaration that names a result for it is `KSEM284`, because that is a value nothing can ever produce, and the code generator marks the point after the call unreachable so a caller writes no statement it could not reach.
+
+## Two Refusals About the Machine
+
+They are separate because they have separate fixes.
+
+`KSEM280` is a target that is not Linux. macOS is deliberately excluded even on the same processors, because its numbers are not a stable interface: Apple supports libSystem and the numbers move between releases, so Kira has none it would stand behind.
+
+`KSEM281` is Linux on a processor Kira emits no entry sequence for. It emits for `aarch64` and `x86_64`.
+
+Both are asked of the machine the build *targets*, not the one running the compiler, so `kira check --target aarch64-linux-gnu` from a Windows host answers about the aarch64 program rather than about Windows.
+
+## Where the Instruction Lives
+
+A system call is an instruction, so the body that holds one has to be native. `--backend llvm` makes every body native and needs nothing said. On hybrid the distinction is real and the rule is the one `@Native` already states: the call site belongs in the native half, and ordinary Kira code reaches it across the bridge exactly as it reaches any other `@Native` function. That is why every function in `packages/linux` carries `@Native`.
+
+## Under the Interpreter
+
+The interpreter emits no instruction, so it does not make the call. It asks its host, through the same seam it reaches a file or a native function by, and the host makes the call in the process it is standing in. A host that stands nowhere near a Linux kernel refuses by name rather than answering a number the program would read as a count.
+
+**Whether a host may serve a call at all is a property of the call, not of the host**, because under the interpreter the process is the interpreter rather than the program.
+
+`read`, `write`, and `ppoll` take a descriptor the program already holds and say what they did, so a host making one on the program's behalf is indistinguishable from the program having made it. That is what lets a `--backend vm` run of such a program be compared byte for byte against a native one.
+
+The other seven are refused by name before the program starts, each with what it would have done:
+
+| Call | What it would do to the interpreter |
+| --- | --- |
+| `execve` | Replaces the interpreter's own image, so the VM ceases to exist mid-program. |
+| `exit_group` | Ends it in the middle of the program it is running. |
+| `wait4` | Reaps the interpreter's children rather than the program's. |
+| `mount`, `umount2`, `reboot`, `sync` | Act on the machine of whoever ran the command. |
+
+The refusal is decided from the calls a program *names*, so a package declaring one of the seven is refused whether or not it calls it.
+
+Taking a descriptor is the test, and it is narrower than "acts on files". `sync` is the call that shows the difference: it is filesystem work with no descriptor to bound it, so it writes back every mount on the machine rather than the program's own files, which is the `mount`/`reboot` case wearing a file-shaped name. `fsync(fd)` is what would be servable. The distinction is not academic: served under the interpreter on a 9p mount, `sync` parks in the kernel uninterruptibly, and the run cannot be killed.
+
+`tests-kik/syscall-parity-harness` runs on all three engines for exactly this reason, and `tests-kik/syscall-harness` keeps the seven and runs on the two that emit the instruction.

@@ -1,0 +1,55 @@
+---
+title: Compiling Kira From Kira
+description: "`Kira/Compiler.kira`: checking a package set from a Kira program, why the unit is a package set rather than a string, and which hosts grant the capability."
+---
+
+`Kira/Compiler.kira` lets a Kira program compile Kira. The unit is a **package set**, not a source string: `checkPackages` takes a `KiraCheckRequest`, a list of `KiraPackage`, each a `package.kira` text plus its named source files with one of them named as the root, and answers with a `KiraCheckResult` holding typed `KiraCheckDiagnostic` values.
+
+```kira
+import Foundation
+
+@Main
+function main() {
+    var package = KiraPackage()
+    package.manifest = "Package App {\n    let kind = .App\n}\n"
+    var file = KiraSourceFile()
+    file.path = "app/main.kira"
+    file.text = "@Main function main() { print(missing) return }"
+    package.files.append(file)
+
+    let result = checkPackage("App", package)
+    print(result.ok())                                 // false
+    print(result.has(.KSEM060, "app/main.kira"))       // true
+    return
+}
+```
+
+## Why a Package Set
+
+The bugs worth catching are multi-file.
+
+- An `import` is written per file and binds that file only, so `import Foundation` in `app/A.kira` is invisible in `app/B.kira`.
+- A package is one flat namespace, so two of its files declaring one name collide.
+- A library plus the app on top of it is two packages with an edge between them.
+
+None of that can be said with one string of source.
+
+## Diagnostics
+
+Each diagnostic carries the code as a `KiraError` value, its severity, and the **file** it points into, so a test asserts `.KSEM061` in `app/FileC.kira` rather than matching text that gets reworded.
+
+`codeText` carries the code exactly as the compiler wrote it, for a code this Foundation's enum does not list. `kiraErrorFromCode` in `Kira/DiagnosticCodes.kira` is the mapping, and it answers `.Unrecognized` for one it does not know.
+
+## What It Touches
+
+Nothing reaches a disk. The files checked are the ones written in the request and no others, so two checks cannot see each other's work and nothing is left behind. The one exception is a bundled package an `import` names, which is Foundation itself.
+
+Checking runs the frontend and nothing after it: no IR, no code generation, no linker, so a suite of these needs no toolchain installed.
+
+## Which Hosts Grant It
+
+Underneath, this is a host capability like the filesystem. The VM describes the request and hands it to its host; native code calls `kira_rt_compiler_check_packages`. Both reach one `kira-check` session, which is what makes the backends agree.
+
+A host with no compiler, an embedded VM or a browser tab or a test, refuses **by name** rather than answering "no diagnostics", which would read as "it compiled". `kira` is the host that grants it, because `kira` is what links the frontend.
+
+A native build links the compiler only when the program reaches it: `kira` links `libkira_compiler_bridge.a` for a program that calls `kcCheckPackages` and the small `libkira_native_bridge.a` for every other, so no Kira program carries a compiler it never calls.

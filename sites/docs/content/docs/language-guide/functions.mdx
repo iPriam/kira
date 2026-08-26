@@ -1,192 +1,117 @@
 ---
 title: Functions
-description: Function declarations, parameters, return types, calls, entrypoints, and execution annotations in the current Kira toolchain.
+description: Declarations, parameter defaults, ownership at the call site, closures and capture, function values, and the floating-point primitives the compiler answers directly.
 ---
 
-Functions are central to both the runnable subset and the broader language surface.
-
-## Declaring a Function
-
-```ts
-function projectedRunway() -> Int {
-    let quarterOne = 3 + 1;
-    let quarterTwo = quarterOne + 2;
-    let quarterThree = quarterTwo + 3;
-    return quarterThree;
+```kira
+function projectedRunway(quarters: Int) -> Int {
+    var total = 0
+    for i in 0..quarters { total = total + i }
+    return total
 }
 ```
 
-Current rules worth knowing:
+Parameters require explicit types. A result type is written after `->`, or after `:` when the result is itself a function type, because `->` would be ambiguous with the function type's own arrow. A body is a block, except for an `@FFI.Extern` or `@FFI.Syscall` declaration, which ends at `;` and has none.
 
-- parameters require explicit types
-- return types may be explicit or inferred from `return`
-- ordinary functions use a block body
-- `@FFI.Extern` functions are declared with `;` instead of a body
+## Parameter Defaults
 
-## Entrypoints
+A parameter may declare a default with `=`, and a call may then omit its argument.
 
-`@Main` marks the single program entrypoint:
+```kira
+function step(base: Int, by: Int = 1, tag: Int = 100) -> Int {
+    return base + by + tag
+}
 
-```ts
-@Main
-function main() {
-    return;
+print(step(1))               // 102, both defaults filled
+print(step(1, 5))            // 106, one default filled
+print(step(base: 1, tag: 9)) // 11, a labeled call omits the middle default
+```
+
+A positional call fills omitted **trailing** arguments; a labeled call may omit any defaulted parameter, middle ones included. Every call path fills the same way: a free function, a method, and a construct-family modifier alike. A parameter with no default is still mandatory, and omitting it is `KSEM062`.
+
+The default is resolved **once**, in the file the function was declared in, so it may name that file's helpers regardless of where the call is written, and the resulting value is reused at every call that omits the argument. Two defaults that fill each other through the call graph have no finite value and are refused with `KSEM240`.
+
+## Ownership at the Call Site
+
+A plain parameter consumes the value it is given, so passing a *named* non-trivial value to one must write `move`.
+
+```kira
+function consume(v: Vec3) -> Int { return v.x + v.y + v.z }
+function sum(v: borrow Vec3) -> Int { return v.x + v.y + v.z }
+
+print(sum(v))            // a borrow reads and gives back; `v` survives
+print(consume(move v))   // this takes `v` away
+print(v.x)               // KSEM107: `v` was moved
+```
+
+There are five modes: `owned` (the default), `borrow`, `borrow mut`, `move`, and `copy`. [Memory and Safety](/docs/language-guide/memory-and-safety) covers what each one costs and which values need a spelling.
+
+## Closures
+
+A closure is a function value, written `{ params in body }`; its type is written `(A, B) -> R`. A closure never annotates its parameters, so a literal only makes sense where a function type is already expected: an annotation, an argument, a field, or a `return`. Nowhere else says what the parameters are, and guessing is refused (`KSEM134`) rather than attempted.
+
+```kira
+function apply(f: borrow (Int) -> Int, x: Int) -> Int { return f(x) }
+
+function makeAdder(step: Int): (Int) -> Int {     // a result type after `:`
+    return { value in return value + step }
+}
+
+let scale: (Int) -> Int = { v in return v * 2 }   // one parameter
+let pick: (Int, Int) -> Int = { a, b in return a }
+let now: () -> Int = { in return 1 }              // zero parameters: a bare `in`
+
+each { value in print(value) }                    // trailing: the last argument
+runWithConfig(2) { frame in draw(frame) }         // after the other arguments
+```
+
+A top-level function name is a function value too. An expected function type checks its parameter and result types exactly; without an expectation, the function's signature supplies the type. A mismatch is `KSEM212`.
+
+**A closure costs no opcode, no IR node, and no backend code.** A function type becomes a synthesized struct, a tag plus the captures of every literal of that type; a literal becomes a lifted top-level function plus a value of that struct; and a call through a closure value becomes a call to a synthesized dispatcher that branches on the tag. Every construct that reaches the IR is one every backend already ran.
+
+### Capture
+
+**A `let` is captured by value; a `var` is shared.** Which applies is decided by how the binding was declared.
+
+- A `let` of `Int`, `Float`, or `Bool` is copied into the closure when it is built. A `let` of `String`, struct, array, or enum is refused (`KSEM117`): those own heap storage, and only the scalars copy for free.
+- A `var` a closure mentions moves into a **capture cell** at its declaration, a share-counted heap box, and the closure holds a share of it. A write through either side is visible through the other, and the box outlives the frame that declared it, so a closure that escapes keeps working.
+
+```kira
+function makeCounter(): () -> Int {
+    var seen = 0
+    return { in
+        seen = seen + 1
+        return seen
+    }
 }
 ```
 
-Current semantic validation proves that:
+A `var` with no storage of its own has no shared form and is still refused (`KSEM117`): a `borrow mut` parameter names the caller's storage, and a recovered callback-state view is a window into a host's.
 
-- exactly one `@Main` must exist for a runnable program
-- `@Main` may not declare parameters
+A cell never crosses the C seam, the hybrid seam, or into `Any`, because a hold taken outside this runtime is a hold nothing releases. A cell holding a closure that captures the same cell is a cycle share counts cannot collect: it leaks, memory-safely and permanently.
 
-## Return Types and Inference
+Captures nest and shadow the way bindings do. A closure two deep captures an outer binding *through* the closure between it rather than reaching past it, a parameter shadows a capture of the same name, and a name is readable as a capture before an inner `let` of that name rebinds it.
 
-Kira allows local and return inference when the answer is unambiguous.
+A closure lifted out of a method has no `self`, so a bare field name in its body is an undefined name rather than a silent capture.
 
-```ts
-function renderFooter() -> Int {
-    let pages = 8 + 2
-    let appendices = pages + 1
-    return appendices;
-}
+## Floating-Point Primitives
+
+`sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, and `abs` are free functions the compiler answers directly. Each takes a `Float` and answers one.
+
+```kira
+let hypotenuse = sqrt(a * a + b * b)
+let wave = sin(phase) * amplitude
 ```
 
-If different `return` statements would imply different types, the semantics layer raises `KSEM030` and asks for an explicit return type.
+They are primitives rather than library code because every target already has them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language whose users reach a square root through eight Newton iterations has an approximation where it should have an answer. `sqrt(2.0)` is exact to the last bit.
 
-## Calling Functions
+A program may still define its own `sqrt`: the primitive answers only when nothing else does.
 
-The repo proves several call shapes:
+## Overloading
 
-- direct local calls such as `helper()`
-- namespaced calls such as `callbacks.kira_invoke_callback(...)`
-- labeled construction-style calls such as `Rect(x: 0.0, y: 0.0, ...)`
-- indirect calls through function-typed locals and fields
-- trailing callback blocks for calls whose final parameter has a function type
+Several declarations may answer to one name when their parameter lists differ, by type or by arity. It works for free functions, for struct, class, and construct-backed methods, and a subclass may override one overload and inherit the rest.
 
-The builtin `print(...)` is a real compiler-recognized call path in the runnable subset.
+Two rules pick among them at a call:
 
-## Ownership In Signatures
-
-Kira uses function signatures to describe whether a parameter borrows or consumes:
-
-```ts
-function inspect(mesh: borrow Mesh) -> Int {
-    return mesh.vertexCount
-}
-
-function simulate(world: borrow mut World, dt: Float) {
-    return
-}
-
-function upload(mesh: Mesh) -> GpuMesh {
-    return GpuMesh()
-}
-```
-
-At the call site:
-
-- `inspect(mesh)` keeps `mesh` available
-- `simulate(world, 0.016)` requires `world` to be mutable
-- `upload(move mesh)` transfers ownership explicitly when `mesh` is a named non-trivial value
-
-Trivial scalars such as integers, floats, and booleans still pass normally without extra `move` syntax.
-
-Kira also accepts explicit ownership expressions when needed:
-
-```ts
-let gpu = upload(move mesh)
-let value = copy counter
-```
-
-Today, non-trivial `copy` is intentionally rejected rather than lowered implicitly.
-
-## Function Values and Callback Blocks
-
-Function types use the readable arrow form:
-
-```ts
-(GraphicsFrame, RawPtr) -> Void
-() -> Void
-```
-
-Named functions can be stored in a value with a matching function type:
-
-```ts
-function drawFrame(frame: GraphicsFrame, data: RawPtr) {
-    return
-}
-
-let onFrame: (GraphicsFrame, RawPtr) -> Void = drawFrame
-```
-
-Kira also supports non-capturing inline callback blocks when the surrounding code provides an expected function type:
-
-```ts
-let onFrame: (GraphicsFrame, RawPtr) -> Void = { frame, data in
-    print("frame")
-}
-```
-
-The callback block parameter list is checked against the expected function type. Parameter types are not written in the block; they come from the function type. If the expected type is `(GraphicsFrame, RawPtr) -> Void`, the block must declare exactly two parameters.
-
-Callback blocks are valid in the same ordinary function-value positions that provide an expected type:
-
-- typed local declarations
-- assignment to function-typed locals or fields
-- struct/class field initialization
-- direct call arguments
-- trailing block calls where the callee's final parameter is function-typed
-- explicit return positions, such as returning from a function declared `-> (Int) -> Void`
-
-This is the callback-builder surface used by lifecycle-style APIs:
-
-```ts
-app.onInit { graphics, data in
-    let state = nativeRecover(data)
-    return
-}
-
-app.onFrame { frame, data in
-    return
-}
-
-app.onCleanup { graphics, data in
-    return
-}
-```
-
-That syntax is ordinary method-call syntax. `onInit`, `onFrame`, and `onCleanup` are expected to be methods or functions whose final parameter has the matching function type.
-
-Current callback blocks are intentionally non-capturing. A block may use its parameters, locals declared inside the block, top-level functions, imports, and explicitly transported state such as `RawPtr` user data. It may not read an outer local from the surrounding function:
-
-```ts
-let offset = 1
-let callback: (Int) -> Void = { value in
-    print(value + offset) // rejected: callback captures are not supported
-}
-```
-
-Use an explicit parameter or callback user data when state must outlive registration. Direct conversion of inline blocks to named FFI callback pointer types is also not supported yet; pass a named `@Native` function for those FFI slots.
-
-Callable-value ownership metadata is still narrower than ordinary function-call ownership. If a callback-style API needs to preserve an owned value across the callback boundary, the API may still need a small adapter rather than relying on the compiler to infer borrowing there automatically.
-
-## Execution Annotations
-
-Functions may also carry execution annotations:
-
-- `@Main`
-- `@Runtime`
-- `@Native`
-
-These control where a function runs under VM, LLVM/native, or hybrid execution. The details are covered fully in [Execution Model](/docs/language-guide/execution-model).
-
-## Current Runnable Boundary
-
-The guide can treat these as strongly proven today:
-
-- function declarations
-- zero-argument entrypoints
-- local calls in the current lowered subset
-- non-capturing function values and callback blocks in typed callback positions
-- `return`
-- direct extern/native callback flows used by the FFI examples
+- **Specificity.** An argument that *is* the parameter's type beats one erased into it, so a concrete declaration wins over an `Any Family` parameter.
+- **Directness.** An exact arity beats one that leans on a parameter default.

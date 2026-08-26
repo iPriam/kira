@@ -1,78 +1,39 @@
 ---
 title: Execution Model
-description: VM, LLVM/native, hybrid, and how `@Main`, `@Runtime`, and `@Native` shape current Kira execution.
+description: The VM, LLVM/native, hybrid, and Web engines; what @Runtime and @Native mean on each; standalone hybrid deployment; and the parity rule that holds them together.
 ---
 
-Kira currently has three execution targets.
+One program, four engines.
 
-| Target | What runs | Best for |
+| Engine | What runs | Selected by |
 | --- | --- | --- |
-| VM | bytecode under `kira_vm_runtime` | the simplest runnable subset |
-| LLVM/native | native object + host executable | fully native proof targets |
-| hybrid | bytecode, native shared library, and a standalone executable | mixed `@Runtime` and `@Native` programs |
+| VM | bytecode, interpreted | `--backend vm`, the default |
+| LLVM/native | machine code with DWARF | `--backend llvm` |
+| hybrid | bytecode plus a loaded native half, in one process | `--backend hybrid` |
+| Web | the LLVM lowering, through emscripten | `--device wasm32` |
 
-## VM
-
-The default `run` path is the VM:
-
-```bash
-kira run examples/hello
-```
-
-Pipeline:
+## The Shared Pipeline
 
 ```text
-source -> lexer -> parser -> semantics -> IR -> bytecode -> VM
+source -> lexer -> macros -> parser -> semantics -> IR -> backend
 ```
 
-VM is the simplest backend, but it cannot execute `@Native` functions. The fail corpus proves `KBUILD001` when a native entrypoint is forced through VM execution.
+Every backend consumes the same IR. Macro expansion, import resolution, generics, closures, construct families, and trait existentials are all resolved above that line, so a backend never learns they existed. That is why a feature lands on every engine at once rather than one at a time.
 
-The VM also does not execute FFI directly. A declaration that directly calls or references an FFI-bound extern must be marked `@Native`, so the compiler can route that edge through native code rather than pretending bytecode can invoke a C ABI symbol.
+## `@Runtime` and `@Native`
 
-## LLVM / Native
+On hybrid, and only on hybrid, the two annotations are real: a `@Runtime` body stays bytecode and a `@Native` body compiles to machine code, and both run in one process through the bridge.
 
-The native path lowers shared IR through the LLVM path and links a host executable:
+- The VM compiles every function to bytecode, so `@Native` requests nothing there.
+- `--backend llvm` compiles every function to machine code, so `@Runtime` requests nothing there.
 
-```bash
-kira run --backend llvm examples/callbacks
-```
+Neither annotation is contagious. A `@Runtime` function calls a `@Native` one directly and a `@Native` function calls back into `@Runtime`, both through generated trampolines. Values crossing are marshalled as described in [Crossing the Native Seam](/docs/language-guide/structures-and-types#crossing-the-native-seam).
 
-Use it when the program should run natively and the entrypoint is native-capable. The LLVM/native path is no longer meant to be a tiny restricted subset for ordinary Kira programs.
+A system call is an instruction, so a body holding one has to be native. `--backend llvm` needs nothing said; on hybrid, `packages/linux` carries `@Native` on every function so the instruction lands where an instruction can live.
 
-## Hybrid
+## Standalone Hybrid Programs
 
-Hybrid mode makes the mixed model explicit:
-
-- `@Runtime` functions stay in bytecode
-- `@Native` functions compile into native code
-- both sides run in one process through the hybrid runtime and native bridge
-
-Hybrid is VM execution plus native trampolines and bridges. It is not a blanket permission for runtime bytecode to call FFI symbols directly, but it is the normal home for mixed `@Runtime` and `@Native` Kira code.
-
-That execution split is meant to feel natural in ordinary Kira code:
-
-- `@Runtime` code may call `@Native` helpers directly
-- `@Runtime` code may construct, read, and mutate `@Native` structs and classes
-- `@Native` code may call back into `@Runtime` helpers
-- the bridge handles materialization and copy-back across the boundary so `@Native` is an execution/performance boundary, not a usability quarantine
-
-Example:
-
-```bash
-kira run --backend hybrid examples/hybrid_roundtrip
-```
-
-Current output:
-
-```text
-native main
-runtime helper
-native helper
-```
-
-### Standalone programs
-
-`kira build --backend hybrid` produces something the operating system starts, not just a bundle for `kira` to host. The deployment is four files in `.kira-build/`:
+`kira build --backend hybrid` produces something the operating system starts, not just a bundle for `kira` to host. The deployment is four files:
 
 ```text
 .kira-build/<name>            the standalone executable
@@ -81,41 +42,25 @@ native helper
 .kira-build/lib<name>.dylib   the native half (.so on Linux, .dll on Windows)
 ```
 
-The executable is a copy of Kira's hybrid launcher: it loads the manifest beside itself and runs the program through both engines exactly as `kira run --backend hybrid` does in-process. Run it directly:
+The executable is a copy of Kira's hybrid launcher: it loads the manifest beside itself and runs the program through both engines exactly as `kira run --backend hybrid` does in-process.
 
 ```bash
 ./.kira-build/<name>              # uses the .khm beside it
 ./.kira-build/<name> other.khm    # or name a manifest explicitly
 ```
 
-Everything after an explicit `.khm` path is passed to the program as its arguments; with no path argument, the launcher uses the one `.khm` beside the executable.
+Everything after an explicit `.khm` path is passed to the program as its arguments. The directory is the deployment unit: move the four files together, under any names, and the program still runs. If several `.khm` files sit beside the executable, pass the one you mean; if none does, the launcher says so rather than guessing.
 
-The directory is the deployment unit: move the four files together — under any names — and the program still runs. If several `.khm` files sit beside the executable, pass the one you mean; if none does, the launcher says so rather than guessing.
+## The Web Engine
 
-## Debug Trace
+The Web target runs the same LLVM lowering the host does, through emscripten. The portable VM core builds for `wasm32-unknown-unknown` separately, which is what lets a Kira library run inside a browser tab with no linker at all. See [Web and WASM](/docs/appendix/platforms/web-and-wasm).
 
-For mixed execution debugging, `run` also exposes a debug-only execution trace:
+## Backend Parity
 
-```bash
-kira run --backend hybrid --trace-execution examples/hybrid_roundtrip
-```
+A feature works on the VM and on LLVM/native, on hybrid where it touches the seam, and on WASM where it is Web-portable, or it is refused by a typed diagnostic. `crates/kira-cli/tests/backend_parity/` runs the same program on each engine and requires identical output, traps included.
 
-When enabled, Kira writes structured trace lines to stderr so you can see where execution is actually happening:
+Where an engine has something another does not, the manual says so rather than quietly weakening the claim. A native library's `print` goes to stdout with no host to redirect it; a trap ends the process; and two Kira native libraries cannot share one binary.
 
-- `VM` for bytecode-side prints and runtime execution helpers
-- `NATIVE` for native print/output helpers
-- `BRIDGE` for runtime/native materialization and copy steps
-- `TRAMPOLINE` for native-to-runtime invocations
-- `CALLBACK` for runtime callback entry/return flow
+## Trap Behavior
 
-The trace is for development and debugging. Normal runs stay quiet unless you opt in.
-
-## Practical Rule
-
-Read execution annotations this way today:
-
-- VM wants runtime execution only
-- LLVM/native needs a native-capable entrypoint
-- hybrid is the natural home for mixed runtime/native programs, especially FFI-heavy ones
-- direct FFI usage requires `@Native`, but callers of `@Native` Kira helpers do not become native automatically
-- outside direct FFI usage, `@Runtime` and `@Native` are execution-boundary annotations rather than usability restrictions
+A trap is a hard stop with the same cause on every engine: an out-of-range index, a `charAt` past the end of a string, an inverted `substring`, an over-long `@FFI.Array` fill, awaiting a cancelled or already-joined task. A trap in a built native program ends the process, exactly as it ends a VM run. `attempt`/`try`/`handle` is the portable way to keep a failure away from a boundary that cannot take one.

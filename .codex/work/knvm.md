@@ -2,7 +2,7 @@
 
 Built 2026-07-19 as `crates/kira-knvm` (lib plus bin `knvm`), together with the
 `kira` launcher's dispatch in `kira-launcher`. What they do and how they
-behave is [docs/knvm.md](../../docs/knvm.md); this note holds the decisions
+behave is [the toolchains appendix](../../sites/docs/content/docs/appendix/toolchains); this note holds the decisions
 behind them and what is left.
 
 `install` is real: fetch, stage, unpack, validate, `rename` into

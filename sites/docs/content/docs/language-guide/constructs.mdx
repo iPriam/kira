@@ -1,285 +1,202 @@
 ---
 title: Constructs
-description: The construct-family model — extends, property schemas, required functions, the SwiftUI-style @Required/@Content/node surface, fluent extend modifiers, content channels, and attempt/try/handle.
+description: "Construct families as typed templates: requirements, defaults, extends, Any and some values, content slots and builders, initializers, lifecycle hooks, and fluent modifiers."
 ---
 
-`construct` defines a **declaration family**: a typed template that other declarations conform to. It is not data (`struct`), not variants (`enum`), and not inheritance-of-behavior (`class`). A construct says *what shape a declaration must have*; concrete declarations headed by the family name (`Widget Button { ... }`) fill that shape in.
-
-The bare head is exactly the spelled-out form: `Widget Button { ... }`, `construct Button() extends Widget { ... }`, and `Widget Button { ... }` with a parameter list all declare one backed declaration of `Widget`. The two-identifier spelling carries no parameter list and no clauses — everything else about the body, including computed members discharging `@Required let`s, is identical.
-
-This is the surface that lets a library define something like a UI framework — `Widget`, `View`, `Route` — in Kira source rather than hardcoding it in the compiler.
-
-## What executes today
-
-The construct family is **fully parsed and semantically validated**, and a growing slice now **executes on `vm`, `llvm`, and `hybrid`**:
-
-- the `Widget → Node` bridge (computed `let node: T { ... }` accessors) executes
-- concrete declarations coerce to `any Family`, and heterogeneous `[Widget]` arrays unify
-- caller-provided content trees (`@Content` fields filled by trailing `{ ... }` blocks) construct and execute end to end
-- `attempt` / `try` / `handle` executes
-
-Inheritance dispatch, property schemas, required-function satisfaction, content channels, and content composition are **validation-complete** (parse + semantic checks + diagnostics).
-
-## Inheritance: `extends`
-
-Constructs inherit from other constructs with `extends` (not `:`, not `extend`). Multiple parents are allowed; the local inheritance graph must be acyclic.
+A construct family is a typed template. It states what every declaration backed by it must provide, and each backed declaration is an ordinary struct that provides it.
 
 ```kira
-construct WebElement {}
-construct Drawable {}
-construct Surface extends WebElement, Drawable {}
-```
-
-A construct-backed declaration may use a **prior declaration** as its parent, inheriting that declaration's family and implementations:
-
-```kira
-construct Drawable { requires { function draw() } }
-Drawable Sprite { function draw() {} }   // first concrete child must implement draw()
-Sprite Player {}                          // inherits draw()
-Sprite AnimatedPlayer { function draw() {} }  // overrides draw()
-```
-
-Diagnostics: unknown parent (`KSEM118`), inheritance cycle (`KSEM119`).
-
-## Property schemas
-
-A construct declares a typed property schema. `required` properties must be provided by every declaration; others are optional. Properties are inherited through `extends`.
-
-```kira
-construct WebElement {
-    properties {
-        id: String
-    }
-}
-construct Route extends WebElement {
-    properties {
-        required path: String
-        title: String
-    }
-}
-```
-
-Declarations supply properties through a **section**, never a constructor-style call:
-
-```kira
-Route Home {
-    properties {
-        path: "/"
-        id: "home"
-    }
-}
-```
-
-Diagnostics: missing required property (`KSEM123`), unknown property (`KSEM124`), property type mismatch (`KSEM125`), duplicate property (`KSEM126`).
-
-## Required functions
-
-`requires { function ... }` lists functions the family's first concrete declaration must implement. A required function returning `Result<Value, Failure>` is fallible. `Self` refers to the implementing declaration's type. An "interface-like" construct is a `requires`-only construct.
-
-```kira
-construct WebElement {
-    requires {
-        function render() -> Result<DomNode, RenderFailure>
-        function update(previous: Self)
-        function unmount()
-    }
-}
-```
-
-Diagnostics: missing required function (`KSEM120`), signature mismatch (`KSEM121`).
-
-## The SwiftUI-style surface: `@Required` and the `node` bridge
-
-Alongside the section surface, a construct may declare **direct members** at its body's top level — requirements written as members rather than in a separate `requires { ... }` block.
-
-- `@Required let name: T` — a field every concrete declaration must provide.
-- `@Required function f(...) -> T` — a required behavior (a bodyless signature), checked like `requires`.
-- `let name: T { ... }` — a **computed default member** (a block-bodied field), not stored state. Declarations may override it.
-
-```kira
-construct Node {
-    @Required function measure(proposal: SizeProposal) -> Size
-    @Required function place(bounds: Rect) -> PlacedNode
-}
-
 construct Widget {
-    @Required let body: Widget
-    let node: Node { body.node }   // default Widget->Node bridge; composites inherit it
+    @Required function render() -> String
+    function announce() -> String { return "<" + render() + ">" }
+}
+
+construct Text(content: String) extends Widget {
+    render { return content }
+}
+
+construct Divider() extends Widget {
+    render { return "---" }
 }
 ```
 
-A concrete declaration uses the family name directly. Component inputs are ordinary `let` fields; the typed bridge to the layout layer is `let node: Node { ... }`.
+**The parameter list tells the two apart.** A `construct` with one is a declaration: the parameters are its construction inputs, and `extends` names the one family backing it. A `construct` without one is the family template, and `extends` names the families it takes requirements and members from. A parameter list with no `extends` is `KPAR077`, and a declaration naming two families is `KPAR078`.
+
+`@Required` states an obligation; a member with a body is inherited by every declaration that does not write its own. A declaration that leaves a requirement unimplemented is `KSEM234`.
+
+## A Family Is Not a Type
+
+A family is not one of its own values, so naming the type takes `Any Widget` or `some Widget`. Both say "a value of some declaration backing `Widget`", and they resolve to the same type. The bare name is `KSEM207`: left accepted it reads like a concrete type and hides that the value is heterogeneous.
 
 ```kira
-// Composite widget: provides `body`, inherits the default `node = body.node`.
-Widget Button {
-    let title: String = ""
-    let body: Widget {
-        Text(text: title)
-    }
-}
-
-// Primitive/terminal widget: provides `node` directly and omits `body`.
-Widget Text {
-    let text: String = ""
-    let node: Node {
-        TextNode(text: text)
-    }
-}
+let items: [Any Widget] = [Text(content: "hi"), Divider()]
+for item in items { print(item.announce()) }
 ```
 
-**Terminal-`node` rule.** A required field need not be provided when the declaration overrides every default member that consumes it. Because the default `node` reads `body`, an explicit `node` discharges the required `body`, and node resolution stops at the explicit `node` instead of recursing through `body`. A declaration that provides neither `body` nor `node` is rejected.
+A family becomes a synthesized enum whose variants carry the backed structs, and a call through a family value becomes a tag dispatcher. Every backend runs ordinary enum projection, branching, and direct calls, so nothing here is a backend feature.
 
-Member access without parentheses (`widget.node`, `button.body.node`) invokes the computed accessor; accessor chains compose. This bridge executes on `vm`, `llvm`, and `hybrid`.
+## Members
 
-Diagnostics: missing required member (`KSEM140`); a `body` that expands to itself without a terminal `node`, which would resolve forever (`KSEM141`).
+| Written | What it is |
+| --- | --- |
+| `let name: T` | A stored member. On a declaration it is a field. |
+| `let name: T = default` | The same, with a default filling every construction that omits it. |
+| `let name: T { expr }` | A computed member: a zero-argument method read as a property. |
+| `name { … }` | The shorthand for a computed member whose result type the family declares for `name`. |
+| `function f(…) -> T { … }` | A default the family provides to every declaration that writes no own. |
+| `@Required function f(…) -> T` | A bodyless signature every backed declaration must implement. |
+| `requires { function f(…) -> T }` | The section spelling of the line above. A family may mix the two. |
+| `@Required let name: T` | A value obligation. A declaration discharges it with a stored field or a computed member. |
+| `let name: some X` / `let name: [some X]` | A child slot, filled by a construction's trailing block. `@Content let` is the same thing. |
+| `init(params) { … }` | Another way of constructing the declaration. |
+| `lifecycle { onAppear() { … } }` | The methods a runtime holding this value is meant to call. |
 
-## Caller-provided content: `@Content`
+A `@Required function` is bodyless by definition: a requirement carrying a body would be an inheritable default, which is the plain `function` member instead (`KPAR065`).
 
-A concrete declaration marks caller-provided children as `@Content` fields. **Field names are the channel names** — there are no string-labeled channels. A trailing `{ ... }` block on a construction fills them, resolved by inspecting the callee:
-
-- one `@Content let x: Widget` → a bare block holds **exactly one** child
-- one `@Content let xs: [Widget]` → a bare block holds an **ordered list** of children
-- several `@Content` fields → a bare block is ambiguous; children are supplied as **named fills** using the field names (declaration order is preserved)
+### The Shorthand
 
 ```kira
-Widget VStack {
-    @Content let children: [Widget]
-    let node: Node { VStackNode() }
+construct SumsToTen() extends Test {
+    test { return add(4, 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
+```
 
-Widget Padding {
-    @Content let child: Widget
-    let node: Node { PaddingNode() }
-}
+**The result type comes from the family, not from the shorthand.** A `name { … }` member is the body of the member the family calls `name`, so what it returns is the family's to state. A family that declares no such member falls back to the family type, which is what keeps a `body { … }` on a family that never mentions `body` meaning what it always did. No name is special-cased.
 
-Widget Dialog {
-    @Content let header: Widget
-    @Content let content: Widget
-    let node: Node { DialogNode() }
-}
+### Initializers
 
-Widget Screen {
-    let body: Widget {
-        VStack {
-            Text(text: "title")
-            HStack {
-                Text(text: "left")
-                Text(text: "right")
-            }
-            Dialog {
-                header { Text(text: "Title") }
-                content { Text(text: "Message") }
-            }
-        }
+The parenthesized header fills the stored members. Each `init` is another way, told apart by what it takes, whose body ends in a construction through the header.
+
+```kira
+construct Link(destination: Any Widget, label: Any Widget) extends Widget {
+    init(title: String, value: Int) {
+        return Link(destination: Leaf(number: value), label: Text(text: title))
+    }
+
+    init(value: Int, label: some Widget) {
+        return Link(destination: Leaf(number: value), label: label)
     }
 }
 ```
 
-Children are stored as `any Widget`, and these caller-provided trees **construct and execute** (nested lists, single children, and named fills) across `vm`, `llvm`, and `hybrid`.
+An `init` writes no result type: there is only one thing it can produce, and restating it would be the declaration's name twice on one line (`KPAR067`).
 
-Diagnostics: a trailing block on a declaration with no `@Content` field (`KSEM142`); wrong child count for a single-`Widget` field (`KSEM143`); a bare block where named fills are required (`KSEM144`); a non-widget child (`KSEM145`).
+## `extends`
 
-## Fluent modifiers: `extend`
+A family may extend others. It takes on their requirements and members, and every declaration backed by it also becomes a value of each parent's type.
 
-`extend C { ... }` adds fluent modifier functions to a family — the external, chainable surface (`.padding(...)`), distinct from the core `node` bridge. Modifiers return the family type and wrap the receiver via `self`.
+```kira
+construct Runnable {
+    @Required function label() -> String
+    function announce() -> String { return "run " + label() }
+}
+
+construct Task extends Runnable {}
+
+construct Fetch() extends Task { label { return "fetch" } }
+
+function drive(items: borrow [Any Runnable]) {
+    for item in items { print(item.announce()) }
+}
+```
+
+`drive` never names `Task`. That is what the clause buys: a runtime holds `[Any Runnable]`, keeps instances, and drives declarations written against families it has never heard of.
+
+Inheritance is transitive, a cycle is `KSEM205`, and a parent that is not a family is `KSEM200`.
+
+**A child may make a promise more specific, never different.** A result and a `@Required let` member may narrow: anything narrows `Any`, and a family type narrows to a family extending it or to a declaration backing one. A *parameter* may not, because everything holding an `Any Runnable` passes whatever the parent's signature accepts, and a child asking for less would refuse a value the parent promised to take. Either way it is `KSEM206`.
+
+```kira
+construct Parent {
+    @Required function render() -> Any
+    @Required function accept(value: Any) -> Bool
+}
+
+construct Child extends Parent {
+    @Required function render() -> String             // narrows a result: allowed
+    @Required function accept(value: String) -> Bool  // KSEM206
+}
+```
+
+A dispatcher carries a narrowed answer up to the result the family it belongs to declared, so reading `render()` through `Any Parent` yields the erased `Any` and reading it through `Any Child` yields the `String`.
+
+## Content Slots
+
+A member whose type is written `some X` or `[some X]` is a **child slot**: it is filled by the trailing `{ … }` block on a construction rather than by a parenthesized argument.
+
+```kira
+construct Row(gap: Int = 0) extends Widget {
+    let children: [some Widget]
+
+    function total() -> Int {
+        var sum = gap
+        for child in children { sum = sum + child.total() }
+        return sum
+    }
+}
+
+Row(gap: 8) {
+    Text(content: "left")
+    Text(content: "right")
+}
+```
+
+The children fill the **last** slot, because they are written after every parenthesized argument. That rule applies wherever such a parameter is declared, so a **method** takes a trailing block too, and a modifier no longer has to name a container its caller does not care about:
+
+```kira
+let node = Leaf(n: 3).paired {
+    Leaf(n: 4)
+}
+```
+
+When the block is the whole argument list, the parentheses go away entirely.
+
+### Builders
+
+Inside a content block, `For` and `if` produce children by control flow. They are recognized only there, so a `For(…)` or an `if` anywhere else parses as it always did.
+
+```kira
+Row(gap: 0) {
+    For(part in parts) {
+        Leaf(n: part)
+    }
+    if wide {
+        Divider()
+    } else {
+        Text(content: "narrow")
+    }
+}
+```
+
+## Copy and Update
+
+A braced name that resolves to an existing construct value evaluates it once, copies its fields, and replaces only the paths written.
+
+```kira
+let wide = base { let width = 200 }
+```
+
+The result uses the same nodes an ordinary construction does, so no backend needs an update operation.
+
+## Fluent Modifiers
+
+`extend Family { … }` adds modifiers to a family. A modifier is a family-level method with one shared body whose receiver is the family value, distinct from the per-variant methods a `construct` family declares. It returns the family type and wraps `self`, which is what makes `text.padding(8).background(fill)` chain.
 
 ```kira
 extend Widget {
-    function padding(amount: Float) -> Widget {
-        Padding(amount: amount) {
-            self
-        }
-    }
-}
-
-Widget Button {
-    let title: String = ""
-    let body: Widget {
-        Text(text: title).padding(amount: 8)
+    function padding(amount: Int) -> Any Widget {
+        return Padding(amount: amount) { self }
     }
 }
 ```
 
-Diagnostics: extending an unknown construct (`KSEM146`). Modifier bodies and construction sites are validated before any backend.
+A modifier whose name is already taken by the family is refused rather than shadowing the declared method. `extend Family { … }` with no colon is the modifier block; `extend Type: Trait { … }` with one is the [trait impl block](/docs/language-guide/traits#retroactive-conformance).
 
-## Content channels
+## Traits on a Family
 
-A construct's `content { ... }` block declares named content channels. `accepts` constrains the element type; `count` (a `min..max` or `min..` range) constrains how many elements a declaration may place. Channels are inherited through `extends`.
+A family may claim a trait in either spelling, `construct Widget: Hashable { … }` or `extend Widget: Hashable { … }`. A family is a template, so the claim files one conformance per backed declaration; members the family provides answer for every variant at once. A compiler-known trait cannot be claimed by a family (`KSEM298`).
 
-```kira
-construct WebElement {
-    content {
-        head { accepts Title; count 0..1 }
-        body { accepts Title; count 1.. }
-    }
-}
-```
+## Why This Exists
 
-A declaration fills channels with named sections:
-
-```kira
-Document Page {
-    head { Title("Home") }
-    body {
-        Title("Welcome")
-        Title("More")
-    }
-}
-```
-
-Content-requiredness is expressed through `count 1..` (reported as `KSEM129` when a channel is left empty) — `requires` declares required *functions* only.
-
-Diagnostics: unknown channel (`KSEM127`), count violation (`KSEM129`), accepts mismatch (`KSEM130`), duplicate channel (`KSEM138`).
-
-### Content composition
-
-A construct may compose inherited content:
-
-- `content sealed` — closes the content surface; descendants may not add/refine/project.
-- `content refine { channel { … } }` — narrows an inherited channel (count must stay within the inherited range; `accepts` may not change element type).
-- `content passthrough` — forwards the parent's channels; the construct owns none of its own.
-- `content project { local as Parent.channel }` — maps a local section name onto an ancestor's channel.
-
-```kira
-construct Route extends WebElement {
-    content project {
-        view as WebElement.content
-        header as WebElement.head
-    }
-}
-```
-
-Diagnostics: content into a sealed construct (`KSEM128`), unknown projection target (`KSEM131`), invalid composition such as a widening refine or a meaningless passthrough (`KSEM132`).
-
-## Linear error handling: `attempt` / `try` / `handle`
-
-`attempt` / `try` / `handle` unwraps `Result<Value, Failure>`. Inside an `attempt` block, `try expr` yields the `Ok` value and continues; on `Error`, control transfers to the matching `handle` case, selected by the failure's variant. `try` is valid only inside `attempt` (`handle` is a contextual keyword). This **executes** on `vm`, `llvm`, and `hybrid` by desugaring to enum `match`.
-
-```kira
-attempt {
-    let node = try element.render()
-    append(target, node)
-} handle {
-    MissingNode(reason) {
-        Log.error(reason)
-    }
-    InvalidState {
-        Log.error("invalid state")
-    }
-}
-```
-
-A `handle` case may bind and read the failure's payload. All `try`s in one `attempt` must share a single failure enum.
-
-Diagnostics: `try` outside `attempt` or in an unsupported position (`KSEM133`); `try` on a non-`Result` value (`KSEM134`); a missing handle case for a reachable failure variant (`KSEM135`); a handle case that is not a variant of the failure enum (`KSEM136`); incompatible failure enums across one `attempt` (`KSEM137`).
-
-## Why constructs matter
-
-Constructs are the clearest example of Kira's intended boundary:
-
-- the compiler provides mechanisms and validation
-- higher-level framework behavior (the actual UI library, themes, diffing) stays in Kira source
-- annotations are declared as source symbols; constructs decide their domain-specific meaning
-
-That boundary is what lets a UI-style construct keep real child trees for layout and rendering while staying out of the compiler core.
+The compiler provides the mechanism; the framework stays in Kira source. `Test` in `tests-kik/harness` is a construct family a package declares, and nothing in the compiler knows the name. A UI library's `Widget`, `View`, and `Route` are the same thing: one construct declaration each, with the layout and rendering written in Kira beside them.

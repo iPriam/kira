@@ -5,7 +5,7 @@ description: "Named sets of members a type promises to present: requirements, de
 
 A trait names a set of members a type may promise to present. A member with no body is a **requirement** every conforming type must present. A member with a body is a **default** a conforming type inherits unless it writes its own. A trait with no members is a **marker**: it classifies without obliging.
 
-```ts
+```kira
 trait Hashable {
     function hash(borrow self) -> Int
 
@@ -27,21 +27,37 @@ struct Mesh: Hashable, Tagged {
 
 `:` is always conformance and `extends` is always a parent. Both clauses follow the declaration's name, traits first.
 
-```ts
+```kira
 class Panel: Hashable extends Surface { }
 ```
 
 A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement's parameters or result is `KSEM293`.
 
+A trait takes no type parameters. `enum` is the only declaration that does.
+
 ## Dispatch
 
 Dispatch on a concrete type is static. `mesh.hash()` resolves to the implementation at type-check time and lowers to an ordinary direct call, so a conforming value costs nothing a hand-written method would not.
+
+## A Trait in a Type Position
+
+A trait's name used as a type is an **existential** over its conformers: `let x: Hashable = …` holds a value of some type that conforms to `Hashable`, and a member call through it dispatches to that type's implementation.
+
+```kira
+let one: Hashable = Mesh(id: 1)
+let shapes: [Hashable] = [Mesh(id: 1), Plate(n: 2)]
+for shape in shapes { print(shape.doubled()) }
+```
+
+The representation is the construct family's, generalized rather than reinvented: analysis synthesizes one enum over the types the conformance table answers for, and a member call lowers to the same per-variant tag dispatcher a family call does. Both engines execute ordinary enum projection, branching, and direct calls, with no new wire surface.
+
+The four compiler-known traits stay refused in a type position (`KSEM295`). They state something about one type's own members or body and none of them classifies values, so there is nothing for a value of "any `Send`" to be. Name the concrete type there.
 
 ## Retroactive Conformance
 
 `extend T: Trait { … }` implements a trait for a type declared elsewhere. It is the impl block; `extend Family { … }` without a colon stays the fluent modifier block construct families use.
 
-```ts
+```kira
 struct Plate {
     let n: Int
 }
@@ -53,7 +69,7 @@ extend Plate: Hashable {
 }
 ```
 
-The colon form also reaches a construct family: `construct Widget: Hashable { … }` claims the trait for every declaration backed by the family, and `extend Widget: Hashable { … }` makes the same claim retroactively. A family is a template rather than a type, so it keeps no promise itself — the claim becomes one conformance per backed declaration, filed at that declaration. Members the family provides at its own scope answer for every variant at once, which is what makes claiming on the family worth writing rather than repeating the claim under each declaration. A declaration that already claims the trait in its own colon list keeps its own conformance untouched.
+The colon form also reaches a construct family: `construct Widget: Hashable { … }` claims the trait for every declaration backed by the family, and `extend Widget: Hashable { … }` makes the same claim retroactively. A family is a template rather than a type, so it keeps no promise itself: the claim becomes one conformance per backed declaration, filed at that declaration. Members the family provides at its own scope answer for every variant at once, which is what makes claiming on the family worth writing rather than repeating the claim under each declaration. A declaration that already claims the trait in its own colon list keeps its own conformance untouched.
 
 A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, and `Sync` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
 
@@ -67,7 +83,7 @@ A conformance may be declared only in the package that declares the type or the 
 
 A trait may require another. `trait Ordered: Equated { … }` says that conforming to `Ordered` obliges a type to conform to `Equated` too.
 
-```ts
+```kira
 trait Equated {
     function equals(borrow self, other: Int) -> Bool
 }
@@ -114,7 +130,7 @@ Some traits exist without a declaration, because what they mean is decided by a 
 
 A compiler-known trait may be required as a supertrait, and a derived one is discharged by the fact rather than by a second spelling of it:
 
-```ts
+```kira
 trait Portable: Send {
     function ferry(borrow self) -> Int
 }
@@ -154,7 +170,7 @@ A task slot is one machine word, so today a narrower rule sits in front of that 
 
 A method's receiver is written as a leading `self` parameter, or left out.
 
-```ts
+```kira
 function hash(borrow self) -> Int          // reads the receiver
 function bump(borrow mut self, by: Int)    // writes through it
 function label() -> String                 // the same as `borrow self`

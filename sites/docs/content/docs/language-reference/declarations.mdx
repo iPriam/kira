@@ -1,144 +1,146 @@
 ---
 title: Declarations
-description: Import, annotation, capability, enum, function, class, struct, construct, and construct-form declarations in the current Kira language surface.
+description: "Every top-level declaration form: import, function, struct, class, enum, trait, construct, extend, type, and the three macro forms."
 ---
 
-## Top-Level Declarations
+## Top-Level Forms
 
-The current frontend recognizes these top-level declaration forms:
-
-- `import`
-- `annotation`
-- `capability`
-- `enum`
-- `function`
-- `class`
-- `struct`
-- `construct`
-- construct-defined forms such as `Widget Card(...) { ... }`
-
-## Imports
-
-Imports use qualified module names with an optional alias:
-
-```ts
-import Support
-import UI as Kit
-import bindings.callbacks as callbacks
+```text
+import  function  struct  class  enum  trait  construct  extend  type
+macro   comptime macro    comptime function
 ```
 
-Unresolved imports are rejected with `KSEM032`.
+## `import`
 
-Whole-library imports merge that library's public declarations into the program's global namespace. For the built-in Foundation library, write `import Foundation`, then use `Result`, `Printable`, and other declarations directly. Do not import dotted Foundation submodules such as `Foundation.Result`.
-
-```ts
+```kira
+import geometry
+import geometry as Geo
+import shapes.Rect as Rect
 import Foundation
-
-let parsed = ParseError.UnexpectedEnd
 ```
 
-## Enums
+A module name is a name, not a path. One segment is a sibling file; a dot is a directory separator. Imports are file-scoped, and an import naming no readable file is `KSEM032`. Referring to a namespace root this file did not import is `KSEM027`.
 
-Enum declarations use `enum`, a name, optional generic type parameters, and a variant body:
+## `function`
 
-```ts
-enum ParseError {
-    InvalidFormat: String = "bad"
-    UnexpectedEnd
-    EmptyInput
-}
-
+```kira
+function name(param: T, other: U = default) -> R { … }
+function name(param: T): (Int) -> Int { … }         // a function-typed result
+function method(borrow self) -> R { … }
+function method(borrow mut self, by: Int) { … }
+@FFI.Extern { … } function foreign(a: I32) -> I32;  // bodyless
 ```
 
-A variant may declare one associated value type with `: Type` or `(Type)`. A variant may also declare a default associated value with `= expression`.
+Parameters require explicit types. A parameter mode is `borrow`, `borrow mut`, `copy`, or nothing. A result type follows `->`, or `:` when it is itself a function type. A bare `self` receiver is `KPAR075`; a receiver on a non-method is `KSEM299`.
 
-Outside `match`, construct variants through the enum name:
+Several declarations may share a name when their parameter lists differ.
 
-```ts
-let invalid = ParseError.InvalidFormat
-let end = ParseError.UnexpectedEnd
-```
+## `struct`
 
-Inside `match`, patterns use unqualified variant names inferred from the matched enum.
-
-## Annotations
-
-Annotation declarations use `annotation`, a name, and a body:
-
-```ts
-annotation State {
-}
-
-annotation Attribute {
-    parameters {
-        index: Int
-    }
+```kira
+struct Name {
+    let member: T
+    var other: U = default
+    function method(borrow self) -> R { … }
 }
 ```
 
-Annotation bodies can declare parameter schemas, target restrictions, capability composition, and explicit generated members.
+Members may be `let` or `var` and may carry a default. Field type order does not matter; a by-value cycle is `KSEM052`. A struct is constructed by a literal (`Name { field = value }`) or by its memberwise constructor (`Name(value)`, `Name(field: value)`).
 
-## Functions
+## `class`
 
-Function declarations use `function`, a parameter list, an optional `-> ReturnType`, and either:
-
-- a block body
-- a trailing `;` for `@FFI.Extern` declarations
-
-## Local Declarations
-
-Local declarations use `let` or `var` and follow three explicit forms:
-
-```ts
-var title = "Quarterly Review"
-var pendingTitle: String
-var ratio: Float = 0.0
-```
-
-These forms mean:
-
-- `var name = expression`: infer the declared type from the initializer expression
-- `var name: SomeType`: declare an uninitialized local with that declared type
-- `var name: SomeType = expression`: require the initializer expression to already match the declared type
-
-Kira does not invent a default value for `var name: SomeType`. The declaration is real, but the local is not usable until it has been initialized.
-
-Annotated initializers are strict:
-
-```ts
-var ratio: Float = 0.0    // valid
-var ratio: Float = 0      // rejected
-```
-
-The second form is rejected because the declared type is `Float` and the initializer expression is an integer literal. Kira does not implicitly convert that declaration for you.
-
-## Classes and Structs
-
-Class declarations use `class Name { ... }` or `class Child extends Parent { ... }` and may contain:
-
-- stored members
-- methods
-- overrides
-
-Struct declarations use `struct Name { ... }` and stay value-oriented:
-
-```ts
-struct Position {
-    let x: Float = 0.0
-    let y: Float = 0.0
+```kira
+class Child: Trait extends Parent, Other {
+    override let member = newDefault
+    function method() -> R { … }
 }
 ```
 
-## Constructs and Construct Forms
+`:` is conformance and `extends` is a parent, traits first. `extends` takes a comma-separated list and may name a `struct`. Two parents declaring one name keeps both, so the bare name is `KSEM067` for a method and `KSEM068` for a field.
 
-Construct declarations use `construct Name { ... }`.
+A class is built by calling it. There is no subtyping (`KSEM063`).
 
-Construct-defined forms look like ordinary declarations, but the leading identifier is the construct name:
+## `enum`
 
-```ts
-Widget Card(title: String) {
-    content {
-        "Card"
-    }
+```kira
+enum Color { Red Green Blue }
+
+enum Message {
+    Empty
+    Text(String)
+    InvalidFormat: String = "not that format"
+}
+
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
 }
 ```
+
+Variants are separated by newlines or spaces, never commas. A variant carries at most one payload, written `(T)` or `: T`, optionally with `= default`. A payload may be `Int`, `Float`, `Bool`, `String`, an array, a struct, another enum, or `Any`; `Void`, `CString`, `RawPtr`, and runtime handles are `KSEM118`.
+
+`enum` is the only declaration that takes type parameters; a generic `struct`, `class`, or `function` is `KPAR047`.
+
+## `trait`
+
+```kira
+trait Ordered: Equated {
+    function less(borrow self, other: Int) -> Bool
+    function atMost(borrow self, other: Int) -> Bool { … }
+}
+```
+
+A bodyless member is a requirement; one with a body is a default. A trait with no members is a marker. A `:` clause on a trait names supertraits. A trait takes no type parameters. Declaring `Copyable`, `Drop`, `Send`, or `Sync` is `KSEM288`.
+
+## `construct`
+
+```kira
+construct Family extends Parent { … }        // a template: no parameter list
+construct Name(params) extends Family { … }  // a declaration
+```
+
+The parameter list tells the two apart. A parameter list with no `extends` is `KPAR077`; a declaration naming two families is `KPAR078`. See [Constructs Reference](/docs/language-reference/constructs-reference).
+
+## `extend`
+
+```kira
+extend Type: Trait { … }     // a trait impl block
+extend Family { … }          // fluent modifiers on a construct family
+```
+
+The colon form implements exactly one trait for one type and may carry only members that trait declares (`KSEM294`). Writing a conformance both in a declaration's colon list and in an `extend` block is `KSEM290`. A conformance may be declared only in the package that declares the type or the package that declares the trait (`KSEM291`).
+
+The colon-free form adds family-level methods whose receiver is the family value.
+
+## `type`
+
+```kira
+type Count = Int
+type Buffer = [Count]
+```
+
+A spelling, not a new type. A cyclic chain is `KSEM157`; claiming a taken name is `KSEM130`.
+
+## Macros
+
+```kira
+macro Name(p: expr) { expand { … } }
+comptime macro Name { kind { … } expand(…) -> Syntax { … } }
+comptime function name(p: Int) -> Int { … }
+```
+
+See [Macros](/docs/macros).
+
+## Package Manifests
+
+`package.kira` is a declaration too, in the same language, and is read by the package layer rather than by the program.
+
+```kira
+Package greetings {
+    let version = "0.1.0"
+    let kind = .Library
+    let moduleRoot = "Greetings"
+}
+```
+
+See [Libraries and Packages](/docs/appendix/cli/packages).

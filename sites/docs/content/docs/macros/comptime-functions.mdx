@@ -1,0 +1,40 @@
+---
+title: Compile-Time Functions
+description: "`comptime function`: ordinary Kira that runs during compilation, why it takes no `!`, how a call site is found, and what is refused."
+---
+
+A `comptime function` is ordinary Kira that runs while the program is being compiled. Its body goes on the same evaluator a `comptime macro`'s `expand` runs on, so it has `let`, `if`, `while`, `for`, `match`, and `attempt`, and it reads the same namespaces.
+
+```kira
+comptime function sumTo(limit: Int) -> Int {
+    var total = 0
+    var i = 1
+    while i <= limit {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+@Main
+function main() {
+    print(sumTo(100))   // the backend sees `print(5050)`
+    return
+}
+```
+
+## How It Differs From a Macro
+
+Two ends differ. Its arguments arrive as **values** rather than as the source text a fragment parameter carries, and what it returns becomes a **literal** at the call site rather than syntax to splice.
+
+**Which is why it takes no `!`.** A macro call is written `Name!(…)` because what happens there is code substitution and a reader should see it. A comptime function's call site is a value, indistinguishable from having written the answer out, so it reads as the ordinary call it is.
+
+## Finding a Call Site
+
+The declaration is blanked like a macro's, so nothing reaches a backend. A call site is found by **name**, which is the one thing that makes this form different to scan for: a method call (`value.name(…)`) and a declaration (`function name(…)`) are told apart by what precedes the name, so an ordinary function or method sharing the name is left alone.
+
+## Composition and Limits
+
+One comptime function may call another, which is what makes them compose. A call that nests more than 32 deep is `KMAC010` rather than a hang: a comptime function that calls itself has no base case here.
+
+An argument the evaluator cannot fold, such as a runtime binding, is `KMAC020` and the call is **refused**, never left standing. A call that survived into a backend would be a call to a function that is not there.

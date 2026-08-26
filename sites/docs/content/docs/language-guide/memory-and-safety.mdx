@@ -1,78 +1,84 @@
 ---
 title: Memory and Safety
-description: "Kira's current ownership model: owned-by-default values, borrowed parameters, explicit moves, and the parts that are still intentionally limited."
+description: "The five ownership modes, which values need a spelling, what a borrow mut costs a backend, Drop bodies and the positions that refuse them, and the release guarantee."
 ---
 
-Kira now has a small ownership model.
+Kira owns by default, and says so at the call site.
 
-Values are owned by default. Read-only access is written with `borrow`, exclusive mutation is written with `borrow mut`, and ownership transfer is explicit with `move` when a named non-trivial value is consumed.
+```kira
+function consume(v: Vec3) -> Int { return v.x + v.y + v.z }
+function sum(v: borrow Vec3) -> Int { return v.x + v.y + v.z }
 
-```ts
-function draw(mesh: borrow Mesh) {
-    return
-}
-
-function update(world: borrow mut World) {
-    return
-}
-
-function upload(mesh: Mesh) -> GpuMesh {
-    return GpuMesh()
-}
-
-draw(mesh)
-update(world)
-let gpu = upload(move mesh)
+let v = Vec3 { x = 1, y = 2, z = 3 }
+print(sum(v))            // a borrow reads and gives back; `v` survives
+print(consume(move v))   // this takes `v` away
+print(v.x)               // KSEM107: `v` was moved and is no longer available
 ```
 
-## Current Model
+## The Five Modes
 
-- ordinary values are owned by default
-- borrowed parameters do not consume the caller's value
-- `borrow mut` requires a mutable caller binding
-- named non-trivial arguments require explicit `move` when ownership transfers
-- trivial scalar values still pass by value without extra syntax
-- non-trivial implicit copies are rejected instead of silently alias-copying
-- use-after-move and move-twice patterns are diagnosed in semantics
-- VM, LLVM/native, and hybrid all carry ownership metadata through the pipeline
+| Mode | Written | Meaning |
+| --- | --- | --- |
+| owned | nothing | The parameter consumes the value it is given. |
+| `borrow` | on the parameter | A shared read. The caller goes on holding the value. |
+| `borrow mut` | on the parameter | Exclusive mutation, written back through the caller's binding. |
+| `move` | at the call site | Hands a named value over. |
+| `copy` | at the call site, or as a parameter mode | An explicit non-consuming value copy. |
 
-## Why It Exists
+All four written spellings are **contextual identifiers**, not reserved keywords: a variable named `move` still parses, because a `move` is only an operator when an operand follows it.
 
-Kira's ownership model is intentionally minimal:
+## Which Values Need a Spelling
 
-- deterministic cleanup matters
-- hot paths should not depend on GC or ARC traffic
-- VM iteration and LLVM/native execution need to agree on value movement
-- ordinary code should stay readable instead of forcing pervasive lifetime syntax
+One predicate decides it: **trivially copyable** covers `Void`, `Int`, `Float`, and `Bool`. A `String` is not trivially copyable, because it owns its bytes, and neither is a struct, so both need `move` or `copy` into a consuming parameter. A temporary never does: `consume(Vec3 { … })` binds nothing, so there is nothing to lose track of.
 
-The design goal is not "Rust but smaller." The design goal is a readable systems language with explicit ownership transfer, deterministic behavior, and backend parity.
+A struct nonetheless **copies when bound**: `var w = v` deep-copies and `v` stays live. Needing a spelling and moving on bind are different questions, and a struct answers them differently. An **array** and an **enum** are the types that answer the second one yes: their bindings alias where a struct copies, so binding one moves it.
 
-Kira does not use GC or ARC in the core runtime hot path.
+`copy` copies scalars by their bits, strings and structs by their owned storage, and arrays through copy-on-write. It lowers on every engine; what it requires is the *spelling*, so the ownership checker can tell an intended copy from an intended move. Passing a named non-trivial value to a copying parameter with neither word written is `KSEM113`, and writing `move` where the parameter copies is `KSEM115`.
+
+## What Each Mode Costs a Backend
+
+**`borrow mut` writes through the caller's binding.** It is the one mode observable at run time, so it is the one mode a backend carries: the parameter is passed by reference, and the call site records where the callee's final value lands.
+
+```kira
+function bump(c: borrow mut Counter, by: Int) {
+    c.n = c.n + by
+    return
+}
+
+var counter = Counter { n = 1 }
+bump(counter, 4)
+print(counter.n)          // 5, the callee wrote through
+```
+
+The argument has to name storage, not a temporary (`KSEM248`), and one call may not mutably borrow the same binding twice (`KSEM247`): both writes would land in one place and the later would erase the earlier.
+
+**The other four modes cost a backend nothing.** For today's types a `move` and a `borrow` are both indistinguishable from the deep copy the runtime already performs, because a caller that moved a value can never look at it again until it assigns the binding a new one, which is exactly what the checker guarantees. They are a static check.
 
 ## Drop
 
-A type claims `Drop` to run a body when its values are released.
+A type claims `Drop` and implements its one member.
 
-```ts
-struct FileHandle: Drop {
-    let fd: Int
-
-    function drop(borrow mut self) {
-        closeFd(self.fd)
-        return
-    }
+```kira
+struct Handle: Drop {
+    let raw: Int
+    function drop(borrow mut self) { closeHandle(raw) }
 }
 ```
 
-The body runs once per value, before the value's own members are released, at every point either engine releases one: a binding leaving scope, a container being freed, a moved value dying in the callee that took it, and a write replacing what a binding, a member, or an element held.
+The body runs **once, before the type's own members are released**, at every point either engine releases a value of the type: a binding going out of scope, a container being freed, a value moved into a callee dying there rather than at the binding it was moved out of, and a write replacing what a binding, a member, or an element held.
 
-The guarantee: **every user `Drop` body runs before the run that made the value ends.** Nothing can enter a body where no engine is executing, so a type that runs one is refused at each position that would outlive the run.
+The guarantee is that **every `Drop` body runs before the run that made the value ends.** Nothing can enter a body where no engine is executing, so a type that runs one is refused at each position that would outlive the run.
 
-`drop` is never called by name. `value.drop()` is `KSEM300`; the release is what runs it.
+Two rules follow, and neither is optional.
 
-### One owner
+- **The body is never called by name.** `value.drop()` is `KSEM300`. A release is the compiler's to schedule, and a hand-written call would run the body a second time and leave the value looking alive.
+- **The type moves rather than copies.** A copy would be a second value with the same body to run, so a `Copyable` claim on a `Drop` type is `KSEM297`, and so is one on a type that merely *holds* a `Drop` value.
 
-A value that runs a body has one owner and no copy. Reading one out of the value that holds it would make a second value with the same body to run, so a read is legal only where it does not take:
+`drop` takes no arguments and returns nothing; anything else is `KSEM301`.
+
+### One Owner
+
+A value that runs a body has one owner and no copy. Reading one out of the value that holds it would make a second value with the same body to run, so a read is legal only where it does not take.
 
 | Written | Answer |
 | --- | --- |
@@ -87,9 +93,9 @@ A value that runs a body has one owner and no copy. Reading one out of the value
 
 Bind the owner and read through it, or move the whole owner.
 
-### Refused positions
+### Refused Positions
 
-Each position below outlives the run that made the value, or copies it:
+Each position below outlives the run that made the value, or copies it.
 
 | Position | Code |
 | --- | --- |
@@ -105,24 +111,17 @@ A `Drop` body itself declares no engine (`KSEM301` if it does): a release happen
 
 A parked release outside any frame gives its storage back rather than running the body. `Instance::release`, `Instance::release_all`, and `Instance::finish` hold no engine to enter a body with, so a value that reached one is abandoned. Nothing an author can write reaches that path: the refusals above are what make the guarantee hold, and this is what keeps a module built by other means from leaking.
 
-## Current Limitations
+## Capture Cells
 
-This repo still has important limits, and the docs should stay honest about them:
+A `var` a closure mentions moves into a share-counted heap box that outlives the frame that declared it. A cell never crosses the C seam, the hybrid seam, or into `Any`, because a hold taken outside this runtime is a hold nothing releases. A cell holding a closure that captures the same cell is a cycle share counts cannot collect: it leaks, memory-safely and permanently. See [Functions](/docs/language-guide/functions#capture).
 
-- returned borrows are rejected today instead of being accepted with incomplete lifetime checking
-- non-trivial `copy` lowering is not implemented yet
-- field-sensitive partial moves are not complete
-- closure escape borrow analysis is not complete
-- a `Drop` value cannot be moved out of a member, an element, or an enum payload; the owner moves whole
-- callable-value ownership metadata is not fully propagated through every callback-style API path
-- LLVM ownership ABI details such as broad `readonly` / `noalias` annotation use are still incomplete
+## No GC, No ARC
 
-## Practical Guidance
+Nothing in the core runtime hot path reference-counts an ordinary value. A struct copies, an array detaches on write, and a `String` owns its bytes. Share counting exists in exactly two places: a capture cell, and an array's element block under copy-on-write.
 
-When writing Kira today:
+## What Is Still Refused
 
-- prefer `borrow` for read-only helpers
-- prefer `borrow mut` for in-place mutation
-- reserve owned/plain parameters for true ownership transfer
-- write `move value` at the call site when a named non-trivial value is consumed
-- expect the compiler to reject unsupported ownership shapes instead of guessing
+- A returned borrow is refused rather than accepted with incomplete lifetime checking.
+- Field-sensitive partial moves are not complete: a struct moves whole.
+- A `Drop` value cannot be moved out of a member, an element, or an enum payload; the owner moves whole.
+- LLVM ownership ABI annotations such as broad `readonly` and `noalias` use are not applied everywhere the checker's facts would allow.

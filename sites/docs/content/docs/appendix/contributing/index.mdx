@@ -1,74 +1,63 @@
 ---
-title: Contributing and Architecture Notes
-description: Repo layout, where to change things, testing expectations, and how to extend the current system cleanly.
+title: Contributing
+description: Repository layout, where a change goes, the test harnesses, and what has to be updated alongside a behavior change.
 ---
 
-## Package Layout
+## Repository Layout
 
-Important top-level areas:
+| Directory | Contents |
+| --- | --- |
+| `crates/` | The Rust workspace: compiler, runtime, backends, toolchain, CLI, runners, tools. |
+| `foundation/` | The standard library, a real Kira package. |
+| `packages/` | Kira libraries a program depends on by path, including anything platform-bound. |
+| `tests-kik/` | The Kira test harnesses. |
+| `examples/` | Readable programs for one part of the language each. |
+| `editors/tree-sitter/` | The Kira grammar. |
+| `sites/docs/` | This site. |
 
-- `packages/`: compiler, runtime, build, CLI, toolchain, native bridge, and C ABI packages
-- `tests/`: corpus-style pass/fail/check cases
-- `examples/`: runnable and frontend-proof examples
-- `templates/`: output used by `kira new`
-- `docs/`: older repo markdown references
-- `apps/docs/`: the Bun + Fumadocs documentation site
+## Where a Change Goes
 
-## Where To Change Things
+Put logic in the lowest crate that owns it, and preserve the dependency direction. [Compiler Architecture](/docs/appendix/compiler-architecture) has the layer graph.
 
-Use the current package layering as the guide:
+| Change | Crates |
+| --- | --- |
+| Tokens | `kira-lexer`, `kira-syntax-model` |
+| Grammar | `kira-parser`, `kira-syntax-model` |
+| Macro expansion | `kira-macros` |
+| Type checking and lowering to HIR | `kira-semantics`, `kira-semantics-model` |
+| Shared IR | `kira-ir` |
+| VM execution | `kira-bytecode`, `kira-vm-runtime` |
+| Native lowering | `kira-llvm-backend`, `kira-native-bridge` |
+| Hybrid | `kira-hybrid-runtime`, `kira-hybrid-definition` |
+| Shaders | `kira-ksl-*`, `kira-shader-*`, and the five backend crates |
+| Manifests and discovery | `kira-manifest`, `kira-project` |
+| Commands | `kira-cli` |
 
-- lexer/token changes: `packages/kira_lexer`, `packages/kira_syntax_model`
-- parser/AST changes: `packages/kira_parser`, `packages/kira_syntax_model`
-- semantic analysis and HIR lowering: `packages/kira_semantics`, `packages/kira_semantics_model`
-- shared IR: `packages/kira_ir`
-- VM execution: `packages/kira_bytecode`, `packages/kira_vm_runtime`
-- LLVM/native lowering: `packages/kira_llvm_backend`, `packages/kira_native_bridge`
-- hybrid runtime: `packages/kira_hybrid_runtime`, `packages/kira_hybrid_definition`
-- CLI behavior: `packages/kira_cli`
-- toolchain and install flow: `packages/kira_toolchain`, `packages/kira_build`, `packages/kira_bootstrapper`
+## Testing
 
-## Testing Expectations
+**Every Kira syntax and behavior belongs in a `tests-kik` harness.** A case is a construct-backed declaration providing `test` and `expect`, and the harness's `Test` family is Kira source rather than a compiler branch. See [Testing](/docs/foundation/testing).
 
-Use targeted coverage first, then broader repo coverage when practical.
+| Harness | Runs |
+| --- | --- |
+| `tests-kik/harness` | The language surface. |
+| `tests-kik/ffi-harness` | The C seam. |
+| `tests-kik/syscall-harness` | System calls, on the engines that emit the instruction. |
+| `tests-kik/syscall-parity-harness` | The host-servable calls, on all three engines. |
 
-- local package behavior: add or update unit tests next to the package
-- user-visible compiler/runtime behavior: add a corpus case under `tests/`
-- backend-sensitive work: make sure the relevant backend matrix still exercises the path you changed
+Backend-sensitive work also belongs in `crates/kira-cli/tests/backend_parity/`, which runs one program on the VM, on LLVM/native, and on hybrid and requires identical output, traps included.
 
-Corpus conventions:
+```bash
+cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+kira test tests-kik/harness
+```
 
-- `tests/pass/run/`
-- `tests/pass/check/`
-- `tests/fail/`
+## What Moves Together
 
-Each corpus case should keep `main.kira` and `expect.toml` in sync.
+A change that alters user-facing behavior updates three things in the same commit:
 
-## Native Libraries And Bindings
+1. The harness case that proves it.
+2. The page under `sites/docs/content/docs/` that documents it.
+3. The `editors/tree-sitter` grammar, when the syntax moved.
 
-If you add a native library:
-
-1. create a dedicated TOML manifest under `native_libs/`
-2. keep autobinding configuration in that manifest's `[bindings]` section
-3. keep generated bindings in a nearby `.kira` file tracked by the manifest
-4. add or update examples/tests that prove the path
-5. document the workflow in `content/docs/appendix/ffi-workflows/` if it changes user-visible behavior
-
-## Docs And Examples
-
-This repo already expects docs and examples to track implemented behavior.
-
-When you change:
-
-- command surface
-- install flow
-- backend behavior
-- executable language subset
-- native library shape
-
-update both:
-
-- the relevant checked-in examples/tests
-- the docs site content under `apps/docs/content/docs/`
-
-The docs should stay a trustworthy description of the repo, not a second design-doc universe.
+Documentation for the language and the toolchain lives in `sites/docs` and nowhere else. A second markdown tree beside the code is how a manual and an implementation drift apart.

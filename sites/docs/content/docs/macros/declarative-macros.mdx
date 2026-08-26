@@ -1,0 +1,87 @@
+---
+title: Declarative Macros
+description: "`macro` with fragment parameters: single evaluation of expr, assignable place fragments, hygiene, and where an expand block may be used."
+---
+
+A declarative `macro` binds fragments of syntax at the call site and substitutes them into a fixed template.
+
+```kira
+macro square(value: expr) {
+    expand {
+        value * value
+    }
+}
+
+let n = square!(buildThing())
+```
+
+## Fragments
+
+A parameter is a **fragment**: a piece of syntax captured at the call site, declared with a kind.
+
+| Kind | Captures |
+| --- | --- |
+| `expr` | A single expression, captured call-by-value. |
+| `place` | An assignable lvalue path. |
+
+`ident` and `type` are reserved for a near-term extension.
+
+### `expr` Is Evaluated Exactly Once
+
+This is the rule that makes macros compose with Kira's affine ownership instead of fighting it. The call above expands as if written:
+
+```kira
+let __kmac_value_0 = buildThing()   // hoisted ahead of the statement, run once
+let n = (__kmac_value_0 * __kmac_value_0)
+```
+
+`buildThing()` runs once, never twice, even though `value` appears twice in the template. An argument that cannot do anything when read again, such as a literal, a name, a field path, or an index, is substituted directly rather than hoisted, because repeating it is already a single evaluation.
+
+**Ownership is unchanged by macros.** If the fragment's value is a non-`Copy` type and the template consumes it in more than one position, that is an ordinary affine move error, exactly the error the same code would produce written by hand. Macros do not relax, hide, or duplicate ownership; they only guarantee single evaluation.
+
+### `place` Is an Assignable Lvalue
+
+Some macros need to read *and* write their argument. `swap!` is the canonical case.
+
+```kira
+macro swap(a: place, b: place) {
+    expand {
+        let temporary = a
+        a = b
+        b = temporary
+    }
+}
+
+swap!(left, right)
+```
+
+expands to
+
+```kira
+let __kmac_temporary_0 = left
+left = right
+right = __kmac_temporary_0
+```
+
+Each side moves exactly once, so this is a correct affine swap for owned values as well as `Copy` ones. Passing a non-lvalue (`swap!(1, x)`) is `KMAC004`.
+
+## Hygiene
+
+Any identifier introduced inside `expand` that is not one of the macro's own fragment parameters is hygienic: each expansion gets a fresh compiler-generated name for it. Two separate `swap!` calls never share a `temporary`, a real variable named `temporary` at the call site is never captured, and the macro's `temporary` is never visible to the caller.
+
+Fragment parameters are the only names that cross the boundary, and they cross as the caller wrote them, resolved in the caller's scope.
+
+Procedural macros are deliberately **not** hygienic: they emit source, and their generated names bind in the caller's scope by design. That is what lets a derive macro generate `eq_Point` and a caller call it.
+
+## `expand` Is a Block
+
+Where the macro is invoked decides how the block is used.
+
+- In **expression position** (`let x = clamp!(…)`) the block must be a single expression, which becomes the value.
+- In **statement position** (`swap!(left, right)`) the block's statements are spliced in place.
+
+Using a statement-only macro as a value is `KMAC005`. Kira `if` is a statement, so a template ending in `if`/`else` is statement-only.
+
+## Composition
+
+A macro may invoke another macro, in its template or in its arguments. Expansion is a fixpoint, running innermost-first until nothing is left to expand. Recursion is bounded, and exceeding the bound is `KMAC010` rather than a hang.

@@ -1,68 +1,41 @@
 ---
 title: The Kira Programming Language
-description: A language-manual-first guide to Kira 1.8.3 as implemented in this repository today.
+description: The manual for the Kira language, compiler, runtime, and toolchain as implemented in this repository.
 ---
 
-Welcome to **The Kira Programming Language**.
+Kira is a readable, ownership-aware language whose programs run identically on a bytecode VM, on LLVM-emitted machine code, on a hybrid of the two, and in a browser.
 
-This manual documents **Kira 1.8.3** as it exists in this repository today. It follows a Swift-style book structure:
+## The Book
 
-- opening pages that explain what Kira is
-- a guided walkthrough of the current language
-- a formal language reference
-- an appendix for workflows such as CLI usage, toolchains, diagnostics, and examples
-
-## What This Book Covers
-
-Kira currently includes:
-
-- a frontend pipeline that parses and validates a broader Kira language surface
-- a VM backend that executes bytecode, including direct FFI through LibFFI
-- an LLVM-native backend that emits host executables and shared libraries
-- a hybrid runtime that runs bytecode and native code together
-- a `wasm32-emscripten` target reached through the LLVM backend
-- a SwiftUI-style construct surface whose `node` bridge and content trees execute
-- a live server/client system with hot restart (`kira live`) and platform export scaffolds (`kira export`)
-- a dedicated `.ksl` shading language with GLSL/WGSL/HLSL/MSL/SPIR-V backends
-- a manifest-driven native library and autobinding system
-- a managed toolchain flow for `kirac`, templates, and pinned LLVM/LibFFI bundles
-
-## Read in Order
-
-1. [Welcome](/docs/welcome)
-2. [About Kira](/docs/about-kira)
-3. [Version Compatibility](/docs/version-compatibility)
-4. [A Kira Tour](/docs/a-kira-tour)
-5. [Language Guide](/docs/language-guide)
-6. [Language Reference](/docs/language-reference)
-7. [Appendix](/docs/appendix)
-
-## How To Read the Status Notes
-
-Kira has an important boundary that appears throughout the manual:
-
-- some features are **parsed by the frontend**
-- some are **semantically validated**
-- a smaller subset is **runnable today**
-
-When those boundaries differ, the guide and reference call that out directly.
+| Part | For |
+| --- | --- |
+| [Language Guide](/docs/language-guide) | Reading the language in order. |
+| [Language Reference](/docs/language-reference) | Looking one rule up. |
+| [Macros](/docs/macros) | Declarative macros, compile-time functions, and procedural macros. |
+| [Foundation](/docs/foundation) | The standard library. |
+| [Appendix](/docs/appendix) | Install, CLI, toolchains, platforms, shaders, FFI, diagnostics, architecture. |
 
 ## Start Here
 
 | Need | Start here |
 | --- | --- |
-| Orient an LLM or coding agent | [Kira for LLMs & Agents](/docs/for-llms) |
-| Understand the current language shape | [Language Guide](/docs/language-guide) |
-| Look up syntax and rules quickly | [Language Reference](/docs/language-reference) |
-| Know what runs on which backend | [Execution & Feature Status](/docs/language-reference/execution-and-feature-status) |
-| See a compact end-to-end sample | [A Kira Tour](/docs/a-kira-tour) |
+| Orient a language model or coding agent | [Kira for LLMs and Agents](/docs/for-llms) |
+| See the language in one page | [A Kira Tour](/docs/a-kira-tour) |
 | Install and run the toolchain | [Getting Started](/docs/appendix/getting-started) |
-| Target platforms, live, and exports | [Platforms & Runners](/docs/appendix/platforms) |
-| Learn CLI and toolchain flows | [Appendix](/docs/appendix) |
+| Know what runs on which backend | [Execution and Feature Status](/docs/language-reference/execution-and-feature-status) |
+| Call a C library | [Interop and FFI](/docs/language-guide/interop-and-ffi) |
+| Target a platform, run live, or export | [Platforms and Runners](/docs/appendix/platforms) |
 
-## Ground Rules
+## What the Toolchain Does
 
-- implemented behavior is described as current fact
-- partial behavior is marked as partial
-- unsupported topics are omitted instead of padded out with placeholders
-- command examples use the checked-in CLI surface
+- A frontend of `kira-source`, `kira-lexer`, `kira-macros`, `kira-parser`, `kira-semantics`, and `kira-ir`, shared by every backend and by the language server.
+- A VM that executes bytecode and stays portable enough to build for `wasm32-unknown-unknown`.
+- An LLVM backend that emits host executables, static archives, shared libraries, and cross-compiled images.
+- A hybrid runtime that runs `@Runtime` bytecode beside `@Native` machine code in one process.
+- Seamless C interop: a package lists its native libraries, declares bodyless `@FFI.Extern` functions, and calls them on every engine.
+- `.ksl`, a separate shading language with GLSL, WGSL, HLSL, MSL, and SPIR-V backends.
+- `kira live` for hot reload, `kira export` for per-platform projects, `kira profile` for sampled profiles, and `kira debug` for stopping a running program.
+
+## Ground Rules for This Manual
+
+Implemented behavior is stated as fact. A refusal is documented with the diagnostic code that fires. Nothing that does not exist is described as though it does.

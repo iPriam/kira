@@ -1,0 +1,31 @@
+---
+title: FFI on Wasm
+description: What a Web build links, which types cross, and the pointer-width bug that made every wasm string trap.
+---
+
+A wasm build passes the matching `wasm32-emscripten` archive and the generated adapters to `emcc` and runs under a JS host.
+
+```bash
+emcc -c NativeLibs/ffimath.c -o NativeLibs/lib/ffimath-wasm.o
+emar crs NativeLibs/lib/libffimath-wasm.a NativeLibs/lib/ffimath-wasm.o
+
+kira build --device wasm32 main.kira
+```
+
+The manifest needs a `wasm32-emscripten-unknown` row. A library declared only for the host and asked for wasm is refused before `emcc` runs, with a diagnostic naming the library and the target.
+
+## What Crosses
+
+Every supported scalar and `RawPtr` type works.
+
+`CString` works in both directions, a Kira string copied into transient C storage for a call and a returned `const char*` copied back out into an owned Kira `String`, and so do Kira strings on their own. Both are proven under node.
+
+A C pointer is four bytes on `wasm32` and eight elsewhere, so a C-layout struct's member offsets are computed per target rather than reused from the host. The by-value ABI shim is built by `emcc`, which is what applies wasm32's own aggregate rules.
+
+`@FFI.Syscall` has no kernel to reach on the Web and is refused.
+
+## The Pointer-Width Bug
+
+Kira strings did not work on wasm until the length passed to `kira_rt_str_new` stopped being emitted at the *host's* pointer width. The emscripten archive expects a 32-bit `usize`; the 64-bit call resolved by name at link time and every wasm string trapped.
+
+The backend now declares that parameter at the target's width, which is also why the type table carries a `usize_ty` rather than reusing `i64`.

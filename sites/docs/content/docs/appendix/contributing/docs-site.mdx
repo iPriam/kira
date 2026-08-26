@@ -1,75 +1,53 @@
 ---
 title: Working on the Docs Site
-description: The docs app structure, Bun commands, and how to add or reorganize documentation pages.
+description: The site's structure, the commands, how to add a page, and the conventions its Markdown follows.
 ---
 
-The documentation site lives at:
+The site lives at `sites/docs/`. It is a Next.js App Router application built with [fumadocs](https://fumadocs.dev), and the package is named `kira-docs`.
+
+## Structure
 
 ```text
-apps/docs/
+sites/docs/
+  app/                    the homepage, docs shell, API routes, and LLM endpoints
+  content/docs/           every page, as .mdx
+  lib/highlighting/       the Kira and KSL TextMate grammars
+  mcp/                    the docs search MCP server
+  source.config.ts        the fumadocs collection and Shiki configuration
 ```
 
-It is a self-contained Bun app built with:
+`kira` and `ksl` are not bundled Shiki languages, so `source.config.ts` registers the repository's own TextMate grammars for ` ```kira ` and ` ```ksl ` fences. Every other language loads lazily from the bundle.
 
-- Next.js App Router
-- Fumadocs
-- Fumadocs MDX source generation
-- static search indexes
-
-## Important Folders
-
-```text
-apps/docs/
-  app/
-    components/
-    lib/
-    llms/
-    api/
-  content/docs/
-  public/
-```
-
-Use:
-
-- `app/` for the homepage, docs route shell, API routes, and LLM helper routes
-- `content/docs/` for the actual English documentation pages
-- `meta.json` files to control page order and grouping in the sidebar
-
-## Local Workflow
+## Commands
 
 ```bash
-cd apps/docs
+cd sites/docs
 bun install
 bun run dev
-```
-
-Type-check and source generation:
-
-```bash
 bun run typecheck
-```
-
-Static build:
-
-```bash
 bun run build
 ```
 
-## Adding A New Page
+`typecheck` needs the generated collection types, which `build` writes, so run `build` at least once in a fresh checkout.
 
-1. Add an `.mdx` file under the correct folder in `content/docs/`.
-2. Update the folder's `meta.json` if you want explicit ordering.
-3. Link to the page from nearby overview pages when it affects navigation.
-4. Run `bun run typecheck` and `bun run build`.
+## Adding a Page
 
-## Versioning Readiness
+1. Add an `.mdx` file under the right folder in `content/docs/`, with `title` and `description` frontmatter.
+2. Register its slug in the enclosing `meta.json` `pages` array. A new section needs its own `meta.json` with a `title` and a `pages` array, and its folder name registered in the parent's array.
+3. Link to it from the section index.
+4. Run `bun run build`.
 
-The site currently publishes only latest English docs.
+A page missing from a `meta.json`, or a `meta.json` naming a page that does not exist, fails the build.
 
-It is still organized so future versioning is possible:
+## Markdown Conventions
 
-- stable section slugs
-- a clear content tree
-- homepage separate from `/docs`
+- Headings are literal noun phrases, not sentences or slogans.
+- No em dashes and no prose arrows. Use punctuation or a second sentence.
+- Lead with the conclusion; follow with the evidence.
+- Prefer a table for short enumerable facts, a list when order or membership matters, prose otherwise.
+- Name the diagnostic code when documenting a refusal, and say what to write instead.
+- Delete a paragraph that does not change the reader's next move.
 
-When versioning is introduced later, keep the current slugs stable unless the underlying product meaning has changed.
+## Machine-Readable Output
+
+The site exposes `/llms.txt`, `/llms-full.txt`, and `/docs/<path>.mdx`. Those are generated from the same content, so nothing has to be maintained twice.

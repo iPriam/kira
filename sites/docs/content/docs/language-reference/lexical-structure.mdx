@@ -1,54 +1,74 @@
 ---
 title: Lexical Structure
-description: Comments, identifiers, keywords, punctuation, literals, and qualified names in the current Kira lexer and parser.
+description: Comments, identifiers, keywords and contextual identifiers, punctuation, literals, string escapes, and statement terminators.
 ---
 
-## Comments and Whitespace
+## Comments
 
-The lexer ignores spaces, tabs, carriage returns, and newlines.
-
-The documented comment forms are:
-
-```ts
-// line comment
-/// documentation comment
+```kira
+// a line comment
+/// a documentation comment
 ```
 
-## Identifiers and Qualified Names
+Consecutive `///` lines immediately above a declaration are its documentation. The lexer treats every comment as trivia, so a comment never reaches the parser.
 
-Identifiers begin with a letter or `_`, and may continue with identifier characters after that.
+## Identifiers
 
-Qualified names are dot-separated identifiers:
-
-```ts
-Support
-bindings.callbacks
-FFI.Pointer
-```
+An identifier begins with a letter or `_` and continues with letters, digits, or `_`. A qualified name is dot-separated: `Geo.Point`, `FFI.Pointer`, `bindings.callbacks`.
 
 ## Keywords
 
-The current token set reserves these keywords:
+These are reserved and cannot be used as names:
 
-`annotation`, `capability`, `class`, `construct`, `enum`, `struct`, `extends`, `function`, `generated`, `override`, `overridable`, `targets`, `uses`, `let`, `var`, `return`, `import`, `as`, `if`, `else`, `for`, `in`, `match`, `switch`, `case`, `default`, `true`, `false`
+```text
+function  let     var       return    if      else    while
+true      false   import    as        struct  enum    class
+construct trait   extends   override  match   attempt try
+for       in      break     continue  type
+```
+
+`handle` is deliberately absent: it is recognized contextually after an `attempt` block and stays usable as a name everywhere else.
+
+## Contextual Identifiers
+
+These carry meaning in one position and remain ordinary names everywhere else, so a local named `move` still binds:
+
+```text
+move  copy  borrow  mut  some  Any  async  extend  macro  comptime
+init  requires  lifecycle  self  For
+```
+
+`extend` is recognized only when the next tokens are an identifier followed by `{` or `:`. `For` is recognized only as the first token of a content-block item, followed by `(`.
 
 ## Punctuation and Operators
 
-The lexer recognizes these punctuation/operator tokens:
+```text
+@  (  )  {  }  [  ]  ;  ,  :  .  ..  =  ->  ?
+!  ~  +  -  *  /  %  <<  >>  &  |  ^
+==  !=  <  <=  >  >=  &&  ||
+```
 
-`@ ( ) { } [ ] ; , : ? = == ! != && || + - -> * / % . < <= > >=`
+`..` appears only in a `for` header. `#` is not a token of the language: `#{ … }` is read out of the raw source inside a macro `quote`, and a `#` anywhere else is an unknown character.
 
 ## Literals
 
-The current literal families are:
+Integer, float, string, and boolean. There is no character literal.
 
-- integer literals
-- float literals
-- string literals
-- boolean literals (`true`, `false`)
+A string literal resolves seven escapes:
 
-Strings use double quotes. Arrays use bracketed element syntax such as `[1, 2, 3]`.
+| Escape | Produces |
+| --- | --- |
+| `\n` | newline |
+| `\t` | tab |
+| `\r` | carriage return |
+| `\e` | escape |
+| `\0` | NUL |
+| `\"` | a quote |
+| `\\` | a backslash |
+| `\` before a newline | nothing: the literal continues on the next line |
+
+A backslash before anything else is `KLEX003` rather than the character itself.
 
 ## Terminators
 
-The parser supports the semicolon-terminated and newline-delimited styles already used across the repo examples.
+A statement ends at a newline or at a `;`. Both are accepted everywhere, and enum variants are separated by newlines or spaces rather than commas. Array and argument list commas are optional where a newline separates the elements.

@@ -1,28 +1,11 @@
 ---
 title: Control Flow
-description: If, else if, for, while, break, continue, switch, and enum match in current Kira.
+description: if, while, for over ranges and arrays, break and continue, match over enum variants, and attempt/try/handle over Result-shaped values.
 ---
 
-Kira's frontend and executable corpus understand these main control-flow forms:
+## Branching
 
-- `if`
-- `else if`
-- `for`
-- `while`
-- `break`
-- `continue`
-- `switch`
-- `match`
-
-## Statement Forms
-
-The current parser accepts these in ordinary statement position:
-
-```ts
-if iw <= 0.0 || ih <= 0.0 {
-    return Rect.zero
-}
-
+```kira
 if score == 0 {
     print("zero")
 } else if score == 1 {
@@ -30,83 +13,93 @@ if score == 0 {
 } else {
     print("many")
 }
-
-for item in [1, 2, 3] {
-    print(item)
-}
-
-while index < 10 {
-    if index == 2 {
-        index = index + 1
-        continue
-    }
-    if index == 4 {
-        break
-    }
-    index = index + 1
-}
-
-switch 0 {
-    case 0 {
-        print("primary")
-    }
-    default {
-        print("fallback")
-    }
-}
-
-match parsed {
-    Ok(value) -> print(value);
-    Error(error) -> print(error);
-}
 ```
 
-## Builder Forms
+`if` is a statement. The condition must be `Bool`. For a value-producing branch, use the [conditional operator](/docs/language-guide/basic-operators#the-conditional-operator).
 
-The same language families also appear in builder/content blocks:
+## Loops
 
-```ts
-content {
-    if 0 == 0 {
-        Kit.Badge("Overview")
-    } else {
-        Kit.Badge("Details")
-    }
+`while` tests before each iteration. `for` walks a **half-open** integer range: the lower bound is included and the upper one is not, so `for i in 0..5` sees `0 1 2 3 4` and `for i in 5..5` never runs. `..` already means "up to but excluding", which is why there is no separate `..<`.
 
-    for item in [1, 2, 3] {
-        Kit.Row("Dashboard row")
-    }
+```kira
+for i in 0..5 { print(i) }
 
-    switch 0 {
-        case 0 {
-            Kit.Text("Overview panel")
-        }
-        default {
-            Kit.Text("Fallback panel")
-        }
+let lo = 2
+let hi = 6
+for i in lo..hi { print(i) }    // bounds are expressions, evaluated once
+```
+
+A range is written only in a `for` header. `..` is not a value operator, so `let r = 0..4` is rejected rather than producing a range object.
+
+A `for` also walks an **array**:
+
+```kira
+let xs = [10, 20, 30]
+var total = 0
+for x in xs { total = total + x }   // xs survives; x is an immutable copy
+```
+
+The loop variable is a fresh immutable binding on each iteration, scoped to the body: assigning to it is the same error assigning to any `let` is, and it does not outlive the loop.
+
+`break` leaves the innermost enclosing loop and `continue` skips to its next iteration. Both work in `while` and `for`, and one written outside a loop is reported rather than ignored. A `for` is rewritten into a `while` during analysis, so every backend compiles one loop shape rather than two, and `continue` still advances the loop because the rewrite steps the cursor before the body rather than after it.
+
+There is no `switch`, no `case`, and no `default`.
+
+## Match
+
+A `match` dispatches on an **enum's variant**. Arms are written with an arrow and take either a single statement or a block. Variants are **unqualified**, because the subject's type already says which enum they belong to.
+
+```kira
+function rank(s: borrow Shade) -> Int {
+    match s {
+        Light -> return 1;
+        Mid -> return 2;
+        Dark -> return 3;
     }
 }
 ```
 
-That construct coverage is one of the clearest examples of Kira's broader frontend surface. Builder/content blocks currently use `if`, `else if`, `for`, and `switch`. `while`, `break`, and `continue` are statement features.
+A parenthesized name binds the variant's payload and is visible only inside its own arm, so two arms may bind the same name to different payloads. The binding is an owned copy that outlives the enum it was read from, and it is immutable.
 
-## What to Use in Executable Code
-
-Today, `if`, `else if`, `for`, `while`, `break`, `continue`, `switch`, and enum `match` are all part of the proven corpus across the runnable backends.
-
-`match` is specifically for enums. It is exhaustive, does not have a wildcard arm, and uses unqualified variant names in patterns:
-
-```ts
-match result {
-    Ok(text) -> print(text);
-    Error(inner) -> print(inner);
+```kira
+match note {
+    Tag(text) -> { print(text) }
+    Rank(value) -> { if value > 10 { print("high") } }
+    Blank -> { print("none") }   // an arm may ignore a payload it does not need
 }
 ```
 
-## A Practical Rule
+A `match` is **checked**: every variant must be covered (`KSEM129`), and a variant matched twice is reported (`KSEM127`). That is what dispatching on a variant buys over comparing with `==`: a chain of comparisons has no variant set to be exhaustive over. A subject that is not an enum is refused (`KSEM125`). There is no wildcard arm and no `else` arm.
 
-If you need executable control flow today:
+Because coverage is checked, an exhaustive `match` whose arms all return is itself a **definite return**, which is why `rank` above needs no trailing `return`. A `break` inside an arm belongs to the enclosing loop: a `match` is not a loop, so a `break` in one that no loop encloses is reported.
 
-- prefer statement-level branching and loops
-- use `else if` instead of nested manual blocks when that reads better
-- treat conditional `?:` expressions as a separate feature boundary
+## Attempt, Try, and Handle
+
+`try` unwraps a **`Result`-shaped** value: an enum with an `Ok` variant and an `Error` variant whose payload is the failure enum. On `Ok` the body carries on with the unwrapped value; on `Error` control leaves the body for the `handle` arm naming that failure.
+
+```kira
+enum ClampError { TooSmall TooBig }
+
+enum ClampOutcome {
+    Ok: Int
+    Error: ClampError
+}
+
+function process(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
+}
+```
+
+"Result-shaped" is **structural, not nominal**: any enum with that `Ok`/`Error` pair works, which is why `ClampOutcome` is declared right there and why Foundation's `Result<Value, Failure>` needs nothing added. A handler arm is spelled `Variant { … }` with **no arrow**, unlike a `match` arm, and a parenthesized name binds the failure's payload exactly as a `match` binding does.
+
+`try` is a **keyword**, never `?`, and it is accepted in exactly one position: as the whole initializer of a `let` directly inside an `attempt` body. Anywhere else, outside an `attempt` or nested in a larger expression, is refused (`KSEM137`), because nothing pins what `g(try f(), try h())` would mean.
+
+The handlers are checked the way a `match` is. Every reachable failure variant must be handled (`KSEM139`), an arm naming something that is not a variant of the failure enum is reported (`KSEM140`), and a failure handled twice is reported (`KSEM142`). Because all the arms route the same value, **every `try` in one `attempt` must fail with the same enum** (`KSEM141`). A `try` on something that is not `Result`-shaped is `KSEM138`, and an `attempt` with no `try` at all is `KSEM143`.
+
+Statements after a `try` run only when it succeeded. The compiler keeps a multi-`try` attempt as a linear sequence of guarded steps with one common exit: each success continues to the next step, while its handler skips the remaining steps. That preserves the same definite-return rule without building a deeply nested success tree.

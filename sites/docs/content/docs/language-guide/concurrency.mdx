@@ -1,0 +1,46 @@
+---
+title: Concurrency
+description: async functions, Task spawns, the three handle operations, cooperative yielding, the virtual clock, and the Send rule at the spawn boundary.
+---
+
+`async function` marks a body meant to be *spawned*. Calling one directly is an ordinary call: the marker changes nothing about a call, only about what a task may run. `async` is contextual, so a local named `async` still binds.
+
+`Task { work(a, b) }` spawns a deferred task and hands back an opaque handle. The arguments evaluate at the spawn; the body runs at the first drive.
+
+```kira
+async function total(a: Int, b: Int) -> Int { return a + b }
+
+@Main function main() {
+    let handle = Task { total(40, 2) }
+    print(handle.await)          // 42, the call ran here rather than above
+    return
+}
+```
+
+## The Handle
+
+A handle has exactly three operations, and anything else on one is `KSEM158`.
+
+| Written | What it does |
+| --- | --- |
+| `handle.await` | Drives the task to completion and takes its result. A `Void` body joins as `Int` `0`, so a join is always a value. |
+| `handle.requestCancel()` | Asks a task that has not run yet not to. Its body never runs, and awaiting it afterwards traps. |
+| `handle.detach()` | Drives the task and throws the result away. Awaiting a detached task traps, as does joining any task twice. |
+
+## Yielding and Sleeping
+
+`taskYield()` is a cooperative suspend point: it hands the oldest queued task a turn and comes back. With nothing queued it does nothing, so calling it outside a task body is legal.
+
+`taskSleep(ms)` moves a **virtual** clock forward and then yields. Nothing sleeps in real time, so a program orders its tasks the same way on every backend and a test suite never waits.
+
+## What a Task Body May Be
+
+A direct call to a named function taking `Int` or `Float` parameters and returning `Int`, `Float`, or nothing, or a bare numeric literal (`Task { 41 }`). Anything else is `KSEM159`. That restriction is what lets a spawn evaluate its arguments now and its body later with no closure in between.
+
+## The `Send` Rule
+
+A spawn is the one boundary a value crosses without its spawner, so what the deferred call takes and returns must be [`Send`](/docs/language-guide/traits#what-carries-send-and-sync) (`KSEM312`). The slot rule above is narrower today, and every type it admits is `Send`.
+
+## The Scheduler
+
+The scheduler is generated IR, not runtime code. The compiler synthesizes the spawn, dispatch, join, detach, cancel, yield, and sleep helpers, and they reach the task table through one primitive. The VM and the native backend therefore run the same scheduler rather than two that have to be kept in step.

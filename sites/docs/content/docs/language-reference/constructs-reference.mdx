@@ -1,123 +1,90 @@
 ---
 title: Constructs Reference
-description: Concise lookup for the construct-family grammar — extends, properties, requires, @Required/@Content/node members, extend modifiers, content channels and composition, attempt/try/handle, and every construct diagnostic code.
+description: "The construct grammar in lookup form: headers, member kinds, content slots and builders, initializers, lifecycle hooks, modifiers, and the diagnostics each rule fires."
 ---
 
-`construct` declares a **declaration family**. Concrete declarations are headed by the family name (`Widget Button { ... }`). See the [Constructs guide](/docs/language-guide/constructs) for narrative coverage.
+`construct` declares either a family template or a declaration backed by one, told apart by the parameter list. See the [Constructs guide](/docs/language-guide/constructs) for the narrative.
 
-## Family declaration
-
-```kira
-construct Family [extends Parent1, Parent2] {
-    // section forms and/or direct members
-}
-```
-
-Multiple parents are allowed; the local inheritance graph must be acyclic. A prior concrete declaration may serve as a parent, inheriting its family and implementations.
-
-## Section forms
-
-| Section | Purpose |
-| --- | --- |
-| `properties { [required] name: T }` | Typed property schema; inherited through `extends`. |
-| `requires { function f(...) -> T }` | Functions the first concrete declaration must implement. |
-| `content { channel { accepts T; count m..n } }` | Named content channels. |
-| `content sealed` / `refine` / `passthrough` / `project { local as Parent.channel }` | Content composition over inherited channels. |
-
-Property values are supplied by a **section** in the declaration, never a constructor call:
+## Headers
 
 ```kira
-Route Home { properties { path: "/"; id: "home" } }
+construct Family { … }
+construct Family extends ParentA, ParentB { … }
+construct Family: Trait { … }
+construct Name(param: T, other: U = default) extends Family { … }
 ```
 
-## Direct members (SwiftUI-style surface)
+A parameter list with no `extends` is `KPAR077`. A declaration naming two families is `KPAR078`. A parent that is not a family is `KSEM200`, and an inheritance cycle is `KSEM205`.
 
-| Member | Meaning |
+## Members
+
+| Written | Kind |
 | --- | --- |
-| `@Required let name: T` | A field every concrete declaration must provide. |
-| `@Required function f(...) -> T` | A required bodyless behavior (checked like `requires`). |
-| `let name: T { ... }` | A computed default member (block-bodied; overridable; not stored). |
-| `@Content let x: Widget` | One caller-provided child (channel name = field name). |
-| `@Content let xs: [Widget]` | An ordered list of caller-provided children. |
+| `let name: T` | Stored member. |
+| `let name: T = default` | Stored member with a default. |
+| `let name: T { expr }` | Computed member: a zero-argument method read as a property. |
+| `name { … }` | Shorthand for the computed member the family declares under `name`. |
+| `function f(…) -> T { … }` | An inheritable default. |
+| `@Required function f(…) -> T` | A bodyless requirement. |
+| `requires { function f(…) -> T }` | The section spelling of the line above. |
+| `@Required let name: T` | A value obligation. |
+| `let name: some X` | A single child slot. `@Content let` is the same. |
+| `let name: [some X]` | A list child slot. |
+| `init(params) { … }` | A secondary construction path. Writes no result type (`KPAR067`). |
+| `lifecycle { name(…) { … } }` | The methods a runtime holding this value calls. |
 
-The `let node: T { ... }` member is the typed **Widget→Node bridge**. Bare access (`widget.node`) invokes the accessor; chains compose (`button.body.node`). The **terminal-`node` rule**: an explicit `node` discharges the required `body`, and resolution stops there.
+A computed member must declare its result type (`KPAR066`). A declaration that leaves a requirement unimplemented is `KSEM234`.
 
-A trailing `{ ... }` block on a construction fills `@Content` fields, routed by callee inspection: one `Widget` field takes exactly one child, one `[Widget]` field takes the whole block as a list, and multiple `@Content` fields require named fills (`header { ... } content { ... }`).
+**The result type comes from the family.** A `name { … }` shorthand returns whatever the family declares for `name`; a family that declares no such member falls back to the family type.
 
-## Fluent modifiers
+## Values
+
+| Written | Means |
+| --- | --- |
+| `Family` | Refused (`KSEM207`). |
+| `Any Family` | A value of some declaration backing `Family`. |
+| `some Family` | The same type. In a member position it also marks a child slot. |
+| `[Any Family]` | A heterogeneous array of them. |
+
+## Narrowing
+
+A child may make a promise more specific, never different. A result and a `@Required let` may narrow: anything narrows `Any`, and a family type narrows to a family extending it or to a declaration backing one. A parameter may not. Either violation is `KSEM206`.
+
+## Content Blocks
+
+A trailing `{ … }` fills the **last** content parameter of a construction, an `init`, or a method. Its items are bare child expressions plus two builders recognized only there:
+
+```kira
+For(binding in iterable) { … }
+if condition { … } else if other { … } else { … }
+```
+
+A `For` builder contributes one child per iteration; an `if` builder contributes the taken branch's children. A `For` with no `{` is `KPAR065`.
+
+A `{ … }` is read as a content block only when it is neither a closure (it has an `in`) nor a struct literal (its first item is `name =` or `name :`) nor a copy/update (its items are `let` overrides).
+
+## Copy and Update
+
+```kira
+let wide = base { let width = 200 }
+```
+
+The local is evaluated once, its fields are copied into a new construction, and only the written paths are replaced.
+
+## Modifiers
 
 ```kira
 extend Family {
-    function modifier(...) -> Family { ... }   // wraps the receiver via `self`
+    function padding(amount: Int) -> Any Family { … }
 }
 ```
 
-`extend` adds the external chainable surface (`.padding(...)`), distinct from the `node` bridge.
+One shared body whose receiver is the family value, returning the family type. A modifier whose name is already taken by the family is refused rather than shadowing it. Only `function` members are legal in the block.
 
-## Content channels
+## Traits on a Family
 
-```kira
-content {
-    channelName {
-        accepts ElementType
-        count 0..1   // or 1.. for "at least one"
-    }
-}
-```
+`construct Family: Trait { … }` and `extend Family: Trait { … }` both file one conformance per backed declaration. A compiler-known trait cannot be claimed by a family (`KSEM298`).
 
-Content-requiredness is `count 1..`, reported as `KSEM129` when empty. `requires` declares required functions only.
+## Lowering
 
-## Error handling
-
-```kira
-attempt {
-    let value = try fallible()
-} handle {
-    VariantA(payload) { ... }
-    VariantB { ... }
-}
-```
-
-`try` is valid only inside `attempt`; all `try`s in one `attempt` share one failure enum. Executes on `vm`, `llvm`, and `hybrid`.
-
-## Diagnostic codes
-
-| Code | Meaning |
-| --- | --- |
-| `KSEM118` | Unknown parent construct in `extends`. |
-| `KSEM119` | Inheritance cycle. |
-| `KSEM120` | Missing required function. |
-| `KSEM121` | Required-function signature mismatch. |
-| `KSEM123` | Missing required property. |
-| `KSEM124` | Unknown property. |
-| `KSEM125` | Property type mismatch. |
-| `KSEM126` | Duplicate property. |
-| `KSEM127` | Unknown content channel. |
-| `KSEM128` | Content added into a sealed construct. |
-| `KSEM129` | Content channel count violation (also: required content unmet). |
-| `KSEM130` | Content `accepts` element-type mismatch. |
-| `KSEM131` | Unknown content projection target. |
-| `KSEM132` | Invalid content composition (widening refine / meaningless passthrough). |
-| `KSEM133` | `try` outside `attempt` or in an unsupported position. |
-| `KSEM134` | `try` on a non-`Result` value. |
-| `KSEM135` | Missing `handle` case for a reachable failure variant. |
-| `KSEM136` | `handle` case is not a variant of the failure enum. |
-| `KSEM137` | Incompatible failure enums across one `attempt`. |
-| `KSEM138` | Duplicate content channel. |
-| `KSEM140` | Missing required direct member. |
-| `KSEM141` | Self-recursive `body` with no terminal `node`. |
-| `KSEM142` | Trailing block on a declaration with no `@Content` field. |
-| `KSEM143` | Wrong child count for a single-`Widget` `@Content` field. |
-| `KSEM144` | Bare block where named fills are required (multiple `@Content` fields). |
-| `KSEM145` | Non-widget content child. |
-| `KSEM146` | `extend` of an unknown construct. |
-
-## Execution status
-
-| Surface | Status |
-| --- | --- |
-| `extends` dispatch, properties, `requires`, content channels/composition | Validation-complete (parse + checks + diagnostics) |
-| `let node: T { ... }` bridge (computed accessors) | Executes on `vm` / `llvm` / `hybrid` |
-| `any Family` coercion + heterogeneous `[Widget]` unification | Executes on `vm` / `llvm` / `hybrid` |
-| `@Content` trailing-block content trees | Construct and execute on `vm` / `llvm` / `hybrid` |
-| `attempt` / `try` / `handle` | Executes on `vm` / `llvm` / `hybrid` |
+A family becomes a synthesized enum whose variants carry the backed structs. A method call through a family value becomes a tag dispatcher; a `@Required let` read becomes a per-variant dispatcher whose arms differ; a modifier becomes one function taking the family value as its receiver. Every backend runs ordinary enum projection, branching, and direct calls, so constructs introduce no IR node, no opcode, and no wire format.

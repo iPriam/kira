@@ -1,0 +1,92 @@
+---
+title: Derives
+description: The four derive macros Foundation ships in Kira, the field classification they share, the serde wire format and its round-trip law, and the builtin `@Derive(Copy)` assertion.
+---
+
+Foundation ships four derive macros written in pure Kira, in `foundation/app/Derive.kira` and `foundation/app/DeriveSerde.kira`. All four are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
+
+| Derive | Generated free function | Contract |
+| --- | --- | --- |
+| `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
+| `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
+| `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` | value to compact wire string |
+| `Deserializable` | `function deserialize_<Type>(s: borrow String) -> <Type>` | wire string to value, trapping on malformed input |
+
+The generated name is glued to the derived type's exact name (`eq_Point`, `clone_Point`, `serialize_Point`, `deserialize_Point`), and that is a fixed contract other tooling reads.
+
+## Field Classification
+
+All four share one classification. A builtin scalar field (`Int`, `Float`, `Bool`, `String`, and the sized numeric and C types) is handled directly: compared with `!=`, copied by field read, rendered with `String(x)`. A field whose type is another *bare* named type is a nested derived type and recurses through that type's own generated function, so `eq_Segment` calls `eq_Point` on its `from` and `to`. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic, which is the right one because the fix is deriving it there.
+
+An array, generic, or optional field type is refused with a `Diagnostics.error` naming the field rather than emitting broken code. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text, so `[Int]` gives `"Int"`, which is not `"[Int]"`.
+
+## The Wire Format
+
+`Serializable` and `Deserializable` build on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
+
+```text
+TypeName{field1=VALUE;field2=VALUE;...}
+```
+
+An `Int`, `Float`, or `Bool` is `String(x)`; a `String` is its text wrapped in `"`; a nested derived struct is `serialize_<FieldType>(x)` recursed inline, so `from=Point{x=1;y=2}` sits inside its parent's braces.
+
+Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label=`, carves the value with a brace-aware scanner (a `;` or `}` at brace depth zero terminates it, so a nested struct's own balanced braces with their internal `;` are consumed whole), converts by field type, and steps over the delimiter.
+
+**Malformed input traps.** Any structural violation, a wrong type name, a missing `=` or `;` or `}`, truncated text, or a non-digit where an `Int` is expected, drives an out-of-range `charAt` or an inverted `substring`, both of which the runtime turns into a hard trap on every backend. There is no partial or best-effort parse: a value either round-trips or the program stops.
+
+**Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise.
+
+```kira
+@Derive(Equatable, Serializable, Deserializable)
+struct Point { var x: Int; var y: Int }
+
+let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
+let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
+```
+
+## Enums
+
+An enum derives too, and writes the variant it holds by name, with a payload in parentheses after it.
+
+```kira
+@Derive(Equatable, Serializable, Deserializable)
+enum Note { Blank Rank(Int) Tag(String) }
+
+serialize_Note(Note.Rank(42))                       // "Note.Rank(42)"
+serialize_Note(Note.Blank)                          // "Note.Blank"
+deserialize_Note("Note.Tag(\"edge\")")              // Note.Tag("edge")
+```
+
+The variant is **named, never numbered**: an ordinal would tie the format to declaration order, so inserting a variant would re-read every value ever written as its neighbour. An enum used as a struct field is that same text in the field's value slot, `slot=Slot{tool=Tool.Move;…}`, which the brace-aware scanner already consumes whole, and an unknown variant name traps like any other structural violation.
+
+## Two Limits
+
+A `String` value is **not escaped**: a `String` field or payload whose text contains `"`, `;`, or `}` is out of contract. No error is raised, but the wire string is then ambiguous and will not round-trip.
+
+`Deserializable` **refuses a `Float`** field or payload. There is no lossless `Float` parsing primitive, so refusing beats shipping a parser that silently loses the low bits.
+
+## `@Derive(Copy)`
+
+`Copy` is a compiler builtin rather than a Foundation macro: it generates no code and produces no free function. It is an *opt-in assertion* that a type is structurally copyable, checked at compile time, which is why macro expansion leaves it in place instead of consuming it.
+
+Kira already classifies copyability automatically and structurally: a type is copyable when every field or variant payload is, and it *moves* the moment it gains a heap-owning field (a `String`, an array), an opaque payload (a callback, native state), or anything that transitively contains one. That classification is silent, so adding one such field flips a type from copy to move at every call site with no signal at the declaration. `@Derive(Copy)` makes the contract explicit and enforced.
+
+On an eligible type the derive is a **no-op**: it compiles and the type behaves exactly as before, granting no new powers. On an ineligible one it is `KIR005`, naming the first offending field or variant payload and its type, and the check is transitive.
+
+```kira
+@Derive(Copy)                 // ok: every field is a scalar
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@Derive(Copy)                 // error[KIR005]: `Label` derives `Copy`, but its
+struct Label {                //   member `text` has type `String`, which is not
+    let id: Int               //   copyable, so `Label` moves rather than copies.
+    let text: String
+}
+```
+
+`Copy` composes with the Foundation derives: `@Derive(Copy, Equatable)` runs the builtin assertion *and* generates `eq_<Type>`. It is recognized before the user-macro lookup, so it never trips `KMAC011`.
+
+`Copyable` is the trait spelling of the same assertion. See [Traits](/docs/language-guide/traits#compiler-known-traits).

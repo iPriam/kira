@@ -1,6 +1,6 @@
 ---
 title: Exports
-description: The `kira export` platform scaffolds — the merged Apple Xcode workspace, Windows/Linux CMake presets, the Android Gradle scaffold, and the Web/WASM bundle.
+description: "The `kira export` platform scaffolds: the merged Apple Xcode workspace, Windows and Linux CMake presets, the Android Gradle scaffold, and the Web bundle."
 ---
 
 `kira export` generates platform project/export scaffolds. The target is optional inside a Kira project; profiles are selected with `--profile debug|profiler|release`, and Web accepts `--surface dom|webgpu|hybrid`.
@@ -19,7 +19,7 @@ kira export linux
 
 ## Apple
 
-Apple export cross-builds every platform it addresses — macOS for this machine's architecture, iOS/tvOS/visionOS as device *and* simulator slices — and links each slice into its platform target through `OTHER_LDFLAGS`. A hybrid app's native half is compiled to a bare object and linked **into the application binary**; its bundle records `@kira-self` as the native half, so the running image is the program's own machine code.
+Apple export cross-builds every platform it addresses, macOS for this machine's architecture and iOS, tvOS, and visionOS as device *and* simulator slices, and links each slice into its platform target through `OTHER_LDFLAGS`. A hybrid app's native half is compiled to a bare object and linked **into the application binary**; its bundle records `@kira-self` as the native half, so the running image is the program's own machine code.
 
 ```text
 exports/apple/

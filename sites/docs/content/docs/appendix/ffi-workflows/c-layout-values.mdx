@@ -1,0 +1,160 @@
+---
+title: C-Layout Values
+description: Structs by value and by address, why Kira never classifies the ABI, extension chaining, reading members through a pointer, inline arrays, and arrays as C buffers.
+---
+
+## Structs by Value
+
+A `@FFI.Struct { layout: c }` crosses the seam **by value**, as a parameter or a result, when every field is a fixed-width scalar, `Bool`, `RawPtr`, or another such struct, to any depth.
+
+```kira
+@FFI.Struct { layout: c; }
+struct Rect {
+    var x: Float
+    var y: Float
+}
+
+@FFI.Extern { library: graphics; symbol: rect_scale; abi: c; }
+function rectScale(r: Rect, k: Float) -> Rect;
+```
+
+The annotation is required. An ordinary Kira struct is refused even when its fields would all map, because the annotation is what says this type mirrors a C declaration field for field. Without it, adding a Kira field would silently change what the C function receives.
+
+`Type()` produces a zeroed value, and a struct literal initializes the fields it names and zero-fills omitted fields that have no Kira default.
+
+### Kira Never Classifies the ABI
+
+Passing a struct by value is the one place the C ABI cannot be derived from the type alone: x86-64 System V classifies eightbytes, AArch64 AAPCS detects homogeneous float aggregates and returns large ones indirectly, and wasm32 has its own rules.
+
+So for each import naming a struct, `kira` generates a small C file that redeclares the struct, redeclares the real symbol with its true by-value signature, and wraps the call in a shim taking every aggregate through a pointer. The target's own C compiler builds it, the managed clang for a host build and `emcc` for wasm, and applies the ABI it defines. Everything Kira emits speaks only pointers and scalars.
+
+A field the seam cannot carry is refused by name: an ordinary Kira heap value such as a `String`, an array, or an enum with a payload.
+
+## A Struct Passed by Address
+
+A parameter written as an `@FFI.Pointer` to a C-layout struct also accepts that struct itself. The seam writes the C-layout image and passes its address. An ordinary call borrows the image; a declaration with `retains:` consumes it and transfers the image plus every block whose address it embeds.
+
+The same position accepts an **`@FFI.Array` of that struct**, which is the same image with an extent: a C array is its elements laid out end to end, so one row describes both and the address of the row is the address of element zero.
+
+```kira
+@FFI.Array { element: WGPUVertexAttribute; count: 4; }
+struct WGPUVertexAttributeArray4 {}
+
+WGPUVertexBufferLayout {
+    arrayStride = 20
+    attributeCount = 2
+    attributes = WGPUVertexAttributeArray4 { elements = [position, colour] }
+}
+```
+
+That is what makes a descriptor-driven graphics API reachable. Almost none of them take one item; they take `T const *items` beside an `itemCount`, and without a way to name several items' storage from Kira that descriptor could only be built in C.
+
+### Extension Chaining
+
+A third value fills the same position: a struct that **begins** with the target. A struct and its first member share an address, so writing the extension writes the base too.
+
+```kira
+wgpuInstanceCreateSurface(instance, WGPUSurfaceDescriptor {
+    nextInChain = WGPUSurfaceSourceWindowsHWND {
+        chain = WGPUChainedStruct { sType = 5 }
+        hinstance = instance
+        hwnd = window
+    }
+    label = title
+})
+```
+
+`nextInChain` is declared `WGPUChainedStruct *`; the value is the HWND source, whose first member is that chain. This is how every extensible C header extends, WebGPU's `nextInChain` and Vulkan's `pNext`, and C walks the chain by casting a link back to whichever extension it belongs to.
+
+Only the *first* member counts: anything later sits at a nonzero offset and is a different address.
+
+All three fills work at a **member** as well as at an argument, and a member written as an `@FFI.Pointer` is a pointer word exactly as a `RawPtr` member is.
+
+An `@FFI.Pointer` member left out of a literal is `NULL`, on the same terms as a `RawPtr` one. That is what makes a modern graphics descriptor writable at all: WebGPU gives every one of them a `WGPUChainedStruct *nextInChain` plus an optional `T const *` per feature, and
+
+```kira
+WGPURenderPassColorAttachment { view = view, loadOp = 2, storeOp = 1 }
+```
+
+leaves the chain, the resolve target, and the rest at `NULL` without naming them. `RawPtr` and an `@FFI.Pointer` also pass for each other at an argument and at a member.
+
+## Reading Members Through a Pointer
+
+A pointer whose `target` is a C-layout struct keeps that target, so the members behind it are read directly.
+
+```kira
+@FFI.Struct { layout: c; }
+struct sapp_event {
+    let kind: U8 = 0
+    let mouse_x: F32 = 0.0
+}
+
+@FFI.Pointer { target: sapp_event; ownership: borrowed; }
+struct sapp_event_ptr {}
+
+function onEvent(event: sapp_event_ptr) {
+    if event.kind == 3 { moveTo(event.mouse_x) }
+}
+```
+
+This is what a callback argument needs. C hands over `const sapp_event*` and the members behind it are the whole payload; without the read, each one needs an accessor compiled into a shim, twenty of them for sokol's event struct alone.
+
+A read lowers to a load at the member's offset in the target's C layout. **The offset is computed per target**, because a C pointer is four bytes on `wasm32` and eight elsewhere, so a struct with a pointer member ahead of the one being read lays out differently.
+
+A member is one of two things. A scalar reads back as a value, which is the load. A nested struct or an inline array has its bytes *inside* the container, so it names a place, and reading it gives that place's address.
+
+```kira
+let x = event.at.x                    // nested struct
+let y = event.touches[index].pos_y    // inline array, indexed like C's
+```
+
+An array member decays to a pointer to its first element and indexing walks from there, both with the meaning C gives them. Nothing is copied out of C storage: every step is an address until the last, which is the load.
+
+A pointer whose target is not a declared C-layout struct stays an opaque handle and reads nothing, which is deliberate: generated bindings point at C types nobody declared and at themselves, and neither is a mistake.
+
+## Inline Arrays
+
+A C struct that reserves storage inline, `int cells[4]`, is spelled with an `@FFI.Array` typedef, and the struct names that type as a field.
+
+```kira
+@FFI.Array { element: I32; count: 4; }
+struct Cells4 {}
+
+@FFI.Struct { layout: c; }
+struct Grid {
+    var cells: Cells4
+    var weight: Float
+}
+```
+
+The elements live in one Kira field named `elements`, so `grid.cells.elements[2]` is ordinary array indexing and `Cells4 { elements = [1, 2] }` is an ordinary struct literal. Indexing the typedef itself (`grid.cells[2]`) names that field instead of guessing.
+
+Kira's array length and the C extent are different things, so the seam fixes what happens when they differ. **Fewer elements than the extent fill from the front and leave the rest zero**, the same value a zero-filled construction carries and the same bytes on every backend. **More elements than the extent is a trap**, on the VM and in native code alike: the elements past the extent have nowhere to go, and writing only the ones that fit would hand C a value the program did not write. A result always carries the whole extent back, because C storage has no length of its own.
+
+An `@FFI.Array` type crosses as a **member**, and as the storage a pointer to its element type addresses. What it is not is a value C receives by itself: in a parameter or result position C decays an array to a pointer, a different type with different ownership, so the seam refuses it there and asks for `RawPtr` when that is what the symbol takes.
+
+## Arrays as C Buffers
+
+A Kira array fills a **pointer word**, an extern's `RawPtr` parameter or a C-layout struct's `RawPtr` member, as long as its elements are seam scalars. The seam writes the elements out at C's widths and the pointer is the address of what it wrote.
+
+```kira
+@FFI.Extern { library: ffimath; symbol: sum_floats; abi: c; }
+function sumFloats(values: RawPtr, count: I32) -> F32;
+
+let values: [F32] = [1.5, 2.25, 3.0]
+sumFloats(values, I32(values.count))            // pointer and a count
+
+@FFI.Struct { layout: c; }
+struct Range {
+    var ptr: RawPtr
+    var size: U64
+}
+
+Range { ptr = values, size = U64(values.count * 4) }   // the same buffer, named
+```
+
+Writing the elements out is the whole point, not a copy that could be skipped: Kira holds a `[F32]` as `double`s and C reads four bytes each, so handing over the array's own storage would give C wrong *numbers* rather than a wrong pointer, which is a rendering bug rather than a crash. An empty array is a null pointer.
+
+The buffer is an owned C block. It is freed with its argument after an ordinary call, and a `retains:` parameter transfers it to the retained registry when the C API keeps the pointer.
+
+The member position is what makes a graphics API reachable at all. Almost none of them take a pointer and a count as two arguments; they take a descriptor holding both.

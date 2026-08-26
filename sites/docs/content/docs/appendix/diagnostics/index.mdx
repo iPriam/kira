@@ -1,107 +1,88 @@
 ---
-title: Diagnostics and KiraLog
-description: Diagnostic codes, stage boundaries, rendered source errors, and the CLI log format.
+title: Diagnostics
+description: The code prefixes, what a rendered diagnostic carries, the domain tags, and the rule that invalid Kira fails as Kira.
 ---
 
-Kira tries to fail as Kira.
+Every refusal Kira makes carries a code, and the code is the stable part. A message may be reworded; `KSEM107` will always be a use after move.
 
-That means:
+## Prefixes
 
-- parser failures are Kira parser diagnostics
-- semantic failures are Kira semantic diagnostics
-- backend/build failures are Kira build diagnostics
-- unexpected internal failures go through an internal compiler error boundary instead of dumping raw Zig internals first
+| Prefix | Owner |
+| --- | --- |
+| `KLEX` | The lexer. |
+| `KPAR` | The parser. |
+| `KMAC` | Macro expansion. See [Macro Diagnostics](/docs/macros/diagnostics). |
+| `KSEM` | Semantic analysis. The largest set by far. |
+| `KIR` | HIR and IR lowering. |
+| `KBE` | A code-generation backend. |
+| `KSLP`, `KSLS` | The KSL parser and KSL semantics. |
+| `KPK` | Package and project discovery, and manifests. |
+| `KTC` | Toolchain discovery and activation. |
+| `KCL` | The command line. |
+| `KLINT` | The package's own linter. |
+| `KIC` | An internal compiler error. |
 
-## Rendered Diagnostics
+A diagnostic also carries a domain tag naming the subsystem it belongs to: `cli`, `package`, `toolchain`, `backend`, `lowering`, or `compiler_internal`.
 
-The current renderer prints:
+## What a Rendered Diagnostic Carries
 
-- severity
-- diagnostic code when available
-- title
-- message
-- source location and caret
-- optional related labels
-- optional help, suggestion, and notes
-
-Typical shape:
+- Severity.
+- The code.
+- A title and a message.
+- The source location, with a caret under the span.
+- Related labels pointing at other spans, when a second location explains the first.
+- Help, a suggestion, and notes, when there is a concrete next move.
 
 ```text
 error[KPAR001]: expected expression
-  ...
-  --> file.kira:line:column
+  --> app/main.kira:12:19
 ```
 
-## KiraLog
+`--show-notes` opts into the note-level output that a normal run keeps quiet.
 
-The CLI also writes structured log lines such as:
+## Invalid Kira Fails as Kira
 
-```text
-[info] frontend.started: Frontend compilation started. command=run path=examples/hello/app/main.kira
-```
+Parser failures are Kira parser diagnostics, semantic failures are Kira semantic diagnostics, and backend and build failures are Kira build diagnostics. An unexpected internal failure goes through an internal compiler error boundary rather than surfacing as a panic, a raw linker message, or a host runtime crash.
 
-These logs come from `kira_log` and are distinct from the user-facing diagnostic renderer.
+The bar for a diagnostic is not "emit an error". It is "emit a Kira-native error at the pass that found it, with stable and useful output".
 
-Current log scopes include:
+## Codes Worth Knowing
 
-- `frontend`
-- `build`
-- `compiler`
+These are the ones that come up most often while learning the language. Each is explained where the rule lives.
 
-## Stage Model
-
-Kira currently reports failures against the pipeline stages:
-
-- lexer
-- parser
-- semantics
-- IR/build
-
-That is also reflected in the corpus expectations under `tests/fail/`.
-
-## Representative Codes In The Repo
-
-| Code | Title | Stage |
-| --- | --- | --- |
-| `KPAR001` | expected `;` after annotation spec / parser expectation failures | parser |
-| `KPAR002` | expected expression | parser |
-| `KSEM002` | multiple `@Main` entrypoints | semantics |
-| `KSEM005` | conflicting execution annotations | semantics |
-| `KSEM021` | invalid lifecycle hook | semantics |
-| `KSEM023` | invalid `@Main` signature | semantics |
-| `KSEM026` | annotation is not allowed in this construct | semantics |
-| `KSEM029` | type inference is ambiguous | semantics |
-| `KSEM031` | type mismatch | semantics |
-| `KSEM032` | unresolved import | semantics |
-| `KSEM045` | invalid callback signature | semantics |
-| `KSEM063` | unknown annotation | semantics |
-| `KSEM064` | annotation does not accept parameters | semantics |
-| `KSEM066` | unknown annotation parameter | semantics |
-| `KSEM069` | missing annotation parameter | semantics |
-| `KSEM071` | annotation parameter type mismatch | semantics |
-| `KSEM093` | direct FFI requires `@Native` | semantics |
-| `KSEM100` | non-exhaustive match | semantics |
-| `KSEM101` | duplicate match arm | semantics |
-| `KSEM102` | missing `onPrint` for `@Printable` type | semantics |
-| `KSEM103` | duplicate enum variant | semantics |
-| `KSEM117` | non-`Copy` closure capture | semantics |
-| `KSEM118` / `KSEM119` | unknown parent / inheritance cycle (`extends`) | semantics |
-| `KSEM120` / `KSEM121` | missing required function / signature mismatch | semantics |
-| `KSEM123`–`KSEM126` | construct property schema violations | semantics |
-| `KSEM127`–`KSEM132`, `KSEM138` | content channel and composition violations | semantics |
-| `KSEM133`–`KSEM137` | `attempt` / `try` / `handle` rules | semantics |
-| `KSEM140`–`KSEM146` | `@Required` / `@Content` / `node` bridge / `extend` rules | semantics |
-| `KPK002` | a `package.kira` declaration could not be read | package discovery |
-| `KCL020` / `KCL021` | `run` / `live` rejected a library root | CLI |
-| `KBUILD001` | native code requires a native-capable backend | IR/build |
-| `KICE001` | internal compiler error | internal boundary |
-
-## Invalid Kira Should Not Collapse Into Zig
-
-This is an explicit project goal already reflected in the CLI tests:
-
-- invalid source should not crash the renderer
-- invalid hybrid input should not segfault the runtime host
-- unexpected failures should be wrapped by the internal compiler error boundary
-
-So when you are improving diagnostics, the bar is not just "emit an error". The bar is "emit a Kira-native error at the correct stage with stable, useful output."
+| Code | Means |
+| --- | --- |
+| `KLEX003` | An unknown escape in a string literal. |
+| `KPAR043` | `@Export` on a `struct`, pointing at the `class` that would work. |
+| `KPAR047` | A generic `struct`, `class`, or `function`. Only `enum` takes type parameters. |
+| `KPAR075` | A bare `self` receiver. |
+| `KPAR077` / `KPAR078` | A construct parameter list with no `extends`, or a declaration naming two families. |
+| `KSEM003` | A duplicate declaration. |
+| `KSEM011` / `KSEM255` | No `@Main` in an application, or one in a library. |
+| `KSEM027` / `KSEM032` | A namespace root this file did not import, or an import naming no readable file. |
+| `KSEM052` | A by-value struct cycle. |
+| `KSEM062` | A missing argument for a parameter with no default. |
+| `KSEM063` | A derived class assigned to an ancestor binding. There is no subtyping. |
+| `KSEM071` | Two different written widths in one operation. |
+| `KSEM081` | `print` of a struct, array, or enum. |
+| `KSEM107` | A use after move. |
+| `KSEM113` / `KSEM115` | A named non-trivial value passed to a copying parameter with no spelling, or `move` where the parameter copies. |
+| `KSEM117` | A closure capture that owns heap storage. |
+| `KSEM118` / `KSEM119` | An enum payload the box cannot own, or a leading-dot variant with no expected type. |
+| `KSEM125`, `KSEM127`, `KSEM129` | A `match` subject that is not an enum, a variant matched twice, a variant not covered. |
+| `KSEM137`–`KSEM143` | The `attempt` / `try` / `handle` rules. |
+| `KSEM157` / `KSEM130` | A cyclic type alias, or an alias claiming a taken name. |
+| `KSEM158` / `KSEM159` | An unknown task-handle operation, or a task body outside the allowed shape. |
+| `KSEM160`–`KSEM168` | The `@Export` boundary rules. |
+| `KSEM172`–`KSEM175` | The generic-enum rules. |
+| `KSEM200`–`KSEM207` | The construct-family rules. |
+| `KSEM234` | A backed declaration leaving a requirement unimplemented. |
+| `KSEM240` / `KSEM213` | Parameter defaults or field defaults that fill each other without end. |
+| `KSEM247` / `KSEM248` | Two mutable borrows of one binding in a call, or a `borrow mut` of a temporary. |
+| `KSEM279`–`KSEM284` | The `@FFI.Syscall` rules. |
+| `KSEM288`–`KSEM298` | The trait rules. |
+| `KSEM300`–`KSEM307` | The `Drop` rules. |
+| `KSEM308`–`KSEM312` | Supertraits, `Send`, `Sync`, and the task boundary. |
+| `KIR005` | `@Derive(Copy)` on a type that moves. |
+| `KPK025` | A `*_types.kira` file outside `bind-types/`. |
+| `KPK041` | A generated binding adopted as package source because it carries no stamp. |

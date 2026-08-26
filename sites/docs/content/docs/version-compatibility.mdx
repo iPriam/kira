@@ -1,34 +1,31 @@
 ---
 title: Version Compatibility
-description: How to interpret this manual's version label and why it tracks the checked-in repo state instead of a frozen language release.
+description: What a Kira version number means, how the manual tracks the toolchain, and which parts of the surface are stable.
 ---
 
-This manual documents **Kira 1.8.3**, the version declared by the current repository manifests and build configuration.
+This manual describes the toolchain in this checkout. Ask the installed one what it is:
 
-## What the Version Means Here
+```bash
+kira --version
+knvm list
+```
 
-In this docs site, the version label means:
+## Version Numbers
 
-- the language and tooling behavior described here matches the checked-in repo state
-- examples and diagnostics are tied to the current bootstrap implementation
-- this is not yet a promise of long-term source compatibility across future Kira releases
+A released version may carry a fourth component: `1.8.3.1`. Cargo cannot express one, so `[workspace.package] version` carries the three-component prefix and the release job passes the whole string through `KIRA_RELEASE_VERSION`. A development build reports the Cargo version.
 
-## Read the Book Like a Repository Manual
+Channels are independent installs. `release` is a GitHub release not marked prerelease, `dev` is the prerelease feed. `latest` resolves inside one channel and never across them.
 
-When a chapter says something is supported, it means one of these:
+## What Is Stable
 
-- the parser accepts it
-- the semantics pass validates it
-- the runnable backends prove it today
+| Surface | Stability |
+| --- | --- |
+| Diagnostic codes | Stable. A code names one refusal and is not reused. |
+| `KBC1` bytecode, `KHM1` hybrid manifest, `KLB1` bundle manifest | Versioned wire formats. A decoder rejects a tag it does not know. |
+| `kira_lib_<library>_<export>` trampoline names | A fixed contract the generated Rust crate reads. |
+| Generated derive function names (`eq_Point`, `serialize_Point`) | A fixed contract other tooling reads. |
+| Language syntax | Moving. A migration that makes the language cleaner is preferred to compatibility with a shape that was wrong. |
 
-When a chapter says a feature is not yet lowered or is only proven in check-only coverage, that is the current contract.
+## Pinning a Project
 
-## Practical Guidance
-
-If you are comparing examples or commits:
-
-- prefer the docs that ship in the same checkout
-- treat current diagnostics and current backend behavior as authoritative
-- do not assume that every frontend feature is runnable just because it appears in the guide
-
-For install, toolchain, and CLI compatibility details, continue in the [Appendix](/docs/appendix).
+`knvm pin <version>` writes a `kira-toolchain.toml` in the working directory, and the launcher walks up from its working directory so the nearest pin wins over the global selection. See [Selecting a Toolchain](/docs/appendix/toolchains/selecting).

@@ -9,7 +9,7 @@
 Kira is a compiler and toolchain for a systems-oriented language that runs the
 same program three ways: on a bytecode VM, as an LLVM-compiled native
 executable, or split across a hybrid runtime/native boundary. This repository is
-the Rust implementation — the compiler pipeline, the VM, the LLVM and hybrid
+the Rust implementation: the compiler pipeline, the VM, the LLVM and hybrid
 backends, the C-ABI interop layer, and the KSL shader pipeline.
 
 The implementation is young and says so. The compiler, debugger, instruction
@@ -48,9 +48,10 @@ function main() {
 ```
 
 `@Main` chooses the entrypoint, `let` binds an immutable local, `var` a mutable
-one. The language guide in [docs/language.md](docs/language.md) covers structs,
-classes, enums, ownership, pattern matching, closures, and the rest of the
-surface with runnable examples.
+one. The language guide in
+[sites/docs/content/docs/language-guide](sites/docs/content/docs/language-guide)
+covers structs, classes, enums, ownership, pattern matching, closures, and the
+rest of the surface with runnable examples.
 
 ## Quick start
 
@@ -65,7 +66,7 @@ kira --help
 `knvm binstall` builds the compiler optimized, installs it under
 `~/.kira/toolchains/dev/<version>/`, and points the `kira` launcher at it. The
 launcher dispatches to the *installed* toolchain, so a `cargo build` alone does
-not change what `kira` runs — rerun `knvm binstall` after compiler changes, or
+not change what `kira` runs. Rerun `knvm binstall` after compiler changes, or
 invoke `./target/release/kira` directly. `knvm binstall --debug` stages the
 unoptimized build, for debugging the compiler itself: it compiles faster and
 then compiles every project it builds several times slower.
@@ -73,16 +74,16 @@ then compiles every project it builds several times slower.
 Run the checked-in examples:
 
 ```bash
-kira run examples/hello
-kira run --backend llvm examples/hello
-kira run --backend hybrid examples/ffi
+kira run examples/hello/test.kira
+kira run --backend llvm examples/hello/test.kira
+kira run --backend hybrid examples/ffi/main.kira
 ```
 
 The LLVM backend is a hard dependency of the build: its build script discovers a
 managed LLVM bundle under `~/.kira/toolchains/llvm/<version>/<host>/`, or wherever
 `KIRA_LLVM_HOME` points. Without one, nothing builds.
 
-Provisioning it is knvm's job, and knvm links no LLVM — so it builds from a bare
+Provisioning it is knvm's job, and knvm links no LLVM, so it builds from a bare
 checkout, before the bundle exists. That is the whole bootstrap:
 
 ```bash
@@ -95,17 +96,17 @@ fetch LLVM would have to be built before the bundle it installs.
 
 ## Examples
 
-Twenty-two runnable packages live in `examples/`, each exercising one part of the
+Twenty-two readable packages live in `examples/`, each exercising one part of the
 language: `hello`, `fib`, `arrays`, `structs`, `classes`, `enums`, `generics`,
-`closures`, `ownership`, `match`, `switch`, `loops`, `strings`, `widths`,
-`bitwise`, `aliases`, `imports`, `attempt`, `library`, `foundation`, `ffi`, and
-`networking`.
+`closures`, `ownership`, `match`, `loops`, `strings`, `widths`, `bitwise`,
+`aliases`, `imports`, `attempt`, `library`, `foundation`, `ffi`, `networking`,
+and `debug-lab`.
 
 ```bash
-kira run examples/generics
+kira run examples/generics/generics.kira
 kira check examples/library
 kira doc examples/library > api.md
-kira run --backend llvm examples/ownership
+kira run --backend llvm examples/ownership/ownership.kira
 ```
 
 ## Debugging
@@ -113,9 +114,9 @@ kira run --backend llvm examples/ownership
 `kira debug` exposes the same entrypoint on all three execution backends:
 
 ```bash
-kira debug --backend vm --break main examples/hello
-kira debug --backend hybrid --batch --break main examples/ffi
-kira debug --backend llvm --batch --break main examples/hello
+kira debug --backend vm --break main examples/hello/test.kira
+kira debug --backend hybrid --batch --break main examples/ffi/main.kira
+kira debug --backend llvm --batch --break main examples/hello/test.kira
 ```
 
 The VM and hybrid sessions support `continue`, `step`, `break`, `backtrace`,
@@ -128,7 +129,7 @@ target CPU instructions; set `KIRA_LLDB` when LLDB is not on `PATH`.
 The VM can also be hosted entirely by LLDB:
 
 ```bash
-kira debug --backend vm --lldb --batch --break main:2 examples/hello
+kira debug --backend vm --lldb --batch --break main:2 examples/hello/test.kira
 ```
 
 This exports `kira_vm_debug_probe` from the host. LLDB stops on that native
@@ -136,7 +137,7 @@ frame, and its register arguments carry the current VM function id, bytecode
 PC, opcode, call depth, stack depth, and live local/operand-stack pointers.
 Use `register read` and CPU disassembly in LLDB; on x86-64 the first two
 location fields are the platform argument registers (`rcx`/`rdx` on Windows,
-`rdi`/`rsi` on System V). The Kira VM remains the execution engine—the probe
+`rdi`/`rsi` on System V). The Kira VM remains the execution engine: the probe
 is its LLDB ABI, not a translation of bytecode into native code. Every probe
 also publishes the exported `KIRA_VM_DEBUG_STATE` C-shaped snapshot. The
 VM host also maintains the exported `KIRA_VM_DEBUG_TEXT` mirror. Batch LLDB
@@ -166,7 +167,7 @@ Use `--lldb` on a hybrid debug run to place the VM host and native shared
 library in one LLDB session:
 
 ```bash
-kira debug --backend hybrid --lldb --batch --break fast examples/ffi
+kira debug --backend hybrid --lldb --batch --break fast examples/ffi/main.kira
 ```
 
 The VM half still reports Kira bytecode stops through its portable observer,
@@ -196,7 +197,8 @@ executable. The **hybrid** backend splits one program on its `@Runtime` and
 across the boundary.
 
 Crates are organized into layers with no upward dependencies; the layout and the
-rule are in [docs/architecture.md](docs/architecture.md).
+rule are in
+[sites/docs/content/docs/appendix/compiler-architecture](sites/docs/content/docs/appendix/compiler-architecture/index.mdx).
 
 ## Native interop
 
@@ -205,21 +207,23 @@ that own their headers, sources, target archives, and linker details. Bindings
 generate into ordinary Kira source. Callbacks cross in both directions, and the
 hybrid host marshals arguments and results across the runtime/native seam.
 
-See [docs/ffi.md](docs/ffi.md) for the manifest format and the current limits.
+See
+[sites/docs/content/docs/appendix/ffi-workflows](sites/docs/content/docs/appendix/ffi-workflows)
+for the manifest format and the current limits.
 
 ## KSL shaders
 
 KSL is Kira's shader language, parsed and validated by a sibling pipeline rather
-than the executable `.kira` frontend. Its crates —
-`kira-ksl-parser`, `kira-ksl-semantics`, `kira-shader-ir`, and the MSL, WGSL,
-GLSL 330, HLSL, and SPIR-V backends — are in this workspace, and a build
+than the executable `.kira` frontend. Its crates, `kira-ksl-parser`,
+`kira-ksl-semantics`, `kira-shader-ir`, and the MSL, WGSL, GLSL 430, HLSL, and
+SPIR-V backends, are in this workspace, and a build
 compiles every shader its program names for all five. SPIR-V is the one that
 emits binary rather than source, and it travels in the artifact as hexadecimal,
 eight characters per word. `ksl!` is no builtin: it is an ordinary `comptime
 macro` the engine declares, over the one compile-time call the compiler owns,
 `Ksl.compile(path, target)`. See
-[docs/macros.md](docs/macros.md). The standalone `kira shader` verb builds and
-validates these targets directly.
+[sites/docs/content/docs/macros](sites/docs/content/docs/macros). The standalone
+`kira shader` verb builds and validates these targets directly.
 
 ## Packages and toolchains
 
@@ -231,7 +235,8 @@ a fresh lockfile. Updating registry pins, packaging, and manifest migration
 remain separate commands listed by `kira help all`.
 
 Toolchain management is `knvm`: `knvm install`, `knvm use`, `knvm list`,
-`knvm binstall` for the current checkout. See [docs/knvm.md](docs/knvm.md).
+`knvm binstall` for the current checkout. See
+[sites/docs/content/docs/appendix/toolchains](sites/docs/content/docs/appendix/toolchains).
 
 ## Developing Kira
 
@@ -254,14 +259,20 @@ runtime and library portions incorporated into products built with Kira.
 
 ## Documentation
 
-- [Language guide](docs/language.md)
-- [Architecture](docs/architecture.md)
-- [Foundation](docs/foundation.md)
-- [Native interop](docs/ffi.md)
-- [Macros](docs/macros.md)
-- [Strings](docs/strings.md)
-- [Structs](docs/structs.md)
-- [Live sessions](docs/live.md)
-- [Debugging](docs/debugging.md)
-- [Profiling](docs/profiling.md)
-- [Toolchain manager](docs/knvm.md)
+The manual lives in `sites/docs`, the fumadocs site in this repository. Read it
+there, or run it locally with `cd sites/docs && bun install && bun run dev`.
+
+- [Language guide](sites/docs/content/docs/language-guide)
+- [Language reference](sites/docs/content/docs/language-reference)
+- [Macros](sites/docs/content/docs/macros)
+- [Foundation, the standard library](sites/docs/content/docs/foundation)
+- [Getting started](sites/docs/content/docs/appendix/getting-started)
+- [CLI reference](sites/docs/content/docs/appendix/cli)
+- [Toolchains and cross compilation](sites/docs/content/docs/appendix/toolchains)
+- [Platforms, live sessions, and exports](sites/docs/content/docs/appendix/platforms)
+- [Native interop](sites/docs/content/docs/appendix/ffi-workflows)
+- [KSL shaders](sites/docs/content/docs/appendix/shaders)
+- [Diagnostics](sites/docs/content/docs/appendix/diagnostics/index.mdx)
+- [Debugging](sites/docs/content/docs/appendix/debugging.mdx)
+- [Profiling](sites/docs/content/docs/appendix/profiling.mdx)
+- [Architecture](sites/docs/content/docs/appendix/compiler-architecture/index.mdx)

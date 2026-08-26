@@ -1,181 +1,62 @@
 ---
 title: Annotations
-description: Defining annotations, annotation parameter schemas, construct allowlists, execution annotations, and FFI annotation families.
+description: "The annotations the compiler answers to: the entrypoint, execution placement, library exports, construct members, the FFI family, and the derive surface."
 ---
 
-Annotations are one of Kira's defining language mechanisms.
+An annotation is `@Name`, optionally with a payload. Every one the compiler answers to is listed here; there is no `annotation` declaration form, so a program cannot add one. What a program *can* add is a [macro](/docs/macros), which is how `@Derive(Equatable)` and a property wrapper's `@State` exist without a compiler branch.
 
-## Defining Annotations
+## Entrypoint and Execution
 
-Kira annotations are first-class declarations. An annotation declaration gives the annotation a source-level identity and, optionally, a parameter schema:
+| Annotation | Where | Meaning |
+| --- | --- | --- |
+| `@Main` | A function | The program's entrypoint. Exactly one per application (`KSEM011`), none in a library (`KSEM255`), and it takes no parameters. |
+| `@Runtime` | A function | On a hybrid build, this body stays bytecode. |
+| `@Native` | A function | On a hybrid build, this body compiles to machine code. |
 
-```ts
-annotation State {
-}
+`@Native` on its own is accepted by every engine. The VM compiles every function to bytecode, so the annotation does not request native execution there, and `--backend llvm` makes every body native whether or not it is written. Hybrid is the only build where the split is real. See [Execution Model](/docs/language-guide/execution-model).
 
-annotation Attribute {
-    parameters {
-        index: Int
-    }
-}
+## Library Exports
 
-annotation InputMapping {
-    parameters {
-        priority: Int = 0
-        blocksLowerPriorityMappings: Bool = false
-    }
-}
-```
+`@Export` names the functions a consumer of a Kira library may call, and the classes whose instances may cross as opaque handles. It is bare: no arguments, no block, no symbol override. See [Library Packages](/docs/appendix/cli/packages).
 
-This keeps annotations lightweight. The declaration says what parameters an annotation accepts; it does not say where the annotation is globally valid or what semantic behavior it performs.
+## Construct Members
 
-## Parameter Blocks
+These are legal only inside a `construct` body.
 
-The first version supports one declaration subblock:
-
-```ts
-parameters {
-    name: Type
-    otherName: Type = defaultValue
-}
-```
-
-Supported parameter types are `Bool`, `Int`, `Float`, and `String`. A parameter without a default is required. A parameter with a default is filled by semantics when the annotation is applied.
-
-Documentation is not modeled as an annotation. Use `///` comments immediately above the declaration or member they describe:
-
-```ts
-/// Horizontal position in points.
-var x: Float = 0.0
-```
-
-The compiler validates that applied annotations exist, that required parameters are present, that unknown parameter names are rejected, and that argument values match the declared parameter types.
-
-## Applying Annotations
-
-The current frontend understands these annotation use styles:
-
-| Style | Example |
+| Annotation | Meaning |
 | --- | --- |
-| Bare | `@Main` |
-| Namespaced | `@FFI.Pointer` |
-| Argument form | `@InputMapping(10)` |
-| Named argument form | `@InputMapping(priority: 10)` |
-| FFI metadata block | `@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }` |
+| `@Required` | On a `let`, a value obligation. On a `function`, a bodyless signature every backed declaration must implement. |
+| `@Content` | On a `let`, a child slot filled by a construction's trailing block. The same thing as writing the type `some X`. |
+| `@Consuming` | On a `function`, a method that consumes its receiver. |
+| `@Comptime` | On a `lifecycle` hook, a hook that runs during compilation instead of at run time. |
 
-User-defined annotation parameters are supplied with parentheses. The FFI metadata block form is the existing compiler interop path and is separate from first-version annotation parameter declarations.
+Any other `@Name` on a construct member is `KPAR061`.
 
-These fail when the declarations above are in scope:
+## The FFI Family
 
-```ts
-@Attribute
-var position: Float = 0.0
+Each of these carries a `{ key: value; … }` block. [Interop and FFI](/docs/language-guide/interop-and-ffi) covers what each block says.
 
-@Attribute("zero")
-var position: Float = 0.0
+| Annotation | Declares |
+| --- | --- |
+| `@FFI.Extern` | A bodyless function reaching a C symbol in a named library. |
+| `@FFI.Syscall` | A bodyless function reaching a Linux system call, with no library at all. |
+| `@FFI.Struct` | A struct laid out the way C lays out its declaration. |
+| `@FFI.Pointer` | A typed pointer to a target type, with an ownership mode. |
+| `@FFI.Array` | An inline C array of an element type and a fixed extent. |
+| `@FFI.Callback` | A C function-pointer type, by ABI, parameter list, and result. |
+| `@FFI.Alias` | A transparent alias a generated binding uses for a C typedef. |
 
-@State(1)
-var isPressed: Bool = false
-```
+## Derives
 
-`@Attribute` requires `index: Int`, `"zero"` is a `String`, and `@State` declares no parameters.
+`@Derive(Name, …)` runs each named derive macro over the declaration below it.
 
-## Execution Annotations
+`Copy` is the one derive the compiler answers itself. It generates no code and is an opt-in assertion that a type is structurally copyable, checked at compile time and reported as `KIR005` when it is not. Every other derive is a macro: Foundation ships `Equatable`, `Clone`, `Serializable`, and `Deserializable`, written in Kira. See [Derives](/docs/macros/derives).
 
-Three annotations have direct compiler meaning for execution:
+## Documentation
 
-- `@Main`
-- `@Runtime`
-- `@Native`
+Documentation is not an annotation. Consecutive `///` comments immediately above a declaration are its documentation, and `kira doc` renders them.
 
-They choose entrypoints and execution placement, and the semantics layer rejects duplicates or conflicting combinations.
-
-## Printable
-
-Foundation defines `Printable` as a compiler-known construct for custom print rendering:
-
-```ts
-import Foundation
-
-@Printable
-struct UserName {
-    let value: String
-
-    function onPrint() -> String {
-        return value
-    }
-}
-```
-
-When `print(value)` receives a named class or struct annotated with `@Printable`, lowering dispatches through that type's `onPrint() -> String` method. Primitive values keep the ordinary builtin print path.
-
-If a `@Printable` type does not provide `onPrint() -> String`, semantics raises `KSEM102`.
-
-## Documentation Comments
-
-Kira documentation uses consecutive `///` comments:
-
-```ts
+```kira
 /// Horizontal position in points.
 var x: Float = 0.0
 ```
-
-Documentation comments are part of the lexical surface, while annotations remain source-level metadata for behavior and validation.
-
-## FFI Annotation Families
-
-The current compiler also gives semantic meaning to these interop annotations:
-
-- `@FFI.Extern`
-- `@FFI.Callback`
-- `@FFI.Pointer`
-- `@FFI.Struct`
-- `@FFI.Alias`
-- `@FFI.Array`
-
-Those annotations are covered in more detail in [Interop and FFI](/docs/language-guide/interop-and-ffi).
-
-## Construct-Declared Annotation Use
-
-Construct definitions declare which already-declared annotations are valid in construct forms:
-
-```ts
-annotation State {
-}
-
-annotation Binding {
-}
-
-construct Widget {
-    annotations {
-        @State;
-        @Binding;
-        @Env;
-    }
-}
-```
-
-That split is intentional:
-
-- `annotation` declares the annotation identity and parameter schema
-- `construct` declares which annotations are meaningful in a construct domain
-- construct semantics remain the source of behavior
-
-Annotations can declare direct target restrictions with readable `targets: ...` entries, and reusable generated behavior is composed through capabilities:
-
-```ts
-capability Labeling {
-    generated {
-        overridable function label() -> String {
-            return "item"
-        }
-    }
-}
-
-annotation GameItem {
-    targets: class
-    uses Labeling
-}
-```
-
-Generated members are explicit through `generated { ... }`, and class-side replacements use normal `override function ...` syntax when the generated member is marked `overridable`.

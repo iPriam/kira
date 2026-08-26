@@ -1,82 +1,53 @@
 ---
-title: LLVM Toolchain
-description: Pinned LLVM bundles, discovery order, supported hosts, and the current fetch/install behavior.
+title: The Managed LLVM
+description: What llvm-metadata.toml pins, how a bundle is discovered, why the code generators are named outright, and what a missing one costs.
 ---
 
-Kira ships pinned LLVM bundles so contributors do not need to build LLVM manually as the normal path.
-
-## Install The Bundle
+The LLVM backend is a hard dependency of every `kira`, and its build script discovers a bundle at `~/.kira/toolchains/llvm/<version>/<host-key>` without being told where it is. `knvm install-llvm` is what puts one there.
 
 ```bash
 knvm install-llvm
+knvm install-llvm --force
 ```
 
-Add `--force` to replace a bundle that is already installed. The command reads
-`llvm-metadata.toml` and installs the matching host bundle under:
+An already-usable bundle is left alone; `--force` removes and refetches it, the repair route for a tree interrupted mid-extraction. The test for "usable" is `include/llvm-c/Core.h`, which is exactly the test discovery applies, so nothing can be installed that discovery would then fail to find. The bundle lands under `llvm/` and touches no toolchain.
 
-```text
-~/.kira/toolchains/llvm/<llvm-version>/<host-key>/
-```
+The downloader is `knvm` rather than `kira` because `kira` links the LLVM backend: a `kira` that provisioned LLVM would have to be built before the bundle it installs. `knvm` links none, so it builds from a bare checkout.
 
-## What The Repo Pins
+## The Pin
 
-The repository source of truth is `llvm-metadata.toml`.
+Nothing about the version is decided by the command. `llvm-metadata.toml`, compiled into `kira-toolchain`, names the LLVM version, the release tag owning the published bundles, the code generators a bundle must carry, and the exact asset per host. A `knvm` built from a checkout whose pin has moved provisions the new bundle by construction.
 
-It records:
+| Field | Current pin |
+| --- | --- |
+| `version` | `23.1.0-rc3` |
+| `release_tag` | `llvm-v23.1.0-rc3-kira.1` |
+| `targets_to_build` | `X86;AArch64;WebAssembly` |
+| Hosts | `x86_64-windows-msvc`, `x86_64-linux-gnu`, `aarch64-macos` |
 
-- the pinned LLVM version
-- the release tag that owns the bundle assets
-- supported host keys
-- exact asset filenames
+The pinned version is also what the backend's `llvm-sys` bindings are built against, and a unit test fails if the two drift apart.
 
-The current repo pin is LLVM `23.1.0-rc3`, published under the release tag
-`llvm-v23.1.0-rc3-kira.1`.
+## Why the Generators Are Named Outright
 
-## Supported Hosts
+A bundle built with CMake's `host` can emit only for the machine that built it, which would make cross compilation a property of *which runner produced your download*: an x86_64 Linux bundle could never emit an aarch64 binary, and the same `kira build --target aarch64-linux-gnu` would work or not depending on where the archive came from.
 
-The first published bundle set is intentionally small and tied to real CI-built hosts:
+Naming `X86;AArch64;WebAssembly` makes every bundle able to emit for every machine Kira publishes for, so a target is a property of the compiler rather than of the download. `WebAssembly` is the Web device's code generator, emitted in-process by the same backend rather than through textual IR.
 
-- `x86_64-windows-msvc`
-- `x86_64-linux-gnu`
-- `aarch64-macos`
-
-## Discovery Order
-
-The LLVM backend checks, in order:
+## Discovery
 
 1. `KIRA_LLVM_HOME`
 2. `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`
-3. older repo-local fallback paths if they already exist
 
-If `llvm-config` exists in the selected tree, Kira uses it to refine the bin/lib directories. Otherwise it uses the standard install layout directly.
+`KIRA_LLVM_HOME` wins outright and never falls through: a wrong override is an error naming the path rather than a silent fallback. If `llvm-config` exists in the selected tree, Kira uses it to refine the bin and lib directories.
 
-## Native And Hybrid Both Use It
+The same discovery serves the pure LLVM/native backend and the native half of hybrid mode.
 
-The same LLVM discovery path is used by:
+## A Missing Generator
 
-- the pure LLVM/native backend
-- the native half of hybrid mode
+A release owns its assets for good, so a pin that grows a generator after its release was cut installs a real LLVM that is short of it. `install-llvm` and `binstall` read what the bundle was built with from its own `llvm-config` and say which pinned generator is absent and what a compiler built against it will refuse, because the alternative is finding out from a build that wanted that device.
 
-So if LLVM is not available, both native and hybrid work will fail until you install or override the toolchain.
+The backend links accordingly: the missing code generator's initializers are not compiled in, the rest of the compiler is, and the device reports itself unavailable by name. A bundle with no `WebAssembly` generator means the compiler refuses `--device wasm32`.
 
-## Checksum Verification
+## Checksums
 
-Each bundle is published with a `.sha256` beside it, and `knvm install-llvm`
-checks the download against it before unpacking — this archive supplies the
-code generator every native artifact is built with, so an archive that is not
-the published one must not reach a build at all. A release that carries no
-sidecar installs with a warning that says the bundle went in unverified.
-
-What names the bundle is:
-
-- the pinned version in `llvm-metadata.toml`
-- the configured release tag
-- the host key
-- the exact asset filename
-
-`knvm` also reports a bundle whose `llvm-config --targets-built` is missing a
-code generator the pin names, and says what that costs — a missing
-`WebAssembly` generator means the compiler built against it refuses
-`--device wasm32`. Without that report, a real LLVM that cannot emit for a
-device Kira supports fails much later, in whichever suite reached that device
-first.
+Each bundle is published with a `.sha256` beside it, and `knvm install-llvm` checks the download against it before unpacking. This archive supplies the code generator every native artifact is built with, so an archive that is not the published one must not reach a build at all. A release that carries no sidecar installs with a warning saying the bundle went in unverified.

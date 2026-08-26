@@ -50,7 +50,7 @@ knvm install libffi
   discovered at `KIRA_LLVM_HOME`, then at
   `~/.kira/toolchains/llvm/<llvm-version>/<host-key>/`.
 - **libffi** backs foreign calls. Kira links it statically, so the archive for
-  the machine being *built for* has to be installed — `knvm install libffi`
+  the machine being *built for* has to be installed. `knvm install libffi`
   installs every published target, so cross builds work from any host. It is
   discovered at `KIRA_LIBFFI_HOME`, then at
   `~/.kira/toolchains/libffi/<libffi-version>/<target>/`.
@@ -58,7 +58,7 @@ knvm install libffi
 ### Rate Limits
 
 Both fetch from GitHub, which allows sixty unauthenticated API requests an hour
-per address — shared, so an office network or a CI runner can exhaust it on
+per address, shared, so an office network or a CI runner can exhaust it on
 somebody else's traffic. `knvm` and the bootstrap scripts send `GH_TOKEN` or
 `GITHUB_TOKEN` when either is set, which raises the limit:
 
@@ -99,8 +99,9 @@ selected toolchain:
 knvm binstall
 ```
 
-`binstall` builds the enclosing checkout optimized — `--debug` for the
-unoptimized build — and selects it on the `dev` channel, so `kira` runs what
+`binstall` builds the enclosing checkout optimized (`--debug` stages the unoptimized build) and selects it on the `dev` channel, so `kira` runs what
 you just compiled. Re-running it always replaces the tree.
 
-`kira new` scaffolds a `kira.toml` and `app/main.kira` starter app.
+`kira new <dir>` scaffolds a `package.kira`, an `app/main.kira`, and a README.
+See [Installing From a Checkout](/docs/appendix/toolchains/from-a-checkout) for
+what each command builds.

@@ -1,0 +1,36 @@
+---
+title: Installing From a Checkout
+description: "`sinstall` for the tools and `binstall` for the toolchain: what each builds, where it lands, and why a dev toolchain is optimized."
+---
+
+From a bare machine with a checkout, the whole setup is three commands:
+
+```bash
+cargo run -p kira-knvm -- sinstall   # tools on PATH
+knvm binstall                        # this checkout as the dev toolchain
+kira run program.kira
+```
+
+## `sinstall`: the Tools
+
+`knvm sinstall` provisions the *tools*, `knvm` and the `kira` launcher, which live outside any toolchain version because they are what selects between versions. Run inside a checkout, it builds both with cargo, lands them in `<kira-home>/bin` (replacing a running `knvm` atomically, stage-then-rename), and points this host's `PATH` at that directory. Every part is idempotent: a second run replaces the binaries and adds no second `PATH` entry.
+
+On unix that means a `<kira-home>/env` script that prepends the directory to `PATH`, plus one source line appended to the startup file *the user's shell actually reads*, chosen from `$SHELL` and created when missing: `.zshenv` for zsh, `.bashrc` for bash, `.profile` otherwise. Chosen from the shell rather than from what exists, because a default macOS home has no dotfiles at all and a line in `.profile` configures nothing for the zsh that machine runs.
+
+On Windows no startup file configures anything, so the entry goes where that host keeps it: the user's own `Path` under `HKCU\Environment`, read raw, prepended, written back as `REG_EXPAND_SZ`, and followed by the `WM_SETTINGCHANGE` broadcast that lets a terminal opened afterwards see it without a sign-out. `setx` is the tool that looks right for this and is not: it truncates the stored value at 1024 characters and folds the machine `Path` into the user's, so a developer machine with a long `PATH` quietly loses entries.
+
+When run in a unix terminal, it finishes by replacing itself with a fresh login shell that already has the tools on `PATH`, so `knvm` and `kira` work at the very next prompt. A non-interactive caller gets the exit code and no shell, and on Windows it says to open a new terminal.
+
+## `binstall`: the Checkout as a Toolchain
+
+`knvm binstall` builds `kira`, `kira-language-server`, `kira-desktop-runner`, and both host runtime archives with cargo, cross-builds the Web runtime archive, and shapes them into the same tree a release unpacks to, with the checkout's `foundation/` beside them. It installs that tree on the `dev` channel, named by the workspace's `[workspace.package] version`.
+
+The LLVM backend is a hard part of every `kira`, so `binstall` discovers the managed LLVM and refuses up front, naming the provisioning route, when no bundle exists. It goes through the same staging, validation, and rename-into-place pipeline as a release install, and selects what it lands, so `kira` dispatches to the fresh build immediately.
+
+**The build is optimized.** A dev toolchain is what every project on the machine then compiles through, and an unoptimized compiler is several times slower at every one of those builds: the cost lands all day, not on the one command that produced it. `knvm binstall --debug` stages the unoptimized build instead, for the case that wants it, which is debugging the compiler itself.
+
+Running it again replaces the installed tree. A dev toolchain names a moving target, so `binstall` never answers "already installed": that would mean "silently stale", which is the one thing a rebuild command must not be.
+
+## Finding the Checkout
+
+Both commands find the enclosing checkout by walking up from the working directory for a `Cargo.toml` with `foundation/package.kira` beside it, the same two markers bundled discovery's checkout rule requires. Anything short of both is refused, so running either in the wrong directory cannot build and install whatever workspace it happens to be standing in.

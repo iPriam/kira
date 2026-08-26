@@ -1,90 +1,81 @@
 ---
 title: Types
-description: Builtin types, named types, generated FFI types, and current coercion/inference boundaries.
+description: Builtin scalars, String, arrays, function types, Any, named types, generic enums, trait existentials, family types, aliases, and the FFI type forms.
 ---
 
 ## Builtin Types
 
-The semantics layer resolves these builtin names:
-
 | Group | Names |
 | --- | --- |
 | General | `Void`, `Int`, `Float`, `Bool`, `String` |
-| Fixed-width integers | `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `U64` |
-| Native/FFI helpers | `RawPtr`, `CString`, `CBool` |
+| Fixed-width integers | `I8`, `I16`, `I32`, `U8`, `U16`, `U32`, `U64` |
+| Fixed-width float | `F32` |
+| Top type | `Any` |
+| Interop | `RawPtr`, `CString` |
+
+There is no `I64` and no `F64`: `Int` is the 64-bit signed integer and `Float` the 64-bit float. `Int32` is accepted as an alias for `I32`. There is no `I128`, no `U128`, and no `Char`.
+
+Every integer type is one 64-bit two's-complement value at run time and every float type one 64-bit IEEE-754 value. A fixed-width name decides type distinctness and the signedness of `/`, `%`, and the four orderings, and nothing else. See [Basic Operators](/docs/language-guide/basic-operators#fixed-width-scalars).
+
+## Assignability
+
+Two written widths must match exactly. Bare `Int` and `Float` are wildcards matching any width in their kind, which makes assignability non-transitive: `U8` to `Int` and `Int` to `U32` both hold while `U8` to `U32` does not.
+
+`Any` accepts every type. A generic instantiation reaches another instantiation of the same template when each type argument stays as it was or becomes `Any`. A position that merely contains one does not widen: `[Result<Int, E>]` is not `[Result<Any, E>]`.
+
+There is no subtyping between classes (`KSEM063`), no implicit numeric widening, and no truthiness.
+
+## Arrays
+
+`[T]` for any `T`, nested to any depth. An array is a shared handle that moves on binding and detaches on write. Its surface is `.append(v)`, `.count`, and `xs[i]`.
 
 ## Function Types
 
-Kira now checks first-class non-capturing function types:
-
-```ts
-(Float) -> Void
-() -> Void
+```kira
+(Int) -> Int
+(Float, RawPtr) -> Void
+() -> Int
 ```
 
-These types are valid in parameters, fields, and local declarations. The current implementation lowers named function references, non-capturing inline callback literals, and callable-value invocations through locals and fields across the shared executable backends.
+A function type is written after `:` on a declaration that returns one, because `->` would be ambiguous with the function type's own arrow.
 
-Inline callback blocks are checked against an expected function type instead of declaring parameter types inside the block:
-
-```ts
-let cleanup: (Graphics, RawPtr) -> Void = { graphics, data in
-    return
-}
-```
-
-The supported callback model is non-capturing. A callback block can be stored anywhere an ordinary function value of the same type can be stored, but it cannot close over surrounding locals. Use callback parameters or `RawPtr` user data for callback state.
-
-## Ownership Type Forms
-
-Kira currently recognizes these ownership-oriented type forms:
-
-```ts
-borrow any
-borrow mut any
-move any
-copy any
-Array(any)
-UnsafePtr(any)
-```
-
-`borrow` and `borrow mut` are the important everyday forms in the executable language today. `move` and `copy` are available when you need to make transfer or copy intent explicit in the type or expression surface.
+A function type is `Send` and `Sync` for neither: its values are closures, and a closure may have captured a `var`.
 
 ## Named Types
 
-Named value types are declared with `struct`; behavior-bearing inheritable declarations use `class`; tagged unions use `enum`:
+`struct`, `class`, and `enum` each declare a type by name. A `class` is a struct that inherits and flattens; its static type is always its dynamic type.
 
-```ts
-struct Point {
-    var x: Float = 0.0
-    var y: Float = 0.0
-}
+An `enum` is the only declaration that takes type parameters. `Result<Int, AppError>` names one type; `Result` alone names none (`KSEM172`). An arity mismatch is `KSEM174`, type arguments on a non-generic type are `KSEM173`, and a template that grows its own argument without end is `KSEM175`.
 
-enum ParseResult {
-    Ok
-    Error: String = "error"
-}
+## Trait Existentials
+
+A trait's name in a type position holds a value of some conforming type, dispatched dynamically.
+
+```kira
+let one: Scored = Key(n: 3)
+let both: [Scored] = [Key(n: 2), Token(n: 30)]
 ```
 
-Structs may contain stored members, defaults, and methods. Classes may contain stored members, methods, inheritance, and overrides. Enums may have optional generic type parameters and variants with at most one associated payload value.
+The four compiler-known traits, `Copyable`, `Drop`, `Send`, and `Sync`, are refused there (`KSEM295`): they state facts about one type's own members and classify no values.
 
-## Generated and Annotated Types
+## Family Types
 
-Generated bindings and native interop declare transport and ABI shapes through `struct`, often with FFI annotations:
+A construct family's bare name is not a type (`KSEM207`). `Any Family` and `some Family` both name a value of some declaration backing it, and they resolve to the same type.
 
-- callback types
-- pointer wrapper types
-- struct types
-- alias types
-- array metadata types
+## Type Aliases
 
-## Inference and Coercion
+`type Name = Target` is a spelling, not a new type. Analysis resolves it away, so no backend learns the alias existed. A cyclic chain is `KSEM157`, and claiming a name that already means something is `KSEM130`.
 
-Current semantic rules include:
+## FFI Type Forms
 
-- locals may infer types when the result is unambiguous
-- ambiguous inference raises `KSEM029`
-- explicit typed declarations require the initializer expression to already match the declared type
-- `var value: Float = 0.0` is valid
-- `var value: Float = 0` is rejected
-- typed declarations without initializer expressions are valid, but remain uninitialized until a later assignment
-- illegal coercions raise a type mismatch diagnostic such as `KSEM031`
+Each is a `struct` carrying an annotation, and each names a C shape rather than a Kira value shape.
+
+| Declared | Names |
+| --- | --- |
+| `@FFI.Struct { layout: c; }` | A struct laid out as C lays out its declaration. |
+| `@FFI.Pointer { target: T; ownership: borrowed; }` | A typed pointer. Members of a C-layout target are read through it. |
+| `@FFI.Array { element: T; count: N; }` | An inline C array. Its elements live in one field named `elements`. |
+| `@FFI.Callback { abi: c; params: […]; result: T; }` | A C function-pointer type. |
+| `@FFI.Alias` | A generated binding's transparent alias for a C typedef. |
+
+`CString` is illegal in an ordinary Kira local or parameter. It is a foreign parameter, a foreign result, or a member of a C-layout struct.

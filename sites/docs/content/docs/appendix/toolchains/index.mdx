@@ -1,73 +1,63 @@
 ---
-title: Bootstrapper and Managed Toolchains
-description: How `kira`, `kirac`, templates, and the managed install layout work.
+title: knvm and the Toolchain Tree
+description: The version manager, the launcher it feeds, the tree an install produces, and the one crate that defines that layout.
 ---
 
-## Launcher vs Real CLI
-
-The user-facing command is `kira`.
-
-Its job is to:
-
-- find the active managed Kira toolchain
-- forward the command into the real CLI binary (`kirac`)
-- keep the path-facing launcher stable while the managed toolchain layout evolves
-
-## Managed Install Layout
-
-The install flow writes:
-
-```text
-~/.kira/toolchains/current.toml
-~/.kira/toolchains/<channel>/<version>/
-  bin/
-    kirac[.exe]
-  templates/
-  llvm-metadata.toml
-```
-
-`current.toml` records:
-
-- channel
-- version
-- primary executable
-
-That is how the launcher knows which real toolchain to launch.
-
-## Developer Targets
-
-The managed toolchain flow is driven from a checkout with `knvm`:
+`knvm` installs Kira. It is the first thing a user runs, before any `kira` exists on the machine.
 
 ```bash
-cargo run -p kira-knvm -- sinstall   # knvm and the kira launcher, onto PATH
-knvm binstall                        # this checkout as the dev toolchain
-knvm binstall --debug                # the same, unoptimized
-knvm list                            # what is installed, and what is selected
+knvm install latest
+knvm install 1.7.3 --channel dev
+knvm install-llvm
+knvm install libffi
+knvm binstall
+knvm binstall --debug
+knvm sinstall
+knvm self-update
+knvm list
+knvm list --remote
+knvm use 1.7.3
+knvm pin 1.7.3
+knvm unpin
+knvm uninstall 1.7.3
 ```
 
-Those exercise the same install pipeline a published release goes through, so
-what you validate locally is what a user gets.
+`install` fetches a release, unpacks it into `~/.kira/toolchains/<channel>/<version>/`, validates it, and selects it by writing `current.toml`. `list`, `use`, `pin`, `unpin`, and `uninstall` operate on what is already on disk and never reach a network. `--channel` defaults to `release` everywhere, and `switch` is accepted as a spelling of `use`.
 
-## Resource Discovery
+## The Launcher
 
-When the CLI needs runtime resources, it looks in this order:
+Selection is what the `kira` launcher reads. It resolves `current.toml`, finds the selected toolchain's primary binary, and hands the process over with every argument and the whole environment forwarded untouched: on unix by replacing its own process image, so the exit status, signals, and stdio belong to `kira` by construction, and on Windows by waiting and forwarding the exit code.
 
-1. the managed toolchain root if the current executable is already running from it
-2. the repo root when running directly from the checkout
-3. the managed toolchain root selected by channel/version
+Exit code 2 from `kira` therefore means exactly one thing, that the launcher itself could not dispatch, and each such failure names `knvm install latest` as the remedy.
 
-That resource root is what gives the CLI access to:
+The launcher is multi-call: installed under the name `kira-language-server`, it dispatches to the selected toolchain's language server instead of its primary. That is what an editor finds on `PATH`, so the server an editor runs always matches the selected compiler and never goes stale when the language moves.
 
-- `llvm-metadata.toml`
-- `templates/`
+## The Tree an Install Produces
 
-## Template Apps
+```text
+~/.kira/toolchains/
+  current.toml                                 channel, version, primary = "kira"
+  release/1.10.0/
+    bin/kira
+    bin/kira-language-server                   the editor server, same frontend as its kira
+    bin/kira-desktop-runner                    the client `kira live` starts
+    bin/libkira_native_bridge.a                the native runtime
+    bin/libkira_compiler_bridge.a              native runtime plus the compiler capability
+    bin/libkira_native_bridge-wasm32-emscripten.a   the Web runtime
+    foundation/                                the standard library, a real Kira package
+      package.kira
+      app/*.kira
+    packages/kira_main
+    templates/{app,library}
+  llvm/ , libffi/                              shared siblings, keyed by their own versions
+```
 
-`kira new` copies from the managed template tree, not from a remote service.
+`foundation/package.kira` beside `bin/` is what makes the tree usable rather than merely present: it is the marker bundled discovery looks for, and install refuses an archive that lacks it. `current.toml` is not inert bookkeeping either: discovery reads it to find Foundation for a consumer that is not `kira` itself, such as a `build.rs` running through `kira-build`. See [Foundation](/docs/foundation).
 
-Current template output:
+Every one of those paths comes from `kira-toolchain`. The `kira-knvm` crate defines no layout of its own, so there is exactly one definition of what an installed toolchain looks like, shared by the thing that writes it and the thing that reads it.
 
-- `kira.toml`
-- `app/main.kira`
+## What knvm Does Not Touch
 
-The template is intentionally small. It reflects the current executable subset instead of pretending the repo already ships a full batteries-included application framework.
+`llvm/` and `libffi/` live under the same `toolchains/` root but are keyed by their own versions and shared across toolchain versions, so a toolchain install must not mutate either. Only `install-llvm` writes the first and only `install libffi` the second. A toolchain install writes exactly `<channel>/<version>/` and `current.toml` and nothing else.
+
+`KIRA_HOME` relocates the whole `~/.kira` root, following the `KIRA_FOUNDATION_HOME` and `KIRA_LLVM_HOME` precedent. It is what lets an install be driven against a throwaway directory instead of a developer's real home, and it reaches `current.toml` and Foundation discovery without either knowing about it.

@@ -1,0 +1,37 @@
+---
+title: Testing
+description: Why Foundation ships no test runner, how a test package declares its own Test family, and the Any widening a case's result relies on.
+---
+
+Foundation contains no test declarations and no runner. `tests-kik/harness`, `tests-kik/ffi-harness`, and `tests-kik/syscall-harness` each own their programs' `Test.kira` and `TestRunner.kira` modules and their result vocabulary.
+
+A case is a declaration backed by `Test`, providing the two members the family requires.
+
+```kira
+construct SumsToTen() extends Test {
+    test { return add(4, 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+```
+
+`kira test` builds a program in test mode and runs its cases.
+
+## Nothing in the Compiler Knows the Name
+
+`Test` is one construct family among any others a package could declare, and every rule that shapes a case is a rule of the [construct surface](/docs/language-guide/constructs). `Test.kira` is a package source, not a frontend branch.
+
+## The Result Types
+
+Both requirements write a result type, `test() -> Any` and `expect() -> Result<Any, TestFailure>`, because `Any`, Kira's top type, names exactly what a case answers with: whatever it measures. A runner reads that without the family knowing what any one case measures.
+
+A case answers with the narrow instantiation it measured, `Result<Int, TestFailure>` above, and a `Result<Any, TestFailure>` position accepts it. That is the one widening the language has beyond `Any` itself: an instantiation reaches another instantiation of the same template when every type argument either stays as it was or becomes `Any`. Nothing about it knows the name `Result`, so a user's own `enum Crate<Held>` widens by the identical path.
+
+The boundary is that the arguments widen and a position that merely *contains* one does not: `[Result<Int, TestFailure>]` is not `[Result<Any, TestFailure>]`, for the same reason `[Int]` is not `[Any]`.
+
+## The Shorthand
+
+The result type comes from the family, not from the shorthand. A `name { … }` member is the body of the member the family calls `name`, so what it returns is the family's to state. No name is special-cased: `test` and `expect` take the same path a user's own family and member would.
+
+## `Any` Is One-Directional
+
+A value crosses into `Any` and is stored, copied, passed, returned, and released, and nothing reads it back. The language has no `is`, `as`, or downcast form, so a runner still reaches a case's own result through its declaration rather than through an `Any Test` value.

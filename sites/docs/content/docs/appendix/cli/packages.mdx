@@ -1,183 +1,210 @@
 ---
-title: Libraries and Package Management
-description: Create library packages, add them to existing apps or libraries, and understand the current lockfile-backed Kira package workflow.
+title: Libraries and Packages
+description: The package.kira manifest, dependency sources and the lockfile, what a library package builds to, @Export, and the generated Rust crate a consumer depends on.
 ---
 
-## Built-in Foundation
+## The Manifest
 
-Every managed Kira install now bundles a `Foundation` package.
+A package is a directory with a `package.kira` beside its `app/` sources.
 
-- `import Foundation` resolves to the bundled package first
-- that bundled package wins before any installed package of the same name
-- Foundation uses an `app/` source tree, so files under that tree are merged into the importing program's global namespace
-- import the whole library with `import Foundation`; do not import dotted Foundation submodules such as `Foundation.Result`
-
-The current Foundation surface includes `Result` and the `Printable` construct:
-
-```ts
-import Foundation
-
-let parsed = ParseError.UnexpectedEnd
+```kira
+Package DemoLibrary {
+    let version = "0.1.0"
+    let kind = .Library
+    let moduleRoot = "DemoLibrary"
+    let dependencies = [
+        Dependency { name: "Core", path: "../core" },
+        Dependency { name: "FrostUI", version: "0.1.0" },
+        Dependency { name: "GameKit", url: "https://example.test/gamekit.git", rev: "a1b2c3d4" }
+    ]
+    let defaults = Defaults { executionMode: .Vm, buildTarget: .Host }
+    let nativeLibraries = [ … ]
+}
 ```
 
-## Manifest
+The file *looks* like Kira and is deliberately not parsed as Kira. `Package` is not a keyword and `.Library` is not an expression, so parsing this with the compiler's own parser would mean inventing language surface for a config file. It is also the wrong layering: a manifest reader that needed the compiler would put the compiler inside every tool that reads a manifest.
 
-New projects should use `kira.toml`.
+A key the reader does not know is ignored rather than rejected, because the model covers a subset of the fields a manifest may carry and rejecting the rest would make every new field a breaking change. A key it *does* know but cannot make sense of is an error, never a guess.
 
-```toml
-[package]
-name = "Hello"
-version = "0.1.0"
-kind = "app"
-kira = "0.1.0"
+`kind` is `.App` or `.Library`. `moduleRoot` is the namespace a consumer's `import` names. `nativeLibraries` is covered in [Native Library Manifests](/docs/appendix/ffi-workflows/manifests).
 
-[defaults]
-execution_mode = "vm"
-build_target = "host"
+`kira migrate-manifest` converts a legacy `kira.toml`, `project.toml`, or `Kira.toml`.
 
-[dependencies]
-FrostUI = "0.1.0"
-LocalDemo = { path = "../LocalDemo" }
-GameKit = { git = "https://github.com/Sunlight-Horizon/GameKit.git", rev = "a1b2c3d4" }
+## Dependencies
+
+| Source | Written |
+| --- | --- |
+| Registry | `Dependency { name: "FrostUI", version: "0.1.0" }` |
+| Path | `Dependency { name: "Core", path: "../core" }` |
+| Git | `Dependency { name: "GameKit", url: "…", rev: "a1b2c3d4" }` |
+
+Registry dependencies are exact-version. A git dependency must be pinned to a concrete commit or tag.
+
+**Only path dependencies resolve today.** A registry or git entry is accepted by the manifest reader and written to `kira.lock` as a source pin, and nothing fetches it: the resolver queues path sources alone. A program importing a module that only a registry or git dependency would supply fails later as an unresolved import rather than at the dependency that could not be fetched. Depend by path until a resolver exists.
+
+```bash
+kira add Core --path ../core
+kira remove Core
+kira sync
+kira update
 ```
 
-## Dependency Sources
+`kira add --version` and `kira add --git` write the manifest entry that the paragraph above describes. `kira update` performs the same local graph refresh `kira sync` does, because there is no network resolver to ask for a newer version.
 
-The current implementation supports:
-
-- exact-version official registry dependencies
-- local path dependencies
-- pinned git dependencies
-- deterministic lockfiles
-- a local shared cache
-
-Registry dependencies are exact-version-only in v1. Floating semver ranges are intentionally not supported yet.
-
-## Lockfile
-
-`kira.lock` records:
-
-- root dependency declarations
-- resolved source kind: registry, path, or git
-- exact registry versions
-- locked git commit hashes
-- registry archive checksum and canonical source URL
-- module-root ownership and transitive dependency names
-
-Re-running `kira sync` without graph changes keeps the lockfile stable.
+`kira.lock` records the resolved graph: each package's source kind, its pin as the manifest spelled it (path, version, or url and rev/tag), module-root ownership, and transitive names. It carries no archive checksum and no resolved commit, because nothing resolves one. It is never tracked in git. Re-running `kira sync` without graph changes keeps it stable.
 
 ## Security Rules
 
-- no install scripts
-- no postinstall scripts
-- no lifecycle scripts
-- no arbitrary shell execution during package installation
-- registry archives are verified with SHA-256 before extraction
-- packages are source-only archives plus metadata
-- git dependencies must be pinned and locked to a concrete commit
+These are the rules a registry installer is to be built to. None of them is in force yet, because no installer exists.
 
-## Core Commands
+- No install, postinstall, or lifecycle scripts, and no shell execution during installation.
+- Registry archives verified with SHA-256 before extraction.
+- Packages are source-only archives plus metadata.
+- Git dependencies pinned and locked to a concrete commit.
 
-```bash
-kira new --lib GraphicsKit generated/GraphicsKit
-kira sync
-kira add FrostUI
-kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev a1b2c3d4 GameKit
-kira remove FrostUI
-kira update
-kira package pack
-kira package inspect generated/Hello-0.1.0.tar
-```
+## Library Packages
 
-`run`, `build`, and `check` automatically sync first. Add `--offline` for cache-only work and `--locked` when you want to require the current lockfile state exactly.
-
-## Creating A Library
-
-Use the CLI:
+A package declaring `kind = .Library` builds to a linkable artifact instead of a program, and needs no `@Main`.
 
 ```bash
-kira new --lib GraphicsKit generated/GraphicsKit
+kira check libname.kira                      # clean with no @Main
+kira build --backend vm libname.kira         # a .kbc plus a Rust crate
+kira build --backend llvm libname.kira       # a static archive, no C main
+kira build --backend hybrid libname.kira     # both halves plus a manifest
+kira run libname.kira                        # refused: no entrypoint
 ```
 
-That scaffold creates:
+The entrypoint rule lives in analysis, above the backend split, so it is one rule rather than three: an application must declare exactly one `@Main` (`KSEM011`), and a library must declare none (`KSEM255`).
 
-- `kira.toml`
-- `kind = "library"`
-- `module_root = "GraphicsKit"`
-- `app/graphicskit.kira`
+### `@Export`
 
-Consumers then import it with:
+`@Export` names the functions a consumer may call. It is bare: no arguments, no block, no symbol override. The consumer's name is derived by snake-casing, so `makeButton` is reached as `make_button`.
 
-```text
-import GraphicsKit
+```kira
+@Export
+class Button {                                  // handle-eligible
+    var title: String = ""
+    var width: Int = 120
+    function label() -> String { return self.title }
+}
+
+@Export
+function makeButton(title: String) -> Button {  // a handle out
+    var b = Button()
+    b.title = title
+    return b
+}
+
+@Export
+function buttonWidth(b: Button) -> Int { return b.width }
 ```
 
-## Adding A Library To An Existing Application
+`@Export` on a class means only that its instances may cross as opaque handles; it exports no method. Functions are the exported surface, so an author wraps a method in an exported function.
 
-If you already have an app and want to add a library dependency, edit the app
-package manifest or use the CLI helper.
+The boundary refuses what it cannot carry, by name and with a reason, rather than inventing a representation.
 
-For a registry package:
+| Refused | Code |
+| --- | --- |
+| An array parameter or result | `KSEM160` |
+| A struct by value | `KSEM161` |
+| An enum by value | `KSEM162` |
+| A function value | `KSEM163` |
+| A class that is not itself `@Export` | `KSEM164` |
+| A `move` or `borrow mut` parameter | `KSEM165` |
+| `@Export` in an application package | `KSEM256` |
+| A payload after `@Export` | `KSEM166` |
+| A method export | `KSEM167` |
+| Two exports colliding after snake-casing | `KSEM168` |
+| `@Export` on a `struct` | `KPAR043`, pointing at the `class` that would work |
+
+All of them are checked in analysis, above the backend split, so three engines cannot grow three opinions about what an export is.
+
+A compiled module carries an appended KBC1 exports section: a class list plus, per export, its consumer name, its Kira name, the function it resolves to, and its parameter and result types. The section is written only when there is something to export, so an application's bytes are what they always were.
+
+### The Generated Rust Crate
+
+`kira build` in a library package produces two things: the artifact, and the Rust crate a consumer actually depends on.
 
 ```bash
-kira add FrostUI
+$ kira build uifoundation.kira            # --backend vm is the default
+Successfully built .kira-build/lib/uifoundation.kbc
+  3 exports -> .kira-build/rust/uifoundation
 ```
-
-For a local path library:
 
 ```toml
 [dependencies]
-GraphicsKit = { path = "../GraphicsKit" }
+uifoundation = { path = "../uifoundation/.kira-build/rust/uifoundation" }
 ```
 
-For a pinned git library:
+```rust
+let ui = Uifoundation::load()?;
+let button = ui.make_button("ok")?;          // a handle out
+println!("{}", ui.button_label(&button)?);   // an owned String out
+assert!(ui.click_at(&button, 4, 8)?);        // Rust re-entering Kira
+drop(button);                                // releases the Kira object
+```
+
+**The consumer's code does not change between engines.** Those five lines compile and run against all three, which is the property the whole feature is measured on. What changes is underneath.
+
+Exported classes become Rust newtypes over a handle. Dropping one releases the object it names, and nothing else does; use-after-free is not expressible, because every method borrows the handle and `Drop` consumes it. The wrapper types are neither `Send` nor `Sync`: one instance belongs to one thread.
+
+The generated crate is a build artifact. It is regenerated on every build, never committed, and its dependency paths are true only of the checkout that produced it.
+
+### The Three Engines
+
+**VM.** The crate `include_bytes!`s the `.kbc` and runs it on a persistent VM instance inside the consumer's process. No linker, no LLVM, no `unsafe`, which is why this engine is the one provable on a machine that has none of them, and why the crate also builds for `wasm32-unknown-unknown`.
+
+A wrapper and the library it was generated from are built separately, so they can disagree. This engine has no link step to fail, so the guard is data: `load()` checks the embedded module's class list, every export's name, arity, parameter types and result type, and finally a content hash, and names the first thing that moved.
+
+**Native.** `--backend llvm` produces a static archive plus the same crate. The archive exports one stable trampoline per export, all sharing one uniform C-ABI shape:
+
+```c
+void kira_lib_uifoundation_make_button(
+    const BridgeValue *args, uint32_t count, BridgeValue *out);
+```
+
+One shape for every Kira signature, never a typed C symbol per export: a typed symbol would re-open ABI drift, two separately compiled sides agreeing on a struct-passing convention per signature with nothing but a name to catch a disagreement, to buy nothing the generated crate does not already hide.
+
+A handle is a **box**. Inside native code a class instance is a struct value that dies with its frame, and a handle outlives the call by definition, so an export returning one moves it into an allocation and hands back the address. Each exported class gets a synthesized destructor, `kira_lib_<lib>_drop_<class>`, and the Rust newtype's `Drop` is the only thing that calls it. A handle *argument* is lent, so the trampoline deep-copies before the call rather than letting the callee drop the consumer's object.
+
+The stale-build guard here is a **symbol**, not data, because this engine has a link step to fail: the library defines `kira_lib_<library>_abi_1` and `load()` calls it. An archive built under a different export contract does not define it, so the consumer's link fails naming the marker.
+
+The archive is self-contained: the Kira native runtime's members are spliced in beside the library's object, so a consumer links one file. **The consumer's build needs no LLVM**: LLVM compiled the library; linking an archive does not.
+
+Three things differ from the VM engine, and each is a consequence of where the code runs. `print` goes to stdout with no host to redirect it. A trap ends the process. And two Kira native libraries cannot share a binary, because each archive carries the `kira_rt_*` runtime and linking two reports duplicate symbols.
+
+**Hybrid.** The third engine, and the only one that keeps the library author's own `@Runtime`/`@Native` split meaningful. The other two ignore it, so hybrid is where a library's hot inner function is machine code while its surface, its handles, and its strings stay on the VM.
+
+A consumer enters through the **bytecode half**, always: a handle is a root into that half's heap, and machine code cannot mint one. Two rules follow, both refused at build time by function name: an `@Export` may not also be `@Native`, and a `@Native` function may not call a `@Runtime` one, because a library instance owns a heap and cannot be re-entered mid-call. An *application* built with `--backend hybrid` may still call in both directions; a library gives that up, and that is the whole of what it gives up.
+
+It builds three artifacts. Two are data and are embedded in the generated crate (`<name>.kbc`, `<name>.khm`); the third is a shared library the consumer's process opens at load, so **deployment is one file**. It is looked for beside the consumer's executable, then at the path the build recorded, or at `KIRA_<LIBRARY>_NATIVE` if that is set, which overrides rather than leads the search. A load that finds nothing names every path it tried. The costs are stated in the generated crate's README: `libloading` enters the consumer's dependency graph, and that crate does not build for `wasm32-unknown-unknown`.
+
+### Web Library Artifacts
+
+`kira build --device wasm32` emits a no-entry Emscripten module. It reuses the export surface and retains one trampoline for each export and class destructor for the JavaScript loader.
+
+## Where Kira Source Lives
+
+| Directory | Loaded by |
+| --- | --- |
+| `foundation/` | `import Foundation`, found beside the compiler on every platform. |
+| `packages/` | A dependency named *by path*, which is where anything platform-bound belongs. |
+| `tests-kik/` | The harness packages. |
+
+`packages/linux` reaches the Linux kernel through `@FFI.Syscall`, and a declaration like that is refused at compile time on a target that cannot reach it, so inside Foundation it would refuse every Windows and macOS build of every program.
+
+## The Proof
+
+`crates/kira-export-consumer` is a Rust crate whose `build.rs` compiles the Kira library in `fixture/uifoundation/`, generates the wrapper through the same generator `kira` drives, compiles it under this workspace's lint gate, and calls it.
+
+`tests/consumer.rs` is the parity proof, and its force comes from being one file rather than three: it is compiled and run **unchanged** against every engine.
 
 ```bash
-kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev a1b2c3d4 GameKit
+cargo test -p kira-export-consumer                            # VM engine
+cargo test -p kira-export-consumer --features native-engine
+cargo test -p kira-export-consumer --features hybrid-engine
 ```
 
-Then sync and build:
+A test that had to be edited to run against another engine would have disproved the claim it was written to check. What an engine has that another does not is stated rather than quietly weakening the shared file: `tests/vm_engine.rs` holds what the two VM-family engines share, a custom host and live-handle accounting, and `tests/hybrid_engine.rs` holds what only the hybrid engine has, a bytecode export calling into machine code and a native half that can be missing.
 
-```bash
-kira sync
-kira run
-```
-
-Imports from the app look like:
-
-```text
-import GraphicsKit
-```
-
-## Adding A Library To An Existing Library
-
-Library packages use the same dependency model as apps. Add the dependency to
-the library package's own `kira.toml`, then sync:
-
-```toml
-[dependencies]
-Colors = { path = "../Colors" }
-```
-
-```bash
-kira sync
-```
-
-That allows one library package to build on top of another while keeping the
-dependency graph explicit and lockfile-backed.
-
-## Suggested Layout For A Local Library
-
-```text
-GraphicsKit/
-  kira.toml
-  app/
-    graphicskit.kira
-    Color/
-      palette.kira
-```
-
-With that shape:
-
-- `import GraphicsKit` resolves the root library module
-- `import GraphicsKit.Color.palette` resolves a descendant module in the same package tree
+`examples/library/` is the same thing written to be read rather than run by CI: a small Kira library, and the Rust that calls it. Its README's snippet was run against the generated crate before it was written down.

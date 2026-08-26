@@ -1,0 +1,47 @@
+---
+title: Installing a Toolchain
+description: What an install does and in what order, the checksum contract and what it is worth, channels, and self-update.
+---
+
+## What an Install Does
+
+Resolving `latest` lists the channel and takes the newest version; an exact version is fetched directly, costing one transfer instead of a listing plus a transfer. A version already present under `<channel>/<version>/` skips the fetch entirely and is selected as it stands: `install` always implies `use`.
+
+Otherwise the archive is fetched into a staging directory belonging to this process alone, checked against the digest published beside it, unpacked with the system `tar`, and validated. The tree must hold executable `bin/kira` and `bin/kira-language-server`, all three runtime archives, and `foundation/package.kira`.
+
+Requiring the language server prevents an editor from silently finding a stale server elsewhere; requiring the archives prevents the compiler from being selected when it cannot run native, compiler-using, or Web programs.
+
+Only then is the validated tree moved into place with a single `rename`, and `current.toml` written. Nothing appears under `<channel>/` until the toolchain is known-good, so a failed install leaves no half-toolchain a launcher could dispatch to. Staging is removed on every exit path.
+
+The one hole in that guarantee is `SIGKILL`: the staging cleanup is a `Drop` guard, which a hard kill does not run, leaving an inert directory under `.staging/` that nothing prunes.
+
+## Checksums
+
+Every published archive carries a `<archive>.sha256` sidecar, and every route that downloads one verifies it before anything is unpacked: `install`, `install-llvm`, `self-update`, and both bootstrap scripts. A mismatch is fatal and installs nothing.
+
+An artifact with no sidecar still installs, because releases cut before sidecars existed have none, and says so. "Verified" and "no checksum was published" are different installs, and a user who cannot tell them apart has no way to notice the day verification stops happening.
+
+The digest is computed by `kira-knvm`'s own SHA-256, implemented in the crate rather than taken from a dependency, for the same reason the transport is a `curl` subprocess: the workspace's external dependency set is frozen. It is pinned by the published FIPS 180-4 vectors, the block-boundary padding lengths, and a test that hashes one message in seven chunkings and requires all seven to agree.
+
+**What this is worth is bounded.** The transport is HTTPS, so TLS is what stands between a user and a hostile network; the checksum catches a truncated transfer, a stale mirror, and an artifact repackaged after publication. There are no signatures, so a verified download proves the bytes match what the release published, not who published them. An attacker who can delete the sidecar from a TLS-served release already owns the archive beside it, which is why an absent sidecar downgrades rather than refuses.
+
+## Channels
+
+A channel is both the directory namespace and the feed a version came from.
+
+| Channel | Feed |
+| --- | --- |
+| `release` (default) | GitHub releases not marked prerelease, with semver tags. `v1.7.3` installs as `1.7.3`. |
+| `dev` | The prerelease feed, typically date-versioned. |
+
+`latest` resolves within one channel and never across them, and versions on different channels are independent installs. `current.toml` records both, so nothing has to search.
+
+Version ordering is numeric-aware but is **not** semver: a trailing prerelease tag compares as text, so `1.7.0-rc1` sorts above `1.7.0`. That is harmless while prereleases live on their own channel instead of in the tag.
+
+## `self-update`
+
+`self-update` fetches the *tools* from a release, for the machine that has no checkout. It replaces `knvm`, the `kira` launcher, and the launcher's `kira-language-server` alias by the same stage-then-rename that makes replacing a running `knvm` safe on unix, and every tool is checked present before any is replaced, so a truncated archive cannot leave half of them updated.
+
+Installed toolchains are untouched and `current.toml` is not rewritten: the tools select between toolchain versions, so updating them must not silently move a user to a different compiler. `knvm install latest` is that decision, and stays separate.
+
+Finding the tools already current exits 0. It is the good outcome of an update, and a scheduled run must not go red on it.

@@ -1,146 +1,163 @@
 ---
 title: A Kira Tour
-description: A compact pass through entrypoints, imports, types, constructs, and execution annotations using repo-proven syntax.
+description: "The language in one page: entrypoints, structs, enums, match, ownership, traits, construct families, closures, and the C seam."
 ---
 
-This tour shows the current Kira language through the kinds of files the repo already proves.
+Every form here is taken from a program in `examples/` or `tests-kik/`.
 
-## A Small Entrypoint
-
-Kira programs pick their entrypoint with `@Main`:
+## An Entrypoint
 
 ```kira
 @Main
 function main() {
-    let left = 40;
-    let right = 2;
-    let total = left + right;
-    print(total);
-    return;
+    print("hello from Kira")
+    print(doubleValue(21))
+    return
+}
+
+function doubleValue(value: Int) -> Int {
+    return value + value
 }
 ```
 
-The current corpus proves this style across `vm`, `llvm`, and `hybrid`.
+Exactly one function carries `@Main`, it takes no parameters, and the program is a directory of `.kira` files rather than one.
 
-## Imports and Helper Functions
-
-Imports use qualified names and can declare an alias:
+## Values
 
 ```kira
-import support as Support
-
-@Main
-function main() {
-    helper();
-    print("imports resolve");
-    return;
+struct Vec3 {
+    var x: Int
+    var y: Int
+    var z: Int
 }
 
-function helper() {
-    let first = 1;
-    let second = 2;
-    print(first + second);
-    return;
+struct Box {
+    var origin: Vec3
+    var label: String = "unnamed"
 }
+
+let v = Vec3 { x = 1, y = 2, z = 3 }
+var b = Box { origin = v }   // `label` takes its default
+b.origin.x = 100             // a nested write lands in place
+var copy = b                 // a deep copy: writing to `copy` leaves `b` alone
 ```
 
-This is the same import shape used by the runnable import corpus and by namespaced bindings such as `bindings.callbacks`.
+A struct is a value. An array and an enum are handles, so binding one moves it.
 
-## Named Types and Members
-
-Kira uses `struct` for value-oriented data shapes and `class` for behavior:
+## Enums and `match`
 
 ```kira
-struct RevenueSnapshot {
-    let monthLabel: String
-    let gross: Int
-    let net: Int
+enum Note {
+    Blank
+    Rank(Int)
+    Tag(String)
 }
 
-class StoryLane {
-    let width: Float
-    let height: Float
-
-    function area() -> Float {
-        return width * height
+function describe(n: borrow Note) -> Int {
+    match n {
+        Blank -> return 0;
+        Rank(value) -> return value;
+        Tag(text) -> return text.count;
     }
 }
 ```
 
-Fields and defaults appear in structs; methods appear in classes.
+A variant is written with a leading dot where the expected type says which enum it belongs to (`let n: Note = .Blank`), and unqualified inside a `match`. Coverage is checked, so an exhaustive `match` whose arms all return is itself a definite return.
 
-## Typed Declarations
-
-Kira local declarations now use an explicit three-form model:
+## Ownership
 
 ```kira
-var title = "Launch"
-var pendingTitle: String
-var opacity: Float = 0.8
+function sum(v: borrow Vec3) -> Int { return v.x + v.y + v.z }
+function consume(v: Vec3) -> Int { return v.x }
+
+print(sum(v))            // a borrow reads and gives back
+print(consume(move v))   // this takes `v` away
 ```
 
-That means:
+Five modes and no others: `owned` by default, `borrow`, `borrow mut`, `move`, and `copy`. A named non-trivial value must say `move` or `copy` at a call site that takes it.
 
-- inferred declaration from an initializer expression
-- explicit typed declaration with no initializer expression yet
-- explicit typed declaration with a strict initializer match
+## Traits
 
-For example, `var opacity: Float = 0.0` is valid, while `var opacity: Float = 0` is rejected.
+```kira
+trait Hashable {
+    function hash(borrow self) -> Int
+    function doubled(borrow self) -> Int { return self.hash() * 2 }
+}
 
-## Constructs and the UI Surface
+struct Mesh: Hashable {
+    let id: Int
+    function hash(borrow self) -> Int { return id * 7 }
+}
+```
 
-A `construct` defines a **declaration family** — a typed template that concrete declarations conform to. This is the SwiftUI-style surface Kira uses for UI: a family declares requirements as direct members, and concrete declarations are headed by the family name.
+`:` is always conformance and `extends` is always a parent. A trait name in a type position is an existential over its conformers.
+
+## Construct Families
 
 ```kira
 construct Widget {
-    @Required let body: Widget
-    let node: Node { body.node }   // default Widget->Node bridge
+    @Required function render() -> String
+    function announce() -> String { return "<" + render() + ">" }
 }
 
-Widget Text {
-    let text: String = ""
-    let node: Node { TextNode(text: text) }   // terminal node, no body
+construct Text(content: String) extends Widget {
+    render { return content }
 }
 
-Widget VStack {
-    @Content let children: [Widget]            // caller-provided children
-    let node: Node { VStackNode() }
-}
+let items: [Any Widget] = [Text(content: "hi")]
+for item in items { print(item.announce()) }
+```
 
-Widget Card {
-    let title: String = ""
-    let body: Widget {
-        VStack {
-            Text(text: title)
-            Text(text: "subtitle")
-        }
+The parameter list tells a declaration from a template. A family is not a type, so a value of one is `Any Widget` or `some Widget`.
+
+## Closures
+
+```kira
+function makeCounter(): () -> Int {
+    var seen = 0
+    return { in
+        seen = seen + 1
+        return seen
     }
 }
 ```
 
-This is more than parsing: the `node` bridge (`widget.node`), `any Widget` coercion, heterogeneous `[Widget]` arrays, and caller-provided `@Content` trees now **construct and execute** across `vm`, `llvm`, and `hybrid`. The full family surface — `extends`, property schemas, `requires`, content channels, and `extend` modifiers — is validated with precise diagnostics. See [Constructs](/docs/language-guide/constructs).
+A `let` is captured by value and a `var` is shared through a capture cell that outlives the frame.
 
-The same section/builder surface works especially well for C-layout FFI descriptors, because `@FFI.Struct { layout: c; }` construction starts from zeroed storage before applying the listed fields.
-
-## Execution Annotations
-
-Execution annotations matter when a program crosses runtime and native boundaries:
+## Error Handling
 
 ```kira
-@Main
-@Native
-function main() {
-    print("native main");
-    runtime_helper();
-    return;
-}
-
-@Runtime
-function runtime_helper() {
-    print("runtime helper");
-    return;
+function process(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
 }
 ```
 
-Use the [Language Guide](/docs/language-guide) for the full walkthrough, then keep the [Language Reference](/docs/language-reference) nearby when you need precise rules.
+`try` unwraps any enum with an `Ok` and an `Error` variant. Every reachable failure variant must be handled.
 
+## Calling C
+
+```kira
+@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
+function add(a: I32, b: I32) -> I32;
+
+@Main function main() { print(add(20, 22)) return }
+```
+
+No `@Native`, no glue. The package lists `ffimath` in its manifest and the same source runs on the VM, on native code, and on both halves of hybrid.
+
+## Macros
+
+```kira
+@Derive(Equatable, Serializable, Deserializable)
+struct Point { var x: Int; var y: Int }
+
+let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
+```
+
+Those four derives are Kira source in Foundation, written on `comptime macro`. Read the [Macros](/docs/macros) section next, or start the [Language Guide](/docs/language-guide) from the beginning.

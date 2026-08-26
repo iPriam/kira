@@ -1,0 +1,34 @@
+---
+title: Macro Diagnostics
+description: Every KMAC code and the condition that fires it.
+---
+
+| Code | Condition |
+| --- | --- |
+| `KMAC001` | unknown macro at a `!` call site |
+| `KMAC002` | wrong fragment count at a `!` call site |
+| `KMAC003` | `expr` fragment given something that is not an expression |
+| `KMAC004` | `place` fragment given a non-assignable argument |
+| `KMAC005` | statement-only macro used in expression position |
+| `KMAC006` | `comptime macro` missing `kind`, or naming one that does not exist |
+| `KMAC007` | macro applied to a declaration kind not in its `appliesTo` |
+| `KMAC008` | `appliesTo` present on a `function` macro, or absent elsewhere |
+| `KMAC009` | `#{ … }` splice of a value with no splice rule |
+| `KMAC010` | expansion depth limit exceeded |
+| `KMAC011` | `@Derive(X)` where `X` is not a `derive`-kind macro |
+| `KMAC012` | `comptime macro` `expand` does not match its `kind` |
+| `KMAC016` | statement-position expansion that does not parse as statements |
+| `KMAC017` | expression-position expansion that is not a single expression |
+| `KMAC020` | an `expand` body used a construct the evaluator does not support |
+| `KMAC021` | a macro raised `Diagnostics.error` |
+| `KMAC022` | `Ksl.compile` could not compile the shader it names |
+| `KMAC023` | `Ksl.compile` passed other than two arguments |
+| `KMAC024` | `Ksl.compile` passed a path that is not a string literal |
+| `KMAC025` | `Syntax.dropField` on a field that does not exist |
+| `KMAC026` | a declaration-only `Syntax` method on a non-declaration value |
+| `KMAC027` | assignment through a wrapped property path |
+| `KMAC028` | more than one replace-mode macro on one declaration |
+| `KMAC029` | a `trigger { field }` macro that is not `replace { true }` |
+| `KMAC030` | two expansions claimed the same bytes, which is a compiler bug |
+
+`@Derive(Copy)` is answered by semantics rather than by this pass, because copyability is a question about a whole reachable shape rather than about syntax. It reports `KIR005`.

@@ -10,7 +10,7 @@
 // literal and a `Size(w, h)` memberwise call mean the same thing they do there.
 // The type methods and matrix/quaternion algebra the oracle also defines wait
 // on struct operator overloading; they are named as a refusal in
-// `docs/foundation.md` rather than stubbed here.
+// `sites/docs/content/docs/foundation/index.mdx` rather than stubbed here.
 
 function printLine(text: borrow String) {
     print(text)

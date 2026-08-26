@@ -1,66 +1,102 @@
 ---
 title: Execution and Feature Status
-description: A compact status matrix for what Kira parses, semantically checks, and runs today.
+description: Which language and toolchain surfaces run on the VM, on LLVM/native, on hybrid, and on the Web target, and what is still refused.
 ---
 
-## Status Matrix
+`Yes` means the engine executes the surface and a checked-in test proves it. A refusal is written as the diagnostic that fires.
 
-| Feature | Parsed | Checked | VM | LLVM | Hybrid |
-| --- | --- | --- | --- | --- | --- |
-| `@Main` entrypoint | Yes | Yes | Yes | Yes | Yes |
-| `@Runtime` / `@Native` | Yes | Yes | `@Runtime` only | Yes | Yes |
-| `function` declarations | Yes | Yes | Yes | Yes | Yes |
-| integer, float, string, and boolean runtime values | Yes | Yes | Yes | Yes | Yes |
-| local `let` (inferred and explicitly typed) | Yes | Yes | Yes | Yes | Yes |
-| member access | Yes | Yes | Yes | Yes | Yes |
-| integer, float, and boolean operators in the lowered subset | Yes | Yes | Yes | Yes | Yes |
-| array literals, indexing, and indexed assignment | Yes | Yes | Yes | Yes | Yes |
-| `if` / `else if` / `for` / `while` / `break` / `continue` / `switch` | Yes | Yes | Yes | Yes | Yes |
-| enum declarations, enum construction, and exhaustive `match` | Yes | Yes | Yes | Yes | Yes |
-| Foundation `Result` through `import Foundation` | Yes | Yes | Yes | Yes | Yes |
-| `@Printable` print dispatch through `onPrint()` | Yes | Yes | Yes | Yes | Yes |
-| conditional `?:` in the lowered scalar/pointer subset | Yes | Yes | Yes | Yes | Yes |
-| class inheritance dispatch (multiple parents, parent-qualified access) | Yes | Yes | Yes | Yes | Yes |
-| `attempt` / `try` / `handle` over `Result` | Yes | Yes | Yes | Yes | Yes |
-| construct families (`extends`, properties, `requires`, content channels) | Yes | Yes | check-oriented only | check-oriented only | check-oriented only |
-| construct `node` bridge (`let node: T { ... }` accessors) | Yes | Yes | Yes | Yes | Yes |
-| `any Family` coercion + heterogeneous `[Widget]` arrays | Yes | Yes | Yes | Yes | Yes |
-| `@Content` caller-provided widget trees | Yes | Yes | Yes | Yes | Yes |
-| `@FFI.Extern` declarations | Yes | Yes | Yes, via LibFFI | Yes, requires `@Native` | Yes, requires `@Native` |
-| callback-typed FFI calls and `@FFI.Struct` values | Yes | Yes | Yes, via LibFFI | Yes | Yes |
-| builtin `print` | Yes | Yes | Yes for scalars, pointers, arrays, named structs, and enums | Yes for ordinary executable values, including named structs, enums, and array summaries | Yes for ordinary executable values, including named structs, enums, and array summaries |
-| named struct construction | Yes | Yes | Yes | Yes | Yes |
-| callable values, callbacks, and captures through locals and fields | Yes | Yes | Yes | Yes | Yes |
-| KSL shaders (`.ksl`) → GLSL 330 / WGSL | Yes | Yes | n/a (separate surface) | n/a | n/a |
+## Language
 
-## Reading the Matrix
+| Surface | VM | LLVM | Hybrid | Web |
+| --- | --- | --- | --- | --- |
+| `@Main`, functions, parameter defaults, overloading | Yes | Yes | Yes | Yes |
+| `Int`, `Float`, `Bool`, `String`, `Void` | Yes | Yes | Yes | Yes |
+| Fixed-width scalars and unsigned `/`, `%`, orderings, `>>` | Yes | Yes | Yes | Yes |
+| Bitwise operators and the conditional operator | Yes | Yes | Yes | Yes |
+| `if`, `while`, `for` over ranges and arrays, `break`, `continue` | Yes | Yes | Yes | Yes |
+| Arrays: literals, indexing, indexed assignment, `append`, `count`, copy-on-write | Yes | Yes | Yes | Yes |
+| Strings: `count`, `charAt`, `substring`, `indexOf`, `String(x)`, scalar operations | Yes | Yes | Yes | Yes |
+| Structs, defaults, nested writes, deep copy, methods | Yes | Yes | Yes | Yes |
+| Classes: flattening, multiple parents, `override`, parent-qualified calls | Yes | Yes | Yes | Yes |
+| Enums, payloads, exhaustive `match` | Yes | Yes | Yes | Yes |
+| Generic enums and `Any` widening | Yes | Yes | Yes | Yes |
+| `attempt` / `try` / `handle` | Yes | Yes | Yes | Yes |
+| Type aliases | Yes | Yes | Yes | Yes |
+| Closures, capture cells, function values | Yes | Yes | Yes | Yes |
+| Traits: static dispatch, defaults, supertraits, retroactive conformance | Yes | Yes | Yes | Yes |
+| Trait existentials (a trait name in a type position) | Yes | Yes | Yes | Yes |
+| Construct families: requirements, defaults, `extends`, `Any Family` | Yes | Yes | Yes | Yes |
+| Construct content slots, trailing blocks, `For` and `if` builders | Yes | Yes | Yes | Yes |
+| Construct `init`, copy/update, `extend` modifiers | Yes | Yes | Yes | Yes |
+| Computed members read as properties | Yes | Yes | Yes | Yes |
+| `Drop` bodies | Yes | Yes | Yes | Yes |
+| Ownership: `borrow`, `borrow mut`, `move`, `copy` | Yes | Yes | Yes | Yes |
+| Async tasks: spawn, await, cancel, detach, yield, virtual sleep | Yes | Yes | Yes | Yes |
+| Macros: declarative, `comptime function`, `comptime macro`, derives, property wrappers | Yes | Yes | Yes | Yes |
 
-This table is intentionally conservative.
+Macro expansion is a frontend pass, so macro parity is structural: by the time a backend sees an expansion it is ordinary Kira. There is no per-backend macro work. The same holds for imports, generics, closures, construct families, and trait existentials, all of which are resolved above the IR.
 
-- `Yes` means the repo has direct support and proof for that stage.
-- `partial` means the syntax and semantic model exist, but the manual does not claim broad runnable coverage.
-- `check-oriented only` means the feature is part of the implemented frontend and semantic validation surface, not a claim about today's executable lowering.
+The Web column is the same LLVM lowering the host runs, through emscripten. `crates/kira-cli/tests/end_to_end/web.rs` builds a module and compares its output against the VM's under node, so a layout mistake shows up as a wrong value rather than hiding.
 
-For the current repo state, VM, LLVM/native, and hybrid share the same ordinary executable lowering surface for the checked-in parity and interop corpus.
+## Interop
 
-## FFI Across Backends
+| Surface | VM | LLVM | Hybrid |
+| --- | --- | --- | --- |
+| `@FFI.Extern` scalar and `RawPtr` signatures | Yes | Yes | Yes |
+| `CString` parameters and results | Yes | Yes | Yes |
+| `@FFI.Struct` by value and by address | Yes | Yes | Yes |
+| `@FFI.Array` members and pointer-backed storage | Yes | Yes | Yes |
+| `@FFI.Callback` values, including Kira functions as C callbacks | Yes | Yes | Yes |
+| Member reads through an `@FFI.Pointer` | Yes | Yes | Yes |
+| Generated bindings from headers (`autobind`) | Yes | Yes | Yes |
+| `@FFI.Syscall` | Host-served; seven calls refused | Yes | Yes |
+| Library `@Export` and the generated Rust crate | Yes | Yes | Yes |
 
-Direct FFI behaves differently per backend, but every backend executes it:
+No `@Native` is required to call C on any engine. The VM asks its host, which answers out of a generated adapter sidecar.
 
-- **VM** invokes native functions through **LibFFI** (the `kira_dynamic_ffi` path), so direct FFI runs without `@Native` and without a precompiled native backend.
-- **LLVM/native and hybrid** still require `@Native` for *direct* FFI use (diagnostic `KSEM093`); indirect use is allowed, and the hybrid bridge marshals values across the runtime/native boundary.
+On the Web target a build passes the matching `wasm32-emscripten` archive and the generated adapters to `emcc`. Every supported scalar and `RawPtr` type works, and `CString` works in both directions; a C pointer is four bytes there, so a C-layout struct's member offsets are computed per target rather than reused from the host. `@FFI.Syscall` has no kernel to reach and is refused. The VM engine's generated Rust crate builds for `wasm32-unknown-unknown`; the hybrid engine's does not, because it needs a dynamic loader.
 
-## Shaders and Platform Targets
+`@FFI.Syscall` emits an instruction, which an interpreter has none of, so the VM asks its host instead. `read`, `write`, and `ppoll` are served because they take a descriptor the program already holds; the other seven are refused by name before the program starts. A non-Linux target is `KSEM280`, and Linux on a processor with no entry sequence is `KSEM281`.
 
-- KSL (`.ksl`) is a dedicated shader language, not part of the executable `.kira` frontend. It emits **GLSL 330**, **WGSL**, **HLSL**, **MSL**, and **textual SPIR-V assembly** for graphics shaders today. Compute shaders parse and type-check but are rejected by the current graphics backends, and binary SPIR-V (via `spirv-as`/`spirv-val`) is deferred.
-- `kira build --target wasm32-emscripten` lowers through the LLVM backend to WASM. `kira live` and `kira export` drive desktop, Apple (macOS/iOS/tvOS/visionOS), Windows, Android, Web, and Linux runners. Host-only probes are reported with `HOST_*` markers and never count as Kira runtime/render success.
+## Shaders
 
-## Ownership Status
+`.ksl` is a separate language with its own lexer, parser, semantics, and typed shader IR. It is compiled by `kira shader build` and by the `Ksl.compile` compile-time call a `comptime macro` reaches.
 
-The current ownership implementation is intentionally specific:
+| Target | `--target` | Emits |
+| --- | --- | --- |
+| GLSL 430 | `glsl_430`, `glsl` | Vertex, fragment, and compute source |
+| WGSL | `wgsl` | Vertex, fragment, and compute source |
+| HLSL | `hlsl` | Vertex, fragment, and compute source |
+| MSL | `msl`, `metal` | One combined module holding every stage |
+| SPIR-V | `spirv`, `spv` | A binary word stream, one module per stage |
 
-- `borrow`, `borrow mut`, `move`, and `copy` syntax exists
-- missing-move, use-after-move, and move-twice diagnostics are checked in semantics
-- VM, LLVM/native, and hybrid all carry ownership metadata
-- returned borrows are rejected today instead of being accepted with incomplete lifetime checking
-- non-trivial `copy` lowering is not implemented yet and is diagnosed instead
+**Compute shaders are emitted by every target.** GLSL declares a `local_size_x/y/z` layout, HLSL a `[numthreads(…)]` attribute, MSL a `kernel` entry, and SPIR-V a `GLCompute` execution model.
+
+The one shape a target cannot express is a SPIR-V compute entry point that declares output variables: SPIR-V has none there, and a compute shader publishes through storage. That leaves the SPIR-V source empty and reports a note, because the other four targets still carry the shader.
+
+`Ksl.compile` answers with every member as a `String`, so SPIR-V arrives as hexadecimal with eight characters to a word, ready to read into the `uint32_t` array `vkCreateShaderModule` takes.
+
+## Platforms
+
+| Target | State |
+| --- | --- |
+| Host desktop (macOS, Linux, Windows) | `run`, `build`, `test`, `debug`, `profile`, `live` |
+| Cross targets (`--target arch-os-abi`) | `build` and `check`. `run`, `test`, and `debug` refuse a cross target by name. |
+| Web (`--device wasm32`) | `build`, `export web`, and `live web`. A built module runs headlessly under node. |
+| Apple (macOS, iOS, tvOS, visionOS) | `export apple` writes a real Xcode workspace; `live` runs the app it builds. |
+| Windows, Linux | `export` writes a CMake or Visual Studio scaffold and audits the tools a local build needs. |
+| Android | Modeled. `export` and `live` refuse by name rather than emitting a project no build produced. |
+
+## What Is Still Refused
+
+| Shape | Answer |
+| --- | --- |
+| A returned borrow | Refused rather than accepted with incomplete lifetime checking. |
+| Field-sensitive partial moves | A struct moves whole. |
+| A `Drop` value read out of a member, an element, or a payload | `KSEM302`. Bind the owner. |
+| A generic `struct`, `class`, or `function` | `KPAR047`. Only `enum` takes type parameters. |
+| Subtyping between classes | `KSEM063`. Use a trait or a construct family. |
+| `print` of a struct, array, or enum | `KSEM081`. No rendering is pinned anywhere. |
+| Payload-carrying enums as direct C values | Refused with a typed diagnostic. Payload-less enums cross as C integers. |
+| Aggregate callback results, non-C ABIs, variadics, generic externs | Refused with a typed diagnostic. |
+| Struct operator overloading | Not built. Foundation's matrix algebra waits on it. |
