@@ -154,6 +154,7 @@ mod tests {
     struct NativeHost {
         lines: Vec<String>,
         seen: Vec<String>,
+        fail: bool,
     }
 
     impl kira_runtime_abi::HostCapabilities for NativeHost {
@@ -168,6 +169,11 @@ mod tests {
         ) -> Result<kira_runtime_abi::NativeReturn, kira_runtime_abi::NativeCallError> {
             use kira_runtime_abi::{NativeArg, NativeResult, NativeReturn};
             self.seen.push(format!("{function_id}{args:?}"));
+            if self.fail {
+                return Err(kira_runtime_abi::NativeCallError::UnboundFunction(
+                    function_id,
+                ));
+            }
             match args {
                 [NativeArg::Int(count), NativeArg::Str(text)] => Ok(NativeReturn::plain(
                     NativeResult::Str(text.repeat(*count as usize)),
@@ -185,11 +191,15 @@ mod tests {
     #[test]
     fn call_native_marshals_through_the_host_and_back() {
         // main: print(shout(2, "hi"))  — shout's body lives in the native half.
+        // The leading marker stays below the call's arguments. It proves the
+        // seam consumes exactly its declared arguments rather than the whole
+        // operand-stack suffix.
         let main = func(
             "main",
             0,
             0,
             vec![
+                I::ConstInt(99),
                 I::ConstInt(2),
                 I::ConstStr(0),
                 I::CallNative(1),
@@ -217,6 +227,39 @@ mod tests {
         assert!(host.seen[0].contains("Str(\"hi\")"), "{:?}", host.seen);
         // Every argument the VM lent out is still reclaimed by exit.
         assert_eq!(outcome.heap.current, 0);
+    }
+
+    #[test]
+    fn a_native_host_error_reclaims_arguments_on_a_persistent_heap() {
+        let main = func(
+            "main",
+            0,
+            0,
+            vec![I::ConstStr(0), I::CallNative(1), I::Return],
+        );
+        let mut native = func("shout", 1, 1, vec![]);
+        native.execution = kira_runtime_abi::Execution::Native;
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
+            functions: vec![main, native],
+            main: Some(0),
+            strings: vec!["transient".to_owned()],
+        };
+        let mut instance = Instance::load(module).expect("the native module validates");
+        let mut host = NativeHost {
+            fail: true,
+            ..NativeHost::default()
+        };
+        assert_eq!(
+            instance.call(&mut host, 0, &[]),
+            Err(VmError::NativeCall(
+                kira_runtime_abi::NativeCallError::UnboundFunction(1)
+            ))
+        );
+        assert_eq!(instance.stats().current, 0);
     }
 
     /// The scalar conversion instructions, pinned at the instruction level: the

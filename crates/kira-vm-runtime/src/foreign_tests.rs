@@ -20,6 +20,7 @@ use crate::{VmError, execute};
 #[derive(Default)]
 struct ForeignHost {
     lines: Vec<String>,
+    fail: bool,
 }
 
 impl HostCapabilities for ForeignHost {
@@ -32,6 +33,9 @@ impl HostCapabilities for ForeignHost {
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        if self.fail {
+            return Err(ForeignCallError::NoForeignHost);
+        }
         match (foreign_id, args) {
             // add(I32, I32) -> I32
             (0, [ForeignArg::I32(a), ForeignArg::I32(b)]) => {
@@ -48,6 +52,31 @@ impl HostCapabilities for ForeignHost {
             _ => Err(ForeignCallError::NoForeignHost),
         }
     }
+}
+
+#[test]
+fn a_foreign_host_error_reclaims_arguments_on_a_persistent_heap() {
+    // The CString is lowered into the instance heap before the host is called.
+    // A host refusal must still unwind the VM stack and frame, rather than
+    // leaving that transient copy live in the instance.
+    let module = module(
+        vec![I::ConstStr(0), I::CallForeign(1), I::Return],
+        vec!["kira".to_owned()],
+    );
+    let mut instance = crate::Instance::load(module).expect("the foreign module validates");
+    let mut host = ForeignHost {
+        fail: true,
+        ..ForeignHost::default()
+    };
+    assert_eq!(
+        instance.call(&mut host, 0, &[]),
+        Err(VmError::ForeignCall(ForeignCallError::NoForeignHost))
+    );
+    assert_eq!(
+        instance.stats().current,
+        0,
+        "a refused call leaves no heap value"
+    );
 }
 
 /// The foreign-import table every test in this file shares.
@@ -108,21 +137,24 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
 
 #[test]
 fn a_foreign_call_marshals_scalars_through_the_host_and_back() {
-    // main: print(add(20, 22))
+    // main: keep(99, add(20, 22)) — the value below the call arguments must
+    // survive the crossing and become the function result.
     let module = module(
         vec![
+            I::ConstInt(99),
             I::ConstInt(20),
             I::ConstInt(22),
             I::CallForeign(0),
             I::Print,
             I::Pop,
-            I::ReturnVoid,
+            I::Return,
         ],
         Vec::new(),
     );
     let mut host = ForeignHost::default();
     let outcome = execute(&module, &mut host).expect("clean run");
     assert_eq!(host.lines, ["42"]);
+    assert_eq!(outcome.result, crate::Value::Int(99));
     assert_eq!(outcome.heap.current, 0, "no heap was leaked");
 }
 
