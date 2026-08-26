@@ -39,6 +39,31 @@ static ALLOCATED: AtomicU64 = AtomicU64::new(0);
 #[cfg(debug_assertions)]
 static FREED: AtomicU64 = AtomicU64::new(0);
 
+/// The relationship between the blocks handed out and the blocks no longer
+/// owned by a running native program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeapBalance {
+    /// Every block is either released or deliberately retained by C.
+    Balanced,
+    /// Blocks remain owned by neither the frame nor the retained registry.
+    Unowned(u64),
+    /// More blocks were released (or retained) than were handed out.
+    Overreleased(u128),
+}
+
+/// Classifies a report without saturating away an accounting error.
+fn classify(allocated: u64, freed: u64, retained: u64) -> HeapBalance {
+    let released_or_retained = u128::from(freed) + u128::from(retained);
+    let allocated = u128::from(allocated);
+    if allocated > released_or_retained {
+        HeapBalance::Unowned((allocated - released_or_retained) as u64)
+    } else if released_or_retained > allocated {
+        HeapBalance::Overreleased(released_or_retained - allocated)
+    } else {
+        HeapBalance::Balanced
+    }
+}
+
 /// Records one real allocation.
 ///
 /// Relaxed ordering: these are counters nobody synchronizes on, read once at
@@ -95,6 +120,18 @@ pub extern "C" fn kira_rt_heap_live() -> u64 {
     kira_rt_heap_allocated().saturating_sub(kira_rt_heap_freed())
 }
 
+/// Blocks released in excess of the blocks allocated, or zero when this build
+/// is not counting.
+///
+/// [`kira_rt_heap_live`] remains saturating for compatibility with callers that
+/// use it as a count. This companion exposes the other side of the imbalance so
+/// a double free cannot look like a balanced zero. Retained blocks are checked
+/// by [`kira_rt_heap_report`], where their count is available.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_heap_overreleased() -> u64 {
+    kira_rt_heap_freed().saturating_sub(kira_rt_heap_allocated())
+}
+
 /// Whether this build counts at all.
 ///
 /// The one thing that separates "balanced" from "never measured": both report
@@ -135,11 +172,29 @@ pub extern "C" fn kira_rt_heap_report() {
         kira_rt_heap_live(),
     );
     let retained = crate::cblock::kira_rt_cblock_retained_block_count();
-    let unowned = live.saturating_sub(retained);
-    eprintln!("kira: heap allocated={allocated} freed={freed} live={live} retained={retained}");
-    if unowned != 0 {
-        eprintln!("kira: the native heap did not balance: {unowned} object(s) leaked");
-        std::process::exit(1);
+    let balance = classify(allocated, freed, retained);
+    let imbalance = match balance {
+        HeapBalance::Balanced => 0,
+        HeapBalance::Unowned(amount) => i128::from(amount),
+        HeapBalance::Overreleased(amount) => -(amount as i128),
+    };
+    eprintln!(
+        "kira: heap allocated={allocated} freed={freed} live={live} retained={retained} \
+         imbalance={imbalance:+}"
+    );
+    match balance {
+        HeapBalance::Balanced => {}
+        HeapBalance::Unowned(amount) => {
+            eprintln!("kira: the native heap did not balance: {amount} object(s) leaked");
+            std::process::exit(1);
+        }
+        HeapBalance::Overreleased(amount) => {
+            eprintln!(
+                "kira: native heap accounting released or retained {amount} object(s) \
+                 more than it allocated"
+            );
+            std::process::exit(1);
+        }
     }
 }
 
@@ -176,5 +231,14 @@ mod tests {
         record_alloc();
         assert!(kira_rt_heap_allocated() > before);
         record_free();
+    }
+
+    /// Saturating live counts must not make an over-release look balanced.
+    #[test]
+    fn the_balance_report_exposes_an_overrelease() {
+        assert_eq!(classify(3, 4, 0), HeapBalance::Overreleased(1));
+        assert_eq!(classify(3, 3, 0), HeapBalance::Balanced);
+        assert_eq!(classify(3, 2, 1), HeapBalance::Balanced);
+        assert_eq!(classify(3, 2, 0), HeapBalance::Unowned(1));
     }
 }
