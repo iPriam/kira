@@ -15,6 +15,10 @@ A Kira `String` is a value: it owns its bytes, a copy is independent, and `+` bu
 | `s.dropLastScalar()` | `String` | `s` without its last Unicode scalar |
 | `scalarText(c)` | `String` | the text of the Unicode scalar at code point `c` |
 
+String properties and operations accept any String expression, including a
+String returned directly by a function call; binding the result to a local is
+not required.
+
 Bytes rather than characters is the choice these operations make together. A program that carves text at a delimiter it located itself hands the index it got back to the operation that slices, so the index has to mean the same thing to both, and a character count beside a byte index would not. `"café".count` is 5 and `"中文".count` is 6, because that is how many bytes those strings hold.
 
 `String(x)` renders exactly what `print` would, so a value printed and a value converted never disagree: `String(2.0)` is `"2"`, `String(1.0 / 3.0)` is `"0.3333333333333333"`, `String(true)` is `"true"`.
