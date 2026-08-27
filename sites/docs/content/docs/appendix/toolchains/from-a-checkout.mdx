@@ -23,7 +23,7 @@ When run in a unix terminal, it finishes by replacing itself with a fresh login 
 
 ## `binstall`: the Checkout as a Toolchain
 
-`knvm binstall` builds `kira`, `kira-language-server`, `kira-desktop-runner`, and both host runtime archives with cargo, cross-builds the Web runtime archive, and shapes them into the same tree a release unpacks to, with the checkout's `foundation/` beside them. It installs that tree on the `dev` channel, named by the workspace's `[workspace.package] version`.
+`knvm binstall` builds `kira`, `kira-language-server`, `kira-desktop-runner`, and both host runtime archives with cargo, cross-builds the Web runtime archive, and shapes them into the same tree a release unpacks to, with the checkout's `foundation/` beside them. It asks Cargo for its resolved target directory, so checkout or parent configuration and `CARGO_TARGET_DIR` are honored when it locates those artifacts. It installs that tree on the `dev` channel, named by the workspace's `[workspace.package] version`.
 
 The LLVM backend is a hard part of every `kira`, so `binstall` discovers the managed LLVM and refuses up front, naming the provisioning route, when no bundle exists. It goes through the same staging, validation, and rename-into-place pipeline as a release install, and selects what it lands, so `kira` dispatches to the fresh build immediately.
 
