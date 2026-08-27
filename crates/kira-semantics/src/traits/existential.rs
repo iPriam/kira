@@ -20,13 +20,15 @@
 
 use std::collections::BTreeMap;
 
-use kira_semantics_model::hir::{Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt};
+use kira_semantics_model::hir::{Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirPlace, HirWriteback};
 use kira_semantics_model::{EnumId, Execution, OwnershipMode, StructId, Type};
 use kira_source::Span;
+use kira_syntax_model::ast::ExprId;
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::constructs::ConstructVariant;
 use crate::constructs::DispatchMethod;
+use crate::place::PlacePurpose;
 
 /// One trait's existential: its synthesized enum, the variants it filled from
 /// the conformance table, and the dispatchers its call sites reserved.
@@ -45,6 +47,12 @@ pub(crate) struct ExistentialMethod {
     pub(crate) params: Vec<Type>,
     /// The written result, `Void` when the declaration wrote none.
     pub(crate) result: Type,
+    /// Whether the receiver is written `borrow mut self`.
+    ///
+    /// The dispatcher writes the receiver back through every frame exactly
+    /// when this holds, and its call sites record one for it on the same
+    /// terms a mutating method's call sites do.
+    pub(crate) mutates_self: bool,
     /// The synthesized tag dispatcher, reserved at the first call site.
     pub(crate) dispatcher: Option<FuncId>,
 }
@@ -188,6 +196,7 @@ impl Analyzer<'_> {
                     ExistentialMethod {
                         params: shape.params,
                         result: shape.result,
+                        mutates_self: shape.receiver_mutates,
                         dispatcher: None,
                     },
                 )
@@ -239,11 +248,15 @@ impl Analyzer<'_> {
     ///
     /// The call lowers to the trait's synthesized tag dispatcher — the same
     /// balanced-tree shape a construct family builds — with each arm calling
-    /// the concrete implementation that type's conformance provided.
+    /// the concrete implementation that type's conformance provided. A member
+    /// whose receiver is `borrow mut self` dispatches mutating: the call site
+    /// records a receiver writeback, and every dispatcher frame hands the
+    /// updated existential back through it.
     pub(crate) fn analyze_trait_existential_call(
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
+        receiver_syntax: ExprId,
         existential_id: EnumId,
         method: &str,
         content: crate::constructs::ConstructCallContent<'_>,
@@ -265,7 +278,7 @@ impl Analyzer<'_> {
             .trait_existentials
             .get(&trait_name)
             .and_then(|existing| existing.methods.get(method))
-            .map(|known| (known.params.clone(), known.result))
+            .map(|known| (known.params.clone(), known.result, known.mutates_self))
         else {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
@@ -283,7 +296,7 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let (params, result) = shape;
+        let (params, result, mutates_self) = shape;
         // Reserve the dispatcher before borrowing the table immutably: one
         // lookup decides, then a second reads what the first may have written.
         let already = self
@@ -369,11 +382,25 @@ impl Analyzer<'_> {
                 values[index + 1] = self.coerce_into(value, expected);
             }
         }
+        // A mutating member writes the existential back into the caller's
+        // storage, exactly as a mutating method on a struct does: the receiver
+        // must name a mutable place, and the call carries one writeback for
+        // it. Resolving here rather than from the analyzed value is what lets
+        // `b.bump(4)` land in `b` and refuse a temporary with the same words a
+        // direct call uses.
+        let writebacks = if mutates_self {
+            match self.resolve_place(ctx, receiver_syntax, PlacePurpose::MutCall) {
+                Some((place, _)) => vec![HirWriteback { param: 0, place }],
+                None => return self.program.exprs.alloc(HirExpr::Error),
+            }
+        } else {
+            Vec::new()
+        };
         self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(dispatcher),
             args: values,
             ty: result,
-            writebacks: Vec::new(),
+            writebacks,
         })
     }
 
@@ -408,13 +435,18 @@ impl Analyzer<'_> {
 
     /// Builds one trait dispatcher: a balanced tag tree whose arms extract the
     /// payload and call the concrete implementation directly.
+    ///
+    /// A member whose requirement writes `borrow mut self` dispatches
+    /// mutating: the root, every tree node, and every arm carry the flag, so
+    /// each frame's caller hands it the receiver by reference and the mutated
+    /// existential reaches the original binding.
     fn trait_dispatcher_body(
         &mut self,
         trait_name: &str,
         existential_id: EnumId,
         method: &str,
     ) -> HirFunction {
-        let Some((variants, params, result)) =
+        let Some((variants, params, result, mutates_self)) =
             self.trait_existentials
                 .get(trait_name)
                 .and_then(|existing| {
@@ -423,10 +455,13 @@ impl Analyzer<'_> {
                         existing.variants.clone(),
                         method.params.clone(),
                         method.result,
+                        method.mutates_self,
                     ))
                 })
         else {
-            return self.empty_dispatcher(trait_name, method, Type::Void, 0);
+            // The member row itself vanished mid-build, so its receiver mode
+            // is unknowable; the placeholder is never reached by a call.
+            return self.empty_dispatcher(trait_name, method, Type::Void, 0, false);
         };
         let dispatch = DispatchMethod {
             family: trait_name,
@@ -434,6 +469,7 @@ impl Analyzer<'_> {
             family_id: existential_id,
             params: &params,
             result,
+            mutates_self,
         };
         let mut arms = Vec::with_capacity(variants.len());
         for variant in variants.iter().copied() {
@@ -448,7 +484,12 @@ impl Analyzer<'_> {
         }
         if arms.is_empty() {
             let mut ctx = FnCtx::new(result);
-            ctx.declare_hidden_as(Type::Enum(existential_id), false, OwnershipMode::BorrowRead);
+            let ownership = if mutates_self {
+                OwnershipMode::BorrowMut
+            } else {
+                OwnershipMode::BorrowRead
+            };
+            ctx.declare_hidden_as(Type::Enum(existential_id), mutates_self, ownership);
             for &ty in &params {
                 ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead);
             }
@@ -471,7 +512,7 @@ impl Analyzer<'_> {
                 is_main: false,
                 is_async: false,
                 execution: Execution::Inherited,
-                mutates_self: false,
+                mutates_self,
                 name_span: Span::new(0, 0),
             };
         }
@@ -485,7 +526,7 @@ impl Analyzer<'_> {
                 is_main: false,
                 is_async: false,
                 execution: Execution::Inherited,
-                mutates_self: false,
+                mutates_self,
                 name_span: Span::new(0, 0),
             };
         };
@@ -525,6 +566,7 @@ impl Analyzer<'_> {
         method: &str,
         result: Type,
         param_count: u32,
+        mutates_self: bool,
     ) -> HirFunction {
         HirFunction {
             name: format!("some {trait_name}.{method}$dispatch"),
@@ -535,7 +577,7 @@ impl Analyzer<'_> {
             is_main: false,
             is_async: false,
             execution: Execution::Inherited,
-            mutates_self: false,
+            mutates_self,
             name_span: Span::new(0, 0),
         }
     }

@@ -29,6 +29,8 @@ struct FamilyMethodShape {
     ///
     /// [`ConstructFamilyMethod::constrained_result`]: super::ConstructFamilyMethod::constrained_result
     result: Option<Type>,
+    /// Whether the method's receiver is written `borrow mut self`.
+    receiver_mutates: bool,
 }
 
 /// The pieces one dispatcher branch forwards to a concrete method.
@@ -64,6 +66,13 @@ pub(crate) struct DispatchMethod<'family> {
     pub(crate) params: &'family [Type],
     /// The result every generated function presents.
     pub(crate) result: Type,
+    /// Whether the method's requirement writes `borrow mut self`.
+    ///
+    /// Every generated function — root, tree node, and arm — carries the flag,
+    /// so each frame's caller hands it the receiver by reference and a call
+    /// that mutates reaches the original binding. Read-only dispatch leaves
+    /// every frame taking its receiver by value, exactly as before.
+    pub(crate) mutates_self: bool,
 }
 
 impl Analyzer<'_> {
@@ -131,10 +140,15 @@ impl Analyzer<'_> {
     }
 
     /// Type-checks a method call on a family value.
+    ///
+    /// A method whose requirement writes `borrow mut self` dispatches
+    /// mutating: the call site records a receiver writeback, so the value the
+    /// chosen variant mutated reaches the caller's binding.
     pub(crate) fn analyze_construct_family_call(
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
+        receiver_syntax: Option<ExprId>,
         family_id: EnumId,
         method: &str,
         content: ConstructCallContent<'_>,
@@ -160,6 +174,7 @@ impl Analyzer<'_> {
             ownership,
             defaults,
             result,
+            receiver_mutates,
         } = shape;
         // A requirement written without `-> T` says nothing about what an
         // implementation returns, so there is no one type this call could have.
