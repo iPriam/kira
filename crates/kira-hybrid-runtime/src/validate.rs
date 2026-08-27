@@ -104,13 +104,13 @@ pub fn hot_reload(
     }
     if previous.foreign_imports != next.foreign_imports
         || previous.foreign_aggregates != next.foreign_aggregates
-        || previous.foreign_callbacks != next.foreign_callbacks
     {
         return Err(HybridError::Mismatch(
             "the native library's foreign crossing surface changed; relaunch is required"
                 .to_owned(),
         ));
     }
+    callback_surface(previous, next)?;
     foreign(manifest, next)?;
     if next
         .functions
@@ -168,6 +168,49 @@ pub fn hot_reload(
     }
 
     Ok(remap)
+}
+
+/// Proves that callback slots still mean the same C-to-Kira calls.
+///
+/// A callback row's function id belongs to the bytecode function table, so it
+/// may change when runtime-only functions are reordered. The callback slot and
+/// its C signature cannot change: the native thunk is already compiled for
+/// that position. Compare the target's stable source identity instead of the
+/// positional id, then [`hot_reload`] can use its id map when the old thunk
+/// enters the new module.
+fn callback_surface(previous: &Module, next: &Module) -> Result<(), HybridError> {
+    if previous.foreign_callbacks.len() != next.foreign_callbacks.len() {
+        return Err(HybridError::Mismatch(
+            "the native library's foreign callback surface changed; relaunch is required"
+                .to_owned(),
+        ));
+    }
+    for (index, (old, new)) in previous
+        .foreign_callbacks
+        .iter()
+        .zip(next.foreign_callbacks.iter())
+        .enumerate()
+    {
+        if old.signature() != new.signature() {
+            return Err(HybridError::Mismatch(format!(
+                "foreign callback {index}'s C signature changed; relaunch is required"
+            )));
+        }
+        let old_target = previous
+            .functions
+            .get(old.function() as usize)
+            .map(|function| (&function.name, function.param_count));
+        let new_target = next
+            .functions
+            .get(new.function() as usize)
+            .map(|function| (&function.name, function.param_count));
+        if old_target != new_target {
+            return Err(HybridError::Mismatch(format!(
+                "foreign callback {index}'s Kira target changed; relaunch is required"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Proves the manifest's foreign table matches the bytecode half's.
@@ -404,5 +447,89 @@ mod tests {
         module.functions[0].local_count = 1;
         let error = bundle(&manifest, &module).expect_err("an entrypoint takes no parameters");
         assert!(matches!(error, HybridError::Mismatch(_)), "{error:?}");
+    }
+
+    fn runtime_manifest() -> HybridManifest {
+        let mut manifest = manifest();
+        for function in &mut manifest.functions {
+            function.execution = Execution::Runtime;
+            function.exported_name = None;
+        }
+        manifest
+    }
+
+    fn runtime_module(order: &[&str], callback_function: Option<u32>) -> Module {
+        let callbacks = callback_function
+            .map(|function| {
+                vec![kira_runtime_abi::ForeignCallback::new(
+                    function,
+                    kira_runtime_abi::ForeignSignature::scalars(
+                        [kira_runtime_abi::ForeignType::I32],
+                        kira_runtime_abi::ForeignType::I32,
+                    ),
+                )]
+            })
+            .unwrap_or_default();
+        Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: callbacks,
+            functions: order
+                .iter()
+                .map(|name| FuncProto {
+                    name: (*name).to_owned(),
+                    param_count: if *name == "hot" { 1 } else { 0 },
+                    local_count: if *name == "hot" { 1 } else { 0 },
+                    execution: Execution::Runtime,
+                    code: vec![Instruction::ReturnVoid],
+                    releases: kira_bytecode::FrameRelease::EveryLocal,
+                })
+                .collect(),
+            main: Some(
+                order
+                    .iter()
+                    .position(|name| *name == "main")
+                    .expect("the runtime fixture has an entrypoint") as u32,
+            ),
+            strings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_hot_reload_maps_old_runtime_ids_after_reordering() {
+        let manifest = runtime_manifest();
+        let previous = runtime_module(&["main", "hot"], None);
+        let next = runtime_module(&["hot", "main"], None);
+        assert_eq!(
+            hot_reload(&manifest, &previous, &next).expect("the runtime identities still match"),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn a_hot_reload_maps_a_callback_target_after_reordering() {
+        let manifest = runtime_manifest();
+        let previous = runtime_module(&["main", "hot"], Some(1));
+        let next = runtime_module(&["hot", "main"], Some(0));
+        assert_eq!(
+            hot_reload(&manifest, &previous, &next).expect("the callback still means `hot`"),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn a_hot_reload_rejects_a_changed_callback_target() {
+        let manifest = runtime_manifest();
+        let previous = runtime_module(&["main", "hot"], Some(1));
+        let next = runtime_module(&["hot", "main"], Some(1));
+        let error = hot_reload(&manifest, &previous, &next)
+            .expect_err("the old callback would enter `hot`, not `main`");
+        assert!(
+            error
+                .to_string()
+                .contains("callback 0's Kira target changed"),
+            "{error}"
+        );
     }
 }

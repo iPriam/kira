@@ -21,6 +21,12 @@ function runHooks(h: Hooks, a: I32, b: I32) -> I32;
 
 A pointer C hands out can be stored and passed back. A named top-level Kira function fills one: `Hooks { add = combine, scale = 2 }`. C then calls into Kira through the generated entry.
 
+During a VM-only live reload, the native thunk remains in place. The callback's
+C signature and Kira target must therefore remain the same, but the target may
+move to another runtime function-table slot; the session remaps the old slot to
+the new one. A changed callback signature or target requires a relaunch rather
+than allowing an old thunk to enter a different function.
+
 ## The Entry Thunk
 
 - The value is the address of a generated entry thunk, one per (function, signature) pair, named `kira_ffi_callback_<i>`.
