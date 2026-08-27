@@ -26,7 +26,7 @@ function main() {
 | `FileSystem.kira` | Reading and writing files on every backend |
 | `Result.kira` | `enum Result<Value, Failure>` |
 | `Printable.kira` | The `Printable` construct family |
-| `Derive.kira`, `DeriveSerde.kira` | The four derive macros, in pure Kira |
+| `Derive.kira`, `DeriveHashable.kira`, `DeriveSerde.kira`, `DeriveTagged.kira` | The six derive macros, in pure Kira |
 | `Image/` | PNG and JPEG decoding into RGBA8 |
 | `Compression/` | DEFLATE and zlib inflation |
 | `Kira/Compiler.kira` | Compiling Kira from a Kira program |
@@ -57,9 +57,22 @@ Both markers are required for the checkout rule. A workspace `Cargo.toml` alone 
 
 A program that declares a name Foundation also declares gets `KSEM003`, the ordinary duplicate-declaration error, where the second declaration is written. An imported package's declarations are the program's declarations; there is no separate rule for a bundled one.
 
-## What Is Not Here Yet
+## Geometry Algebra
 
-The geometry structs are pure data. Vector and matrix algebra as methods (`add`, `dot`, `cross`, `normalize`, `multiply`, `translate`) lean on struct operator overloading, which the compiler has not built, so they wait on it rather than being ported in a form that would not compile. `Vec2`, `Vec4`, and `Quaternion` are unported for the same reason.
+Foundation ships `Vec2`, `Vec3`, and `Vec4` with `add`, `subtract`, `multiply`,
+`divide`, `dot`, `length`, and `normalize`; `Vec3` also has `cross`. `Rect`
+provides `minX`, `minY`, `maxX`, `maxY`, and inclusive `contains`.
+
+`Mat4` is row-major and defaults to identity. Its `multiply`, `translate`,
+`scale`, and `rotate` methods compose transforms explicitly. The free helpers
+`mat4Identity`, `mat4Translate`, `mat4Scale`, `mat4Rotate`, `mat4Perspective`,
+and `mat4LookAt` build the common transforms. `Quaternion` supports
+`multiply`, `normalize`, and `toMat4`, while `quaternionFromAxisAngle` builds a
+rotation quaternion. The arithmetic operators `+`, `-`, `*`, and `/` on a
+named value desugar to the corresponding methods, so matrix composition may
+use either `a * b` or `a.multiply(b)`.
+
+## What Is Not Here Yet
 
 `Web.kira` waits on the DOM bindings. It is named here rather than stubbed: a file that compiles and does nothing is worse than an import that fails.
 

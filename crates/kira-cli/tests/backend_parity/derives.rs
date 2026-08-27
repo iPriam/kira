@@ -1,8 +1,8 @@
-//! Parity for the builtin derives: Foundation's four macros, and the compiler's
+//! Parity for the builtin derives: Foundation's six macros, and the compiler's
 //! own `@Derive(Copy)` assertion.
 //!
 //! These sit apart from `macros.rs` because what they prove is different. The
-//! macro tests prove the *mechanism*; these prove the four functions Foundation
+//! macro tests prove the *mechanism*; these prove the generated functions Foundation
 //! generates behave identically on every backend, down to the exact wire string
 //! the serde pair writes and the trap malformed input produces.
 
@@ -44,6 +44,65 @@ function main() {
 "#,
     );
     assert_eq!(output, "true\nfalse\ntrue\nedge\n");
+}
+
+/// Foundation's `@Derive(Hashable)` folds scalar and nested fields in the same
+/// declaration order on every backend.
+#[test]
+fn the_foundation_hashable_derive_agrees() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Hashable)
+struct DhxInner { var value: Int }
+
+@Derive(Hashable)
+struct DhxRecord {
+    var id: Int
+    var label: String
+    var enabled: Bool
+    var inner: DhxInner
+}
+
+@Main
+function main() {
+    let base = DhxRecord { id: 7, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    let same = DhxRecord { id: 7, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    let changed = DhxRecord { id: 8, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    print(hash_DhxRecord(base) == hash_DhxRecord(same))
+    print(hash_DhxRecord(base) != hash_DhxRecord(changed))
+    print(hash_DhxInner(DhxInner { value: 12 }) != hash_DhxInner(DhxInner { value: 13 }))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\n");
+}
+
+/// `@Derive(Tagged)` maps payload-less enum variants to declaration-order codes
+/// and uses the first variant as the total decoder fallback.
+#[test]
+fn the_foundation_tagged_derive_agrees() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Tagged)
+enum DhxMaterial { Flat Frosted Metallic }
+
+@Main
+function main() {
+    print(code_DhxMaterial(DhxMaterial.Flat))
+    print(code_DhxMaterial(DhxMaterial.Frosted))
+    print(code_DhxMaterial(DhxMaterial.Metallic))
+    print(code_DhxMaterial(DhxMaterial_fromCode(2)))
+    print(code_DhxMaterial(DhxMaterial_fromCode(99)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "0\n1\n2\n2\n0\n");
 }
 
 /// Foundation's `@Derive(Serializable)` / `@Derive(Deserializable)`: the exact

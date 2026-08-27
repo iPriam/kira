@@ -13,7 +13,7 @@
 //
 // The generated names are glued to the enum's exact name — `code_Material`,
 // `Material_fromCode` — and that is a fixed contract other tooling reads, the
-// same rule `Derive.kira`'s four follow.
+// the same source-glued naming rule as the other Foundation derives.
 //
 // # Why this exists
 //

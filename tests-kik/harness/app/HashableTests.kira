@@ -1,0 +1,65 @@
+import Foundation
+
+// Hashable derives a deterministic FNV-1a fold from every field. These tests
+// keep the value-level contract in the Kira harness rather than proving it only
+// through generated Rust or macro snapshots.
+
+@Derive(Hashable)
+struct HxInner {
+    var id: Int
+}
+
+@Derive(Hashable)
+struct HxRecord {
+    var id: Int
+    var name: String
+    var enabled: Bool
+    var inner: HxInner
+}
+
+construct HxEqualRecordsHashTheSame() extends Test {
+    test {
+        let left = HxRecord {
+            id: 7
+            name: "same"
+            enabled: true
+            inner: HxInner { id: 11 }
+        }
+        let right = HxRecord {
+            id: 7
+            name: "same"
+            enabled: true
+            inner: HxInner { id: 11 }
+        }
+        return hash_HxRecord(left) == hash_HxRecord(right)
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct HxEveryFieldChangesTheFold() extends Test {
+    test {
+        let base = HxRecord {
+            id: 7
+            name: "same"
+            enabled: true
+            inner: HxInner { id: 11 }
+        }
+        let changed = HxRecord {
+            id: 8
+            name: "same"
+            enabled: true
+            inner: HxInner { id: 11 }
+        }
+        return hash_HxRecord(base) != hash_HxRecord(changed)
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct HxNestedFieldsUseTheirOwnDerive() extends Test {
+    test {
+        let first = HxInner { id: 1 }
+        let second = HxInner { id: 2 }
+        return hash_HxInner(first) != hash_HxInner(second)
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}

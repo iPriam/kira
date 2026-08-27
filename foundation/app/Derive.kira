@@ -2,22 +2,27 @@
 //
 // Foundation is merged into every importing package, so these `comptime macro`
 // declarations register as derive macros for all Kira code in a program that
-// imports it. Four ship here:
+// imports it. Six ship here:
 //
 //   @Derive(Equatable)      generates  function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool
 //   @Derive(Clone)          generates  function clone_<Type>(v: borrow <Type>) -> <Type>
 //   @Derive(Serializable)   generates  function serialize_<Type>(v: borrow <Type>) -> String
 //   @Derive(Deserializable) generates  function deserialize_<Type>(s: borrow String) -> <Type>
+//   @Derive(Hashable)       generates  function hash_<Type>(v: borrow <Type>) -> Int
+//   @Derive(Tagged)         generates  code_<Type> and <Type>_fromCode for enums
 //
 // The generated name is glued to the derived type's exact name — `eq_Point`,
-// `clone_Point`, `serialize_Point`, `deserialize_Point` — and that is a fixed
-// contract other tooling reads. Only the macro names themselves are top-level
-// public API; the shared deserialization helpers carry the reserved
+// `clone_Point`, `hash_Point`, `serialize_Point`, and `deserialize_Point` —
+// and that is a fixed contract other tooling reads. Tagged uses the same rule
+// for `code_Point` and `Point_fromCode`. Only the macro names themselves are
+// top-level public API; the shared deserialization helpers carry the reserved
 // `__kira_deser_` prefix so they can never collide with user code.
 //
-// Field classification is shared by all four. A builtin scalar field is handled
-// directly; a field whose type is another *bare* named type is a nested derived
-// type and is handled by recursion through that type's own generated function.
+// Equatable, Clone, Serializable, and Deserializable share one field
+// classification. A builtin scalar field is handled directly; a field whose
+// type is another *bare* named type is a nested derived type and is handled by
+// recursion through that type's own generated function. Hashable has its own
+// integer fold, and Tagged walks enum variants rather than struct fields.
 // A missing `eq_X` / `clone_X` surfaces as an ordinary unknown-call diagnostic,
 // which is the right one: the fix is deriving it there.
 //
@@ -29,7 +34,7 @@
 //     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
 //   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
 //     parsing primitive, so refusing beats shipping a lossy parser.
-//   * All four take a struct or an enum. A struct holding an enum field recurses
+//   * The four structural derives take a struct or an enum. A struct holding an enum field recurses
 //     through that enum's own `eq_` / `clone_` / `serialize_` / `deserialize_`
 //     and those have to exist — which is what `@Derive(Equatable) enum Blend
 //     { … }` gives.

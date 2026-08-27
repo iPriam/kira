@@ -1,24 +1,71 @@
 ---
 title: Derives
-description: The four derive macros Foundation ships in Kira, the field classification they share, the serde wire format and its round-trip law, and the builtin `@Derive(Copy)` assertion.
+description: The six derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
 ---
 
-Foundation ships four derive macros written in pure Kira, in `foundation/app/Derive.kira` and `foundation/app/DeriveSerde.kira`. All four are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
+Foundation ships six derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, and `foundation/app/DeriveTagged.kira`. All six are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
 
 | Derive | Generated free function | Contract |
 | --- | --- | --- |
 | `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
 | `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
+| `Hashable` | `function hash_<Type>(v: borrow <Type>) -> Int` | deterministic FNV-1a fold of every supported field |
 | `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` | value to compact wire string |
 | `Deserializable` | `function deserialize_<Type>(s: borrow String) -> <Type>` | wire string to value, trapping on malformed input |
+| `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
 
-The generated name is glued to the derived type's exact name (`eq_Point`, `clone_Point`, `serialize_Point`, `deserialize_Point`), and that is a fixed contract other tooling reads.
+The generated name is glued to the derived type's exact name (`eq_Point`,
+`clone_Point`, `hash_Point`, `serialize_Point`, `deserialize_Point`,
+`code_Note`, `Note_fromCode`), and that is a fixed contract other tooling reads.
 
 ## Field Classification
 
-All four share one classification. A builtin scalar field (`Int`, `Float`, `Bool`, `String`, and the sized numeric and C types) is handled directly: compared with `!=`, copied by field read, rendered with `String(x)`. A field whose type is another *bare* named type is a nested derived type and recurses through that type's own generated function, so `eq_Segment` calls `eq_Point` on its `from` and `to`. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic, which is the right one because the fix is deriving it there.
+`Equatable`, `Clone`, `Serializable`, and `Deserializable` share one
+classification. A builtin scalar field (`Int`, `Float`, `Bool`, `String`, and
+the sized numeric and C types) is handled directly: compared with `!=`, copied
+by field read, rendered with `String(x)`. A field whose type is another *bare*
+named type is a nested derived type and recurses through that type's own
+generated function, so `eq_Segment` calls `eq_Point` on its `from` and `to`. A
+missing `eq_X` surfaces as an ordinary unknown-call diagnostic, which is the
+right one because the fix is deriving it there.
 
 An array, generic, or optional field type is refused with a `Diagnostics.error` naming the field rather than emitting broken code. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text, so `[Int]` gives `"Int"`, which is not `"[Int]"`.
+
+## `Hashable`
+
+`Hashable` folds fields in declaration order with 64-bit FNV-1a and generates
+`hash_<Type>`. Integer widths, `Bool`, `String` bytes, and nested structs are
+supported; a nested struct must derive `Hashable` too. This is a change
+detector, not a cryptographic hash, so collisions are possible and only mean
+redundant work for a cache or diff.
+
+Array, generic, and optional field types are refused instead of guessing
+whether identity, order, or length is part of the hash. `Float` and `F32` are
+also refused: equal floating-point values can have distinct bit patterns, so a
+bitwise fold would disagree with `Equatable`.
+
+```kira
+@Derive(Hashable)
+struct Point { var x: Int; var y: Int }
+
+let key = hash_Point(Point { x = 3, y = 4 })
+```
+
+## `Tagged`
+
+`Tagged` applies to enums and generates `code_<Type>` plus
+`<Type>_fromCode`. `code_<Type>` returns the zero-based declaration position;
+payloads do not affect the code. `fromCode` returns the matching payload-less
+variant and falls back to the first variant for an unknown number, so use it on
+an enum whose variants carry no payload.
+
+```kira
+@Derive(Tagged)
+enum Material { Flat Frosted }
+
+let code = code_Material(Material.Frosted)       // 1
+let value = Material_fromCode(code)              // Material.Frosted
+```
 
 ## The Wire Format
 

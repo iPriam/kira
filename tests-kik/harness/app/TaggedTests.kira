@@ -1,0 +1,23 @@
+import Foundation
+
+// Tagged turns an enum's declaration order into a stable zero-based code and
+// reconstructs payload-less variants from those codes.
+
+@Derive(Tagged)
+enum HxMaterial {
+    Flat
+    Frosted
+    Metallic
+}
+
+construct HxTaggedUsesDeclarationOrder() extends Test {
+    test {
+        let first = code_HxMaterial(HxMaterial.Flat)
+        let second = code_HxMaterial(HxMaterial.Frosted)
+        let third = code_HxMaterial(HxMaterial.Metallic)
+        let roundTrip = code_HxMaterial(HxMaterial_fromCode(2))
+        let fallback = code_HxMaterial(HxMaterial_fromCode(99))
+        return first + second + third + roundTrip + fallback
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
