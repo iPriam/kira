@@ -40,7 +40,13 @@ A key the reader does not know is ignored rather than rejected, because the mode
 
 Registry dependencies are exact-version. A git dependency must be pinned to a concrete commit or tag.
 
-**Only path dependencies resolve today.** A registry or git entry is accepted by the manifest reader and written to `kira.lock` as a source pin, and nothing fetches it: the resolver queues path sources alone. A program importing a module that only a registry or git dependency would supply fails later as an unresolved import rather than at the dependency that could not be fetched. Depend by path until a resolver exists.
+**Only path dependencies resolve today.** The resolver reports `KPK028` for a
+registry dependency and `KPK029` for a git dependency because no fetcher is
+configured. It keeps both dependency edges in the graph, so the package is
+never silently dropped, but it cannot add either package's sources. A build
+therefore stops at the dependency diagnostic; it does not pretend that a
+partial graph is valid. Use `kira add --path` with a checked-out package until a
+registry or git resolver is available.
 
 ```bash
 kira add Core --path ../core
@@ -51,7 +57,7 @@ kira update
 
 `kira add --version` and `kira add --git` write the manifest entry that the paragraph above describes. `kira update` performs the same local graph refresh `kira sync` does, because there is no network resolver to ask for a newer version.
 
-`kira.lock` records the resolved graph: each package's source kind, its pin as the manifest spelled it (path, version, or url and rev/tag), module-root ownership, and transitive names. It carries no archive checksum and no resolved commit, because nothing resolves one. It is never tracked in git. Re-running `kira sync` without graph changes keeps it stable.
+`kira.lock` records the resolved graph: each package's source kind, its pin as the manifest spelled it (path, version, or url and rev/tag), module-root ownership, and transitive names. It carries no archive checksum and no resolved commit, because nothing resolves one. It is never tracked in git. Re-running `kira sync` without graph changes keeps it stable; unresolved registry and git entries remain source pins and are diagnosed again until a fetcher is configured or the entries are replaced with path dependencies.
 
 ## Security Rules
 

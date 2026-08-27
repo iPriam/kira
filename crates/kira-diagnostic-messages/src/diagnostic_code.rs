@@ -40,6 +40,10 @@ pub enum DiagnosticCode {
     Kpk026LockfileSynced,
     /// KPK027 — a drifted lockfile could not be rewritten.
     Kpk027LockfileSyncFailed,
+    /// KPK028 — a registry dependency has no configured fetcher.
+    Kpk028RegistryDependencyUnavailable,
+    /// KPK029 — a git dependency has no configured fetcher.
+    Kpk029GitDependencyUnavailable,
     /// KPK030 — a package manifest handed to the compiler could not be read.
     Kpk030UnreadableManifest,
     /// KPK031 — the root a check request named is in no package it listed.
@@ -73,6 +77,8 @@ impl DiagnosticCode {
             DiagnosticCode::Kpk025MisplacedBindTypesFile => "KPK025",
             DiagnosticCode::Kpk026LockfileSynced => "KPK026",
             DiagnosticCode::Kpk027LockfileSyncFailed => "KPK027",
+            DiagnosticCode::Kpk028RegistryDependencyUnavailable => "KPK028",
+            DiagnosticCode::Kpk029GitDependencyUnavailable => "KPK029",
             DiagnosticCode::Kpk030UnreadableManifest => "KPK030",
             DiagnosticCode::Kpk031UnknownRootPackage => "KPK031",
             DiagnosticCode::Kpk032UnreadableDependencyManifest => "KPK032",
