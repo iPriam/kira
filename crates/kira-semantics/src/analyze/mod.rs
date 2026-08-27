@@ -39,8 +39,10 @@ pub struct Analysis {
 /// One declared function plus the struct it is a method of, if any.
 #[derive(Clone)]
 pub(crate) struct Callable<'a> {
-    /// The struct whose method this is; `None` for a free function.
-    pub(crate) receiver: Option<StructId>,
+    /// The type whose method this is; `None` for a free function. Most methods
+    /// are aggregate methods, but `extend` may attach a method to any concrete
+    /// type, including a scalar or an array.
+    pub(crate) receiver: Option<Type>,
     /// For a class method copied from an ancestor, the ancestor that wrote the
     /// body; `None` for a free function or a method written where it lives.
     ///

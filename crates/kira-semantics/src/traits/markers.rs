@@ -120,13 +120,13 @@ impl Analyzer<'_> {
     pub(crate) fn check_marker_claim(
         &mut self,
         marker: Marker,
-        ty: StructId,
+        ty: Type,
         source: SourceId,
         span: Span,
     ) {
         self.source = source;
-        let name = self.program.types.type_name(Type::Struct(ty));
-        let Some(reason) = self.marker_reason(&name, Type::Struct(ty), marker) else {
+        let name = self.program.types.type_name(ty);
+        let Some(reason) = self.marker_reason(&name, ty, marker) else {
             return;
         };
         self.emit(

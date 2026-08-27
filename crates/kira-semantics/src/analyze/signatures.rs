@@ -65,7 +65,7 @@ impl<'a> Analyzer<'a> {
             }
             // A method's receiver is parameter 0, so its signature carries the
             // struct type ahead of what was written.
-            let mut params: Vec<Type> = callable.receiver.map(Type::Struct).into_iter().collect();
+            let mut params: Vec<Type> = callable.receiver.into_iter().collect();
             // A specialized copy takes the subclass where the declaration wrote
             // the parent. This is the whole of the substitution: everything
             // downstream — the body, `self`-less method resolution inside it,

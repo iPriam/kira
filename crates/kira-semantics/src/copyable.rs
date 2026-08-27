@@ -184,7 +184,7 @@ impl Analyzer<'_> {
         // Asked of the conformance rather than of the recorded body, because a
         // `Drop` body is a method and has no id until signatures exist — later
         // than the copy question is first asked.
-        if self.conforms_to(id, crate::traits::DROP) {
+        if self.conforms_to(Type::Struct(id), crate::traits::DROP) {
             return Some(NotCopyable::UserDrop { owner });
         }
         for field in &def.fields {

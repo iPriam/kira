@@ -43,7 +43,7 @@ impl<'a> Analyzer<'a> {
                         .lookup_owned(package, self.interner.resolve(declaration.name));
                     for method in &declaration.methods {
                         callables.push(Callable {
-                            receiver: owner,
+                            receiver: owner.map(Type::Struct),
                             origin: None,
                             specialize: Vec::new(),
                             initializes: None,
@@ -213,10 +213,10 @@ impl<'a> Analyzer<'a> {
             })
             .collect();
         let written = &format!("{written}{suffix}");
-        let Some(id) = callable.receiver else {
+        let Some(receiver_ty) = callable.receiver else {
             return written.to_owned();
         };
-        let receiver = self.program.types.type_name(Type::Struct(id));
+        let receiver = self.program.types.type_name(receiver_ty);
         // A class carries one copy of every method any ancestor declares. The
         // copy that wins bare lookup takes the plain `Class.method` name a call
         // site spells; a copy an override shadows takes a qualified name, which
@@ -230,8 +230,8 @@ impl<'a> Analyzer<'a> {
             self.interner.resolve(callable.function.name),
             &callable.function.params,
         );
-        match callable.origin {
-            Some(origin) if !self.is_most_derived(id, origin, &key) => {
+        match (receiver_ty, callable.origin) {
+            (Type::Struct(id), Some(origin)) if !self.is_most_derived(id, origin, &key) => {
                 let origin = self.program.types.type_name(Type::Struct(origin));
                 format!("{receiver}.{origin}${written}")
             }

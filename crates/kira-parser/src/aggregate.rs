@@ -171,12 +171,14 @@ impl Parser<'_> {
         } else {
             Vec::new()
         };
+        let traits = self.parse_trait_list();
         let mut variants = Vec::new();
         if !self.expect(TokenKind::LBrace) {
             let span = Span::from_bounds(start.start, self.previous_end());
             return Some(EnumDecl {
                 name,
                 name_span,
+                traits,
                 type_params,
                 variants,
                 derives_copy: None,
@@ -215,6 +217,7 @@ impl Parser<'_> {
         Some(EnumDecl {
             name,
             name_span,
+            traits,
             type_params,
             variants,
             derives_copy: None,

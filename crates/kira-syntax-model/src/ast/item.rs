@@ -68,6 +68,10 @@ pub struct ExtendDecl {
     pub name: Symbol,
     /// Span of the family name, for diagnostics and definition links.
     pub name_span: Span,
+    /// A written type reference when the impl target is not an identifier,
+    /// such as `extend [Int]: Equatable`. Named targets keep `None` for the
+    /// compact family and type lookup paths.
+    pub target: Option<TypeRefId>,
     /// The trait this block implements, when the header wrote `: Trait`.
     ///
     /// `Some` turns the block from a fluent modifier block into an **impl**:
@@ -332,6 +336,8 @@ pub struct EnumDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The traits the declaration claims to implement.
+    pub traits: Vec<TraitRef>,
     /// The declared type parameters, in order; empty for an ordinary enum.
     pub type_params: Vec<TypeParamDecl>,
     /// The variants, in declaration order.

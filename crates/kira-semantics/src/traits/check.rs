@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use kira_semantics_model::{StructId, Type};
+use kira_semantics_model::Type;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 
@@ -20,7 +20,7 @@ use crate::traits::markers::Marker;
 /// Where one conformance was recorded, and how the type came by it.
 struct ConformanceSite {
     /// The conforming type.
-    ty: StructId,
+    ty: Type,
     /// The file the conformance is filed under, which every refusal points
     /// into.
     source: SourceId,
@@ -115,7 +115,10 @@ impl Analyzer<'_> {
             .filter(|(_, method)| !method.uniform)
             .map(|(name, _)| name.clone())
             .collect();
-        let Some(construct) = self.constructs.get(&site.ty) else {
+        let Type::Struct(struct_id) = site.ty else {
+            return;
+        };
+        let Some(construct) = self.constructs.get(&struct_id) else {
             return;
         };
         let overrides_all_methods =
@@ -127,7 +130,7 @@ impl Analyzer<'_> {
             .into_iter()
             .filter(|member| !construct.members.contains(member))
             .collect();
-        let name = self.program.types.type_name(Type::Struct(site.ty));
+        let name = self.program.types.type_name(site.ty);
         self.source = site.source;
         for member in missing {
             self.emit(
@@ -149,7 +152,7 @@ impl Analyzer<'_> {
     fn check_supertraits_are_claimed(
         &mut self,
         trait_name: &str,
-        ty: StructId,
+        ty: Type,
         source: SourceId,
         span: Span,
     ) {
@@ -164,7 +167,7 @@ impl Analyzer<'_> {
                     .collect()
             })
             .unwrap_or_default();
-        let type_name = self.program.types.type_name(Type::Struct(ty));
+        let type_name = self.program.types.type_name(ty);
         for super_name in required {
             // A trait the compiler *derives* is true of a shape whether or not
             // anyone wrote it down, so the obligation is discharged by the fact
@@ -204,11 +207,11 @@ impl Analyzer<'_> {
 
     /// Why `ty` does not carry the derived trait `name`, or `None` when it
     /// does.
-    pub(crate) fn derived_trait_unmet(&self, name: &str, ty: StructId) -> Option<String> {
-        let type_name = self.program.types.type_name(Type::Struct(ty));
+    pub(crate) fn derived_trait_unmet(&self, name: &str, ty: Type) -> Option<String> {
+        let type_name = self.program.types.type_name(ty);
         match Marker::from_name(name) {
-            Some(marker) => self.marker_reason(&type_name, Type::Struct(ty), marker),
-            None => self.not_copyable_reason(&type_name, Type::Struct(ty), &mut HashSet::new()),
+            Some(marker) => self.marker_reason(&type_name, ty, marker),
+            None => self.not_copyable_reason(&type_name, ty, &mut HashSet::new()),
         }
     }
 
@@ -253,7 +256,7 @@ impl Analyzer<'_> {
         let ConformanceSite {
             ty, source, span, ..
         } = *site;
-        let type_name = self.program.types.type_name(Type::Struct(ty));
+        let type_name = self.program.types.type_name(ty);
         let qualified = format!("{type_name}.{}", shape.name);
         let candidates: Vec<_> = self
             .sig_index
@@ -371,11 +374,11 @@ impl Analyzer<'_> {
     /// The same question `@Derive(Copy)` asks, asked by the trait spelling: a
     /// type copies when every member it reaches does, and the refusal names the
     /// member that owns storage a copy would have to clone.
-    fn check_copyable_claim(&mut self, ty: StructId, source: SourceId, span: Span) {
+    fn check_copyable_claim(&mut self, ty: Type, source: SourceId, span: Span) {
         self.source = source;
-        let name = self.program.types.type_name(Type::Struct(ty));
+        let name = self.program.types.type_name(ty);
         let mut seen = HashSet::new();
-        if let Some(reason) = self.not_copyable_reason(&name, Type::Struct(ty), &mut seen) {
+        if let Some(reason) = self.not_copyable_reason(&name, ty, &mut seen) {
             self.emit(
                 span,
                 "KSEM297",

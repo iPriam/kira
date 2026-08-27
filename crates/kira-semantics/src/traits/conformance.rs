@@ -10,13 +10,13 @@ use std::collections::{HashMap, HashSet};
 
 use kira_semantics_model::{StructId, Type};
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::{ConstructKind, Function, Item, TraitRef};
+use kira_syntax_model::ast::{ConstructKind, Function, Item, TraitRef, TypeRefId};
 
 use super::{Conformance, Contract, SupertraitRef, TraitInfo, TraitMemberInfo, is_builtin_trait};
 use crate::analyze::{Analyzer, Callable};
 
 /// Every method name each type presents, keyed by the type.
-type PresentedNames = HashMap<StructId, HashSet<String>>;
+type PresentedNames = HashMap<Type, HashSet<String>>;
 
 impl<'a> Analyzer<'a> {
     /// Registers every `trait` declaration the program writes.
@@ -240,29 +240,44 @@ impl<'a> Analyzer<'a> {
                 Item::Struct(declaration) if !declaration.traits.is_empty() => {
                     let name = self.interner.resolve(declaration.name);
                     if let Some(id) = self.declared_struct(name, source) {
-                        self.declare_conformances(&declaration.traits, id, source, &presented);
+                        self.declare_conformances(
+                            &declaration.traits,
+                            Type::Struct(id),
+                            source,
+                            &presented,
+                        );
                     }
                 }
                 Item::Class(declaration) if !declaration.traits.is_empty() => {
                     let name = self.interner.resolve(declaration.name);
                     if let Some(id) = self.declared_struct(name, source) {
-                        self.declare_conformances(&declaration.traits, id, source, &presented);
+                        self.declare_conformances(
+                            &declaration.traits,
+                            Type::Struct(id),
+                            source,
+                            &presented,
+                        );
                     }
                 }
-                Item::Construct(declaration) if !declaration.traits.is_empty() => match declaration
-                    .kind
-                {
-                    ConstructKind::Family => {
-                        let name = self.interner.resolve(declaration.name).to_owned();
-                        family_claims.push((source, name, declaration.traits.clone()));
-                    }
-                    ConstructKind::Backed { .. } => {
-                        let name = self.interner.resolve(declaration.name);
-                        if let Some(id) = self.declared_struct(name, source) {
-                            self.declare_conformances(&declaration.traits, id, source, &presented);
+                Item::Construct(declaration) if !declaration.traits.is_empty() => {
+                    match declaration.kind {
+                        ConstructKind::Family => {
+                            let name = self.interner.resolve(declaration.name).to_owned();
+                            family_claims.push((source, name, declaration.traits.clone()));
+                        }
+                        ConstructKind::Backed { .. } => {
+                            let name = self.interner.resolve(declaration.name);
+                            if let Some(id) = self.declared_struct(name, source) {
+                                self.declare_conformances(
+                                    &declaration.traits,
+                                    Type::Struct(id),
+                                    source,
+                                    &presented,
+                                );
+                            }
                         }
                     }
-                },
+                }
                 Item::Extend(declaration) => {
                     let Some(claimed) = declaration.conforms else {
                         continue;
@@ -272,10 +287,10 @@ impl<'a> Analyzer<'a> {
                         family_claims.push((source, name, vec![claimed]));
                         continue;
                     }
-                    match self.visible_struct(&name) {
-                        Some(id) => self.declare_conformances(
+                    match self.conforming_type_named(&name, source, declaration.target) {
+                        Some(ty) => self.declare_conformances(
                             std::slice::from_ref(&claimed),
-                            id,
+                            ty,
                             source,
                             &presented,
                         ),
@@ -285,9 +300,7 @@ impl<'a> Analyzer<'a> {
                                 declaration.name_span,
                                 "KSEM298",
                                 format!(
-                                    "`{name}` is not a type that can conform to `{trait_name}`: \
-                                     an impl block implements a trait for a struct, a class, or \
-                                     a construct-backed declaration"
+                                    "`{name}` is not a type that can conform to `{trait_name}`"
                                 ),
                             );
                         }
@@ -295,6 +308,27 @@ impl<'a> Analyzer<'a> {
                 }
                 _ => {}
             }
+        }
+        // Enum declarations may claim a trait directly. Their type identity is
+        // the enum row, not one of their variants.
+        for (source, item) in tree.items_with_source() {
+            let Item::Enum(declaration) = item else {
+                continue;
+            };
+            if declaration.traits.is_empty() {
+                continue;
+            }
+            let name = self.interner.resolve(declaration.name);
+            let Some(id) = self
+                .program
+                .types
+                .enums()
+                .lookup_owned(self.imports.package_of(source), name)
+            else {
+                continue;
+            };
+            self.source = source;
+            self.declare_conformances(&declaration.traits, Type::Enum(id), source, &presented);
         }
         for (source, family, claimed) in family_claims {
             self.source = source;
@@ -309,7 +343,7 @@ impl<'a> Analyzer<'a> {
     /// that presents a member of the default's name has answered for it,
     /// whether it wrote the method in its own body, inherited it from a class
     /// parent or a construct family, or wrote it in an impl block.
-    fn presented_method_names(&self) -> PresentedNames {
+    fn presented_method_names(&mut self) -> PresentedNames {
         let mut presented: PresentedNames = HashMap::new();
         for (source, item) in self.tree.items_with_source() {
             let (id, names) = match item {
@@ -318,7 +352,10 @@ impl<'a> Analyzer<'a> {
                     let Some(id) = self.declared_struct(name, source) else {
                         continue;
                     };
-                    (id, self.method_names(declaration.methods.iter()))
+                    (
+                        Type::Struct(id),
+                        self.method_names(declaration.methods.iter()),
+                    )
                 }
                 Item::Class(declaration) => {
                     let name = self.interner.resolve(declaration.name);
@@ -328,7 +365,7 @@ impl<'a> Analyzer<'a> {
                     let mut names =
                         self.method_names(declaration.methods.iter().map(|it| &it.function));
                     names.extend(self.inherited_method_names(id));
-                    (id, names)
+                    (Type::Struct(id), names)
                 }
                 Item::Construct(declaration) => {
                     let ConstructKind::Backed { .. } = declaration.kind else {
@@ -341,16 +378,29 @@ impl<'a> Analyzer<'a> {
                     let mut names =
                         self.method_names(declaration.methods.iter().map(|it| &it.function));
                     names.extend(self.family_method_names(declaration));
-                    (id, names)
+                    (Type::Struct(id), names)
                 }
                 Item::Extend(declaration) if declaration.conforms.is_some() => {
                     let name = self.interner.resolve(declaration.name).to_owned();
                     // Resolved against the *declaring* file, which is the scope
                     // the block's own header was written in.
-                    let Some(id) = self.struct_visible_from(&name, source) else {
+                    let Some(ty) = self.conforming_type_named(&name, source, declaration.target)
+                    else {
                         continue;
                     };
-                    (id, self.method_names(declaration.methods.iter()))
+                    (ty, self.method_names(declaration.methods.iter()))
+                }
+                Item::Enum(declaration) => {
+                    let name = self.interner.resolve(declaration.name);
+                    let Some(id) = self
+                        .program
+                        .types
+                        .enums()
+                        .lookup_owned(self.imports.package_of(source), name)
+                    else {
+                        continue;
+                    };
+                    (Type::Enum(id), HashSet::new())
                 }
                 _ => continue,
             };
@@ -375,7 +425,7 @@ impl<'a> Analyzer<'a> {
                 let (source, span) = sites.get(ty).copied()?;
                 Some(Conformance {
                     contract: Contract::Family(info.family.clone()),
-                    ty: *ty,
+                    ty: Type::Struct(*ty),
                     source,
                     span,
                     via_family: None,
@@ -408,7 +458,12 @@ impl<'a> Analyzer<'a> {
         let variants: Vec<StructId> = self
             .construct_families
             .get(family)
-            .map(|info| info.variants.iter().map(|it| it.struct_id).collect())
+            .map(|info| {
+                info.variants
+                    .iter()
+                    .filter_map(|it| it.struct_id())
+                    .collect()
+            })
             .unwrap_or_default();
         let sites = self.backed_declaration_sites();
         for entry in claimed {
@@ -418,17 +473,20 @@ impl<'a> Analyzer<'a> {
             }
             self.link_type_name(&trait_name, entry.span);
             for ty in &variants {
-                if self.conforms_to(*ty, &trait_name) {
+                if self.conforms_to(Type::Struct(*ty), &trait_name) {
                     continue;
                 }
                 let (declared_in, at) = sites.get(ty).copied().unwrap_or((source, entry.span));
                 self.conformances.push(Conformance {
                     contract: Contract::Trait(trait_name.clone()),
-                    ty: *ty,
+                    ty: Type::Struct(*ty),
                     source: declared_in,
                     span: at,
                     via_family: Some(family.to_owned()),
-                    provided: presented.get(ty).cloned().unwrap_or_default(),
+                    provided: presented
+                        .get(&Type::Struct(*ty))
+                        .cloned()
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -516,13 +574,13 @@ impl<'a> Analyzer<'a> {
     fn declare_conformances(
         &mut self,
         claimed: &[TraitRef],
-        ty: StructId,
+        ty: Type,
         source: SourceId,
         presented: &PresentedNames,
     ) {
         for entry in claimed {
             let trait_name = self.interner.resolve(entry.name).to_owned();
-            let type_name = self.program.types.type_name(Type::Struct(ty));
+            let type_name = self.program.types.type_name(ty);
             if !is_builtin_trait(&trait_name) && !self.traits.contains_key(&trait_name) {
                 self.emit(
                     entry.span,
@@ -544,13 +602,16 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             if !self.conformance_is_coherent(&trait_name, ty, source) {
-                let owner = self
-                    .program
-                    .types
-                    .structs()
-                    .owner_of(ty)
-                    .unwrap_or("this program")
-                    .to_owned();
+                let owner = match ty {
+                    Type::Struct(id) => self
+                        .program
+                        .types
+                        .structs()
+                        .owner_of(id)
+                        .unwrap_or("this program")
+                        .to_owned(),
+                    _ => "the trait's package".to_owned(),
+                };
                 self.emit(
                     entry.span,
                     "KSEM291",
@@ -585,9 +646,9 @@ impl<'a> Analyzer<'a> {
     ///
     /// A compiler-known trait is declared by no package, so the type's own is
     /// the only one that may claim it.
-    fn conformance_is_coherent(&self, trait_name: &str, ty: StructId, source: SourceId) -> bool {
+    fn conformance_is_coherent(&self, trait_name: &str, ty: Type, source: SourceId) -> bool {
         let here = self.imports.package_of(source);
-        if self.program.types.structs().owner_of(ty) == here {
+        if matches!(ty, Type::Struct(id) if self.program.types.structs().owner_of(id) == here) {
             return true;
         }
         self.traits
@@ -607,9 +668,24 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The struct `name` denotes from `source`, whichever package declared it.
-    fn struct_visible_from(&self, name: &str, source: SourceId) -> Option<StructId> {
-        self.declared_struct(name, source)
-            .or_else(|| self.program.types.structs().lookup(name))
+    fn conforming_type_named(
+        &mut self,
+        name: &str,
+        _source: SourceId,
+        target: Option<TypeRefId>,
+    ) -> Option<Type> {
+        if let Some(target) = target {
+            return Some(self.resolve_type_ref(target));
+        }
+        if let Some(ty) = Type::from_name(name) {
+            return (ty != Type::Void && ty != Type::Error && ty != Type::CString).then_some(ty);
+        }
+        if let Some(ty) = self.resolve_alias_name(name, &crate::types::NameContext::Ordinary) {
+            return Some(ty);
+        }
+        self.visible_struct(name)
+            .map(Type::Struct)
+            .or_else(|| self.visible_enum(name).map(Type::Enum))
     }
 
     /// The names of a run of declared methods.
@@ -650,7 +726,7 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Whether `ty` conforms to the trait `name`.
-    pub(crate) fn conforms_to(&self, ty: StructId, name: &str) -> bool {
+    pub(crate) fn conforms_to(&self, ty: Type, name: &str) -> bool {
         self.conformances
             .iter()
             .any(|entry| entry.ty == ty && entry.contract.trait_name() == Some(name))
@@ -684,7 +760,7 @@ impl<'a> Analyzer<'a> {
             // A class already collects every `extend <Class>` block's methods
             // while it is flattened, so that a subclass inherits them. Adding
             // them again here would be two callables for one body.
-            if self.classes.contains_key(&entry.ty) {
+            if matches!(entry.ty, Type::Struct(id) if self.classes.contains_key(&id)) {
                 continue;
             }
             for method in &declaration.methods {

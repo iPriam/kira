@@ -55,10 +55,34 @@ impl Parser<'_> {
     /// body's `{` or at the `:` of an impl block, and requiring one of those is
     /// what keeps a local named `extend` from being read as a declaration.
     pub(crate) fn at_extend_block(&self) -> bool {
-        self.at(TokenKind::Identifier)
-            && self.text_of(self.current().span) == "extend"
-            && self.peek(1).kind == TokenKind::Identifier
-            && matches!(self.peek(2).kind, TokenKind::LBrace | TokenKind::Colon)
+        if !(self.at(TokenKind::Identifier) && self.text_of(self.current().span) == "extend") {
+            return false;
+        }
+        if self.peek(1).kind == TokenKind::Identifier {
+            return matches!(self.peek(2).kind, TokenKind::LBrace | TokenKind::Colon);
+        }
+        if self.peek(1).kind != TokenKind::LBracket {
+            return false;
+        }
+        let mut depth = 0_u32;
+        let mut offset = 1;
+        loop {
+            match self.peek(offset).kind {
+                TokenKind::LBracket => depth += 1,
+                TokenKind::RBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(
+                            self.peek(offset + 1).kind,
+                            TokenKind::LBrace | TokenKind::Colon
+                        );
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
+        }
     }
 
     /// Parses `extend Family { [@Native] function ... }`, with `extend` at the
@@ -73,17 +97,22 @@ impl Parser<'_> {
         let start = self.current().span;
         self.bump(); // `extend`
         let name_span = self.current().span;
-        let name = if self.at(TokenKind::Identifier) {
+        let (name, target) = if self.at(TokenKind::Identifier) {
             let symbol = self.intern_span(name_span);
             self.bump();
-            symbol
+            (symbol, None)
+        } else if self.at(TokenKind::LBracket) {
+            let target = self.parse_type_ref();
+            // The semantic target is the type reference; the symbol remains an
+            // error sentinel because an array has no identifier to intern.
+            (Symbol::ERROR, Some(target))
         } else {
             self.error(
                 name_span,
                 "KPAR063",
                 "expected the name of the construct family to extend",
             );
-            Symbol::ERROR
+            (Symbol::ERROR, None)
         };
         // `extend T: Trait { … }` is the impl block, and it may name exactly one
         // trait: a block implements the members of one trait for one type, so a
@@ -158,6 +187,7 @@ impl Parser<'_> {
         Some(ExtendDecl {
             name,
             name_span,
+            target,
             conforms,
             methods,
             span,
