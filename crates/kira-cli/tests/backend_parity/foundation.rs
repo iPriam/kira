@@ -85,6 +85,49 @@ fn foundation_geometry_types_agree_on_every_backend() {
     assert_eq!(out, "185\n");
 }
 
+/// Foundation's vector, rectangle, matrix, and quaternion operations are
+/// ordinary Kira methods, including the arithmetic operators that desugar to
+/// those methods, so they must remain byte-identical through every backend.
+#[test]
+fn foundation_geometry_algebra_agrees_on_every_backend() {
+    let out = assert_parity(
+        "import Foundation\n\
+         @Main function main() {\n\
+             let v2 = Vec2(3.0, 4.0)\n\
+             let v2Other = Vec2(1.0, 2.0)\n\
+             let v2Sum = v2 + v2Other\n\
+             let v2Scaled = v2 * 2.0\n\
+             let v2Halved = v2 / 2.0\n\
+             print(Int(v2.length()) + Int(v2.dot(v2Other)) + Int(v2Sum.x) + Int(v2Scaled.x) + Int(v2Halved.y) + Int(v2.normalize().x * 10.0))\n\
+             let v3 = Vec3(1.0, 0.0, 0.0)\n\
+             let v3Other = Vec3(0.0, 1.0, 0.0)\n\
+             let cross = v3.cross(v3Other)\n\
+             print(Int(cross.z) + Int((v3 * 2.0).x) + Int((v3 / 2.0).x) + Int(v3.dot(v3)) + Int(Vec3().normalize().z))\n\
+             let v4 = Vec4(1.0, 2.0, 2.0, 4.0)\n\
+             let v4Other = Vec4(2.0, 1.0, 0.0, 1.0)\n\
+             print(Int(v4.dot(v4Other)) + Int((v4 + v4Other).w) + Int((v4 - v4Other).x) + Int(v4.length()) + Int((v4 * 2.0).w) + Int((v4 / 2.0).w))\n\
+             let rect = Rect(10.0, 20.0, 30.0, 40.0)\n\
+             print(Int(rect.minX()) + Int(rect.minY()) + Int(rect.maxX()) + Int(rect.maxY()))\n\
+             let offset = Vec3(2.0, 3.0, 4.0)\n\
+             let amount = Vec3(5.0, 6.0, 7.0)\n\
+             let translated = mat4Translate(offset)\n\
+             let scaled = mat4Scale(amount)\n\
+             let combined = translated * scaled\n\
+             print(Int(translated.m03) + Int(translated.m13) + Int(translated.m23) + Int(scaled.m00) + Int(scaled.m11) + Int(scaled.m22) + Int(combined.m03) + Int(combined.m13) + Int(combined.m23))\n\
+             let axis = Vec3(0.0, 0.0, 1.0)\n\
+             let rotation = quaternionFromAxisAngle(axis, 1.5707963267948966)\n\
+             let rotationMatrix = rotation.toMat4()\n\
+             let rotated = mat4Identity().rotate(axis, 1.5707963267948966)\n\
+             print(Int(rotationMatrix.m01) + Int(rotationMatrix.m10) + Int(rotated.m01) + Int(rotated.m10))\n\
+             let perspective = mat4Perspective(1.5707963267948966, 1.0, 1.0, 100.0)\n\
+             let view = mat4LookAt(Vec3(0.0, 0.0, 1.0), Vec3(), Vec3(0.0, 1.0, 0.0))\n\
+             print(Int(perspective.m00) + Int(perspective.m11) + Int(view.m00) + Int(view.m11) + Int(view.m22) + Int(view.m23))\n\
+             return\n\
+         }",
+    );
+    assert_eq!(out, "34\n4\n27\n130\n36\n0\n2\n");
+}
+
 /// A memberwise constructor reaching only its leading fields leaves the rest at
 /// their declared defaults — `Point(5.0)` sets `x` and defaults `y` to `0.0` —
 /// and every backend fills the same defaults.

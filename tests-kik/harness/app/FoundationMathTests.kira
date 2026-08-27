@@ -1,0 +1,152 @@
+import Foundation
+
+// Foundation geometry is deliberately exercised through its public methods and
+// the arithmetic operators that desugar to them. The values and named algebra
+// remain backend-independent.
+
+function fndScaled(value: Float, digits: Int) -> Int {
+    var scale = 1
+    var i = 0
+    while i < digits {
+        scale = scale * 10
+        i = i + 1
+    }
+    return Int(value * Float(scale))
+}
+
+function fndMakeVec2() -> Vec2 {
+    return Vec2(1.0, 2.0)
+}
+
+construct FoundationOperatorsAcceptTemporaryValues() extends Test {
+    test {
+        let left = fndMakeVec2() + Vec2(3.0, 4.0)
+        let right = Vec2(3.0, 4.0) + fndMakeVec2()
+        let scaled = fndMakeVec2() * 2.0
+        return Int(left.x) + Int(right.y) + Int(scaled.x)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+construct FoundationVec2Operations() extends Test {
+    test {
+        let value = Vec2(3.0, 4.0)
+        let other = Vec2(1.0, 2.0)
+        let sum = value + other
+        let difference = value - other
+        let scaled = value * 2.0
+        let halved = value / 2.0
+        let unit = value.normalize()
+        return Int(value.length()) + Int(value.dot(other)) + Int(sum.x) + Int(difference.y)
+            + Int(scaled.x) + Int(halved.y) + fndScaled(unit.x, 1)
+    }
+    // 5 + 11 + 4 + 2 + 6 + 2 + 6 = 36
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+construct FoundationVec3CrossAndNormalize() extends Test {
+    test {
+        let x = Vec3(1.0, 0.0, 0.0)
+        let y = Vec3(0.0, 1.0, 0.0)
+        let cross = x.cross(y)
+        let value = Vec3(2.0, 0.0, 0.0)
+        let unit = value.normalize()
+        let scaled = value * 2.0
+        let halved = value / 2.0
+        return Int(cross.z) + fndScaled(unit.x, 1) + Int(value.dot(value))
+            + Int(scaled.x) + Int(halved.x)
+    }
+    // 1 + 10 + 4 + 4 + 1 = 20
+    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+}
+
+construct FoundationVec4Operations() extends Test {
+    test {
+        let value = Vec4(1.0, 2.0, 2.0, 4.0)
+        let other = Vec4(2.0, 1.0, 0.0, 1.0)
+        let sum = value + other
+        let difference = value - other
+        let scaled = value * 2.0
+        let halved = value / 2.0
+        return Int(value.dot(other)) + Int(sum.w) + Int(difference.x) + Int(value.length())
+            + Int(scaled.w) + Int(halved.w)
+    }
+    // 8 + 5 + (-1) + 5 + 8 + 2 = 27
+    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+}
+
+construct FoundationRectBoundaries() extends Test {
+    test {
+        let rect = Rect(10.0, 20.0, 30.0, 40.0)
+        let inside = rect.contains(Point(25.0, 50.0))
+        let edge = rect.contains(Point(40.0, 60.0))
+        let outside = rect.contains(Point(41.0, 60.0))
+        if inside && edge && outside == false {
+            return Int(rect.minX()) + Int(rect.minY()) + Int(rect.maxX()) + Int(rect.maxY())
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(130); return e }
+}
+
+construct FoundationMatrixComposition() extends Test {
+    test {
+        let offset = Vec3(2.0, 3.0, 4.0)
+        let amount = Vec3(5.0, 6.0, 7.0)
+        let translated = mat4Translate(offset)
+        let scaled = mat4Scale(amount)
+        let combined = translated * scaled
+        return Int(translated.m03) + Int(translated.m13) + Int(translated.m23)
+            + Int(scaled.m00) + Int(scaled.m11) + Int(scaled.m22)
+            + Int(combined.m03) + Int(combined.m13) + Int(combined.m23)
+    }
+    // Translation 9, scale 18, and the translated scale 9.
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+construct FoundationQuaternionRotation() extends Test {
+    test {
+        let axis = Vec3(0.0, 0.0, 1.0)
+        let quarter = quaternionFromAxisAngle(axis, 1.5707963267948966)
+        let matrix = quarter.toMat4()
+        let rotated = mat4Identity().rotate(axis, 1.5707963267948966)
+        return fndScaled(matrix.m01, 0) + fndScaled(matrix.m10, 0)
+            + fndScaled(rotated.m01, 0) + fndScaled(rotated.m10, 0)
+    }
+    // The two quarter turns carry -1 and +1 in both matrices.
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+construct FoundationQuaternionComposition() extends Test {
+    test {
+        let identity = Quaternion()
+        let value = Quaternion(1.0, 2.0, 3.0, 4.0)
+        let same = identity.multiply(value)
+        let zero = Quaternion(0.0, 0.0, 0.0, 0.0).normalize()
+        return Int(same.x) + Int(same.y) + Int(same.z) + Int(same.w) + Int(zero.w)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+}
+
+construct FoundationPerspectiveAndLookAt() extends Test {
+    test {
+        let perspective = mat4Perspective(1.5707963267948966, 1.0, 1.0, 100.0)
+        let eye = Vec3(0.0, 0.0, 1.0)
+        let target = Vec3(0.0, 0.0, 0.0)
+        let up = Vec3(0.0, 1.0, 0.0)
+        let view = mat4LookAt(eye, target, up)
+        return fndScaled(perspective.m00, 0) + fndScaled(perspective.m11, 0)
+            + Int(view.m00) + Int(view.m11) + Int(view.m22) + Int(view.m23)
+    }
+    // The approximation is just below one: 0 + 0 + 1 + 1 + 1 - 1 = 2.
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+construct FoundationZeroNormalizesToTheIdentityFallback() extends Test {
+    test {
+        let vector = Vec3(0.0, 0.0, 0.0).normalize()
+        let quaternion = Quaternion(0.0, 0.0, 0.0, 0.0).normalize()
+        return Int(vector.x) + Int(vector.y) + Int(vector.z) + Int(quaternion.w)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}

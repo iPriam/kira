@@ -17,6 +17,7 @@ description: Which language and toolchain surfaces run on the VM, on LLVM/native
 | Arrays: literals, indexing, indexed assignment, `append`, `count`, copy-on-write | Yes | Yes | Yes | Yes |
 | Strings: `count`, `charAt`, `substring`, `indexOf`, `String(x)`, scalar operations | Yes | Yes | Yes | Yes |
 | Structs, defaults, nested writes, deep copy, methods | Yes | Yes | Yes | Yes |
+| Struct arithmetic operators desugared to `add`, `subtract`, `multiply`, `divide` methods | Yes | Yes | Yes | Yes |
 | Classes: flattening, multiple parents, `override`, parent-qualified calls | Yes | Yes | Yes | Yes |
 | Enums, payloads, exhaustive `match` | Yes | Yes | Yes | Yes |
 | Generic enums and `Any` widening | Yes | Yes | Yes | Yes |
@@ -99,4 +100,3 @@ The one shape a target cannot express is a SPIR-V compute entry point that decla
 | `print` of a struct, array, or enum | `KSEM081`. No rendering is pinned anywhere. |
 | Payload-carrying enums as direct C values | Refused with a typed diagnostic. Payload-less enums cross as C integers. |
 | Aggregate callback results, non-C ABIs, variadics, generic externs | Refused with a typed diagnostic. |
-| Struct operator overloading | Not built. Foundation's matrix algebra waits on it. |

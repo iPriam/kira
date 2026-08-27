@@ -28,6 +28,7 @@ mod native_state;
 mod overloads;
 mod print;
 mod qualified;
+mod struct_ops;
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -816,19 +817,21 @@ impl Analyzer<'_> {
                 rhs: rhs_hir,
                 ty,
             }),
-            None => {
-                self.emit(
-                    span,
-                    "KSEM071",
-                    format!(
-                        "operator `{}` cannot combine `{}` and `{}`",
-                        op.spelling(),
-                        self.type_name(lt),
-                        self.type_name(rt)
-                    ),
-                );
-                self.program.exprs.alloc(HirExpr::Error)
-            }
+            None => self
+                .analyze_binary_operator_method(ctx, op, lhs, lhs_hir, rhs_hir, span)
+                .unwrap_or_else(|| {
+                    self.emit(
+                        span,
+                        "KSEM071",
+                        format!(
+                            "operator `{}` cannot combine `{}` and `{}`",
+                            op.spelling(),
+                            self.type_name(lt),
+                            self.type_name(rt)
+                        ),
+                    );
+                    self.program.exprs.alloc(HirExpr::Error)
+                }),
         }
     }
 

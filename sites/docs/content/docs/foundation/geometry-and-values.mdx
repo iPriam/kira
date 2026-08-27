@@ -1,11 +1,13 @@
 ---
 title: Geometry and Values
-description: The Point, Size, Rect, Vec3, and Mat4 data structs, the math primitives the compiler answers, Result, and Printable.
+description: The geometry value structs, their named algebra methods, the math primitives the compiler answers, Result, and Printable.
 ---
 
 ## The Geometry Vocabulary
 
-`Point`, `Size`, `Rect`, `Vec3`, and `Mat4` are data structs. `Mat4` defaults to the identity, and the free function `mat4Identity()` returns it.
+`Point`, `Size`, `Rect`, `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quaternion` are
+value structs. `Mat4` defaults to the identity, and the free function
+`mat4Identity()` returns it.
 
 ```kira
 let frame = Rect(x: 0.0, y: 0.0, width: 640.0, height: 480.0)
@@ -18,7 +20,13 @@ Each is constructed by its implicit memberwise constructor: `Point(1.0, 2.0)` fi
 
 ## Math
 
-The trigonometry and roots are compiler primitives rather than library functions: `sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, and `abs`. See [Functions](/docs/language-guide/functions#floating-point-primitives).
+Vectors expose named methods (`add`, `subtract`, `multiply`, `divide`, `dot`,
+`length`, and `normalize`, with `cross` on `Vec3`) and the arithmetic operators
+desugar to those methods. Matrices use `multiply`, `translate`, `scale`, and
+`rotate`; the free constructors include `mat4Perspective` and `mat4LookAt`.
+Quaternions use `multiply`, `normalize`, and `toMat4`. See
+[Functions](/docs/language-guide/functions#floating-point-primitives) for the
+complete list of compiler-provided floating-point primitives.
 
 ## `Result`
 

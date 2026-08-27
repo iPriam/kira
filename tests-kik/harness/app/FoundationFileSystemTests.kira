@@ -1,0 +1,90 @@
+import Foundation
+
+// Foundation's filesystem wrappers are values-first: successful reads and
+// writes return data, while missing paths and invalid operations answer false,
+// zero, or an empty collection. Every test cleans its own path so the harness
+// can be run repeatedly from the checkout.
+
+construct FsfTextRoundTrip() extends Test {
+    test {
+        let path = "kik-foundation-text-round-trip.txt"
+        removePath(path)
+        let wrote = writeFile(path, "hello")
+        let direct = readFile(path)
+        let file = openFile(path)
+        let opened = file.isOpen()
+        let throughFile = file.readAll()
+        file.close()
+        let removed = removePath(path)
+        return wrote && direct.ok && direct.text == "hello" && direct.size == 5
+            && opened && throughFile.text == direct.text && removed
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct FsfBytesPreserveNulsAndRanges() extends Test {
+    test {
+        let path = "kik-foundation-bytes-round-trip.bin"
+        removePath(path)
+        var bytes: [U8] = [104, 105, 0, 122]
+        let wrote = writeBytesFile(path, bytes)
+        let whole = readFileRange(path, 0, 10)
+        let middle = readFileRange(path, 2, 2)
+        let text = readFile(path)
+        let short = readFileRange(path, 99, 4)
+        let empty = readFileRange(path, 0, 0)
+        let negative = readFileRange(path, 0 - 1, 4)
+        let removed = removePath(path)
+        return wrote && whole.count == 4 && whole[0] == 104 && whole[1] == 105
+            && whole[2] == 0 && whole[3] == 122 && middle.count == 2
+            && middle[0] == 0 && middle[1] == 122 && text.ok && text.size == 4
+            && text.text == "hi" && short.count == 0 && empty.count == 0
+            && negative.count == 0 && removed
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct FsfDirectoriesListAndRename() extends Test {
+    test {
+        let root = "kik-foundation-directory"
+        removePath(root)
+        let made = makeDirectory(root)
+        let again = makeDirectory(root)
+        let noParents = makeDirectory(root + "/missing/child")
+        let first = writeFile(root + "/one.txt", "1")
+        let nested = makeDirectory(root + "/inner")
+        let second = writeFile(root + "/inner/two.txt", "2")
+        let listing = listDirectory(root)
+        let count = listing.count()
+        let outOfRange = listing.entry(99) == ""
+        let negative = listing.entry(0 - 1) == ""
+        listing.close()
+        let renamed = renamePath(root + "/one.txt", root + "/renamed.txt")
+        let oldGone = pathExists(root + "/one.txt") == false
+        let newThere = fileExists(root + "/renamed.txt")
+        let isDir = isDirectory(root) && fileExists(root) == false
+        let removed = removePath(root)
+        let gone = pathExists(root) == false
+        return made && again && noParents == false && first && nested && second
+            && count == 2 && outOfRange && negative && renamed && oldGone
+            && newThere && isDir && removed && gone
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct FsfMissingPathsAnswerValues() extends Test {
+    test {
+        let path = "kik-foundation-missing-path"
+        removePath(path)
+        let contents = readFile(path)
+        let listing = listDirectory(path)
+        return contents.ok == false && contents.text == "" && contents.size == 0
+            && fileSize(path) == 0 && fileExists(path) == false
+            && pathExists(path) == false && isDirectory(path) == false
+            && listing.count() == 0 && listing.entry(0) == ""
+            && writeFile(path + "/missing", "x") == false
+            && makeDirectory(path + "/missing") == false
+            && removePath(path) == false
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
