@@ -358,7 +358,7 @@ module.exports = grammar({
         ),
       ),
 
-    // `enum Name[<A, B>] { <variant>* }`. Variants are separated by nothing.
+    // `enum Name[<A, B>][: Trait, …] { <variant>* }`. Variants are separated by nothing.
     // A parameter may carry trait bounds (`Value: Scored + Send`); the comma
     // separates parameters, so the traits of one parameter's bound join with
     // `+`.
@@ -368,6 +368,7 @@ module.exports = grammar({
         'enum',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
+        optional(field('conforms', $.conformance_list)),
         field('body', $.enum_body),
       ),
 

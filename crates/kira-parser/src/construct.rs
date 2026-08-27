@@ -58,25 +58,34 @@ impl Parser<'_> {
         if !(self.at(TokenKind::Identifier) && self.text_of(self.current().span) == "extend") {
             return false;
         }
-        if self.peek(1).kind == TokenKind::Identifier {
-            return matches!(self.peek(2).kind, TokenKind::LBrace | TokenKind::Colon);
-        }
-        if self.peek(1).kind != TokenKind::LBracket {
+        if !matches!(
+            self.peek(1).kind,
+            TokenKind::Identifier | TokenKind::LBracket | TokenKind::LParen
+        ) {
             return false;
         }
-        let mut depth = 0_u32;
+        // The target is a written type, so a generic argument or nested array
+        // can contain the same delimiters as the header. Scan to the first
+        // top-level `:` or `{`; doing this here keeps `extend` contextual and
+        // avoids treating an ordinary identifier named `extend` as a
+        // declaration. The real type parser performs the authoritative check.
+        let mut angle = 0_u32;
+        let mut bracket = 0_u32;
+        let mut paren = 0_u32;
         let mut offset = 1;
         loop {
             match self.peek(offset).kind {
-                TokenKind::LBracket => depth += 1,
-                TokenKind::RBracket => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return matches!(
-                            self.peek(offset + 1).kind,
-                            TokenKind::LBrace | TokenKind::Colon
-                        );
-                    }
+                TokenKind::Lt => angle += 1,
+                TokenKind::Gt => angle = angle.saturating_sub(1),
+                TokenKind::GtGt => angle = angle.saturating_sub(2),
+                TokenKind::LBracket => bracket += 1,
+                TokenKind::RBracket => bracket = bracket.saturating_sub(1),
+                TokenKind::LParen => paren += 1,
+                TokenKind::RParen => paren = paren.saturating_sub(1),
+                TokenKind::LBrace | TokenKind::Colon
+                    if angle == 0 && bracket == 0 && paren == 0 =>
+                {
+                    return true;
                 }
                 TokenKind::Eof => return false,
                 _ => {}
@@ -100,11 +109,20 @@ impl Parser<'_> {
         let (name, target) = if self.at(TokenKind::Identifier) {
             let symbol = self.intern_span(name_span);
             self.bump();
-            (symbol, None)
-        } else if self.at(TokenKind::LBracket) {
+            if self.at_type_params() {
+                // Generic targets are concrete types too (`extend Box<Int>:
+                // Trait`). Keep the parsed type reference so semantics can
+                // resolve the instantiated identity rather than the template.
+                let target = self.parse_generic_args(symbol, name_span, name_span);
+                (Symbol::ERROR, Some(target))
+            } else {
+                (symbol, None)
+            }
+        } else if matches!(self.current_kind(), TokenKind::LBracket | TokenKind::LParen) {
             let target = self.parse_type_ref();
             // The semantic target is the type reference; the symbol remains an
-            // error sentinel because an array has no identifier to intern.
+            // error sentinel because an array or function type has no identifier
+            // to intern.
             (Symbol::ERROR, Some(target))
         } else {
             self.error(

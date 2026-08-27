@@ -197,6 +197,26 @@ enum Result<Value, Failure> {
         payload: (type_identifier)))))
 
 ================================================================================
+An enum may claim one or more traits
+================================================================================
+
+enum Tag: Scored, Displayable { Red Blue }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier)
+      (type_identifier))
+    body: (enum_body
+      (enum_variant
+        name: (identifier))
+      (enum_variant
+        name: (identifier)))))
+
+================================================================================
 A type parameter may carry trait bounds joined by `+`
 ================================================================================
 
