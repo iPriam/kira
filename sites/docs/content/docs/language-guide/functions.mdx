@@ -96,14 +96,24 @@ A closure lifted out of a method has no `self`, so a bare field name in its body
 
 ## Floating-Point Primitives
 
-`sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, and `abs` are free functions the compiler answers directly. Each takes a `Float` and answers one.
+Kira provides target-backed floating-point functions for `Float` values:
+`sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`,
+`tanh`, `floor`, `ceil`, `round`, `trunc`, `abs`, `exp`, `log`, `log2`,
+`log10`, `exp2`, `pow`, `min`, `max`, `hypot`, `copysign`, and `fmod`. The
+unary functions take one `Float`; `pow`, `atan2`, `min`, `max`, `hypot`,
+`copysign`, and `fmod` take two.
 
 ```kira
 let hypotenuse = sqrt(a * a + b * b)
 let wave = sin(phase) * amplitude
 ```
 
-They are primitives rather than library code because every target already has them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language whose users reach a square root through eight Newton iterations has an approximation where it should have an answer. `sqrt(2.0)` is exact to the last bit.
+They are primitives rather than library code because every target already has
+them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language
+whose users reach a square root through eight Newton iterations has an
+approximation where it should have an answer. `sqrt(2.0)` is exact to the last
+bit. The operations use the platform's full-precision math implementation on
+every backend.
 
 A program may still define its own `sqrt`: the primitive answers only when nothing else does.
 
