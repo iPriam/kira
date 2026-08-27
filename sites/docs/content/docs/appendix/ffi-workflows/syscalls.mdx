@@ -31,6 +31,13 @@ At most six arguments (`KSEM282` for a seventh, because there is no register for
 
 A declaration's written width is what reaches the register: `fd: I32` arrives sign-extended exactly as it would through an `@FFI.Extern`, so one annotation never disagrees with the other about the same signature.
 
+The interpreter host checks the argument count and every exact-width `ForeignArg`
+against the declaration before it allocates transient string storage or enters
+the kernel. It also refuses a result that cannot fit in the single kernel result
+word. This is a backstop for loaded artifacts and embedders constructing a
+signature directly; source declarations receive the same rejection during
+semantic analysis.
+
 `exit_group` does not return, and the compiler knows: a declaration that names a result for it is `KSEM284`, because that is a value nothing can ever produce, and the code generator marks the point after the call unreachable so a caller writes no statement it could not reach.
 
 ## Two Refusals About the Machine
