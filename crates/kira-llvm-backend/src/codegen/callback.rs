@@ -1,17 +1,16 @@
-//! Callback entries, which C reaches through a libffi closure.
+//! Callback entries, which C reaches either as native functions or libffi
+//! closures.
 //!
-//! The address C holds for a `@FFI.Callback` is a closure libffi prepared, not a
-//! function this backend gave the declared C signature. Whether a struct passed
-//! by value arrives in registers, in memory, or behind a hidden pointer is the
-//! target ABI's answer, and libffi is where this workspace keeps it: a backend
-//! that spelled the signature itself would be classifying the struct a second
-//! time, with a second chance to disagree.
+//! Host and hybrid modules use a libffi closure because the callback address is
+//! handed to a separately loaded C image. A Web module has one image, so
+//! scalar-only callbacks are ordinary LLVM functions and callbacks with
+//! by-value aggregates use a generated C entry. The C compiler owns the latter's
+//! classification; LLVM only sees the entry's pointer-forwarded body.
 //!
-//! So each callback row emits one entry with libffi's own closure signature —
-//! `(cif, result, arguments, user_data)` — and reads each argument out of the
-//! decoded `arguments` array. An aggregate is already a pointer to its C-layout
-//! bytes there, which is exactly what the Kira function's `@FFI.Pointer`
-//! parameter takes.
+//! A host closure emits libffi's `(cif, result, arguments, user_data)` entry and
+//! reads each argument out of the decoded `arguments` array. An aggregate is
+//! already a pointer to its C-layout bytes there, which is exactly what the Kira
+//! function's `@FFI.Pointer` parameter takes.
 
 use kira_runtime_abi::{Execution, ForeignSignature, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::Type;
@@ -20,7 +19,8 @@ use llvm_sys::prelude::*;
 
 use super::{Callable, Codegen};
 use crate::LlvmError;
-use crate::callback_thunk_symbol;
+use crate::shim::callback_needs_entry;
+use crate::{callback_body_name, callback_name};
 
 fn kira_type_of(spec: ForeignTypeSpec) -> Type {
     match spec {
@@ -76,7 +76,25 @@ impl Codegen<'_> {
             .ok_or(LlvmError::internal("a callback not in the table"))?
             .clone();
         result_of(entry.signature().result())?;
-        let target = self.declare_callback_entry(index, entry.signature())?;
+        if self.calls_foreign_directly() {
+            let surface = self.declare_callback_surface(index, entry.signature())?;
+            // A Web module has one image and no loader or libffi closure to
+            // manufacture an address. For an aggregate callback the generated
+            // C entry owns the address; for a scalar callback this declaration
+            // is the LLVM function itself.
+            // SAFETY: `surface` is a function in this live module or a matching
+            // external C entry, and the destination integer is the callback
+            // value representation.
+            return Ok(unsafe {
+                LLVMBuildPtrToInt(
+                    self.builder,
+                    surface.value,
+                    self.types.i64,
+                    c"cb.direct.addr".as_ptr(),
+                )
+            });
+        }
+        let target = self.declare_callback_entry(index)?;
         let descriptor = self.callback_ffi_descriptor(index)?;
         let mut arguments = [descriptor, target.value];
         // SAFETY: both arguments are values in this live module and the runtime
@@ -90,7 +108,21 @@ impl Codegen<'_> {
         let entry = self.program.foreign_callbacks[index].clone();
         let signature = entry.signature();
         let result = result_of(signature.result())?;
-        let target = self.declare_callback_entry(index, signature)?;
+        if self.calls_foreign_directly() {
+            return self.emit_direct_callback(index, &entry, signature, result);
+        }
+        self.emit_closure_callback(index, &entry, signature, result)
+    }
+
+    /// Emits the libffi closure entry used by host and hybrid callbacks.
+    fn emit_closure_callback(
+        &mut self,
+        index: usize,
+        entry: &kira_runtime_abi::ForeignCallback,
+        signature: &ForeignSignature,
+        result: ForeignType,
+    ) -> Result<(), LlvmError> {
+        let target = self.declare_callback_entry(index)?;
         // SAFETY: the entry is a function just declared in this module and the
         // block belongs to its context.
         unsafe {
@@ -126,13 +158,96 @@ impl Codegen<'_> {
         Ok(())
     }
 
-    /// Declares one callback entry with libffi's closure signature.
-    fn declare_callback_entry(
+    /// Emits the true-prototype callback body reached by a generated C entry.
+    ///
+    /// C owns classification of a by-value aggregate. Its entry takes that
+    /// aggregate by value and forwards a pointer to this function, so LLVM
+    /// only sees scalar C values and opaque pointers here. This is the direct
+    /// Web path: the C entry's address is materialized without asking libffi to
+    /// prepare a closure the Web runtime cannot provide.
+    fn emit_direct_callback(
         &mut self,
         index: usize,
+        entry: &kira_runtime_abi::ForeignCallback,
         signature: &ForeignSignature,
-    ) -> Result<Callable, LlvmError> {
-        let name = super::ffi::c_string(&callback_thunk_symbol(index, signature));
+        result: ForeignType,
+    ) -> Result<(), LlvmError> {
+        let name = if callback_needs_entry(signature) {
+            callback_body_name(index)
+        } else {
+            callback_name(index)
+        };
+        let target = self.declare_direct_callback(index, name, signature, result)?;
+        // SAFETY: the target was declared in this module and the block belongs
+        // to this module's live context.
+        unsafe {
+            let block =
+                LLVMAppendBasicBlockInContext(self.context, target.value, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, block);
+        }
+
+        let mut arguments = Vec::with_capacity(signature.parameters().len());
+        for (slot, spec) in signature.parameters().iter().copied().enumerate() {
+            // SAFETY: the declared function has exactly one parameter for each
+            // signature position, and all values belong to this context.
+            let value = unsafe { LLVMGetParam(target.value, slot as u32) };
+            arguments.push(match spec {
+                ForeignTypeSpec::Aggregate(_) => {
+                    // The C entry deliberately passes the address of its own
+                    // by-value copy. Kira callback functions take that address
+                    // as the `RawPtr` representation used by field access.
+                    // SAFETY: `value` is an opaque pointer parameter and the
+                    // Kira representation is the i64 pointer word.
+                    unsafe {
+                        LLVMBuildPtrToInt(
+                            self.builder,
+                            value,
+                            self.types.i64,
+                            c"cb.aggregate.ptr".as_ptr(),
+                        )
+                    }
+                }
+                ForeignTypeSpec::Scalar(ForeignType::CString) => {
+                    // A C string is copied into Kira-owned storage before the
+                    // callback can retain or inspect it, just as in the libffi
+                    // closure entry.
+                    // SAFETY: `value` is the `const char *` C supplied for this
+                    // callback position.
+                    unsafe {
+                        self.call_runtime(self.runtime.str_from_cstr, &mut [value], c"cb.str")
+                    }
+                }
+                ForeignTypeSpec::Scalar(ty) => self.c_value_to_kira(value, ty)?,
+            });
+        }
+
+        let function = entry.function();
+        let produced = if self.engine_of(function as usize) == Execution::Native {
+            self.enter_kira_function(function, &arguments, result)?
+        } else {
+            self.enter_through_runtime(function, signature.parameters(), &arguments, result)?
+        };
+        match produced {
+            Some(value) => {
+                // SAFETY: `value` was converted to the direct body's declared
+                // C result type by `enter_*`.
+                unsafe { LLVMBuildRet(self.builder, value) };
+            }
+            None => {
+                // SAFETY: a void callback body has no result value.
+                unsafe { LLVMBuildRetVoid(self.builder) };
+            }
+        }
+        Ok(())
+    }
+
+    /// Declares one callback entry with libffi's closure signature.
+    fn declare_callback_entry(&mut self, index: usize) -> Result<Callable, LlvmError> {
+        // Host and hybrid modules expose the libffi closure entry under the
+        // address name. A wasm module never calls this declaration for an
+        // aggregate callback; its generated C surface owns that name and the
+        // LLVM body uses `callback_body_name` instead.
+        let name = super::ffi::c_string(&callback_name(index));
         let mut parameter_types = [
             self.types.ptr,
             self.types.ptr,
@@ -156,6 +271,68 @@ impl Codegen<'_> {
             if existing.is_null() {
                 LLVMAddFunction(self.module, name.as_ptr(), ty)
             } else {
+                existing
+            }
+        };
+        Ok(Callable { ty, value })
+    }
+
+    /// Declares the external C entry whose address the Web callback stores.
+    ///
+    /// Its parameter list is the real C prototype: scalar positions retain
+    /// their exact C type and aggregate positions are passed as pointers by
+    /// the generated entry. The C translation unit defines this symbol.
+    fn declare_callback_surface(
+        &mut self,
+        index: usize,
+        signature: &ForeignSignature,
+    ) -> Result<Callable, LlvmError> {
+        let result = result_of(signature.result())?;
+        self.declare_direct_callback(index, callback_name(index), signature, result)
+    }
+
+    /// Declares one direct callback function with scalar values and aggregate
+    /// pointers in its LLVM-visible prototype.
+    fn declare_direct_callback(
+        &mut self,
+        _index: usize,
+        name: String,
+        signature: &ForeignSignature,
+        result: ForeignType,
+    ) -> Result<Callable, LlvmError> {
+        let mut parameters: Vec<LLVMTypeRef> = signature
+            .parameters()
+            .iter()
+            .map(|spec| match spec {
+                ForeignTypeSpec::Aggregate(_) => self.types.ptr,
+                ForeignTypeSpec::Scalar(ty) => self.foreign_c_type(*ty),
+            })
+            .collect();
+        // SAFETY: every type belongs to this module's context, and the
+        // parameter vector outlives the function-type call.
+        let ty = unsafe {
+            LLVMFunctionType(
+                self.foreign_c_type(result),
+                parameters.as_mut_ptr(),
+                parameters.len() as u32,
+                0,
+            )
+        };
+        let name = super::ffi::c_string(&name);
+        // SAFETY: the name and type belong to this live module. Reusing an
+        // existing declaration is what lets callback address materialization
+        // precede body emission.
+        let value = unsafe {
+            let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
+            if existing.is_null() {
+                LLVMAddFunction(self.module, name.as_ptr(), ty)
+            } else {
+                let found = LLVMGlobalGetValueType(existing);
+                if found != ty {
+                    return Err(LlvmError::SymbolCollision {
+                        symbol: name.to_string_lossy().into_owned(),
+                    });
+                }
                 existing
             }
         };

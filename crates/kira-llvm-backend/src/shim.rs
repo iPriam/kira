@@ -309,6 +309,9 @@ fn write_callback_entry(out: &mut String, index: usize, signature: &ForeignSigna
         .map(|(position, spec)| {
             let ty = spec_c_type(*spec);
             let space = if ty.ends_with('*') { "" } else { " " };
+            // This is the C-facing prototype. Keep aggregates by value so the
+            // C compiler, rather than LLVM, classifies every callback argument
+            // for the selected target.
             format!("{ty}{space}p{position}")
         })
         .collect::<Vec<_>>();
