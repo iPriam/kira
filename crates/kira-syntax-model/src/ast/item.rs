@@ -200,8 +200,8 @@ pub enum ConstructKind {
     },
 }
 
-/// One stored member of a [`ConstructDecl`] (`@Required let`, plain `let`, or
-/// `let name: Any = default`).
+/// One stored member of a [`ConstructDecl`] (`@Required let`, plain `let`/`var`,
+/// or `let name: Any = default`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstructField {
     /// The member's name.
@@ -211,6 +211,13 @@ pub struct ConstructField {
     /// Whether the member carried `@Required`: a value every backed declaration
     /// must provide.
     pub required: bool,
+    /// Whether a backed declaration may write through this member.
+    ///
+    /// Construct fields use the same `let`/`var` rule as struct fields. A
+    /// required member is always spelled `@Required let`; a declaration can
+    /// discharge it with a mutable `var` field when its implementation needs
+    /// to update the value through a mutating receiver.
+    pub mutable: bool,
     /// Whether this is a **child slot**: a field whose type was written
     /// `some X` / `[some X]`, or that carried the compat `@Content` annotation.
     ///

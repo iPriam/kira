@@ -351,6 +351,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: true,
+            mutable: false,
             slot,
             ty,
             default,
@@ -372,6 +373,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: false,
+            mutable: false,
             slot: true,
             ty,
             default,
@@ -381,7 +383,7 @@ impl Parser<'_> {
 
     /// Parses a plain or computed `let` construct member, with `let`/`var` at
     /// the cursor.
-    pub(super) fn parse_construct_let(&mut self, body: &mut ConstructBody, _is_var: bool) {
+    pub(super) fn parse_construct_let(&mut self, body: &mut ConstructBody, is_var: bool) {
         let start = self.current().span;
         self.bump(); // `let` / `var`
         let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
@@ -417,6 +419,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: false,
+            mutable: is_var,
             slot,
             ty,
             default,

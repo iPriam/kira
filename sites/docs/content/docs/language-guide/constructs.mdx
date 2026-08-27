@@ -33,13 +33,14 @@ let items: [Any Widget] = [Text(content: "hi"), Divider()]
 for item in items { print(item.announce()) }
 ```
 
-A family becomes a synthesized enum whose variants carry the backed structs, and a call through a family value becomes a tag dispatcher. Every backend runs ordinary enum projection, branching, and direct calls, so nothing here is a backend feature.
+A family becomes a synthesized enum whose variants carry the backed structs, and a call through a family value becomes a tag dispatcher. Every backend runs ordinary enum projection, branching, and direct calls, so nothing here is a backend feature. A method requirement written with `borrow mut self` dispatches through the same tree while rebuilding the selected payload and writing the updated family value back to the caller's `var` binding.
 
 ## Members
 
 | Written | What it is |
 | --- | --- |
-| `let name: T` | A stored member. On a declaration it is a field. |
+| `let name: T` | An immutable stored member. On a declaration it is a field. |
+| `var name: T` | A mutable stored member. A mutating method may write through it. |
 | `let name: T = default` | The same, with a default filling every construction that omits it. |
 | `let name: T { expr }` | A computed member: a zero-argument method read as a property. |
 | `name { … }` | The shorthand for a computed member whose result type the family declares for `name`. |

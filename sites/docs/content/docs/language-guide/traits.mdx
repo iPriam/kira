@@ -51,6 +51,38 @@ for shape in shapes { print(shape.doubled()) }
 
 The representation is the construct family's, generalized rather than reinvented: analysis synthesizes one enum over the types the conformance table answers for, and a member call lowers to the same per-variant tag dispatcher a family call does. Both engines execute ordinary enum projection, branching, and direct calls, with no new wire surface.
 
+A requirement may write `borrow mut self`. A call through the existential then
+requires a `var` binding and writes the updated concrete value back into that
+binding, just like a direct mutating method call:
+
+```kira
+trait Counter {
+    function bump(borrow mut self, by: Int)
+    function value(borrow self) -> Int
+}
+
+struct Meter: Counter {
+    var count: Int
+
+    function bump(borrow mut self, by: Int) {
+        self.count = self.count + by
+        return
+    }
+
+    function value(borrow self) -> Int {
+        return self.count
+    }
+}
+
+var meter: Counter = Meter(count: 1)
+meter.bump(by: 4)
+print(meter.value()) // 5
+```
+
+The conforming method must use the same receiver mode as the requirement;
+otherwise conformance is refused because an existential could not preserve the
+call's write-back contract.
+
 The four compiler-known traits stay refused in a type position (`KSEM295`). They state something about one type's own members or body and none of them classifies values, so there is nothing for a value of "any `Send`" to be. Name the concrete type there.
 
 ## Retroactive Conformance

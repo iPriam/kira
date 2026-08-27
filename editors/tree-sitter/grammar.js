@@ -619,7 +619,14 @@ module.exports = grammar({
       seq(
         field('name', $.identifier),
         token.immediate('!'),
-        field('arguments', $.arguments),
+        field('arguments', $.macro_arguments),
+      ),
+
+    macro_arguments: ($) =>
+      seq(
+        '(',
+        commaSepTrailing(choice($.labeled_argument, $.variable_declaration, $._expression)),
+        ')',
       ),
 
     // ----- statements ----------------------------------------------------

@@ -65,6 +65,7 @@ impl Analyzer<'_> {
                 return Some(self.analyze_construct_declaration_call(
                     ctx,
                     id,
+                    receiver,
                     &name,
                     args,
                     span,
@@ -114,6 +115,7 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         id: StructId,
+        receiver_syntax: ExprId,
         method: &str,
         args: &[CallArg],
         root_span: Span,
@@ -135,9 +137,10 @@ impl Analyzer<'_> {
             // family and dispatch there.
             if let Some(family_id) = self.family_uniform_method(id, method) {
                 let upcast = self.coerce_construct_value(receiver_hir, Some(Type::Enum(family_id)));
-                return self.analyze_construct_family_call(
+                let call = self.analyze_construct_family_call(
                     ctx,
                     upcast,
+                    (!own_member).then_some(receiver_syntax),
                     family_id,
                     method,
                     crate::constructs::ConstructCallContent {
@@ -146,6 +149,7 @@ impl Analyzer<'_> {
                     },
                     method_span,
                 );
+                return call;
             }
             self.emit(
                 method_span,

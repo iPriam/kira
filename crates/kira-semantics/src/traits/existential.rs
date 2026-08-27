@@ -20,7 +20,9 @@
 
 use std::collections::BTreeMap;
 
-use kira_semantics_model::hir::{Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirPlace, HirWriteback};
+use kira_semantics_model::hir::{
+    Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,
+};
 use kira_semantics_model::{EnumId, Execution, OwnershipMode, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::ExprId;
@@ -446,18 +448,18 @@ impl Analyzer<'_> {
         existential_id: EnumId,
         method: &str,
     ) -> HirFunction {
-        let Some((variants, params, result, mutates_self)) =
-            self.trait_existentials
-                .get(trait_name)
-                .and_then(|existing| {
-                    let method = existing.methods.get(method)?;
-                    Some((
-                        existing.variants.clone(),
-                        method.params.clone(),
-                        method.result,
-                        method.mutates_self,
-                    ))
-                })
+        let Some((variants, params, result, mutates_self)) = self
+            .trait_existentials
+            .get(trait_name)
+            .and_then(|existing| {
+                let method = existing.methods.get(method)?;
+                Some((
+                    existing.variants.clone(),
+                    method.params.clone(),
+                    method.result,
+                    method.mutates_self,
+                ))
+            })
         else {
             // The member row itself vanished mid-build, so its receiver mode
             // is unknowable; the placeholder is never reached by a call.

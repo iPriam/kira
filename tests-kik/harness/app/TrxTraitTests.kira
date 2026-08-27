@@ -108,6 +108,22 @@ struct TrxCounter {
     }
 }
 
+trait TrxMutable {
+    function bump(borrow mut self, by: Int)
+    function value(borrow self) -> Int
+}
+
+struct TrxTraitCounter: TrxMutable {
+    var ticks: Int
+    function bump(borrow mut self, by: Int) {
+        self.ticks = self.ticks + by
+        return
+    }
+    function value(borrow self) -> Int {
+        return self.ticks
+    }
+}
+
 function trxSum(value: borrow TrxLeaf) -> Int {
     return value.score() + value.doubled()
 }
@@ -209,6 +225,16 @@ construct TrxAMutableReceiverWritesBackToTheCaller() extends Test {
         return counter.ticks
     }
     expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+}
+
+construct TrxAMutableTraitExistentialWritesBackToTheCaller() extends Test {
+    test {
+        var counter: TrxMutable = TrxTraitCounter(ticks: 3)
+        counter.bump(by: 4)
+        counter.bump(by: 2)
+        return counter.value()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
 }
 
 // Churn: a heap-owning conforming type built and released in a loop, so a

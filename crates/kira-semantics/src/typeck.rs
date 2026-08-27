@@ -610,7 +610,7 @@ impl Analyzer<'_> {
                     && self.construct_family_computed_member(family_id, &name)
                 {
                     return self.analyze_construct_family_property(
-                        ctx, base_hir, family_id, &name, field_span,
+                        ctx, base_hir, base, family_id, &name, field_span,
                     );
                 }
                 // A value member of the family — `@Required let` or typed

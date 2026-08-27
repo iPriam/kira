@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use kira_semantics_model::{OwnershipMode, StructId, Type};
+use kira_semantics_model::{StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 
@@ -356,10 +356,7 @@ impl Analyzer<'_> {
         // receiver exactly when the requirement says it may, so an
         // implementation disagreeing here would lose or invent writes on every
         // call that did not name the type.
-        let implements_mutates = self
-            .param_ownership(matched)
-            .first()
-            .is_some_and(|mode| *mode == OwnershipMode::BorrowMut);
+        let implements_mutates = self.mutates_self(*matched);
         if implements_mutates != shape.receiver_mutates {
             let (written, wanted) = match implements_mutates {
                 true => ("`borrow mut self`", "`borrow self`"),

@@ -6,7 +6,7 @@
 //! with one is a declaration whose parameters are its construction inputs, and
 //! a construct without one is the template itself.
 //!
-//! Both share a member body — stored `let` members, computed block-bodied
+//! Both share a member body — stored `let`/`var` members, computed block-bodied
 //! members (`let node: Any { expr }`), `function` members, and the bodyless
 //! `@Required function f(…) -> T` requirement — so they share a parser. A family
 //! adds nothing to the header beyond its name; a backed declaration adds a
@@ -399,16 +399,7 @@ impl Parser<'_> {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_construct_member(body),
             TokenKind::Let => self.parse_construct_let(body, false),
-            TokenKind::Var => {
-                let span = self.current().span;
-                self.error(
-                    span,
-                    "KPAR058",
-                    "a construct member is declared with `let`: a construct's fields \
-                     are its construction inputs, not reassignable state",
-                );
-                self.parse_construct_let(body, true);
-            }
+            TokenKind::Var => self.parse_construct_let(body, true),
             TokenKind::Function => {
                 if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
                     body.methods.push(ConstructMethod {
