@@ -29,7 +29,7 @@ print(step(base: 1, tag: 9)) // 11, a labeled call omits the middle default
 
 A positional call fills omitted **trailing** arguments; a labeled call may omit any defaulted parameter, middle ones included. Every call path fills the same way: a free function, a method, and a construct-family modifier alike. A parameter with no default is still mandatory, and omitting it is `KSEM062`.
 
-The default is resolved **once**, in the file the function was declared in, so it may name that file's helpers regardless of where the call is written, and the resulting value is reused at every call that omits the argument. Two defaults that fill each other through the call graph have no finite value and are refused with `KSEM240`.
+The default's **expression** is resolved once, in the file the function was declared in, so it may name that file's helpers regardless of where the call is written. That resolved expression is then **evaluated on every call** that omits the argument, exactly as writing the argument out at each call site would be: a default that calls a function calls it once per call, not once per program. Two defaults that fill each other through the call graph have no finite value and are refused with `KSEM240`.
 
 ## Ownership at the Call Site
 
@@ -96,14 +96,31 @@ A closure lifted out of a method has no `self`, so a bare field name in its body
 
 ## Floating-Point Primitives
 
-`sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, and `abs` are free functions the compiler answers directly. Each takes a `Float` and answers one.
+These are free functions the compiler answers directly. Every one takes `Float` operands and answers a `Float`.
+
+| Group | Names |
+| --- | --- |
+| Roots and powers | `sqrt`, `pow`, `hypot` |
+| Exponential | `exp`, `exp2` |
+| Logarithmic | `log`, `log2`, `log10` |
+| Trigonometric | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` |
+| Hyperbolic | `sinh`, `cosh`, `tanh` |
+| Rounding | `floor`, `ceil`, `round`, `trunc` |
+| Selection and sign | `min`, `max`, `abs`, `copysign` |
+| Remainder | `fmod` |
 
 ```kira
 let hypotenuse = sqrt(a * a + b * b)
 let wave = sin(phase) * amplitude
+let encoded = 1.055 * pow(channel, 1.0 / 2.4) - 0.055   // an sRGB transfer curve
+let angle = atan2(dy, dx)
 ```
 
+`round` takes halves away from zero, `trunc` drops the fraction toward zero, and `fmod` is what `%` means on floats — the remainder truncated toward zero, so its sign follows the dividend.
+
 They are primitives rather than library code because every target already has them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language whose users reach a square root through eight Newton iterations has an approximation where it should have an answer. `sqrt(2.0)` is exact to the last bit.
+
+They travel as one `MathOp` instruction told apart by an operand byte, so a new operation costs a number in that table and nothing in the opcode table.
 
 A program may still define its own `sqrt`: the primitive answers only when nothing else does.
 

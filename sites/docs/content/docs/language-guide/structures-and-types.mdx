@@ -41,7 +41,7 @@ Defaults that recursively construct each other have no finite value and are refu
 
 ### Defaults Are a Frontend Concern
 
-After function signatures exist, analysis resolves every field default once, in the file the field was declared in. Its qualified names therefore use that file's imports, a bare named function becomes a typed function value there, and a genuinely undefined name is reported even when no construction omits the field. Local scope stays empty, so a default cannot capture a construction site's bindings. Every construction reuses the resolved expression, with one initializer per field in declaration order.
+After function signatures exist, analysis resolves every field default once, in the file the field was declared in. Its qualified names therefore use that file's imports, a bare named function becomes a typed function value there, and a genuinely undefined name is reported even when no construction omits the field. Local scope stays empty, so a default cannot capture a construction site's bindings. Every construction re-runs that resolved expression, with one initializer per field in declaration order: a default that calls a function calls it once per construction, not once per program.
 
 ### Printing
 
