@@ -1,14 +1,14 @@
 //! Expected-type upcasts and synthesized dispatch for construct-family values.
 
 use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,
+    Callee, FuncId, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirWriteback,
 };
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
 
-use super::ConstructVariant;
 use crate::analyze::{Analyzer, FnCtx, InitContent};
+use crate::place::PlacePurpose;
 
 /// Written argument and child lists of one construct-family call.
 pub(crate) struct ConstructCallContent<'a> {
@@ -29,20 +29,8 @@ struct FamilyMethodShape {
     ///
     /// [`ConstructFamilyMethod::constrained_result`]: super::ConstructFamilyMethod::constrained_result
     result: Option<Type>,
-}
-
-/// The pieces one dispatcher branch forwards to a concrete method.
-struct DispatchArm<'locals> {
-    target: FuncId,
-    /// What the concrete method returns, which a child family may have made
-    /// more specific than the dispatcher's own result.
-    target_result: Type,
-    receiver: LocalId,
-    family: EnumId,
-    variant: ConstructVariant,
-    param_locals: &'locals [LocalId],
-    params: &'locals [Type],
-    result: Type,
+    /// Whether the method's receiver is written `borrow mut self`.
+    receiver_mutates: bool,
 }
 
 /// The family method a dispatcher is being generated for.
@@ -64,6 +52,13 @@ pub(crate) struct DispatchMethod<'family> {
     pub(crate) params: &'family [Type],
     /// The result every generated function presents.
     pub(crate) result: Type,
+    /// Whether the method's requirement writes `borrow mut self`.
+    ///
+    /// Every generated function — root, tree node, and arm — carries the flag,
+    /// so each frame's caller hands it the receiver by reference and a call
+    /// that mutates reaches the original binding. Read-only dispatch leaves
+    /// every frame taking its receiver by value, exactly as before.
+    pub(crate) mutates_self: bool,
 }
 
 impl Analyzer<'_> {
@@ -131,10 +126,15 @@ impl Analyzer<'_> {
     }
 
     /// Type-checks a method call on a family value.
+    ///
+    /// A method whose requirement writes `borrow mut self` dispatches
+    /// mutating: the call site records a receiver writeback, so the value the
+    /// chosen variant mutated reaches the caller's binding.
     pub(crate) fn analyze_construct_family_call(
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
+        receiver_syntax: Option<ExprId>,
         family_id: EnumId,
         method: &str,
         content: ConstructCallContent<'_>,
@@ -160,6 +160,7 @@ impl Analyzer<'_> {
             ownership,
             defaults,
             result,
+            receiver_mutates,
         } = shape;
         // A requirement written without `-> T` says nothing about what an
         // implementation returns, so there is no one type this call could have.
@@ -281,11 +282,39 @@ impl Analyzer<'_> {
                 values[index + 1] = self.coerce_into(value, expected);
             }
         }
+        let writebacks = if receiver_mutates {
+            match receiver_syntax {
+                Some(receiver_syntax) => {
+                    match self.resolve_place(ctx, receiver_syntax, PlacePurpose::MutCall) {
+                        Some((place, _)) => vec![HirWriteback { param: 0, place }],
+                        None => return self.program.exprs.alloc(HirExpr::Error),
+                    }
+                }
+                // A qualified call on a declaration can be the declaration's
+                // own receiver (`Family.method()` inside the declaration). Its
+                // analyzed receiver is the hidden `self` local, so it still
+                // has a real writeback place even though there is no source
+                // expression to resolve. An out-of-context qualified call
+                // supplies its syntax above and is checked as a temporary.
+                None => match self.program.expr(receiver) {
+                    HirExpr::Local { local, .. } => vec![HirWriteback {
+                        param: 0,
+                        place: HirPlace {
+                            local: *local,
+                            path: Vec::new(),
+                        },
+                    }],
+                    _ => return self.program.exprs.alloc(HirExpr::Error),
+                },
+            }
+        } else {
+            Vec::new()
+        };
         self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(dispatcher),
             args: values,
             ty: result,
-            writebacks: Vec::new(),
+            writebacks,
         })
     }
 
@@ -294,6 +323,7 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
+        receiver_syntax: ExprId,
         family_id: EnumId,
         method: &str,
         span: Span,
@@ -301,6 +331,7 @@ impl Analyzer<'_> {
         self.analyze_construct_family_call(
             ctx,
             receiver,
+            Some(receiver_syntax),
             family_id,
             method,
             ConstructCallContent {
@@ -352,6 +383,10 @@ impl Analyzer<'_> {
             ownership: method.ownership.clone(),
             defaults: method.defaults.clone(),
             result: method.constrained_result(),
+            receiver_mutates: method
+                .function
+                .receiver
+                .is_some_and(|receiver| receiver.mutable),
         })
     }
 
@@ -412,19 +447,22 @@ impl Analyzer<'_> {
             // is what guarantees that surface still satisfies this one. Checking
             // it again here would compare it against the parent's un-narrowed
             // signature and report a conformance failure that is not one.
-            let Some(struct_id) = variant.struct_id() else {
+            let Some(variant_struct_id) = variant.struct_id() else {
                 continue;
             };
             let declared_here = self
                 .constructs
-                .get(&struct_id)
+                .get(&variant_struct_id)
                 .and_then(|info| info.families.first())
                 .is_some_and(|(declaring, _)| *declaring == enum_id);
             if !declared_here {
                 continue;
             }
             self.source = source;
-            let owner = self.program.types.type_name(variant.ty);
+            let owner = self
+                .program
+                .types
+                .type_name(Type::Struct(variant_struct_id));
             let qualified = format!("{owner}.{method}");
             let Some((id, actual_params, actual_result)) = self.lookup_function(&qualified) else {
                 self.emit(
@@ -445,12 +483,24 @@ impl Analyzer<'_> {
                     format!("`{qualified}` does not match the signature of `{family}.{method}`"),
                 );
             }
-            if self.mutates_self(id) {
+            let implements_mutates = self.mutates_self(id);
+            let requires_mutates = self
+                .construct_families
+                .get(&family)
+                .and_then(|info| info.methods.get(&method))
+                .is_some_and(|method| {
+                    method
+                        .function
+                        .receiver
+                        .is_some_and(|receiver| receiver.mutable)
+                });
+            if implements_mutates != requires_mutates {
                 self.emit(
-                    span,
-                    "KSEM236",
+                    self.sigs[id.0 as usize].name_span,
+                    "KSEM235",
                     format!(
-                        "`{qualified}` mutates its receiver and cannot dispatch through `Any {family}` yet"
+                        "`{qualified}` has a receiver mode different from `{family}.{method}`; \
+                         both must use the same `borrow mut self` declaration"
                     ),
                 );
             }
@@ -486,7 +536,7 @@ impl Analyzer<'_> {
     }
 
     fn construct_dispatcher_body(&mut self, family: &str, method: &str) -> HirFunction {
-        let Some((enum_id, variants, params, result)) =
+        let Some((enum_id, variants, params, result, mutates_self)) =
             self.construct_families.get(family).and_then(|info| {
                 let method = info.methods.get(method)?;
                 Some((
@@ -494,6 +544,10 @@ impl Analyzer<'_> {
                     info.variants.clone(),
                     method.params.clone(),
                     method.result,
+                    method
+                        .function
+                        .receiver
+                        .is_some_and(|receiver| receiver.mutable),
                 ))
             })
         else {
@@ -509,6 +563,7 @@ impl Analyzer<'_> {
             family_id: enum_id,
             params: &params,
             result,
+            mutates_self,
         };
         let mut arms = Vec::with_capacity(variants.len());
         for variant in variants.iter().copied() {
@@ -532,7 +587,15 @@ impl Analyzer<'_> {
             // hybrid loader checks exactly that and refuses the program —
             // "takes N parameters in the manifest and 0 in the bytecode half" —
             // for a family none of whose declarations implement the member.
-            ctx.declare_hidden_as(Type::Enum(enum_id), false, OwnershipMode::BorrowRead);
+            ctx.declare_hidden_as(
+                Type::Enum(enum_id),
+                mutates_self,
+                if mutates_self {
+                    OwnershipMode::BorrowMut
+                } else {
+                    OwnershipMode::BorrowRead
+                },
+            );
             for &ty in &params {
                 ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead);
             }
@@ -555,7 +618,7 @@ impl Analyzer<'_> {
                 is_main: false,
                 is_async: false,
                 execution: kira_semantics_model::Execution::Inherited,
-                mutates_self: false,
+                mutates_self,
                 name_span: Span::new(0, 0),
             };
         }
@@ -577,7 +640,7 @@ impl Analyzer<'_> {
                 is_main: false,
                 is_async: false,
                 execution: kira_semantics_model::Execution::Inherited,
-                mutates_self: false,
+                mutates_self,
                 name_span: Span::new(0, 0),
             };
         };
@@ -590,297 +653,6 @@ impl Analyzer<'_> {
             format!("Any {family}.{method}$dispatch"),
             &mut tree_number,
         )
-    }
-
-    /// Builds one node in a balanced tag selector tree.
-    pub(crate) fn construct_dispatch_tree_function(
-        &mut self,
-        dispatch: DispatchMethod<'_>,
-        arms: &[(ConstructVariant, FuncId)],
-        fallback: FuncId,
-        name: String,
-        tree_number: &mut u32,
-    ) -> HirFunction {
-        let DispatchMethod {
-            family,
-            method,
-            family_id,
-            params,
-            result,
-        } = dispatch;
-        let mut ctx = FnCtx::new(result);
-        // Dispatch only inspects the erased value and forwards the call.  Keep
-        // the caller's value borrowed so every node can lend the same storage;
-        // making this an owned parameter would clone/drop the full enum at
-        // every branch in a native executable.
-        let receiver =
-            ctx.declare_hidden_as(Type::Enum(family_id), false, OwnershipMode::BorrowRead);
-        let param_locals: Vec<_> = params
-            .iter()
-            .map(|&ty| ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead))
-            .collect();
-
-        let body = if arms.len() == 1 {
-            let (variant, arm) = arms[0];
-            let value = self.program.exprs.alloc(HirExpr::Local {
-                local: receiver,
-                ty: Type::Enum(family_id),
-            });
-            let tag = self.program.exprs.alloc(HirExpr::EnumTag { value });
-            let wanted = self
-                .program
-                .exprs
-                .alloc(HirExpr::Int(i64::from(variant.tag)));
-            let cond = self.program.exprs.alloc(HirExpr::Binary {
-                op: HirBinaryOp::EqInt,
-                lhs: tag,
-                rhs: wanted,
-                ty: Type::Bool,
-            });
-            let then_body = self.construct_dispatch_function_call(
-                arm,
-                receiver,
-                family_id,
-                &param_locals,
-                params,
-                result,
-            );
-            let else_body = if arm == fallback {
-                then_body.clone()
-            } else {
-                self.construct_dispatch_function_call(
-                    fallback,
-                    receiver,
-                    family_id,
-                    &param_locals,
-                    params,
-                    result,
-                )
-            };
-            vec![self.program.stmts.alloc(HirStmt::If {
-                cond,
-                then_body,
-                else_body,
-            })]
-        } else {
-            let middle = arms.len() / 2;
-            let pivot = arms[middle].0.tag;
-            let left_id = self.reserve_synth();
-            let left_number = *tree_number;
-            *tree_number += 1;
-            let left = self.construct_dispatch_tree_function(
-                dispatch,
-                &arms[..middle],
-                fallback,
-                format!("Any {family}.{method}$dispatch_tree{left_number}"),
-                tree_number,
-            );
-            self.fill_synth(left_id, left);
-            let right_id = self.reserve_synth();
-            let right_number = *tree_number;
-            *tree_number += 1;
-            let right = self.construct_dispatch_tree_function(
-                dispatch,
-                &arms[middle..],
-                fallback,
-                format!("Any {family}.{method}$dispatch_tree{right_number}"),
-                tree_number,
-            );
-            self.fill_synth(right_id, right);
-
-            let value = self.program.exprs.alloc(HirExpr::Local {
-                local: receiver,
-                ty: Type::Enum(family_id),
-            });
-            let tag = self.program.exprs.alloc(HirExpr::EnumTag { value });
-            let pivot = self.program.exprs.alloc(HirExpr::Int(i64::from(pivot)));
-            let cond = self.program.exprs.alloc(HirExpr::Binary {
-                op: HirBinaryOp::LtInt,
-                lhs: tag,
-                rhs: pivot,
-                ty: Type::Bool,
-            });
-            let then_body = self.construct_dispatch_function_call(
-                left_id,
-                receiver,
-                family_id,
-                &param_locals,
-                params,
-                result,
-            );
-            let else_body = self.construct_dispatch_function_call(
-                right_id,
-                receiver,
-                family_id,
-                &param_locals,
-                params,
-                result,
-            );
-            vec![self.program.stmts.alloc(HirStmt::If {
-                cond,
-                then_body,
-                else_body,
-            })]
-        };
-        HirFunction {
-            name,
-            param_count: 1 + params.len() as u32,
-            return_type: result,
-            locals: ctx.locals,
-            body,
-            is_main: false,
-            is_async: false,
-            execution: kira_semantics_model::Execution::Inherited,
-            mutates_self: false,
-            name_span: Span::new(0, 0),
-        }
-    }
-
-    /// Builds one concrete implementation arm in its own native function.
-    ///
-    /// The family dispatcher stays as a small tag test, while this helper owns
-    /// the payload extraction and the call into the concrete implementation.
-    /// The VM sees the same HIR operation sequence and therefore keeps the
-    /// existing semantics; native code simply gets a real call boundary for
-    /// stack-frame sizing.
-    pub(crate) fn construct_dispatch_arm_function(
-        &mut self,
-        dispatch: DispatchMethod<'_>,
-        variant: ConstructVariant,
-        target: FuncId,
-        target_result: Type,
-    ) -> HirFunction {
-        let DispatchMethod {
-            family,
-            method,
-            family_id,
-            params,
-            result,
-        } = dispatch;
-        let mut ctx = FnCtx::new(result);
-        let receiver =
-            ctx.declare_hidden_as(Type::Enum(family_id), false, OwnershipMode::BorrowRead);
-        let param_locals: Vec<_> = params
-            .iter()
-            .map(|&ty| ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead))
-            .collect();
-        let body = self.construct_dispatch_arm(DispatchArm {
-            target,
-            target_result,
-            receiver,
-            family: family_id,
-            variant,
-            param_locals: &param_locals,
-            params,
-            result,
-        });
-        HirFunction {
-            name: format!("Any {family}.{method}$dispatch_arm{}", variant.tag),
-            param_count: 1 + params.len() as u32,
-            return_type: result,
-            locals: ctx.locals,
-            body,
-            is_main: false,
-            is_async: false,
-            execution: kira_semantics_model::Execution::Inherited,
-            mutates_self: false,
-            name_span: Span::new(0, 0),
-        }
-    }
-
-    /// Emits the small call/return body for one dispatcher arm.
-    fn construct_dispatch_function_call(
-        &mut self,
-        callee: FuncId,
-        receiver: LocalId,
-        family: EnumId,
-        param_locals: &[LocalId],
-        params: &[Type],
-        result: Type,
-    ) -> Vec<HirStmtId> {
-        let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
-            local: receiver,
-            ty: Type::Enum(family),
-        })];
-        for (&local, &ty) in param_locals.iter().zip(params.iter()) {
-            args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
-        }
-        let call = self.program.exprs.alloc(HirExpr::Call {
-            callee: Callee::User(callee),
-            args,
-            ty: result,
-            writebacks: Vec::new(),
-        });
-        if result == Type::Void {
-            vec![
-                self.program.stmts.alloc(HirStmt::Expr { expr: call }),
-                self.program.stmts.alloc(HirStmt::Return { value: None }),
-            ]
-        } else {
-            vec![
-                self.program
-                    .stmts
-                    .alloc(HirStmt::Return { value: Some(call) }),
-            ]
-        }
-    }
-
-    fn construct_method_target(
-        &self,
-        variant: ConstructVariant,
-        method: &str,
-    ) -> Option<(FuncId, Type)> {
-        let owner = self.program.types.type_name(variant.ty);
-        self.lookup_function(&format!("{owner}.{method}"))
-            .map(|(id, _, result)| (id, result))
-    }
-
-    fn construct_dispatch_arm(&mut self, arm: DispatchArm<'_>) -> Vec<HirStmtId> {
-        let DispatchArm {
-            target,
-            target_result,
-            receiver,
-            family,
-            variant,
-            param_locals,
-            params,
-            result,
-        } = arm;
-        let family_value = self.program.exprs.alloc(HirExpr::Local {
-            local: receiver,
-            ty: Type::Enum(family),
-        });
-        let concrete_ty = variant.ty;
-        let concrete = self.program.exprs.alloc(HirExpr::EnumPayload {
-            value: family_value,
-            ty: concrete_ty,
-        });
-        let mut args = vec![concrete];
-        for (&local, &ty) in param_locals.iter().zip(params.iter()) {
-            args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
-        }
-        let call = self.program.exprs.alloc(HirExpr::Call {
-            callee: Callee::User(target),
-            args,
-            ty: target_result,
-            writebacks: Vec::new(),
-        });
-        // A child family may return something more specific than the family
-        // this dispatcher belongs to promised, so the arm carries its answer up
-        // to the declared result rather than relabelling it.
-        let call = self.coerce_into(call, result);
-        if result == Type::Void {
-            vec![
-                self.program.stmts.alloc(HirStmt::Expr { expr: call }),
-                self.program.stmts.alloc(HirStmt::Return { value: None }),
-            ]
-        } else {
-            vec![
-                self.program
-                    .stmts
-                    .alloc(HirStmt::Return { value: Some(call) }),
-            ]
-        }
     }
 
     pub(super) fn empty_construct_dispatcher(&self) -> HirFunction {

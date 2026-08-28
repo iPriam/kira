@@ -41,6 +41,12 @@ pub(crate) struct RequiredShape {
     pub(crate) result: Type,
     /// Whether the member has no body, so the type must present one itself.
     pub(crate) required: bool,
+    /// Whether the receiver is written `borrow mut self`.
+    ///
+    /// Part of the dispatch-facing signature: a member dispatched through an
+    /// existential writes back through its receiver exactly when this holds,
+    /// so an implementation disagreeing here cannot be reached through one.
+    pub(crate) receiver_mutates: bool,
 }
 
 impl Analyzer<'_> {
@@ -245,6 +251,7 @@ impl Analyzer<'_> {
                     .return_type
                     .map_or(Type::Void, |written| self.resolve_type_ref(written)),
                 required,
+                receiver_mutates: function.receiver.is_some_and(|receiver| receiver.mutable),
             })
             .collect();
         self.source = here;
@@ -342,6 +349,29 @@ impl Analyzer<'_> {
                 format!(
                     "`{type_name}.{}` returns `{written}`, but `{trait_name}` requires \
                      `{wanted}`",
+                    shape.name
+                ),
+            );
+            self.source = source;
+        }
+        // The receiver's mode is part of the dispatch-facing signature: a
+        // member called through the existential writes back through its
+        // receiver exactly when the requirement says it may, so an
+        // implementation disagreeing here would lose or invent writes on every
+        // call that did not name the type.
+        let implements_mutates = self.mutates_self(*matched);
+        if implements_mutates != shape.receiver_mutates {
+            let (written, wanted) = match implements_mutates {
+                true => ("`borrow mut self`", "`borrow self`"),
+                false => ("`borrow self`", "`borrow mut self`"),
+            };
+            self.source = declared_source;
+            self.emit(
+                name_span,
+                "KSEM293",
+                format!(
+                    "`{type_name}.{}` takes {written}, but `{trait_name}` requires {wanted}; \
+                     dispatch through `{trait_name}` cannot reach them both",
                     shape.name
                 ),
             );

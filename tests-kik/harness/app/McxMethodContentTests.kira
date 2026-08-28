@@ -110,6 +110,28 @@ construct McxAForInsideTheBlockProducesChildren() extends Test {
     expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
 }
 
+// A family requirement can mutate its erased receiver. The payload is updated
+// by the selected declaration and remains visible through the family field.
+construct McxMutableNode {
+    @Required let total: Int
+    @Required function bump(borrow mut self, by: Int) -> Int
+}
+
+construct McxMutableLeaf(total: Int) extends McxMutableNode {
+    function bump(borrow mut self, by: Int) -> Int {
+        self = McxMutableLeaf(total: self.total + by)
+        return self.total
+    }
+}
+
+construct McxAMutableFamilyDispatchWritesBackThePayload() extends Test {
+    test {
+        var node: some McxMutableNode = McxMutableLeaf(total: 5)
+        return node.bump(by: 6)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+}
+
 function mcxSection() -> Int {
     var checksum = 0
     checksum = checksum + McxLeaf(n: 3).paired { McxLeaf(n: 4) }.total()

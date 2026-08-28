@@ -26,6 +26,8 @@ mod backed;
 mod collection;
 mod construction;
 mod dispatch;
+mod dispatch_arm;
+mod dispatch_tree;
 mod extend;
 mod inferred;
 mod inherit;
@@ -201,6 +203,7 @@ pub(crate) struct ConstructFamilyStoredField {
     pub(crate) default: Option<ExprId>,
     pub(crate) source: SourceId,
     pub(crate) slot: bool,
+    pub(crate) mutable: bool,
 }
 
 /// One construct family's type, conformance surface, and concrete variants.

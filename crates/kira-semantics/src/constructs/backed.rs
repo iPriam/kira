@@ -66,7 +66,7 @@ impl Analyzer<'_> {
             fields.push(FieldDef {
                 name: field_name,
                 ty,
-                mutable: false,
+                mutable: field.mutable,
             });
             defaults.push(
                 field
@@ -189,7 +189,7 @@ impl Analyzer<'_> {
                     fields.push(FieldDef {
                         name: family_field.name.clone(),
                         ty,
-                        mutable: false,
+                        mutable: family_field.mutable,
                     });
                     defaults.push(
                         family_field

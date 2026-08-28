@@ -234,7 +234,7 @@ impl<'a> Analyzer<'a> {
         // Snapshot the modifier's resolved shape and syntax before analyzing its
         // body: the immutable read of `construct_families` cannot overlap the
         // `&mut self` the body analysis needs.
-        let Some((function, source, params, ownership, result)) = self
+        let Some((function, source, params, ownership, result, mutates_self)) = self
             .construct_families
             .get(family)
             .and_then(|info| info.methods.get(method))
@@ -245,6 +245,10 @@ impl<'a> Analyzer<'a> {
                     entry.params.clone(),
                     entry.ownership.clone(),
                     entry.result,
+                    entry
+                        .function
+                        .receiver
+                        .is_some_and(|receiver| receiver.mutable),
                 )
             })
         else {
@@ -254,14 +258,18 @@ impl<'a> Analyzer<'a> {
         self.source = source;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(result);
-        // Local 0 is the receiver `self`, the family value. It is read as a
-        // whole value (wrapped into a layer's child slot), never mutated, so it
-        // is an immutable borrow — the family enum has no fields to write.
+        // Local 0 is the receiver `self`, the family value. A read-only
+        // modifier lends it; a `borrow mut self` modifier receives the family
+        // storage so its updated enum reaches the caller.
         ctx.declare_param(
             "self",
             Type::Enum(enum_id),
-            false,
-            OwnershipMode::BorrowRead,
+            mutates_self,
+            if mutates_self {
+                OwnershipMode::BorrowMut
+            } else {
+                OwnershipMode::BorrowRead
+            },
         );
         for (index, param) in function.params.iter().enumerate() {
             let ty = params.get(index).copied().unwrap_or(Type::Error);
@@ -296,7 +304,7 @@ impl<'a> Analyzer<'a> {
             // function in the native half. Hardcoding `Inherited` here is what
             // made the annotation vanish between the source and the split.
             execution: function.execution,
-            mutates_self: false,
+            mutates_self,
             name_span: function.name_span,
         }
     }

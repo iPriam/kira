@@ -20,7 +20,8 @@ A parameter list with no `extends` is `KPAR077`. A declaration naming two famili
 
 | Written | Kind |
 | --- | --- |
-| `let name: T` | Stored member. |
+| `let name: T` | Immutable stored member. |
+| `var name: T` | Mutable stored member. |
 | `let name: T = default` | Stored member with a default. |
 | `let name: T { expr }` | Computed member: a zero-argument method read as a property. |
 | `name { … }` | Shorthand for the computed member the family declares under `name`. |
@@ -87,4 +88,4 @@ One shared body whose receiver is the family value, returning the family type. A
 
 ## Lowering
 
-A family becomes a synthesized enum whose variants carry the backed structs. A method call through a family value becomes a tag dispatcher; a `@Required let` read becomes a per-variant dispatcher whose arms differ; a modifier becomes one function taking the family value as its receiver. Every backend runs ordinary enum projection, branching, and direct calls, so constructs introduce no IR node, no opcode, and no wire format.
+A family becomes a synthesized enum whose variants carry the backed structs. A method call through a family value becomes a tag dispatcher; a `@Required let` read becomes a per-variant dispatcher whose arms differ; a modifier becomes one function taking the family value as its receiver. A `borrow mut self` requirement carries the updated selected payload back through the dispatcher to the caller's mutable place. Every backend runs ordinary enum projection, branching, and direct calls, so constructs introduce no IR node, no opcode, and no wire format.

@@ -154,6 +154,7 @@ impl<'a> Analyzer<'a> {
                     default: field.default,
                     source,
                     slot: field.slot,
+                    mutable: field.mutable,
                 })
                 .collect();
             self.construct_family_names.insert(enum_id, name.clone());
