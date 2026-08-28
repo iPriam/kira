@@ -6,11 +6,9 @@
 // whose lengths are summed. Every result folds into one deterministic Int
 // checksum so any divergence across vm/llvm/hybrid changes the printed value.
 //
-// NOTE (compiler bug worked around here): reading a property off the *temporary*
-// returned by a String-returning call — e.g. `strPick(i).count` — fails to lower
-// (KIR001, "a lowering obligation was left undischarged"). Binding the result to
-// a local first (`let s = strPick(i)  ... s.count`) lowers correctly on every
-// backend, so this module always binds String call results before measuring them.
+// String members may be read directly from a temporary returned by a call. The
+// direct form appears below beside the bound form so all backends keep the same
+// ownership and reclamation behavior for both expression shapes.
 
 // Consume a string by value (requires `move` at the call site) and report length.
 function strLen(s: String) -> Int {
@@ -126,12 +124,16 @@ function strSection() -> Int {
     let consumed = "consumed"
     acc = acc + strLen(move consumed)  // 8
 
-    // 3. Returning strings from a function; bind the result before measuring.
+    // 3. Returning strings from a function; both direct and bound member reads.
     var pickTotal = 0
     var i = 0
     while i < 40 {
-        let s = strPick(i)
-        pickTotal = pickTotal + s.count
+        if i == 0 {
+            pickTotal = pickTotal + strPick(i).count
+        } else {
+            let s = strPick(i)
+            pickTotal = pickTotal + s.count
+        }
         i = i + 1
     }
     // Per period of 5: 5+2+5+1+0 = 13; 40/5 = 8 periods -> 104.
