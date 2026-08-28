@@ -71,7 +71,10 @@ impl Parser<'_> {
             }
             "Consuming" => {
                 if self.at(TokenKind::Function) {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut function) =
+                        self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut function);
                         body.methods.push(ConstructMethod {
                             computed: false,
                             lifecycle: false,
@@ -151,6 +154,7 @@ impl Parser<'_> {
         body.inits.push(Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
             is_async: false,
             export: None,
@@ -312,6 +316,7 @@ impl Parser<'_> {
             function: Function {
                 name,
                 name_span,
+                type_params: Vec::new(),
                 is_main: false,
                 is_async: false,
                 export: None,
@@ -517,6 +522,7 @@ impl Parser<'_> {
         Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
             is_async: false,
             foreign: None,
@@ -540,6 +546,7 @@ impl Parser<'_> {
         Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
             is_async: false,
             foreign: None,

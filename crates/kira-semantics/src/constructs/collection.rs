@@ -427,6 +427,7 @@ impl<'a> Analyzer<'a> {
                 initializes: Some(id),
                 function: init,
                 source,
+                type_bindings: Vec::new(),
             });
         }
         let mut own = HashSet::new();
@@ -444,6 +445,7 @@ impl<'a> Analyzer<'a> {
                 initializes: None,
                 function: &method.function,
                 source,
+                type_bindings: Vec::new(),
             });
         }
         let family_name = self.interner.resolve(*family);
@@ -467,6 +469,7 @@ impl<'a> Analyzer<'a> {
                     initializes: None,
                     function: method.function,
                     source: method.source,
+                    type_bindings: Vec::new(),
                 });
             }
         }

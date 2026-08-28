@@ -1,14 +1,10 @@
 //! Type-parameter lists on a declaration and type-argument lists on a use.
 //!
-//! # Why only an enum takes type parameters
-//!
-//! The reference corpus contains exactly one generic declaration —
-//! `enum Result<Value, Failure>` — and every other declaration form is written
-//! bare. So a `<` after a `struct`, `class`, or `function` name is refused here
-//! by name rather than parsed into surface nothing pins: guessing what a
-//! generic function means would put a design decision in the parser that no
-//! program has ever asked for. The list is still consumed so the rest of the
-//! declaration parses and the file reports one mistake instead of a cascade.
+//! Type parameters are shared by every declaration that owns a type-level
+//! signature: enums, structs, classes, functions, and traits. A declaration
+//! remains a template until semantics substitutes a complete argument list, so
+//! the parser records the names and bounds without trying to decide what a
+//! concrete type means.
 //!
 //! A parameter may carry a trait bound (`Value: Scored + Send`). The bound is
 //! recorded on the parameter and discharged by semantics when an instantiation
@@ -26,7 +22,7 @@ use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::Token;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{TraitRef, TypeParamDecl, TypeRef, TypeRefId};
+use kira_syntax_model::ast::{Function, TraitRef, TypeParamDecl, TypeRef, TypeRefId};
 
 use crate::Parser;
 
@@ -116,11 +112,14 @@ impl Parser<'_> {
                 break;
             }
             let span = self.current().span;
-            bounds.push(TraitRef {
-                name: self.intern_span(span),
-                span,
-            });
+            let name = self.intern_span(span);
             self.bump();
+            let args = if self.at(TokenKind::Lt) {
+                self.parse_call_type_args()
+            } else {
+                Vec::new()
+            };
+            bounds.push(TraitRef { name, span, args });
             if !self.eat(TokenKind::Plus) {
                 break;
             }
@@ -128,12 +127,13 @@ impl Parser<'_> {
         bounds
     }
 
-    /// Consumes and refuses a type-parameter list on a declaration that may not
-    /// take one, naming the construct in the diagnostic.
+    /// Consumes and refuses a type-parameter list on a declaration member that
+    /// may not take one, naming the construct in the diagnostic.
     ///
-    /// Only an `enum` is generic here. `construct` is the keyword the source
-    /// wrote, so the message says which declaration is being refused rather
-    /// than a generic "not supported".
+    /// Construct lifecycle and requirement members do not own an independent
+    /// specialization, even though ordinary top-level functions and aggregate
+    /// methods do. `construct` is the keyword the source wrote, so the message
+    /// names the form rather than giving a generic "not supported" refusal.
     pub(crate) fn refuse_type_params(&mut self, construct: &'static str) {
         if !self.at_type_params() {
             return;
@@ -145,10 +145,43 @@ impl Parser<'_> {
             span,
             "KPAR047",
             format!(
-                "a generic `{construct}` is not supported; only `enum` takes type parameters \
-                 (write the concrete types out)"
+                "a generic `{construct}` member is not supported; write the concrete types out"
             ),
         );
+    }
+
+    /// Refuses type parameters on a member function after its complete body or
+    /// signature has been parsed. Only free functions own an independent
+    /// callable specialization; a method is specialized by its enclosing
+    /// aggregate or trait instead, so a second parameter list would have no
+    /// place in the semantic tables.
+    pub(crate) fn refuse_generic_member(&mut self, function: &mut Function) {
+        let Some(first) = function.type_params.first() else {
+            return;
+        };
+        let last = function
+            .type_params
+            .last()
+            .expect("the first type parameter implies a last one");
+        let span = Span::from_bounds(first.span.start, last.span.end());
+        self.error(
+            span,
+            "KPAR047",
+            "a generic declaration member is not supported; put type parameters on the enclosing declaration or write a free function",
+        );
+        let parameter_spans: Vec<Span> = function
+            .params
+            .iter()
+            .map(|param| self.tree.type_ref(param.ty).span())
+            .collect();
+        for (param, type_span) in function.params.iter_mut().zip(parameter_spans) {
+            param.ty = self.tree.add_type(TypeRef::Error { span: type_span });
+        }
+        if let Some(return_type) = &mut function.return_type {
+            let type_span = self.tree.type_ref(*return_type).span();
+            *return_type = self.tree.add_type(TypeRef::Error { span: type_span });
+        }
+        function.type_params.clear();
     }
 
     /// Parses `<A, B>` as a call's explicit type arguments.

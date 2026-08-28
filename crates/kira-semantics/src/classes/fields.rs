@@ -23,7 +23,7 @@ use crate::types::{AggregateKind, NameContext};
 impl Analyzer<'_> {
     /// Builds the flattened field list: every parent's fields, in order, then
     /// this class's own, with `override let` rewriting an inherited default.
-    pub(super) fn flatten_fields(
+    pub(crate) fn flatten_fields(
         &mut self,
         declaration: &ClassDecl,
         name: &str,
@@ -204,7 +204,7 @@ impl Analyzer<'_> {
     }
 
     /// Records how each bare field name resolves, now that slots are numbered.
-    pub(super) fn record_bare_fields(&mut self, info: &mut ClassInfo) {
+    pub(crate) fn record_bare_fields(&mut self, info: &mut ClassInfo) {
         let mut by_name: HashMap<&str, Vec<(StructId, u32)>> = HashMap::new();
         for (slot, (owner, plain)) in info.slot_origin.iter().enumerate() {
             by_name

@@ -31,6 +31,24 @@ A positional call fills omitted **trailing** arguments; a labeled call may omit 
 
 The default's **expression** is resolved once, in the file the function was declared in, so it may name that file's helpers regardless of where the call is written. That resolved expression is then **evaluated on every call** that omits the argument, exactly as writing the argument out at each call site would be: a default that calls a function calls it once per call, not once per program. Two defaults that fill each other through the call graph have no finite value and are refused with `KSEM240`.
 
+## Generic Functions
+
+A function may declare type parameters and use them in its parameter and result
+types:
+
+```kira
+function identity<Value>(value: Value) -> Value { return value }
+
+let number = identity(7)       // inferred as Int
+let text = identity<String>("ok")
+```
+
+The compiler infers each parameter from the corresponding value argument. Write
+`name<Type>(…)` when inference has no answer or when an explicit specialization
+is clearer. Every concrete specialization is checked and emitted like an
+ordinary function; an ambiguous or incomplete inference is `KSEM316`, and a
+wrong number of type arguments is `KSEM174`.
+
 ## Ownership at the Call Site
 
 A plain parameter consumes the value it is given, so passing a *named* non-trivial value to one must write `move`.

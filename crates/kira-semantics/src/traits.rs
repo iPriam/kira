@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use kira_semantics_model::Type;
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::Function;
+use kira_syntax_model::ast::{Function, TypeParamDecl, TypeRefId};
 
 /// The compiler-known trait asserting that a type copies rather than moves.
 pub(crate) const COPYABLE: &str = "Copyable";
@@ -80,6 +80,13 @@ pub(crate) struct TraitInfo<'a> {
     /// Its package is one of the two that may declare a conformance to this
     /// trait, and it is the scope the member signatures resolve against.
     pub(crate) source: SourceId,
+    /// The parameters on the trait declaration. Empty for an ordinary trait;
+    /// a non-empty list marks this row as a template until a concrete trait
+    /// instance is minted under its mangled name.
+    pub(crate) type_params: Vec<TypeParamDecl>,
+    /// Substitutions active while resolving this concrete trait instance's
+    /// members. The template row carries an empty frame.
+    pub(crate) type_bindings: crate::generics::TypeBindings,
     /// The traits this one *requires*, written `trait Ord: Eq { … }`.
     ///
     /// A supertrait is an obligation rather than an inheritance: a type
@@ -95,6 +102,8 @@ pub(crate) struct TraitInfo<'a> {
 pub(crate) struct SupertraitRef {
     /// The required trait's name, as written.
     pub(crate) name: String,
+    /// Type arguments written on the supertrait, if any.
+    pub(crate) args: Vec<TypeRefId>,
     /// Span of the name at the clause, for the diagnostics that point at it.
     pub(crate) span: Span,
 }

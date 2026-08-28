@@ -33,11 +33,14 @@ impl Parser<'_> {
                 break;
             }
             let span = self.current().span;
-            traits.push(TraitRef {
-                name: self.intern_span(span),
-                span,
-            });
+            let name = self.intern_span(span);
             self.bump();
+            let args = if self.at(TokenKind::Lt) {
+                self.parse_call_type_args()
+            } else {
+                Vec::new()
+            };
+            traits.push(TraitRef { name, span, args });
             if !self.eat(TokenKind::Comma) {
                 break;
             }
@@ -72,7 +75,11 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
-        self.refuse_type_params("trait");
+        let type_params = if self.at_type_params() {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
         // `trait A: B` is a supertrait clause, read by the same production a
         // conformance list uses: both are a list of trait names after a
         // declaration's own, and whether each names a trait is semantics'.
@@ -83,6 +90,7 @@ impl Parser<'_> {
             return Some(TraitDecl {
                 name,
                 name_span,
+                type_params,
                 supertraits,
                 members,
                 span,
@@ -123,6 +131,7 @@ impl Parser<'_> {
         Some(TraitDecl {
             name,
             name_span,
+            type_params,
             supertraits,
             members,
             span,
@@ -132,6 +141,7 @@ impl Parser<'_> {
     /// Parses one trait member, with `function` at the cursor.
     fn parse_trait_member(&mut self) -> Option<TraitMember> {
         let mut function = self.parse_function_signature(false, Execution::Inherited)?;
+        self.refuse_generic_member(&mut function);
         let has_body = self.at(TokenKind::LBrace);
         if has_body {
             function.body = self.parse_block();

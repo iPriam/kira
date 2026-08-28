@@ -25,6 +25,13 @@ use crate::aliases::AliasTable;
 use crate::build_kind::BuildKind;
 use crate::build_machine::BuildMachine;
 
+/// Synthesized functions use a temporary id range while analysis is still
+/// discovering generic specializations. Generic signatures are appended while
+/// ordinary bodies are analyzed, so reserving synthesized ids in the final
+/// function-index range would make the two kinds overlap. The temporary range
+/// is rewritten to its final contiguous position once all signatures exist.
+pub(crate) const SYNTH_ID_BASE: u32 = 1 << 31;
+
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
 pub struct Analysis {
@@ -75,6 +82,10 @@ pub(crate) struct Callable<'a> {
     /// and so its body resolves qualified names against *that* file's imports —
     /// which is the whole of file scoping.
     pub(crate) source: SourceId,
+    /// Type-parameter substitutions active while this callable's signature and
+    /// body are resolved. Ordinary declarations carry an empty frame; a
+    /// monomorphized generic declaration carries its concrete arguments.
+    pub(crate) type_bindings: crate::generics::TypeBindings,
 }
 
 /// The parameter of one `init(…)` that its construction's trailing children
@@ -225,6 +236,31 @@ pub(crate) struct Analyzer<'a> {
     /// instantiation substitutes its arguments and declares the result in the
     /// ordinary enum table. See [`crate::generics`].
     pub(crate) generic_enums: crate::generics::GenericEnumTable<'a>,
+    /// Generic struct and class declarations waiting for an instantiation.
+    pub(crate) generic_aggregates: crate::generics::GenericAggregateTable<'a>,
+    /// Concrete aggregate rows back to their template name for constructor
+    /// inference from an expected result type.
+    pub(crate) generic_instance_templates: HashMap<StructId, String>,
+    /// The concrete arguments used for each generic aggregate row, so generic
+    /// function inference can unify a parameter such as `Box<Value>` with an
+    /// already analyzed `Box<Int>` argument.
+    pub(crate) generic_instance_arguments: HashMap<StructId, kira_semantics_model::Instantiation>,
+    /// Generic free functions waiting for argument inference at a call site.
+    pub(crate) generic_functions: crate::generics::GenericFunctionTable<'a>,
+    /// Memoized concrete signatures for generic free-function calls.
+    pub(crate) generic_function_instances: HashMap<String, FuncId>,
+    /// Monomorphized callable bodies discovered while resolving declarations or
+    /// calls. They are appended to the ordinary function list before any
+    /// synthesized function ids are allocated.
+    pub(crate) generic_callables: Vec<(FuncId, Callable<'a>)>,
+    /// Methods belonging to concrete generic struct/class instances. They are
+    /// included in the ordinary callable list once all rows have been minted.
+    pub(crate) generic_method_callables: Vec<Callable<'a>>,
+    /// Whether the initial ordinary callable list has already reserved its
+    /// signatures. Generic aggregate instances discovered while analyzing a
+    /// body must register their methods immediately rather than waiting for a
+    /// callable-list pass that has already happened.
+    pub(crate) generic_signatures_open: bool,
     /// The type-parameter substitution in force right now, empty outside a
     /// generic enum's body.
     pub(crate) type_bindings: crate::generics::TypeBindings,
@@ -283,6 +319,11 @@ pub(crate) struct Analyzer<'a> {
     /// Beside the type table rather than in it: conformance is resolved away
     /// before the HIR exists, so nothing downstream carries it.
     pub(crate) conformances: Vec<crate::traits::Conformance>,
+    /// Number of conformance rows already checked. Generic instances can be
+    /// discovered while a body is analyzed, after the initial conformance
+    /// pass; checking only the suffix keeps that late activation diagnostic-
+    /// stable instead of repeating every earlier claim.
+    pub(crate) checked_conformances: usize,
     /// Member and element reads of a value that runs a user `Drop`, waiting for
     /// the body being analyzed to finish.
     ///
@@ -332,8 +373,10 @@ pub(crate) struct Analyzer<'a> {
     /// child slot does. This is what makes `NavigationLink(value: v) { Text(…) }`
     /// reach an init instead of only the parenthesized header.
     pub(crate) init_content: HashMap<u32, InitContent>,
-    /// The id every synthesized function is offset from: the number of
-    /// functions the source declares.
+    /// The base of the temporary id range reserved for synthesized functions.
+    ///
+    /// These ids are rewritten to the final function-vector positions after
+    /// generic specializations have been discovered.
     pub(crate) synth_base: u32,
     /// Synthesized function bodies — lifted closures and dispatchers — indexed
     /// by their id less [`Analyzer::synth_base`].

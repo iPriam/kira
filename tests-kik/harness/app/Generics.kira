@@ -227,7 +227,117 @@ function genArrayOfResults() -> Int {
         acc = acc + genResultValue(results[j])
         j = j + 1
     }
-    return acc
+    return acc + genDeclarationSection()
+}
+
+// --- Generic declarations beyond enums ----------------------------------
+
+trait GenScored {
+    function score(borrow self) -> Int
+}
+
+struct GenScore: GenScored {
+    let value: Int
+
+    function score(borrow self) -> Int {
+        return value
+    }
+}
+
+// The bound on the trait itself is checked when `GenProvider<GenScore>` is
+// minted. Its default member also proves that a substituted trait member can
+// be called through the concrete conformer.
+trait GenProvider<Value: GenScored> {
+    function get(borrow self) -> Value
+    function scoreValue(borrow self) -> Int {
+        return self.get().score()
+    }
+}
+
+struct GenProviderBox: GenProvider<GenScore> {
+    let value: GenScore
+
+    function get(borrow self) -> GenScore {
+        return value
+    }
+}
+
+struct GenBox<Value: GenScored> {
+    let value: Value
+
+    function score(borrow self) -> Int {
+        return self.value.score()
+    }
+}
+
+class GenHolder<Value: GenScored> {
+    let value: Value
+
+    function score(borrow self) -> Int {
+        return self.value.score()
+    }
+}
+
+class GenGrand<Value> {
+    let value: Value
+
+    function get(borrow self) -> Value {
+        return self.value
+    }
+}
+
+class GenParent<Value> extends GenGrand<Value> {}
+
+class GenChild<Value> extends GenParent<Value> {
+    override function get(borrow self) -> Value {
+        return self.value
+    }
+}
+
+function genIdentity<Value>(value: Value) -> Value {
+    return value
+}
+
+function genUnbox<Value: GenScored>(value: GenBox<Value>) -> Value {
+    return value.value
+}
+
+function genBoundRead<Value: GenProvider<GenScore>>(value: borrow Value) -> Int {
+    return value.scoreValue()
+}
+
+construct GenGenericDeclarationsAndBoundsWork() extends Test {
+    test {
+        let boxed: GenBox<GenScore> = GenBox(value: GenScore(value: 3))
+        let held: GenHolder<GenScore> = GenHolder(value: GenScore(value: 4))
+        let provider = GenProviderBox(value: GenScore(value: 5))
+        let inferred = genIdentity(6)
+        let explicit = genIdentity<Int>(7)
+        let explicitBox = GenBox<GenScore>(value: GenScore(value: 2))
+        let unboxed = genUnbox<GenScore>(GenBox<GenScore>(value: GenScore(value: 8)))
+        let inferredBox = genUnbox(GenBox(value: GenScore(value: 9)))
+        return boxed.score() + held.score() + genBoundRead(provider) + inferred + explicit + explicitBox.score() + unboxed.score() + inferredBox.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(44); return e }
+}
+
+construct GenParameterizedInheritanceWorks() extends Test {
+    test {
+        let child = GenChild(value: 6)
+        return child.get()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+}
+
+function genDeclarationSection() -> Int {
+    let boxed: GenBox<GenScore> = GenBox(value: GenScore(value: 3))
+    let held: GenHolder<GenScore> = GenHolder(value: GenScore(value: 4))
+    let provider = GenProviderBox(value: GenScore(value: 5))
+    let explicit = genIdentity<Int>(7)
+    let explicitBox = GenBox<GenScore>(value: GenScore(value: 2))
+    let unboxed = genUnbox<GenScore>(GenBox<GenScore>(value: GenScore(value: 8)))
+    let inferredBox = genUnbox(GenBox(value: GenScore(value: 9)))
+    return boxed.score() + held.score() + genBoundRead(provider) + genIdentity(6) + explicit + explicitBox.score() + unboxed.score() + inferredBox.score()
 }
 
 // --- Section entry ------------------------------------------------------
@@ -293,4 +403,3 @@ function genSection() -> Int {
 
     return acc
 }
-

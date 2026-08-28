@@ -56,8 +56,11 @@ impl Analyzer<'_> {
     /// One loop over one table, whichever kind of contract each row names: a
     /// declared trait's members, or a construct family's `@Required` surface.
     pub(crate) fn check_conformances(&mut self) {
-        self.check_impl_blocks_declare_only_trait_members();
-        for index in 0..self.conformances.len() {
+        if self.checked_conformances == 0 {
+            self.check_impl_blocks_declare_only_trait_members();
+        }
+        let first = self.checked_conformances;
+        for index in first..self.conformances.len() {
             let (contract, site) = {
                 let entry = &self.conformances[index];
                 (
@@ -96,6 +99,7 @@ impl Analyzer<'_> {
                 self.check_member(&trait_name, &site, &shape);
             }
         }
+        self.checked_conformances = self.conformances.len();
     }
 
     /// Checks one backed declaration against its family's `@Required` surface.
@@ -237,6 +241,13 @@ impl Analyzer<'_> {
             (declared.source, members)
         };
         let here = self.source;
+        let outer_bindings = std::mem::replace(
+            &mut self.type_bindings,
+            self.traits
+                .get(name)
+                .map(|declared| declared.type_bindings.clone())
+                .unwrap_or_default(),
+        );
         self.source = source;
         let shapes = members
             .into_iter()
@@ -255,6 +266,7 @@ impl Analyzer<'_> {
             })
             .collect();
         self.source = here;
+        self.type_bindings = outer_bindings;
         Some(shapes)
     }
 
@@ -432,11 +444,13 @@ impl Analyzer<'_> {
             let Item::Extend(declaration) = item else {
                 continue;
             };
-            let Some(claimed) = declaration.conforms else {
+            let Some(claimed) = declaration.conforms.as_ref() else {
                 continue;
             };
             self.source = source;
-            let trait_name = self.interner.resolve(claimed.name).to_owned();
+            let Some(trait_name) = self.resolve_trait_ref(claimed) else {
+                continue;
+            };
             // A compiler-known trait declares its members here rather than in
             // source, and the rule is the same one: a block carries the trait's
             // members and nothing else.

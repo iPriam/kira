@@ -13,9 +13,9 @@
 // written by hand — same leading-dot construction, same `match`, same move
 // semantics, same `try`.
 //
-// The enum is the *only* declaration that takes type parameters. A generic
-// struct, class, or function is refused by name, because nothing in the language
-// needs one yet.
+// Enums, structs, classes, traits, and free functions may take type parameters.
+// Each concrete use is monomorphized into the ordinary semantic tables, so the
+// backends see the same shapes they see for declarations written by hand.
 
 enum AppError {
     NotFound

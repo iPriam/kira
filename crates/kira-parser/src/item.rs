@@ -424,7 +424,11 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
-        self.refuse_type_params("function");
+        let type_params = if self.at_type_params() {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
         let (receiver, params) = self.parse_signature_params();
         let return_type = self.parse_return_type();
         let span = Span::from_bounds(start.start, self.previous_end());
@@ -432,6 +436,7 @@ impl Parser<'_> {
         Some(Function {
             name,
             name_span,
+            type_params,
             is_main,
             // Set by the caller that consumed a contextual `async` before the
             // `function` keyword; a bare `function` carries none.

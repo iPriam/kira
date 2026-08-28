@@ -337,6 +337,17 @@ impl Analyzer<'_> {
             return Type::Error;
         }
         if self.traits.contains_key(&text) {
+            if self.is_generic_trait(&text) {
+                self.emit(
+                    span,
+                    "KSEM172",
+                    format!(
+                        "generic trait `{text}` needs its type arguments here (write \
+                         `{text}<...>`)",
+                    ),
+                );
+                return Type::Error;
+            }
             let Some(enum_id) = self.reserve_trait_existential(&text, span) else {
                 return Type::Error;
             };

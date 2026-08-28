@@ -25,6 +25,7 @@
 
 mod exprs;
 mod fields;
+mod parents;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -33,6 +34,7 @@ use kira_source::SourceId;
 use kira_syntax_model::ast::{ClassDecl, Item};
 
 use crate::analyze::{Analyzer, FieldDefault};
+use crate::types::NameContext;
 
 /// How a member name resolved against one class's inherited members.
 ///
@@ -107,17 +109,17 @@ pub(crate) struct ClassInfo {
 }
 
 /// One field of a class being flattened, before it becomes a [`FieldDef`].
-struct FlatField {
+pub(crate) struct FlatField {
     /// The type that declared it; `None` for a field this class declares
     /// itself, whose id does not exist until the class is declared.
-    owner: Option<StructId>,
+    pub(crate) owner: Option<StructId>,
     /// The name as written, before any qualification.
-    plain: String,
+    pub(crate) plain: String,
     /// The storage name in the flattened struct.
-    storage: String,
-    ty: Type,
-    mutable: bool,
-    default: Option<FieldDefault>,
+    pub(crate) storage: String,
+    pub(crate) ty: Type,
+    pub(crate) mutable: bool,
+    pub(crate) default: Option<FieldDefault>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -138,6 +140,10 @@ impl<'a> Analyzer<'a> {
         let declarations = self.class_declarations();
         let mut ids = Vec::with_capacity(declarations.len());
         for (source, declaration) in &declarations {
+            if !declaration.type_params.is_empty() {
+                ids.push(None);
+                continue;
+            }
             self.source = *source;
             let name = self.interner.resolve(declaration.name).to_owned();
             // One type namespace: a name an enum already took is not available
@@ -418,49 +424,13 @@ impl Analyzer<'_> {
         added
     }
 
-    /// Resolves the `extends` list to ids, reporting unknown and duplicated
-    /// parents.
-    fn resolve_parents(&mut self, declaration: &ClassDecl) -> Vec<StructId> {
-        let mut parents: Vec<StructId> = Vec::new();
-        for parent in &declaration.parents {
-            let written = self.interner.resolve(parent.name).to_owned();
-            let Some(id) = self.visible_struct(&written) else {
-                // A parent dropped for a cycle already produced its diagnostic;
-                // reporting it missing here would blame the wrong declaration.
-                if !self.unflattenable_classes.contains(&written) {
-                    self.emit(
-                        parent.span,
-                        "KSEM003",
-                        format!("unknown parent type `{written}`"),
-                    );
-                }
-                continue;
-            };
-            if parents.contains(&id) {
-                self.emit(
-                    parent.span,
-                    "KSEM065",
-                    format!("`{written}` is already a parent of this class"),
-                );
-                continue;
-            }
-            parents.push(id);
-        }
-        parents
-    }
-
-    /// `id` together with everything it inherits from, transitively.
-    fn ancestors_of(&self, id: StructId) -> BTreeSet<StructId> {
-        let mut all = BTreeSet::new();
-        all.insert(id);
-        if let Some(info) = self.classes.get(&id) {
-            all.extend(info.ancestors.iter().copied());
-        }
-        all
-    }
-
     /// Records which ancestor's body each method name names.
-    fn resolve_methods(&mut self, own: StructId, parents: &[StructId], info: &mut ClassInfo) {
+    pub(crate) fn resolve_methods(
+        &mut self,
+        own: StructId,
+        parents: &[StructId],
+        info: &mut ClassInfo,
+    ) {
         for parent in parents {
             for pair in self.methods_of(*parent) {
                 info.qualified_methods.insert(pair);
@@ -495,25 +465,6 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Whether `descendant` inherits from `ancestor`.
-    ///
-    /// `own` is the class being declared, whose ancestors are not in the table
-    /// yet, so they are passed alongside.
-    fn inherits_from(
-        &self,
-        descendant: StructId,
-        ancestor: StructId,
-        own: StructId,
-        own_ancestors: &BTreeSet<StructId>,
-    ) -> bool {
-        if descendant == own {
-            return own_ancestors.contains(&ancestor);
-        }
-        self.classes
-            .get(&descendant)
-            .is_some_and(|info| info.ancestors.contains(&ancestor))
-    }
-
     /// Every `(owner, method name)` pair visible on `id`.
     fn methods_of(&self, id: StructId) -> Vec<(StructId, String)> {
         match self.classes.get(&id) {
@@ -530,7 +481,7 @@ impl Analyzer<'_> {
 
     /// Reports an `override` that overrides nothing, and one whose parameter
     /// count does not match what it overrides.
-    fn check_overrides(&mut self, declaration: &ClassDecl, own: StructId) {
+    pub(crate) fn check_overrides(&mut self, declaration: &ClassDecl, own: StructId) {
         let Some(info) = self.classes.get(&own).cloned() else {
             return;
         };
@@ -621,6 +572,7 @@ impl<'a> Analyzer<'a> {
                 function,
                 // Spans are offsets in the file containing the method body.
                 source: origin_source,
+                type_bindings: self.generic_method_bindings(*owner),
             });
         }
     }
@@ -639,12 +591,16 @@ impl<'a> Analyzer<'a> {
     /// receiver struct: two packages may each declare a class of one name, and
     /// the first tree-order match by name alone would compile the other
     /// package's body against this package's field layout.
-    fn method_ast(
+    pub(crate) fn method_ast(
         &self,
         owner: StructId,
         key: &str,
     ) -> Option<(&'a kira_syntax_model::ast::Function, SourceId)> {
         let owner_name = self.program.types.type_name(Type::Struct(owner));
+        let declaration_name = self
+            .generic_instance_templates
+            .get(&owner)
+            .map_or(owner_name.as_str(), String::as_str);
         let owner_package = self.program.types.structs().owner_of(owner);
         self.tree.items_with_source().find_map(|(source, item)| {
             if self.imports.package_of(source) != owner_package {
@@ -654,10 +610,10 @@ impl<'a> Analyzer<'a> {
                 self.member_key(self.interner.resolve(function.name), &function.params) == key
             };
             let candidate = match item {
-                Item::Struct(def) if self.interner.resolve(def.name) == owner_name => {
+                Item::Struct(def) if self.interner.resolve(def.name) == declaration_name => {
                     def.methods.iter().find(matches)
                 }
-                Item::Class(def) if self.interner.resolve(def.name) == owner_name => def
+                Item::Class(def) if self.interner.resolve(def.name) == declaration_name => def
                     .methods
                     .iter()
                     .map(|method| &method.function)
@@ -666,7 +622,7 @@ impl<'a> Analyzer<'a> {
                 // is written across more than one file. Found here rather than
                 // registered separately so it is the same lookup: everything
                 // downstream asks this one question to reach a method's body.
-                Item::Extend(def) if self.interner.resolve(def.name) == owner_name => {
+                Item::Extend(def) if self.interner.resolve(def.name) == declaration_name => {
                     def.methods.iter().find(matches)
                 }
                 _ => None,

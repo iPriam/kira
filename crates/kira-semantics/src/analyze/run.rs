@@ -34,6 +34,14 @@ impl<'a> Analyzer<'a> {
             resolving_param_defaults: BTreeSet::new(),
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
+            generic_aggregates: crate::generics::GenericAggregateTable::new(),
+            generic_instance_templates: HashMap::new(),
+            generic_instance_arguments: HashMap::new(),
+            generic_functions: crate::generics::GenericFunctionTable::new(),
+            generic_function_instances: HashMap::new(),
+            generic_callables: Vec::new(),
+            generic_method_callables: Vec::new(),
+            generic_signatures_open: false,
             type_bindings: crate::generics::TypeBindings::new(),
             pending_bounds: Vec::new(),
             instantiation_depth: 0,
@@ -48,13 +56,14 @@ impl<'a> Analyzer<'a> {
             existential_traits: HashMap::new(),
             traits: crate::traits::TraitTable::new(),
             conformances: Vec::new(),
+            checked_conformances: 0,
             drop_extractions: Vec::new(),
             enum_payload_sites: Vec::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
             init_content: HashMap::new(),
-            synth_base: 0,
+            synth_base: SYNTH_ID_BASE,
             synth: Vec::new(),
             closure_sites: Vec::new(),
             current_execution: kira_semantics_model::Execution::Inherited,
@@ -85,6 +94,10 @@ impl<'a> Analyzer<'a> {
         // one type namespace means a struct, class, enum, or family declared
         // below has to be able to lose its name to a trait.
         self.collect_traits();
+        // Generic declaration headers are templates, not concrete rows. Keep
+        // them available before the ordinary type passes so a field may mint a
+        // concrete `Box<Int>` while those passes are resolving.
+        self.collect_generic_declarations();
         // Enum *names* are declared before structs, so a struct field may name
         // one; a struct is declared before signatures, so a parameter may name
         // either. Enum *payloads* wait until every struct exists, because a
@@ -133,12 +146,22 @@ impl<'a> Analyzer<'a> {
         // is answered once every struct, class, enum, and construct-backed type
         // exists and every payload is resolved.
         self.check_copy_derives();
-        let callables = self.callables();
-        // Every synthesized function sits after every declared one, so the
-        // declared count is the offset a reserved id is measured from. Fixed
-        // here, before any signature can reserve one.
-        self.synth_base = callables.len() as u32;
+        let mut callables = self.callables();
+        // Resolving a callable's signature can itself encounter a generic
+        // aggregate type. Its concrete methods are not known when
+        // `callables()` takes its snapshot, so drain and sign those methods in
+        // rounds until signature resolution stops discovering more rows.
+        self.generic_method_callables.clear();
         self.collect_signatures(&callables);
+        loop {
+            let discovered = std::mem::take(&mut self.generic_method_callables);
+            if discovered.is_empty() {
+                break;
+            }
+            self.collect_signatures(&discovered);
+            callables.extend(discovered);
+        }
+        self.generic_signatures_open = true;
         // Which init parameters take content is a question about the written
         // `some X`, and the ids the answer is filed under exist only now.
         self.record_init_content(&callables);
@@ -221,6 +244,17 @@ impl<'a> Analyzer<'a> {
         for (index, callable) in callables.iter().enumerate() {
             let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
+        }
+        // A generic free function is instantiated lazily by the first call
+        // whose argument types make its parameters concrete. Those signatures
+        // are appended after the declarations, and their bodies are analyzed
+        // to the same function vector before synthesized ids are allocated.
+        let mut generic_index = 0;
+        while generic_index < self.generic_callables.len() {
+            let (id, callable) = self.generic_callables[generic_index].clone();
+            let hir_function = self.analyze_function(id, &callable);
+            self.program.functions.push(hir_function);
+            generic_index += 1;
         }
         // Dynamic construct dispatchers, family value-member dispatchers, and
         // `extend` modifier bodies share one synthesized-function id space, and

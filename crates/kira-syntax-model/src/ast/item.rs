@@ -1,27 +1,17 @@
 //! Top-level items: functions, structs, enums, their members, and the written
 //! type references they name.
 //!
-//! # Why this file stays whole past the size ladder
-//!
-//! It is 27 node definitions and four methods: a grammar written down, not
-//! logic that grew. [`Item`] enumerates every variant, and each variant's node
-//! sits below it, so the file reads top-down in the order the grammar does.
-//! Splitting it would put an [`Item`] variant in one file and its payload in
-//! another, and the split would have to fall somewhere — items versus members,
-//! or aggregates versus functions — that the grammar does not actually divide:
-//! a [`ClassDecl`] holds [`FieldDecl`]s, [`OverrideFieldDecl`]s, and
-//! [`ClassMethod`]s, each of which holds a [`Function`]. Every consumer matches
-//! on [`Item`] and walks straight through, so nobody would import one half.
-//!
-//! The ladder's concern is a file where behavior accumulates until no one can
-//! hold it in mind. Nothing here has behavior to accumulate; the file grows only
-//! when the language gains syntax, and then it grows by a node.
-
 use super::{Block, ExprId, ReceiverDecl, TraitDecl, TraitRef, TypeRefId};
 use crate::ownership::OwnershipMode;
 use kira_core::Symbol;
 use kira_runtime_abi::Execution;
 use kira_source::Span;
+
+mod ffi;
+mod types;
+
+pub use ffi::{FfiTypeKind, FfiTypeMark, ForeignField, ForeignKind, ForeignMark};
+pub use types::TypeRef;
 
 /// A top-level declaration.
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +102,11 @@ pub struct ConstructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The type parameters the header wrote, when any did.
+    ///
+    /// Recorded so semantics can refuse a generic construct with its own typed
+    /// diagnostic rather than the parser guessing at what one would mean.
+    pub type_params: Vec<TypeParamDecl>,
     /// The traits the declaration's `: Trait, Trait` clause named.
     pub traits: Vec<TraitRef>,
     /// The stored members: `@Required let`, plain `let`, and defaulted `let`.
@@ -343,8 +338,9 @@ pub struct ConstantDecl {
 /// A parameter may carry a **bound** (`Value: Scored`), written after its name
 /// as one or more trait names joined by `+`. A bound states what every type
 /// argument for this parameter must conform to; it is discharged when an
-/// instantiation is minted, and names no additional surface on the parameter
-/// itself — see `kira-semantics`'s generics module.
+/// instantiation is minted — and inside a generic body it is what makes the
+/// bound trait's members callable on a value of the parameter. See
+/// `kira-semantics`'s generics module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeParamDecl {
     /// The parameter's name.
@@ -369,9 +365,8 @@ pub struct TypeParamDecl {
 ///
 /// A declaration may be *generic* (`enum Result<Value, Failure>`), in which
 /// case `type_params` is non-empty and the declaration names no type by itself:
-/// each written instantiation is what mints one. The enum is the only
-/// declaration form that takes type parameters — a generic struct, class, or
-/// function is refused at the parse, because nothing in the corpus writes one.
+/// each written instantiation is what mints one. The struct, class, function,
+/// and trait forms take type parameters the same way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl {
     /// The enum's name.
@@ -419,6 +414,13 @@ pub struct StructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The declared type parameters, in order; empty for an ordinary struct.
+    ///
+    /// A generic struct names no type by itself: each written instantiation
+    /// (`Box<Int>`) is what declares one, with the arguments substituted into
+    /// the fields. See `kira-semantics`'s generics module for the model, which
+    /// is the one the other declaration forms share.
+    pub type_params: Vec<TypeParamDecl>,
     /// The traits the declaration's `: Trait, Trait` clause named.
     pub traits: Vec<TraitRef>,
     /// The stored members, in declaration order.
@@ -459,6 +461,11 @@ pub struct ClassDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The declared type parameters, in order; empty for an ordinary class.
+    ///
+    /// A generic class instantiates exactly as a generic struct does — see
+    /// [`StructDecl::type_params`].
+    pub type_params: Vec<TypeParamDecl>,
     /// The traits the declaration's `: Trait, Trait` clause named.
     pub traits: Vec<TraitRef>,
     /// The written parents, in declaration order. Empty when no `extends` was
@@ -504,6 +511,9 @@ pub struct ParentRef {
     pub name: Symbol,
     /// Span of the name token, for diagnostics about this parent.
     pub span: Span,
+    /// Explicit type arguments on the parent, as in `extends Parent<Value>`.
+    /// Empty for an ordinary parent or for a malformed/incomplete list.
+    pub type_args: Vec<TypeRefId>,
 }
 
 /// An `override let name = value` member: a new default for an inherited field.
@@ -558,175 +568,6 @@ pub struct FieldDecl {
     pub span: Span,
 }
 
-/// One `key: value;` field inside an `@FFI.Extern { ... }` or
-/// `@FFI.Syscall { ... }` block.
-///
-/// Both the key (`library`, `symbol`, `abi`, `name`) and the value are written
-/// as bare identifiers, so both are interned symbols. What each key means — and
-/// which values a key accepts — is the analyzer's to decide; the parser only
-/// records the `identifier : identifier ;` shape and the spans, so a later
-/// refusal can point at the exact token the author wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ForeignField {
-    /// The field's key (`library`, `symbol`, `abi`, `name`).
-    pub key: Symbol,
-    /// Span of the key token, for diagnostics.
-    pub key_span: Span,
-    /// The field's value, written as a bare identifier (`kira_ffi_add`, `c`,
-    /// `write`).
-    pub value: Symbol,
-    /// Span of the value token, for diagnostics.
-    pub value_span: Span,
-}
-
-/// Where a bodyless function's implementation comes from.
-///
-/// Both forms declare the same thing — a function Kira calls but does not
-/// contain — and differ only in what has to be named to reach it. That is why
-/// one mark carries both: the signature rules, the arity check, the call
-/// resolution, and the refusal of a body are one question with one answer, and
-/// splitting them would be two places for the same rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForeignKind {
-    /// `@FFI.Extern` — a C symbol in a named native library.
-    Extern,
-    /// `@FFI.Address` — the ADDRESS of a data symbol a native library exports,
-    /// answered by a nullary function.
-    ///
-    /// C libraries export data as well as functions: interface tables, sentinel
-    /// objects, version constants, `stdin`. A bodyless *function* cannot reach
-    /// one, and a shim written to hand it back is glue that exists only because
-    /// the boundary could not say it.
-    ///
-    /// It is a function rather than a binding because Kira has no globals, and
-    /// inventing them for this would be a language-shaped hole opened by one C
-    /// convention. A nullary call reads the same and costs the same: the address
-    /// is a link-time constant either way.
-    ///
-    /// The answer is the symbol's ADDRESS, never its value. Address-of is the
-    /// one reading that works for every symbol alike -- an opaque struct has no
-    /// value this side can hold, a mutable global read once would be a stale
-    /// copy, and a width read from the declaration would have to agree with C's.
-    /// Reading through the address is what `@FFI.Pointer` is already for.
-    Address,
-    /// `@FFI.Syscall` — a Linux system call, named the way `man 2` names it.
-    ///
-    /// It carries no `library`, `symbol`, or `abi`, because the kernel is not a
-    /// library: there is nothing to load, nothing to look a name up in, and one
-    /// calling convention. What it carries instead is the call's name, and the
-    /// compiler owns the number that name resolves to — a number written in Kira
-    /// source could not be right on two architectures at once.
-    Syscall,
-}
-
-impl ForeignKind {
-    /// The annotation as an author wrote it, for a diagnostic that has to name
-    /// the form it is refusing.
-    pub const fn annotation(self) -> &'static str {
-        match self {
-            Self::Extern => "@FFI.Extern",
-            Self::Address => "@FFI.Address",
-            Self::Syscall => "@FFI.Syscall",
-        }
-    }
-}
-
-/// The parsed `@FFI.Extern { ... }` or `@FFI.Syscall { ... }` annotation on a
-/// bodyless function.
-///
-/// New Kira design: the oracle has no seamless C-FFI. The mark records which
-/// form was written, the annotation name's span, the block's span, and the
-/// `key: value;` fields as written — nothing is validated here. The analyzer
-/// reads the fields, checks the signature, and either mints a foreign callable
-/// or refuses the whole declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ForeignMark {
-    /// Which of the two bodyless forms was written.
-    pub kind: ForeignKind,
-    /// Span of the qualified annotation name (`FFI.Extern`, `FFI.Syscall`).
-    pub span: Span,
-    /// Span covering the whole `{ ... }` block.
-    pub block_span: Span,
-    /// The fields the block wrote, in source order.
-    pub fields: Vec<ForeignField>,
-}
-
-/// A `@FFI.*` annotation on a *struct* declaration — every member of the family
-/// except `@FFI.Extern`, which rides a function instead.
-///
-/// The five struct-attached forms each declare a *type* whose real shape the
-/// annotation carries: `@FFI.Struct` a C-layout struct, `@FFI.Pointer` a native
-/// pointer alias, `@FFI.Alias` a plain typedef, `@FFI.Array` an inline
-/// fixed-size C array, and `@FFI.Callback` a function-pointer typedef. The
-/// parser records the shape; the analyzer resolves the referenced types and
-/// decides what each becomes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FfiTypeMark {
-    /// Which of the five struct-attached `@FFI.*` forms this is, with its
-    /// parsed arguments.
-    pub kind: FfiTypeKind,
-    /// Span of the qualified annotation name (`FFI.Struct`, `FFI.Pointer`, …).
-    pub name_span: Span,
-    /// Span covering the whole `{ ... }` block.
-    pub block_span: Span,
-}
-
-/// The five struct-attached `@FFI.*` forms, each with the arguments its block
-/// carried. A required argument the block omitted is recorded as `None`/empty,
-/// so the analyzer reports the omission against the block rather than the parser
-/// bailing.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FfiTypeKind {
-    /// `@FFI.Struct { layout: c; }` — a struct laid out by C rules. The
-    /// declaration's own body carries the fields; this only records `layout`.
-    Struct {
-        /// The `layout` value as written (`c`), and its span.
-        layout: Option<(Symbol, Span)>,
-    },
-    /// `@FFI.Pointer { target: Target; ownership: o; }` — a native pointer alias.
-    Pointer {
-        /// The written pointee type, when present.
-        target: Option<TypeRefId>,
-        /// The `ownership` value as written (`borrowed`), and its span.
-        ownership: Option<(Symbol, Span)>,
-    },
-    /// `@FFI.Alias { target: Target; }` — a plain typedef of one type to another.
-    Alias {
-        /// The written aliased type, when present.
-        target: Option<TypeRefId>,
-    },
-    /// `@FFI.Array { element: E; count: N; }` — an inline fixed-size C array.
-    Array {
-        /// The written element type, when present.
-        element: Option<TypeRefId>,
-        /// The written element count and its span, when present.
-        count: Option<(i64, Span)>,
-    },
-    /// `@FFI.Callback { abi: c; params: [ParamType, …]; result: ResultType; }` — a
-    /// function-pointer typedef.
-    Callback {
-        /// The `abi` value as written (`c`), and its span.
-        abi: Option<(Symbol, Span)>,
-        /// The written parameter types, in order; empty for `params: []`.
-        params: Vec<TypeRefId>,
-        /// The written result type, when present.
-        result: Option<TypeRefId>,
-    },
-}
-
-impl FfiTypeKind {
-    /// A short label naming the form, for diagnostics (`Struct`, `Pointer`, …).
-    pub fn label(&self) -> &'static str {
-        match self {
-            FfiTypeKind::Struct { .. } => "Struct",
-            FfiTypeKind::Pointer { .. } => "Pointer",
-            FfiTypeKind::Alias { .. } => "Alias",
-            FfiTypeKind::Array { .. } => "Array",
-            FfiTypeKind::Callback { .. } => "Callback",
-        }
-    }
-}
-
 /// A function declaration: signature plus body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -734,6 +575,12 @@ pub struct Function {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The declared type parameters, in order; empty for an ordinary function.
+    ///
+    /// A generic function names no callable by itself: each call is what
+    /// declares one, with the type arguments inferred from the value arguments
+    /// (or written explicitly) substituted into the signature and the body.
+    pub type_params: Vec<TypeParamDecl>,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
     /// Whether the declaration was written `async function`.
@@ -805,135 +652,6 @@ pub struct Param {
     pub default: Option<ExprId>,
     /// Span covering the whole parameter.
     pub span: Span,
-}
-
-/// A written type reference, e.g. `Int`, `Point`, `[Int]`, or `[[Byte]]`.
-///
-/// An arena node rather than a flat `Copy` struct because an array type nests:
-/// `[[Int]]`'s element is itself a written type. Following the index/arena law
-/// — a [`TypeRefId`] into the tree's arena, never a `Box` — is what keeps this
-/// free of the recursive-allocation-per-node cost and keeps the whole model
-/// lifetime-free.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeRef {
-    /// A named type: `Int`, `String`, `Point`.
-    Named {
-        /// The type name as an interned symbol.
-        name: Symbol,
-        /// Where the type name appears.
-        span: Span,
-    },
-    /// An existential over a construct family: `some Widget`.
-    ///
-    /// Names "a value of some concrete declaration backing this family" — the
-    /// heterogeneous family value, which is what a child slot holds and what a
-    /// function returns when the concrete declaration is its own business.
-    ///
-    /// The family stays separate from ordinary nominal types in syntax so
-    /// semantics can reject `some` applied to a struct, class, alias, or
-    /// builtin instead of silently treating the qualifier as decoration. Bare
-    /// `Widget` resolves to the same [`Type`](kira_semantics_model::Type), so
-    /// this variant buys the *check*, not a distinct resolved type.
-    SomeConstruct {
-        /// The construct family's name, including any module qualifier.
-        family: Symbol,
-        /// Span of the family name alone, for definition links and diagnostics.
-        family_span: Span,
-        /// Span covering `some` through the family name.
-        span: Span,
-    },
-    /// The result type a construct family declares for one of its members.
-    ///
-    /// Written by nobody: this is what the `name { … }` member shorthand
-    /// desugars its result type to. The shorthand says "here is the body of the
-    /// member the family calls `name`", and what that member *returns* is the
-    /// family's to state — but the parser has no families, so it defers the
-    /// question instead of guessing.
-    ///
-    /// Resolving it asks the named family what it declared for that member.
-    /// A family that declared none falls back to the family type itself, which
-    /// is what keeps a `body { … }` on a family that never mentions `body`
-    /// meaning what it always did.
-    ConstructMember {
-        /// The construct family whose member this is, including any qualifier.
-        family: Symbol,
-        /// Span of the family name, for the diagnostic when it is not a family.
-        family_span: Span,
-        /// The member name the shorthand wrote.
-        member: Symbol,
-        /// Span covering the shorthand's member name.
-        span: Span,
-    },
-    /// A generic instantiation: `Result<Int, AppError>`.
-    ///
-    /// Written only where a generic declaration is in scope. Semantics
-    /// monomorphizes it — the arguments are substituted into the declaration's
-    /// body and the result is declared as an ordinary nominal type — so nothing
-    /// below semantics ever sees this node or learns that generics exist.
-    Generic {
-        /// The generic declaration's name.
-        name: Symbol,
-        /// Span of the name alone, for a diagnostic about the declaration.
-        name_span: Span,
-        /// The written type arguments, in order. Never empty: `Name<>` does not
-        /// parse.
-        args: Vec<TypeRefId>,
-        /// Span covering the name through the closing `>`.
-        span: Span,
-    },
-    /// An array type: `[Int]`.
-    Array {
-        /// The written element type.
-        element: TypeRefId,
-        /// Span covering the brackets and their contents.
-        span: Span,
-    },
-    /// A function type: `(Int) -> Void`, `() -> Void`, `(borrow Event) -> Void`.
-    ///
-    /// The result is always written — `->` and a type — because a function type
-    /// has no "absent means `Void`" spelling the way a declaration does.
-    Function {
-        /// The written parameter types, in order; empty for `() -> R`.
-        params: Vec<TypeRefId>,
-        /// The ownership mode written on each parameter, index-aligned with
-        /// `params`; [`OwnershipMode::Owned`] where none was written.
-        ///
-        /// Kept rather than dropped because it is what an indirect call checks
-        /// its arguments against. Dropping it makes every parameter owned, so a
-        /// call through `(borrow Event) -> Void` demands `move` for a value the
-        /// source declared `borrow` — the mode is invisible at run time and
-        /// decisive at the ownership check.
-        param_ownership: Vec<OwnershipMode>,
-        /// The written result type.
-        result: TypeRefId,
-        /// Span covering the parameter list through the result.
-        span: Span,
-    },
-    /// A type position the parser could not parse; recovery inserts this.
-    ///
-    /// A variant rather than a sentinel name, so analysis resolves it to
-    /// `Type::Error` **silently**: the parser already said what was wrong, and
-    /// a second "unknown type `<error>`" on top of it would name a type nobody
-    /// wrote.
-    Error {
-        /// Span of the malformed type.
-        span: Span,
-    },
-}
-
-impl TypeRef {
-    /// The span covering this type reference.
-    pub fn span(&self) -> Span {
-        match self {
-            TypeRef::Named { span, .. }
-            | TypeRef::SomeConstruct { span, .. }
-            | TypeRef::ConstructMember { span, .. }
-            | TypeRef::Generic { span, .. }
-            | TypeRef::Array { span, .. }
-            | TypeRef::Function { span, .. }
-            | TypeRef::Error { span } => *span,
-        }
-    }
 }
 
 /// A parsed-but-unanalyzed top-level construct.

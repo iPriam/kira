@@ -43,6 +43,8 @@ impl<'a> Analyzer<'a> {
         let mut main_seen = false;
         for callable in callables {
             let function = callable.function;
+            let outer_bindings =
+                std::mem::replace(&mut self.type_bindings, callable.type_bindings.clone());
             // A signature's types are written in the file the function was, so
             // they resolve against that file's imports.
             self.source = callable.source;
@@ -161,6 +163,7 @@ impl<'a> Analyzer<'a> {
             // synthesized function reserves a later id with no row here, so the
             // default lookup returns `None` for it — never a panic.
             self.param_defaults.push(param_defaults);
+            self.type_bindings = outer_bindings;
         }
         self.name_overloads();
     }

@@ -215,6 +215,7 @@ module.exports = grammar({
           optional('async'),
           'function',
           field('name', $.identifier),
+          optional(field('type_parameters', $.type_parameters)),
           field('parameters', $.parameters),
           optional(field('return_type', $.return_type)),
           optional(choice(field('body', $.block), ';')),
@@ -313,6 +314,7 @@ module.exports = grammar({
         repeat($.attribute),
         'struct',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         field('body', $.struct_body),
       ),
@@ -326,6 +328,7 @@ module.exports = grammar({
         repeat($.attribute),
         'class',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         optional(field('extends', $.extends_list)),
         field('body', $.class_body),
@@ -338,9 +341,25 @@ module.exports = grammar({
         '}',
       ),
 
-    conformance_list: ($) => seq(':', commaSep1Trailing($._type_path)),
+    conformance_list: ($) => seq(':', commaSep1Trailing($._trait_reference)),
 
-    extends_list: ($) => seq('extends', commaSep1Trailing($._type_path)),
+    // A conformance may name an ordinary trait or one concrete generic trait
+    // instance (`Provider<Int>`). The rule is hidden so the existing tree for
+    // an ordinary `: Hashable, Tagged` list stays flat.
+    _trait_reference: ($) =>
+      seq(
+        $._type_path,
+        optional($.type_arguments),
+      ),
+
+    // A parent may be a concrete generic aggregate (`extends Parent<Value>`).
+    // Keep the rule hidden so an ordinary parent remains the same flat
+    // `type_identifier` node in the tree.
+    extends_list: ($) =>
+      seq(
+        'extends',
+        commaSep1Trailing(seq($._type_path, optional($.type_arguments))),
+      ),
 
     _aggregate_member: ($) => choice($.field_declaration, $.function_definition),
 
@@ -428,6 +447,7 @@ module.exports = grammar({
       seq(
         'trait',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         field('body', $.trait_body),
       ),

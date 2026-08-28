@@ -170,7 +170,7 @@ enum Message {
         default: (string_literal)))))
 
 ================================================================================
-The enum is the one declaration that takes type parameters
+A generic enum declaration
 ================================================================================
 
 enum Result<Value, Failure> {
@@ -245,6 +245,60 @@ enum Boxed<Value: Scored + Send, Rest> {
       (enum_variant
         name: (identifier)
         payload: (type_identifier)))))
+
+================================================================================
+Generic aggregate declarations and a generic trait reference
+================================================================================
+
+trait Provider<Value> {
+    function get(borrow self) -> Value
+}
+
+struct Box<Value>: Provider<Value> {
+    let value: Value
+}
+
+class Holder<Value> {
+    let value: Value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier)))))
+  (struct_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    conforms: (conformance_list
+      (type_identifier)
+      (type_arguments
+        (type_identifier)))
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))))
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)))))
 
 ================================================================================
 Type alias
@@ -327,3 +381,41 @@ let greeting: String = audience()
     value: (call_expression
       function: (identifier)
       arguments: (arguments))))
+
+================================================================================
+A generic class extends a concrete generic parent
+================================================================================
+
+class Parent<Value> {
+    let value: Value
+}
+
+class Child<Value> extends Parent<Value> {
+    let extra: Int
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))))
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    extends: (extends_list
+      (type_identifier)
+      (type_arguments
+        (type_identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)))))
