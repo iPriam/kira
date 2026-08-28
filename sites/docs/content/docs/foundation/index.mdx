@@ -22,7 +22,7 @@ function main() {
 
 | File | Contents |
 | --- | --- |
-| `Foundation.kira` | `printLine` and the geometry vocabulary |
+| `Foundation.kira` | `printLine`, geometry values, and vector/matrix/quaternion algebra |
 | `FileSystem.kira` | Reading and writing files on every backend |
 | `Result.kira` | `enum Result<Value, Failure>` |
 | `Printable.kira` | The `Printable` construct family |
@@ -69,8 +69,14 @@ provides `minX`, `minY`, `maxX`, `maxY`, and inclusive `contains`.
 and `mat4LookAt` build the common transforms. `Quaternion` supports
 `multiply`, `normalize`, and `toMat4`, while `quaternionFromAxisAngle` builds a
 rotation quaternion. The arithmetic operators `+`, `-`, `*`, and `/` on a
-named value desugar to the corresponding methods, so matrix composition may
-use either `a * b` or `a.multiply(b)`.
+named value desugar to the corresponding `add`, `subtract`, `multiply`, and
+`divide` methods, so matrix composition may use either `a * b` or
+`a.multiply(b)`.
+
+The `sqrtApprox`, `sinApprox`, `cosApprox`, and `tanApprox` helpers remain
+available for portable approximation code; compiler primitives such as `sqrt`
+and `sin` provide full-precision floating-point operations when that is what a
+caller needs.
 
 ## What Is Not Here Yet
 

@@ -810,7 +810,7 @@ impl Analyzer<'_> {
     /// to. It is honored unless class specialization renamed the callee, in
     /// which case the specialized copy is a different function and is looked up
     /// as one.
-    fn analyze_user_call_hinted(
+    pub(crate) fn analyze_user_call_hinted(
         &mut self,
         name: &str,
         args: &[HirExprId],
