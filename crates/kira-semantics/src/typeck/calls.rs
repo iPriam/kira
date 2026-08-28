@@ -13,7 +13,8 @@ use kira_semantics_model::Type;
 use kira_semantics_model::hir::{
     Callee, FuncId, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId,
 };
-use kira_syntax_model::ast::{CallArg, ExprId};
+use kira_source::Span;
+use kira_syntax_model::ast::{CallArg, ExprId, TypeRefId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
@@ -48,6 +49,24 @@ enum CallTarget {
     /// arguments were invalid. Its own diagnostic is sufficient; do not add a
     /// cascading undefined-function error.
     Invalid,
+}
+
+/// The syntax and context needed to type-check one user call.
+pub(super) struct CallSyntax<'a> {
+    /// The function context receiving ownership effects.
+    pub(super) ctx: &'a mut FnCtx,
+    /// The written callee name.
+    pub(super) name: &'a str,
+    /// Already analyzed leading values, such as a method receiver.
+    pub(super) leading: &'a [HirExprId],
+    /// Explicit generic type arguments.
+    pub(super) type_args: &'a [TypeRefId],
+    /// Written arguments.
+    pub(super) args: &'a [CallArg],
+    /// Already analyzed trailing values, such as child content.
+    pub(super) trailing: &'a [HirExprId],
+    /// Source span of the call.
+    pub(super) span: Span,
 }
 
 impl Analyzer<'_> {

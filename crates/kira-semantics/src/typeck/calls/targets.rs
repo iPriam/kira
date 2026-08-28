@@ -15,7 +15,7 @@ impl Analyzer<'_> {
         ctx: &FnCtx,
         name: &str,
         leading: &[HirExprId],
-        type_args: &[kira_syntax_model::ast::TypeRefId],
+        type_args: &[TypeRefId],
         args: &[CallArg],
         trailing: &[HirExprId],
     ) -> CallTarget {
@@ -136,7 +136,7 @@ impl Analyzer<'_> {
         &mut self,
         name: &str,
         args: &[HirExprId],
-        span: kira_source::Span,
+        span: Span,
     ) -> HirExprId {
         self.analyze_user_call_hinted(name, args, span, None)
     }
@@ -151,7 +151,7 @@ impl Analyzer<'_> {
         &mut self,
         name: &str,
         args: &[HirExprId],
-        span: kira_source::Span,
+        span: Span,
         chosen: Option<FuncId>,
     ) -> HirExprId {
         // A program may still declare a function called `sqrt`; a *call* of one

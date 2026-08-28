@@ -14,7 +14,7 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         name: kira_core::Symbol,
-        name_span: kira_source::Span,
+        name_span: Span,
         inits: &[FieldInit],
     ) -> HirExprId {
         // A module-qualified literal (`Support.Point { … }`) resolves exactly as

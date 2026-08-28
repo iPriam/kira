@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// Mutable inference state threaded through one generic type reference.
+struct TypeInference<'a> {
+    /// Generic parameter names in declaration order.
+    names: &'a [String],
+    /// Inferred concrete types for those parameters.
+    bindings: &'a mut [Option<Type>],
+    /// Parameters inferred to two different concrete types.
+    conflicts: &'a mut [bool],
+    /// Substitutions inherited from a generic parent template.
+    substitution: &'a [Vec<(String, TypeRefId)>],
+    /// Guards recursive parent-parameter substitutions.
+    substitutions_in_flight: &'a mut HashSet<(usize, String)>,
+}
+
 impl<'a> Analyzer<'a> {
     /// Infers a generic free function's arguments and reserves its concrete
     /// signature. Inference intentionally happens before the ordinary argument
@@ -47,7 +61,7 @@ impl<'a> Analyzer<'a> {
             );
             return None;
         }
-        if explicit_types.iter().any(|ty| *ty == Type::Error) {
+        if explicit_types.contains(&Type::Error) {
             return None;
         }
         for (index, ty) in explicit_types.into_iter().enumerate() {
@@ -162,55 +176,47 @@ impl<'a> Analyzer<'a> {
         conflicts: &mut [bool],
         substitution: &[Vec<(String, TypeRefId)>],
     ) {
-        self.infer_type_ref_inner(
-            type_ref,
-            actual,
+        let mut substitutions_in_flight = HashSet::new();
+        let mut state = TypeInference {
             names,
             bindings,
             conflicts,
             substitution,
-            &mut HashSet::new(),
-        );
+            substitutions_in_flight: &mut substitutions_in_flight,
+        };
+        self.infer_type_ref_inner(type_ref, actual, &mut state);
     }
 
     fn infer_type_ref_inner(
         &self,
         type_ref: TypeRefId,
         actual: Type,
-        names: &[String],
-        bindings: &mut [Option<Type>],
-        conflicts: &mut [bool],
-        substitution: &[Vec<(String, TypeRefId)>],
-        substitutions_in_flight: &mut HashSet<(usize, String)>,
+        state: &mut TypeInference<'_>,
     ) {
         match self.tree.type_ref(type_ref) {
             kira_syntax_model::ast::TypeRef::Named { name, .. } => {
                 let written = self.interner.resolve(*name);
-                if let Some((_, replacement)) = substitution
+                if let Some((_, replacement)) = state
+                    .substitution
                     .first()
                     .into_iter()
                     .flat_map(|layer| layer.iter().rev())
                     .find(|(parameter, _)| parameter == written)
                 {
-                    let marker = (substitution.len(), written.to_owned());
-                    if substitutions_in_flight.insert(marker.clone()) {
-                        self.infer_type_ref_inner(
-                            *replacement,
-                            actual,
-                            names,
-                            bindings,
-                            conflicts,
-                            &substitution[1..],
-                            substitutions_in_flight,
-                        );
-                        substitutions_in_flight.remove(&marker);
+                    let marker = (state.substitution.len(), written.to_owned());
+                    if state.substitutions_in_flight.insert(marker.clone()) {
+                        let substitution = state.substitution;
+                        state.substitution = &substitution[1..];
+                        self.infer_type_ref_inner(*replacement, actual, state);
+                        state.substitution = substitution;
+                        state.substitutions_in_flight.remove(&marker);
                     }
                     return;
                 }
-                if let Some(index) = names.iter().position(|name| name == written) {
-                    match bindings[index] {
-                        None => bindings[index] = Some(actual),
-                        Some(previous) if previous != actual => conflicts[index] = true,
+                if let Some(index) = state.names.iter().position(|name| name == written) {
+                    match state.bindings[index] {
+                        None => state.bindings[index] = Some(actual),
+                        Some(previous) if previous != actual => state.conflicts[index] = true,
                         _ => {}
                     }
                 }
@@ -219,15 +225,7 @@ impl<'a> Analyzer<'a> {
                 if let Type::Array(id) = actual
                     && let Some(element_ty) = self.program.types.arrays().element(id)
                 {
-                    self.infer_type_ref_inner(
-                        *element,
-                        element_ty,
-                        names,
-                        bindings,
-                        conflicts,
-                        substitution,
-                        substitutions_in_flight,
-                    );
+                    self.infer_type_ref_inner(*element, element_ty, state);
                 }
             }
             kira_syntax_model::ast::TypeRef::Generic { name, args, .. } => {
@@ -248,15 +246,7 @@ impl<'a> Analyzer<'a> {
                     return;
                 }
                 for (&written_arg, &actual_arg) in args.iter().zip(instantiation.arguments.iter()) {
-                    self.infer_type_ref_inner(
-                        written_arg,
-                        actual_arg,
-                        names,
-                        bindings,
-                        conflicts,
-                        substitution,
-                        substitutions_in_flight,
-                    );
+                    self.infer_type_ref_inner(written_arg, actual_arg, state);
                 }
             }
             _ => {}

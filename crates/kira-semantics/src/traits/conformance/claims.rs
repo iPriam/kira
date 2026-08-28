@@ -438,10 +438,10 @@ impl<'a> Analyzer<'a> {
         source: SourceId,
     ) -> bool {
         let here = self.imports.package_of(source);
-        if let Type::Struct(id) = ty {
-            if self.program.types.structs().owner_of(id) == here {
-                return true;
-            }
+        if let Type::Struct(id) = ty
+            && self.program.types.structs().owner_of(id) == here
+        {
+            return true;
         }
         self.traits
             .get(trait_name)

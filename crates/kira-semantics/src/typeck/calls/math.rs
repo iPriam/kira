@@ -6,7 +6,7 @@ impl Analyzer<'_> {
         &mut self,
         op: kira_runtime_abi::MathOp,
         args: &[HirExprId],
-        span: kira_source::Span,
+        span: Span,
     ) -> HirExprId {
         let name = op.name();
         let expected = op.argument_count();
@@ -51,11 +51,7 @@ impl Analyzer<'_> {
     }
 
     /// Analyzes `scalarText(codePoint)` — one Unicode scalar as text.
-    pub(super) fn analyze_scalar_text_call(
-        &mut self,
-        args: &[HirExprId],
-        span: kira_source::Span,
-    ) -> HirExprId {
+    pub(super) fn analyze_scalar_text_call(&mut self, args: &[HirExprId], span: Span) -> HirExprId {
         let [value] = args else {
             self.emit(
                 span,

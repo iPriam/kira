@@ -6,7 +6,8 @@
 //! aggregate each variant carries.
 
 use kira_semantics_model::hir::{
-    Callee, HirBinaryOp, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback, LocalId,
+    Callee, FuncId, HirBinaryOp, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback,
+    LocalId,
 };
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
@@ -14,13 +15,31 @@ use kira_source::Span;
 use super::{ConstructVariant, DispatchMethod};
 use crate::analyze::{Analyzer, FnCtx};
 
+/// The values one dispatch-tree node forwards to its selected child.
+struct DispatchCall<'a> {
+    /// The child function to call.
+    callee: FuncId,
+    /// The receiver local in this tree node.
+    receiver: LocalId,
+    /// The synthesized enum carrying the receiver.
+    family: EnumId,
+    /// Parameter locals forwarded after the receiver.
+    param_locals: &'a [LocalId],
+    /// Parameter types forwarded after the receiver.
+    params: &'a [Type],
+    /// The result type of the call.
+    result: Type,
+    /// Whether the receiver is written back after the child returns.
+    mutates_self: bool,
+}
+
 impl Analyzer<'_> {
     /// Builds one node in a balanced tag selector tree.
     pub(crate) fn construct_dispatch_tree_function(
         &mut self,
         dispatch: DispatchMethod<'_>,
-        arms: &[(ConstructVariant, kira_semantics_model::hir::FuncId)],
-        fallback: kira_semantics_model::hir::FuncId,
+        arms: &[(ConstructVariant, FuncId)],
+        fallback: FuncId,
         name: String,
         tree_number: &mut u32,
     ) -> HirFunction {
@@ -68,27 +87,27 @@ impl Analyzer<'_> {
                 rhs: wanted,
                 ty: Type::Bool,
             });
-            let then_body = self.construct_dispatch_function_call(
-                arm,
+            let then_body = self.construct_dispatch_function_call(DispatchCall {
+                callee: arm,
                 receiver,
-                family_id,
-                &param_locals,
+                family: family_id,
+                param_locals: &param_locals,
                 params,
                 result,
                 mutates_self,
-            );
+            });
             let else_body = if arm == fallback {
                 then_body.clone()
             } else {
-                self.construct_dispatch_function_call(
-                    fallback,
+                self.construct_dispatch_function_call(DispatchCall {
+                    callee: fallback,
                     receiver,
-                    family_id,
-                    &param_locals,
+                    family: family_id,
+                    param_locals: &param_locals,
                     params,
                     result,
                     mutates_self,
-                )
+                })
             };
             vec![self.program.stmts.alloc(HirStmt::If {
                 cond,
@@ -133,24 +152,24 @@ impl Analyzer<'_> {
                 rhs: pivot,
                 ty: Type::Bool,
             });
-            let then_body = self.construct_dispatch_function_call(
-                left_id,
+            let then_body = self.construct_dispatch_function_call(DispatchCall {
+                callee: left_id,
                 receiver,
-                family_id,
-                &param_locals,
+                family: family_id,
+                param_locals: &param_locals,
                 params,
                 result,
                 mutates_self,
-            );
-            let else_body = self.construct_dispatch_function_call(
-                right_id,
+            });
+            let else_body = self.construct_dispatch_function_call(DispatchCall {
+                callee: right_id,
                 receiver,
-                family_id,
-                &param_locals,
+                family: family_id,
+                param_locals: &param_locals,
                 params,
                 result,
                 mutates_self,
-            );
+            });
             vec![self.program.stmts.alloc(HirStmt::If {
                 cond,
                 then_body,
@@ -172,16 +191,16 @@ impl Analyzer<'_> {
     }
 
     /// Emits the small call/return body for one dispatcher branch.
-    fn construct_dispatch_function_call(
-        &mut self,
-        callee: kira_semantics_model::hir::FuncId,
-        receiver: LocalId,
-        family: EnumId,
-        param_locals: &[LocalId],
-        params: &[Type],
-        result: Type,
-        mutates_self: bool,
-    ) -> Vec<HirStmtId> {
+    fn construct_dispatch_function_call(&mut self, call: DispatchCall<'_>) -> Vec<HirStmtId> {
+        let DispatchCall {
+            callee,
+            receiver,
+            family,
+            param_locals,
+            params,
+            result,
+            mutates_self,
+        } = call;
         let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
             local: receiver,
             ty: Type::Enum(family),

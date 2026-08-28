@@ -15,7 +15,7 @@ impl Analyzer<'_> {
         ctx: &mut FnCtx,
         receiver: ExprId,
         method: kira_core::Symbol,
-        method_span: kira_source::Span,
+        method_span: Span,
         content: MethodCallContent<'_>,
         expected: Option<Type>,
     ) -> HirExprId {
@@ -102,10 +102,13 @@ impl Analyzer<'_> {
             return self.analyze_trait_existential_call(
                 ctx,
                 receiver_hir,
-                receiver,
                 existential_id,
                 &name,
-                crate::constructs::ConstructCallContent { args, children },
+                crate::constructs::ConstructCallContent {
+                    args,
+                    children,
+                    receiver_syntax: Some(receiver),
+                },
                 method_span,
             );
         }
@@ -116,10 +119,13 @@ impl Analyzer<'_> {
             return self.analyze_construct_family_call(
                 ctx,
                 receiver_hir,
-                Some(receiver),
                 family_id,
                 &name,
-                crate::constructs::ConstructCallContent { args, children },
+                crate::constructs::ConstructCallContent {
+                    args,
+                    children,
+                    receiver_syntax: Some(receiver),
+                },
                 method_span,
             );
         }
@@ -188,10 +194,13 @@ impl Analyzer<'_> {
                 return self.analyze_construct_family_call(
                     ctx,
                     upcast,
-                    Some(receiver),
                     family_id,
                     &name,
-                    crate::constructs::ConstructCallContent { args, children },
+                    crate::constructs::ConstructCallContent {
+                        args,
+                        children,
+                        receiver_syntax: Some(receiver),
+                    },
                     method_span,
                 );
             }

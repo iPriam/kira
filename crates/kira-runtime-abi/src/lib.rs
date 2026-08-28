@@ -101,7 +101,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 10;
+pub const RUNTIME_ABI_VERSION: u32 = 11;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -133,7 +133,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_10";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_11";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///

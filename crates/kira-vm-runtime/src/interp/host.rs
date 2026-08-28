@@ -9,6 +9,22 @@ use super::frames::{Frame, Writeback};
 use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
 
+/// The fixed inputs for one native seam call.
+struct NativeCallRequest<'a> {
+    /// The bytecode module whose native function is entered.
+    module: &'a Module,
+    /// The function index being entered.
+    id: u32,
+    /// Caller places that receive values written through by the native side.
+    writebacks: &'a [Writeback],
+    /// Active VM frames receiving writeback values.
+    frames: &'a mut [Frame],
+    /// First argument position on the operand stack.
+    first: usize,
+    /// Number of arguments on the operand stack.
+    count: usize,
+}
+
 impl Vm<'_> {
     /// Rebuilds every deferred state read sitting at or above `first` on the
     /// operand stack.
@@ -52,12 +68,14 @@ impl Vm<'_> {
             .ok_or(VmError::StackUnderflow)?;
         let mut scratch = std::mem::take(&mut self.native_scratch);
         let result = self.call_native_with_scratch(
-            module,
-            id,
-            writebacks,
-            frames,
-            first,
-            count,
+            NativeCallRequest {
+                module,
+                id,
+                writebacks,
+                frames,
+                first,
+                count,
+            },
             &mut scratch,
         );
         // `call_native_with_scratch` can refuse before it reaches the host: a
@@ -80,14 +98,17 @@ impl Vm<'_> {
     /// their capacity through [`Self::call_native`].
     fn call_native_with_scratch(
         &mut self,
-        module: &Module,
-        id: u32,
-        writebacks: &[Writeback],
-        frames: &mut [Frame],
-        first: usize,
-        count: usize,
+        call: NativeCallRequest<'_>,
         scratch: &mut NativeCallScratch,
     ) -> Result<(), VmError> {
+        let NativeCallRequest {
+            module,
+            id,
+            writebacks,
+            frames,
+            first,
+            count,
+        } = call;
         let active_vm = self as *mut _;
         let arguments = &mut scratch.arguments;
         let trees = &mut scratch.trees;

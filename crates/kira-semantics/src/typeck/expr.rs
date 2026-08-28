@@ -447,15 +447,15 @@ impl Analyzer<'_> {
                         }
                         _ => Vec::new(),
                     };
-                    self.analyze_user_call_from_syntax_with_type_args(
+                    self.analyze_user_call_from_syntax_with_type_args(calls::CallSyntax {
                         ctx,
-                        &name,
-                        &[],
-                        &type_args,
-                        &args,
-                        &trailing,
-                        callee_span,
-                    )
+                        name: &name,
+                        leading: &[],
+                        type_args: &type_args,
+                        args: &args,
+                        trailing: &trailing,
+                        span: callee_span,
+                    })
                 }
             }
             Expr::StructLit {

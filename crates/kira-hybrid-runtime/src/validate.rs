@@ -476,6 +476,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: callbacks,
+            constants: Vec::new(),
             functions: order
                 .iter()
                 .map(|name| FuncProto {

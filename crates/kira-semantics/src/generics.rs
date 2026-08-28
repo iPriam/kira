@@ -57,7 +57,7 @@
 //! cap is what actually terminates it. Hitting the cap is `KSEM175` — a typed
 //! refusal, never a stack overflow.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use kira_semantics_model::{EnumId, FieldDef, Instantiation, StructDef, StructId, Type};
 use kira_source::{SourceId, Span};
@@ -229,15 +229,17 @@ impl<'a> Analyzer<'a> {
                 Item::Function(function) if !function.type_params.is_empty() => {
                     let name = self.interner.resolve(function.name).to_owned();
                     self.validate_type_params(&name, &function.type_params);
-                    if self.generic_functions.contains_key(&name) {
-                        self.emit(
-                            function.name_span,
-                            "KSEM003",
-                            format!("function `{name}` is already defined"),
-                        );
-                    } else {
-                        self.generic_functions
-                            .insert(name, GenericFunction { function, source });
+                    match self.generic_functions.entry(name.clone()) {
+                        Entry::Occupied(_) => {
+                            self.emit(
+                                function.name_span,
+                                "KSEM003",
+                                format!("function `{name}` is already defined"),
+                            );
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(GenericFunction { function, source });
+                        }
                     }
                 }
                 Item::Trait(declaration) if !declaration.type_params.is_empty() => {
@@ -337,9 +339,7 @@ impl<'a> Analyzer<'a> {
             }
             return Some(base.to_owned());
         }
-        let Some(template) = self.traits.get(base).cloned() else {
-            return None;
-        };
+        let template = self.traits.get(base).cloned()?;
         if template.type_params.is_empty() {
             if !arguments.is_empty() {
                 self.emit(
@@ -355,7 +355,7 @@ impl<'a> Analyzer<'a> {
             .iter()
             .map(|&arg| self.resolve_type_ref(arg))
             .collect();
-        let has_error = args.iter().any(|ty| *ty == Type::Error);
+        let has_error = args.contains(&Type::Error);
         let arity = template.type_params.len();
         if args.len() != arity {
             self.emit(
@@ -373,7 +373,7 @@ impl<'a> Analyzer<'a> {
         if has_error {
             return None;
         }
-        let key = self.mangle(&base, &args);
+        let key = self.mangle(base, &args);
         if !self.traits.contains_key(&key) {
             self.instantiate_trait(base, &key, &template, &args, span);
         }

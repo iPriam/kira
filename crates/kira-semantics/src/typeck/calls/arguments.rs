@@ -21,9 +21,17 @@ impl Analyzer<'_> {
         name: &str,
         leading: &[HirExprId],
         args: &[CallArg],
-        span: kira_source::Span,
+        span: Span,
     ) -> HirExprId {
-        self.analyze_user_call_from_syntax_with_type_args(ctx, name, leading, &[], args, &[], span)
+        self.analyze_user_call_from_syntax_with_type_args(CallSyntax {
+            ctx,
+            name,
+            leading,
+            type_args: &[],
+            args,
+            trailing: &[],
+            span,
+        })
     }
 
     /// [`Analyzer::analyze_user_call_from_syntax`], plus arguments that occupy
@@ -40,32 +48,35 @@ impl Analyzer<'_> {
         leading: &[HirExprId],
         args: &[CallArg],
         trailing: &[HirExprId],
-        span: kira_source::Span,
+        span: Span,
     ) -> HirExprId {
-        self.analyze_user_call_from_syntax_with_type_args(
+        self.analyze_user_call_from_syntax_with_type_args(CallSyntax {
             ctx,
             name,
             leading,
-            &[],
+            type_args: &[],
             args,
             trailing,
             span,
-        )
+        })
     }
 
     /// The syntax-call path with explicit generic type arguments. Keeping the
     /// old wrappers above means all non-generic callers retain their compact
     /// call sites while a `f<Int>(value)` can feed its type list into inference.
-    pub(crate) fn analyze_user_call_from_syntax_with_type_args(
+    pub(in crate::typeck) fn analyze_user_call_from_syntax_with_type_args(
         &mut self,
-        ctx: &mut FnCtx,
-        name: &str,
-        leading: &[HirExprId],
-        type_args: &[kira_syntax_model::ast::TypeRefId],
-        args: &[CallArg],
-        trailing: &[HirExprId],
-        span: kira_source::Span,
+        syntax: CallSyntax<'_>,
     ) -> HirExprId {
+        let CallSyntax {
+            ctx,
+            name,
+            leading,
+            type_args,
+            args,
+            trailing,
+            span,
+        } = syntax;
         let (id, params) =
             match self.resolve_call_target(ctx, name, leading, type_args, args, trailing) {
                 CallTarget::Chosen(id, params) => (id, params),

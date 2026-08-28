@@ -20,17 +20,15 @@
 
 use std::collections::BTreeMap;
 
+use crate::analyze::{Analyzer, FnCtx};
+use crate::constructs::ConstructVariant;
+use crate::constructs::DispatchMethod;
+use crate::place::PlacePurpose;
 use kira_semantics_model::hir::{
     Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,
 };
 use kira_semantics_model::{EnumId, Execution, OwnershipMode, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::ExprId;
-
-use crate::analyze::{Analyzer, FnCtx};
-use crate::constructs::ConstructVariant;
-use crate::constructs::DispatchMethod;
-use crate::place::PlacePurpose;
 
 /// One trait's existential: its synthesized enum, the variants it filled from
 /// the conformance table, and the dispatchers its call sites reserved.
@@ -253,13 +251,16 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
-        receiver_syntax: ExprId,
         existential_id: EnumId,
         method: &str,
         content: crate::constructs::ConstructCallContent<'_>,
         span: Span,
     ) -> HirExprId {
-        let crate::constructs::ConstructCallContent { args, children } = content;
+        let crate::constructs::ConstructCallContent {
+            args,
+            children,
+            receiver_syntax,
+        } = content;
         let trait_name = match self.existential_traits.get(&existential_id) {
             Some(name) => name.clone(),
             None => return self.program.exprs.alloc(HirExpr::Error),
@@ -386,6 +387,9 @@ impl Analyzer<'_> {
         // `b.bump(4)` land in `b` and refuse a temporary with the same words a
         // direct call uses.
         let writebacks = if mutates_self {
+            let Some(receiver_syntax) = receiver_syntax else {
+                return self.program.exprs.alloc(HirExpr::Error);
+            };
             match self.resolve_place(ctx, receiver_syntax, PlacePurpose::MutCall) {
                 Some((place, _)) => vec![HirWriteback { param: 0, place }],
                 None => return self.program.exprs.alloc(HirExpr::Error),

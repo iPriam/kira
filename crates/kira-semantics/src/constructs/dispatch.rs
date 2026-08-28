@@ -14,6 +14,8 @@ use crate::place::PlacePurpose;
 pub(crate) struct ConstructCallContent<'a> {
     pub(crate) args: &'a [CallArg],
     pub(crate) children: &'a [ExprId],
+    /// The source receiver to write back for a mutating call, when one exists.
+    pub(crate) receiver_syntax: Option<ExprId>,
 }
 
 /// The dispatch-facing signature of one construct-family method.
@@ -134,13 +136,16 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         receiver: HirExprId,
-        receiver_syntax: Option<ExprId>,
         family_id: EnumId,
         method: &str,
         content: ConstructCallContent<'_>,
         span: Span,
     ) -> HirExprId {
-        let ConstructCallContent { args, children } = content;
+        let ConstructCallContent {
+            args,
+            children,
+            receiver_syntax,
+        } = content;
         let Some(shape) = self.family_method_shape(family_id, method) else {
             self.emit(
                 span,
@@ -331,12 +336,12 @@ impl Analyzer<'_> {
         self.analyze_construct_family_call(
             ctx,
             receiver,
-            Some(receiver_syntax),
             family_id,
             method,
             ConstructCallContent {
                 args: &[],
                 children: &[],
+                receiver_syntax: Some(receiver_syntax),
             },
             span,
         )
