@@ -75,6 +75,11 @@ with no decode in the way. That last one is what a host serving the call could
 most easily get wrong: decoding the answer itself would make the interpreted
 call disagree with the emitted one here and nowhere else.
 
+The host seam additionally validates the exact `ForeignArg` shape and the
+single-word result before entering the kernel. The source cases above exercise
+the valid side of those checks; malformed module tables are covered by the
+`kira-runtime-abi` host tests because source analysis cannot construct one.
+
 `ppoll`'s blocking case is deliberately absent. A `ppoll` on no descriptors with
 no timeout never returns, which is exactly what an idle PID 1 wants of it and
 exactly why no test can assert it.
