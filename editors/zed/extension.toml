@@ -3,7 +3,7 @@ name = "Kira"
 version = "0.2.0"
 schema_version = 1
 authors = ["Kira"]
-description = "Kira language support for Zed: syntax highlighting and diagnostics from the Kira language server."
+description = "Kira language support for Zed: syntax highlighting and language features from the Kira language server."
 repository = "https://github.com/kira-lang-com/kira-zed-extension"
 languages = ["languages/kira"]
 themes = []
@@ -14,21 +14,11 @@ capabilities = []
 kind = "Rust"
 version = "0.7.0"
 
-# LOCAL DEVELOPMENT PIN — see README "Publishing" before releasing.
-#
-# `file://` loads the grammar from a checkout instead of GitHub, which is what
-# lets a dev install run a grammar that has not been pushed yet. Before this
-# extension is published, both lines must go back to the GitHub URL and a rev
-# that is *reachable from main* — a published extension cannot resolve a path
-# on one person's disk.
-#
-# The rev this previously pinned (9c7db31) was an orphan: not on main, not on
-# any branch, left behind by a history rewrite. GitHub still served it by SHA,
-# so installs worked and nobody noticed, but it was the pre-rewrite grammar —
-# and one `git gc` from breaking every install in the field.
+# The grammar lives in the Kira monorepo. Keep this at a commit reachable from
+# its main branch so marketplace installs never depend on a developer's disk.
 [grammars.kira]
-repository = "file:///Users/priamc/Code/kira-projects/kira"
-rev = "6ae4b3629d4c9e0ecc410dd1b048def25dfceb39"
+repository = "https://github.com/kira-lang-com/kira"
+rev = "ab303e96b5c5da17070c875a1594d38f505b0ddf"
 path = "editors/tree-sitter"
 
 # `languages` must match the `name` in languages/kira/config.toml exactly.
