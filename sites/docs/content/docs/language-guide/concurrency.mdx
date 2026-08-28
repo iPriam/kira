@@ -44,3 +44,8 @@ A spawn is the one boundary a value crosses without its spawner, so what the def
 ## The Scheduler
 
 The scheduler is generated IR, not runtime code. The compiler synthesizes the spawn, dispatch, join, detach, cancel, yield, and sleep helpers, and they reach the task table through one primitive. The VM and the native backend therefore run the same scheduler rather than two that have to be kept in step.
+
+The task table belongs to one run. A VM creates it when execution starts; a
+native or hybrid host resets its thread-local table at the same boundary and
+clears it when the run ends. A task handle is therefore never valid in a later
+run, even when a hybrid library stays loaded between runs.

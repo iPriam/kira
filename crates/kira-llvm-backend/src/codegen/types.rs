@@ -180,6 +180,8 @@ pub(crate) struct Runtime {
     /// `(primitive, a, b, c) -> answer` shape covers every question the
     /// generated scheduler asks it.
     pub(super) task_op: Callable,
+    /// Resets the native task table at a process or hybrid run boundary.
+    pub(super) task_reset: Callable,
     /// `kira_rt_trap_foreign`: how a generated adapter's non-success status
     /// becomes a native trap at a foreign call site.
     pub(super) trap_foreign: Callable,
@@ -516,6 +518,7 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.i64,
                 &mut [types.i64, types.i64, types.i64, types.i64],
             ),
+            task_reset: declare(c"kira_rt_task_reset", types.void, &mut []),
             stack_save: declare(c"llvm.stacksave.p0", types.ptr, &mut []),
             stack_restore: declare(c"llvm.stackrestore.p0", types.void, &mut [types.ptr]),
             trap_foreign_unavailable: declare(

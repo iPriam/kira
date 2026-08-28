@@ -44,6 +44,7 @@ impl Session {
         // emitted `main` to report its heap balance from. The host asks on its
         // behalf once the run is over — see `HeapReportAtExit`.
         let _heap_report = HeapReportAtExit::new(&self.library);
+        let _task_scope = TaskScopeAtExit::new(&self.library);
         let entry = self
             .manifest
             .entry_function()
@@ -300,5 +301,27 @@ impl Session {
         };
         *slot = Some(closure);
         Ok(address)
+    }
+}
+
+/// Gives every hybrid run a fresh native task table, then clears it again.
+///
+/// The VM constructs its `TaskExecutor` inside each `Vm`; native storage is
+/// thread-local because the C ABI has no context argument, so the session must
+/// provide the equivalent lifetime explicitly.
+struct TaskScopeAtExit<'a> {
+    library: &'a NativeLibrary,
+}
+
+impl<'a> TaskScopeAtExit<'a> {
+    fn new(library: &'a NativeLibrary) -> Self {
+        library.reset_tasks();
+        TaskScopeAtExit { library }
+    }
+}
+
+impl Drop for TaskScopeAtExit<'_> {
+    fn drop(&mut self) {
+        self.library.reset_tasks();
     }
 }
