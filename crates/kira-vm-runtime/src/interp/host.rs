@@ -39,8 +39,36 @@ impl Vm<'_> {
         writebacks: &[Writeback],
         frames: &mut [Frame],
     ) -> Result<(), VmError> {
+        let proto = module
+            .functions
+            .get(usize::try_from(id).map_err(|_| VmError::UnknownFunction(u64::from(id)))?)
+            .ok_or(VmError::UnknownFunction(u64::from(id)))?;
+        let count = usize::try_from(proto.param_count)
+            .map_err(|_| VmError::LocalSlotOutOfRange(proto.param_count))?;
+        let first = self
+            .stack
+            .len()
+            .checked_sub(count)
+            .ok_or(VmError::StackUnderflow)?;
         let mut scratch = std::mem::take(&mut self.native_scratch);
-        let result = self.call_native_with_scratch(module, id, writebacks, frames, &mut scratch);
+        let result = self.call_native_with_scratch(
+            module,
+            id,
+            writebacks,
+            frames,
+            first,
+            count,
+            &mut scratch,
+        );
+        // `call_native_with_scratch` can refuse before it reaches the host: a
+        // native-state view may not recover, an aggregate may not have a seam
+        // tree, or a returned value may fail a writeback. The arguments are
+        // still owned by the operand stack in all of those cases. Remove them
+        // here, outside the fallible helper, so every path releases exactly the
+        // values that crossed (or were about to cross) the seam.
+        for value in self.stack.drain(first..first + count) {
+            self.heap.drop_value(value);
+        }
         scratch.clear();
         self.native_scratch = scratch;
         result
@@ -56,23 +84,14 @@ impl Vm<'_> {
         id: u32,
         writebacks: &[Writeback],
         frames: &mut [Frame],
+        first: usize,
+        count: usize,
         scratch: &mut NativeCallScratch,
     ) -> Result<(), VmError> {
         let active_vm = self as *mut _;
         let arguments = &mut scratch.arguments;
         let trees = &mut scratch.trees;
         let native_views = &mut scratch.native_views;
-        let proto = module
-            .functions
-            .get(usize::try_from(id).map_err(|_| VmError::UnknownFunction(u64::from(id)))?)
-            .ok_or(VmError::UnknownFunction(u64::from(id)))?;
-        let count = usize::try_from(proto.param_count)
-            .map_err(|_| VmError::LocalSlotOutOfRange(proto.param_count))?;
-        let first = self
-            .stack
-            .len()
-            .checked_sub(count)
-            .ok_or(VmError::StackUnderflow)?;
         // A deferred state read becomes objects before it reaches the seam.
         // A recovered view is materialized below from the host-owned state, so
         // neither deferred reads nor native-state handles cross this call.
@@ -84,7 +103,7 @@ impl Vm<'_> {
         // every one of them, and the drop loop below is still what releases
         // them.
         arguments.clear();
-        arguments.extend_from_slice(&self.stack[first..]);
+        arguments.extend_from_slice(&self.stack[first..first + count]);
 
         // Every aggregate becomes an owned tree first. `NativeArg::Aggregate`
         // borrows, so the trees have to outlive the argument list built from
@@ -186,10 +205,6 @@ impl Vm<'_> {
                 .call_native(id, &lowered)
                 .map_err(VmError::NativeCall)
         };
-
-        for value in self.stack.split_off(first) {
-            self.heap.drop_value(value);
-        }
 
         let returned = returned?;
         // The writebacks land before the result is pushed, so a failure among
@@ -350,7 +365,7 @@ impl Vm<'_> {
         // the value must outlive every schedule this side could guess. Only a
         // call that actually ran retains — a refused call showed C nothing.
         let succeeded = outcome.is_ok();
-        for (index, value) in self.stack.split_off(first).into_iter().enumerate() {
+        for (index, value) in self.stack.drain(first..first + count).enumerate() {
             if succeeded && import.signature().is_retained(index) {
                 self.heap.retain_for_foreign(value);
             } else {
