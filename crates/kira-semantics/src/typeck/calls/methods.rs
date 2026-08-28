@@ -95,8 +95,7 @@ impl Analyzer<'_> {
                     receiver,
                     receiver_hir,
                     &qualified,
-                    args,
-                    children,
+                    MethodCallContent { args, children },
                     method_span,
                 );
             }
@@ -154,8 +153,7 @@ impl Analyzer<'_> {
                     receiver,
                     receiver_hir,
                     &qualified,
-                    args,
-                    children,
+                    MethodCallContent { args, children },
                     method_span,
                 );
             }
@@ -247,8 +245,7 @@ impl Analyzer<'_> {
             receiver,
             receiver_hir,
             &qualified,
-            args,
-            children,
+            MethodCallContent { args, children },
             method_span,
         )
     }
@@ -262,15 +259,15 @@ impl Analyzer<'_> {
         receiver: ExprId,
         receiver_hir: HirExprId,
         qualified: &str,
-        args: &[CallArg],
-        children: &[ExprId],
+        content: MethodCallContent<'_>,
         method_span: Span,
     ) -> HirExprId {
+        let MethodCallContent { args, children } = content;
         // A trailing block on a struct method fills that method's content
         // parameter, exactly as it does on a construction or a family modifier.
         // The children are already analyzed into one value, so they occupy the
         // last parameter slot rather than arriving as written arguments.
-        let trailing = match self.lookup_function(&qualified).map(|(id, _, _)| id) {
+        let trailing = match self.lookup_function(qualified).map(|(id, _, _)| id) {
             Some(id) if !children.is_empty() => match self.init_content_param(id) {
                 Some(content) => vec![self.content_value(ctx, &content, children, method_span)],
                 None => {
@@ -291,7 +288,7 @@ impl Analyzer<'_> {
         };
         let call = self.analyze_user_call_from_syntax_with(
             ctx,
-            &qualified,
+            qualified,
             &[receiver_hir],
             args,
             &trailing,
