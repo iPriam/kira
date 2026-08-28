@@ -84,21 +84,33 @@ impl Analyzer<'_> {
         let extractions = self.drop_extraction_snapshot();
         let receiver_hir = self.analyze_expr(ctx, receiver);
         let receiver_ty = self.program.expr(receiver_hir).type_of();
+        let name = self.interner.resolve(method).to_owned();
+        let qualified = format!("{}.{name}", self.type_name(receiver_ty));
+        let has_user_method = self.lookup_function(&qualified).is_some();
 
         if receiver_ty.is_array() {
+            if has_user_method && !matches!(name.as_str(), "append" | "count") {
+                return self.analyze_resolved_method(
+                    ctx,
+                    receiver,
+                    receiver_hir,
+                    &qualified,
+                    args,
+                    children,
+                    method_span,
+                );
+            }
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);
             self.restore_drop_extractions(extractions);
             // An array builtin binds its argument by shape, not by a parameter
             // name, so a label on one is a mistake.
-            let name = self.interner.resolve(method).to_owned();
             let values = Self::argument_values(args);
             return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
         }
         if let Type::Enum(existential_id) = receiver_ty
             && self.is_trait_existential_type(existential_id)
         {
-            let name = self.interner.resolve(method).to_owned();
             return self.analyze_trait_existential_call(
                 ctx,
                 receiver_hir,
@@ -115,7 +127,6 @@ impl Analyzer<'_> {
         if let Type::Enum(family_id) = receiver_ty
             && self.is_construct_family_type(family_id)
         {
-            let name = self.interner.resolve(method).to_owned();
             return self.analyze_construct_family_call(
                 ctx,
                 receiver_hir,
@@ -134,13 +145,22 @@ impl Analyzer<'_> {
         // resolve a method on it: it is not a struct, so a field-based lookup
         // would report a missing type rather than the opaque-handle rule.
         if matches!(receiver_ty, Type::Task(_)) {
-            let name = self.interner.resolve(method).to_owned();
             return self.analyze_task_method(ctx, receiver_hir, &name, args, method_span);
         }
         if receiver_ty == Type::String {
+            if has_user_method && !is_builtin_string_method(&name) {
+                return self.analyze_resolved_method(
+                    ctx,
+                    receiver,
+                    receiver_hir,
+                    &qualified,
+                    args,
+                    children,
+                    method_span,
+                );
+            }
             // A string builtin binds its arguments by shape, not by a parameter
             // name, so a label on one is a mistake.
-            let name = self.interner.resolve(method).to_owned();
             let values = Self::argument_values(args);
             return self.analyze_string_method(ctx, receiver_hir, &name, method_span, &values);
         }
@@ -148,27 +168,14 @@ impl Analyzer<'_> {
         if receiver_ty == Type::Error {
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        let name = self.interner.resolve(method).to_owned();
         if self.refuse_direct_drop_call(receiver_ty, &name, method_span) {
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        let Type::Struct(_) = receiver_ty else {
-            self.emit(
-                method_span,
-                "KSEM096",
-                format!(
-                    "type `{}` has no methods, so it has no method `{name}`",
-                    self.type_name(receiver_ty)
-                ),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        };
         // A field of function type is *called* through this same syntax, so a
         // closure in a field is tried before a method of that name is looked
         // up. A method wins if both exist, because a method is what the
         // receiver's type declares and a field only what it stores.
-        let qualified = format!("{}.{name}", self.type_name(receiver_ty));
-        if self.lookup_function(&qualified).is_none() {
+        if !has_user_method && let Type::Struct(_) = receiver_ty {
             let values = Self::argument_values(args);
             if let Some(call) = self.analyze_field_closure_call(
                 ctx,
@@ -182,7 +189,7 @@ impl Analyzer<'_> {
                 return call;
             }
         }
-        if self.lookup_function(&qualified).is_none() {
+        if !has_user_method {
             // A concrete construct value calls its family's `extend` modifiers
             // through the same syntax: the receiver has no method of this name,
             // but its family does. Upcast the receiver into the family value and
@@ -211,19 +218,54 @@ impl Analyzer<'_> {
             }
             // A field holding a value is not callable, and saying so names the
             // likelier mistake than "no such method".
-            let message = match self.resolve_field_quietly(receiver_ty, &name) {
-                true => format!(
-                    "`{name}` is a field of `{}`, not a method",
-                    self.type_name(receiver_ty)
-                ),
-                false => format!(
-                    "struct `{}` has no method `{name}`",
-                    self.type_name(receiver_ty)
-                ),
-            };
-            self.emit(method_span, "KSEM097", message);
+            if let Type::Struct(_) = receiver_ty {
+                let message = match self.resolve_field_quietly(receiver_ty, &name) {
+                    true => format!(
+                        "`{name}` is a field of `{}`, not a method",
+                        self.type_name(receiver_ty)
+                    ),
+                    false => format!(
+                        "struct `{}` has no method `{name}`",
+                        self.type_name(receiver_ty)
+                    ),
+                };
+                self.emit(method_span, "KSEM097", message);
+            } else {
+                self.emit(
+                    method_span,
+                    "KSEM096",
+                    format!(
+                        "type `{}` has no methods, so it has no method `{name}`",
+                        self.type_name(receiver_ty)
+                    ),
+                );
+            }
             return self.program.exprs.alloc(HirExpr::Error);
         }
+        self.analyze_resolved_method(
+            ctx,
+            receiver,
+            receiver_hir,
+            &qualified,
+            args,
+            children,
+            method_span,
+        )
+    }
+
+    /// Type-checks a method whose concrete receiver already selected a user
+    /// callable. Trait defaults use this path for every type an `extend` block
+    /// may target, including scalars, arrays, strings, and concrete enums.
+    fn analyze_resolved_method(
+        &mut self,
+        ctx: &mut FnCtx,
+        receiver: ExprId,
+        receiver_hir: HirExprId,
+        qualified: &str,
+        args: &[CallArg],
+        children: &[ExprId],
+        method_span: Span,
+    ) -> HirExprId {
         // A trailing block on a struct method fills that method's content
         // parameter, exactly as it does on a construction or a family modifier.
         // The children are already analyzed into one value, so they occupy the
@@ -267,4 +309,10 @@ impl Analyzer<'_> {
         self.record_mut_receiver(ctx, call, receiver);
         call
     }
+}
+
+/// Whether `name` belongs to `String`'s built-in method surface.
+fn is_builtin_string_method(name: &str) -> bool {
+    matches!(name, "count" | "charAt" | "indexOf" | "substring")
+        || kira_runtime_abi::StringOp::from_method_name(name).is_some()
 }

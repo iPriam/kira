@@ -216,6 +216,14 @@ impl Analyzer<'_> {
         // bodies are appended at their final contiguous positions.
         let final_base = self.program.functions.len() as u32;
         self.remap_synth_calls(final_base);
+        for constant in &mut self.program.constants {
+            remap_synth_id(
+                &mut constant.init,
+                self.synth_base,
+                self.synth.len() as u32,
+                final_base,
+            );
+        }
         let synth = std::mem::take(&mut self.synth);
         for function in synth {
             if let Some(function) = function {
