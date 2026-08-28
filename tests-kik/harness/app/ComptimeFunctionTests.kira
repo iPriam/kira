@@ -1,0 +1,54 @@
+import Foundation
+
+// Compile-time functions are ordinary Kira evaluated before semantic lowering.
+// Keeping these as Test declarations proves both ends of the feature: the
+// evaluator computes the call and the resulting literal still reaches the
+// test runner on every backend.
+
+comptime function ctfDouble(value: Int) -> Int {
+    return value * 2
+}
+
+comptime function ctfTriangular(limit: Int) -> Int {
+    var total = 0
+    var i = 1
+    while i <= limit {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+comptime function ctfComposed(value: Int) -> Int {
+    return ctfDouble(ctfDouble(value)) + 1
+}
+
+comptime function ctfDescribe(value: Int) -> String {
+    if value < 0 {
+        return "negative"
+    }
+    if value == 0 {
+        return "zero"
+    }
+    return "positive"
+}
+
+construct CtfFunctionComputesAValue() extends Test {
+    test { return ctfDouble(21) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+construct CtfFunctionRunsAWhileLoop() extends Test {
+    test { return ctfTriangular(10) }
+    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+}
+
+construct CtfFunctionCallsAnotherFunction() extends Test {
+    test { return ctfComposed(5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+}
+
+construct CtfFunctionRunsBranches() extends Test {
+    test { return ctfDescribe(0) }
+    expect { let e: Result<String, TestFailure> = .Ok("zero"); return e }
+}

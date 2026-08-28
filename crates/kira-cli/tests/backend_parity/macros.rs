@@ -55,6 +55,46 @@ function main() {
     assert_eq!(output, "36\n6\n130\n25\n");
 }
 
+/// Compile-time functions execute ordinary Kira before the backend is chosen.
+/// This exercises a loop, nested calls, and a string result while proving that
+/// the generated program is identical on VM, LLVM, and hybrid.
+#[test]
+fn comptime_functions_agree() {
+    let output = assert_parity(
+        r#"
+comptime function cfpTriangular(limit: Int) -> Int {
+    var total = 0
+    var i = 1
+    while i <= limit {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+comptime function cfpDouble(value: Int) -> Int {
+    return value * 2
+}
+
+comptime function cfpLabel(value: Int) -> String {
+    if value == 0 {
+        return "zero"
+    }
+    return "nonzero"
+}
+
+@Main
+function main() {
+    print(cfpTriangular(10))
+    print(cfpDouble(cfpTriangular(3)))
+    print(cfpLabel(0))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "55\n12\nzero\n");
+}
+
 /// An `expr` fragment is evaluated exactly once even though the template names
 /// it twice — the C-style double-evaluation footgun does not exist here.
 #[test]
