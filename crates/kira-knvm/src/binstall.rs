@@ -86,6 +86,14 @@ pub enum BinstallError {
     /// `cargo` is required to build the checkout and is not on PATH.
     #[error("`cargo` was not found on PATH; binstall builds the checkout with it")]
     CargoUnavailable,
+    /// Cargo could not report the target directory used by this checkout.
+    #[error("could not resolve Cargo's target directory for `{checkout}`: {detail}")]
+    CargoMetadataFailed {
+        /// The checkout whose Cargo configuration was being resolved.
+        checkout: PathBuf,
+        /// The process or JSON error Cargo reported.
+        detail: String,
+    },
     /// No managed LLVM was found, and kira cannot be built without one.
     #[error(
         "no managed LLVM found under the toolchains root; the LLVM backend is \
@@ -190,6 +198,12 @@ pub fn binstall(
     if kira_toolchain::llvm_discovery::discover(Some(&checkout)).is_err() {
         return Err(BinstallError::LlvmMissing);
     }
+    // Cargo accepts target directories from environment and configuration
+    // files, including configurations inherited from a parent directory. Ask
+    // Cargo for the resolved directory instead of reconstructing only the
+    // checkout-local default. The installer must copy the artifacts Cargo
+    // actually produced, not a second path that happens to be conventional.
+    let target_dir = cargo_target_dir(&checkout)?;
     let mut build = Command::new("cargo");
     build.arg("build");
     build.args(profile.cargo_flags());
@@ -231,7 +245,7 @@ pub fn binstall(
         return Err(BinstallError::BuildFailed { checkout });
     }
 
-    let built_dir = target_dir(&checkout).join(profile.target_subdirectory());
+    let built_dir = target_dir.join(profile.target_subdirectory());
     let compiler = built_dir.join(executable_name(PRIMARY_BINARY));
     let language_server = built_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
     let desktop_runner = built_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
@@ -245,7 +259,7 @@ pub fn binstall(
     // itself: the engine is linked in rather than shipped beside the artifact,
     // so there is no separate binary for a toolchain to stage.
     let libffi_archive = built_dir.join(static_archive_name("kira_libffi"));
-    let wasm_archive = target_dir(&checkout)
+    let wasm_archive = target_dir
         .join("wasm32-unknown-emscripten")
         .join(profile.target_subdirectory())
         .join("libkira_native_bridge.a");
@@ -447,12 +461,50 @@ fn workspace_version(checkout: &Path) -> Result<String, BinstallError> {
         .ok_or_else(unreadable)
 }
 
-/// Where cargo put the build, honoring a `CARGO_TARGET_DIR` override.
-pub(crate) fn target_dir(checkout: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(overridden) if !overridden.is_empty() => PathBuf::from(overridden),
-        _ => checkout.join("target"),
+/// Asks Cargo where it puts artifacts for this checkout.
+///
+/// Cargo's answer includes configuration from the checkout, its parents, and
+/// the environment. Resolving it through Cargo is important for developer
+/// checkouts that deliberately share a target directory with other worktrees.
+pub(crate) fn cargo_target_dir(checkout: &Path) -> Result<PathBuf, BinstallError> {
+    let metadata = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(checkout)
+        .output()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => BinstallError::CargoUnavailable,
+            _ => BinstallError::CargoMetadataFailed {
+                checkout: checkout.to_path_buf(),
+                detail: error.to_string(),
+            },
+        })?;
+    if !metadata.status.success() {
+        return Err(BinstallError::CargoMetadataFailed {
+            checkout: checkout.to_path_buf(),
+            detail: String::from_utf8_lossy(&metadata.stderr).trim().to_owned(),
+        });
     }
+
+    let document: serde_json::Value =
+        serde_json::from_slice(&metadata.stdout).map_err(|error| {
+            BinstallError::CargoMetadataFailed {
+                checkout: checkout.to_path_buf(),
+                detail: error.to_string(),
+            }
+        })?;
+    let target = document
+        .get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| BinstallError::CargoMetadataFailed {
+            checkout: checkout.to_path_buf(),
+            detail: "Cargo metadata did not contain target_directory".to_string(),
+        })?;
+    let target = PathBuf::from(target);
+    Ok(if target.is_absolute() {
+        target
+    } else {
+        checkout.join(target)
+    })
 }
 
 /// Copies a directory tree; contents only, no metadata beyond what `copy` keeps.

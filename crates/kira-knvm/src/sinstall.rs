@@ -27,7 +27,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::binstall::{BinstallError, enclosing_checkout, target_dir};
+use crate::binstall::{BinstallError, cargo_target_dir, enclosing_checkout};
 use crate::install::InstallError;
 use crate::path_setup::{self, PathConfigured};
 
@@ -81,6 +81,7 @@ pub fn sinstall(
     let checkout = enclosing_checkout(start).ok_or_else(|| BinstallError::NotACheckout {
         start: start.to_path_buf(),
     })?;
+    let target_dir = cargo_target_dir(&checkout)?;
 
     let built = Command::new("cargo")
         .args(["build", "-p", "kira-knvm", "-p", "kira-launcher"])
@@ -102,7 +103,7 @@ pub fn sinstall(
 
     sweep_displaced(&bin_dir);
 
-    let debug_dir = target_dir(&checkout).join("debug");
+    let debug_dir = target_dir.join("debug");
     for (tool, installed) in TOOLS {
         let name = kira_toolchain::executable_name(installed);
         let built_binary = debug_dir.join(kira_toolchain::executable_name(tool));
