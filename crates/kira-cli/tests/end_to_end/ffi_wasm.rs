@@ -6,10 +6,10 @@
 //! does; a machine without them fails here rather than skipping, so a green run
 //! means the whole path was exercised.
 //!
-//! Two programs run here. The first is the scalar subset of the fixture, which
-//! creates no Kira strings at all; the second is the string half — literals,
-//! concatenation, the string primitives, and `CString` in both directions —
-//! which proves the width `kira_rt_str_new` is called at is the *target*'s.
+//! The fixture is exercised by scalar calls, string operations, direct scalar
+//! and `CString` callbacks, and a by-value aggregate callback. Together they
+//! prove that the generated C and LLVM paths use the target's ABI and pointer
+//! width rather than the host's.
 
 use std::path::Path;
 use std::process::Command;
@@ -22,6 +22,9 @@ const EXPECTED: &str =
 
 /// The string program's output, line for line.
 const EXPECTED_STRINGS: &str = "catdog\n6\n99\natd\n3\n42!\n5\n6\nhello from C\nround trip\n";
+
+/// The scalar and `CString` callback program's output, line for line.
+const EXPECTED_CALLBACK: &str = "34\n344\n112\nkira!\n407\n!\n9\n";
 
 /// Compiles the checked-in C fixture into an emscripten static archive under
 /// `dir` with `emcc` and `emar`.
@@ -165,6 +168,107 @@ fn a_wasm_build_creates_kira_strings_and_crosses_the_cstring_seam() {
         String::from_utf8_lossy(&node.stdout),
         EXPECTED_STRINGS,
         "the wasm string program produced unexpected output",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Scalar and `CString` callbacks use direct LLVM functions in a Web module;
+/// unlike the host path they do not require a libffi closure to manufacture
+/// their address.
+#[test]
+fn a_wasm_build_enters_scalar_and_string_callbacks_directly() {
+    let dir = scratch("wasm-kira-callback");
+    build_wasm_archive(&dir);
+    std::fs::write(
+        dir.join("NativeLibs/ffifixture.toml"),
+        "name = \"ffifixture\"\n\
+         [[target]]\n\
+         triple = \"wasm32-emscripten-unknown\"\n\
+         staticLib = \"lib/libffifixture-wasm.a\"\n",
+    )
+    .expect("manifest");
+    let entry = dir.join("main.kira");
+    std::fs::write(
+        &entry,
+        include_str!("../fixtures/ffi/ffi_program_kira_callback.kira"),
+    )
+    .expect("program");
+
+    let build = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
+        .output()
+        .expect("run kira");
+    assert!(
+        build.status.success(),
+        "the wasm callback build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let node = Command::new("node")
+        .arg(dir.join(".kira-build/web/main.js"))
+        .output()
+        .expect("run node (required for the wasm FFI test)");
+    assert!(
+        node.status.success(),
+        "the wasm callback module must run to completion under node: {}",
+        String::from_utf8_lossy(&node.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&node.stdout),
+        EXPECTED_CALLBACK,
+        "the wasm callback program produced unexpected output",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Web callback whose C signature contains a by-value aggregate uses the
+/// generated C entry rather than the host-only libffi closure path. The entry
+/// lets emscripten classify the struct, then forwards its address to the LLVM
+/// callback body; the body reads the same fields the native callback does.
+#[test]
+fn a_wasm_build_enters_a_struct_callback_through_its_generated_c_entry() {
+    let dir = scratch("wasm-struct-callback");
+    build_wasm_archive(&dir);
+    std::fs::write(
+        dir.join("NativeLibs/ffifixture.toml"),
+        "name = \"ffifixture\"\n\
+         [[target]]\n\
+         triple = \"wasm32-emscripten-unknown\"\n\
+         staticLib = \"lib/libffifixture-wasm.a\"\n",
+    )
+    .expect("manifest");
+    let entry = dir.join("main.kira");
+    std::fs::write(
+        &entry,
+        include_str!("../fixtures/ffi/ffi_program_struct_callback.kira"),
+    )
+    .expect("program");
+
+    let build = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
+        .output()
+        .expect("run kira");
+    assert!(
+        build.status.success(),
+        "the wasm struct-callback build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let node = Command::new("node")
+        .arg(dir.join(".kira-build/web/main.js"))
+        .output()
+        .expect("run node (required for the wasm FFI test)");
+    assert!(
+        node.status.success(),
+        "the wasm struct callback must run to completion under node: {}",
+        String::from_utf8_lossy(&node.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&node.stdout),
+        "704\n300\n504\n6.25\n5.75\n",
+        "the wasm struct callback produced unexpected output",
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
