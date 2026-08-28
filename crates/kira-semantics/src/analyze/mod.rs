@@ -368,6 +368,12 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) ffi_callback_signatures: HashMap<StructId, kira_runtime_abi::ForeignSignature>,
     /// Keeps each C-layout aggregate in the program table exactly once.
     pub(crate) foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder,
+    /// Every module-scope constant, in evaluation order, in lockstep with
+    /// [`kira_semantics_model::hir::HirProgram::constants`].
+    pub(crate) constants: Vec<crate::constants::ConstantEntry>,
+    /// Each constant's slot by name. Names are unique — a clash was refused —
+    /// so one index answers a read.
+    pub(crate) constant_index: HashMap<String, u32>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Reference→definition links, recorded as names resolve.

@@ -244,6 +244,16 @@ impl Heap {
         };
         self.freed += 1;
         self.free_list.push(id.0);
+        // The glue is keyed by slot, and the slot was just recycled: a stale
+        // entry would hand this type's `Drop` body to whatever unrelated
+        // object the free list places here next. Only the non-last holder of
+        // a dropping struct reaches this line — the last holder parked above —
+        // and a non-last holder's slot still carries its own entry. The empty
+        // test keeps the no-`Drop` program paying one length check, as the
+        // registry promises.
+        if !self.drop_glue.is_empty() {
+            self.drop_glue.remove(&id.0);
+        }
         // Only the last holder of the block owns what is in it. Another handle
         // still reading these fields would find them freed underneath it.
         let Ok(fields) = Rc::try_unwrap(fields) else {
@@ -423,6 +433,29 @@ mod tests {
     use kira_runtime_abi::{CBlockOffset, ForeignPointerWidth};
 
     use super::*;
+
+    #[test]
+    fn a_recycled_slot_does_not_inherit_the_previous_tenant_drop_glue() {
+        // A copy of a dropping struct shares the fields and carries the glue.
+        // Freeing the copy is a non-last-holder free: the slot goes back to
+        // the free list, and the glue entry keyed by that slot must go with
+        // it — a stale entry would run this type's `Drop` body against
+        // whatever unrelated object lands on the slot next.
+        let mut heap = Heap::new();
+        let original = heap.alloc_struct_dropping(vec![Value::Int(7)], 3);
+        let copy = heap.copy_value(Value::Struct(original));
+        let Value::Struct(copy_id) = copy else {
+            panic!("a struct copy stays a struct");
+        };
+        heap.drop_value(copy);
+
+        let recycled = heap.alloc_struct(vec![Value::Int(994_771_479)]);
+        assert_eq!(recycled, copy_id, "the free list did not recycle the slot");
+        assert_eq!(heap.glue_of(recycled.0), None);
+        // The original handle still owes its body: last holder, parked whole.
+        heap.drop_value(Value::Struct(original));
+        assert!(heap.owes_drops());
+    }
 
     #[test]
     fn a_cblock_tree_clone_rewrites_its_embedded_pointer() {

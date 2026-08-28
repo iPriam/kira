@@ -11,6 +11,7 @@ fn module_round_trips_through_bytes() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         main: Some(1),
         strings: vec!["hello".to_owned(), "world".to_owned()],
         functions: vec![
@@ -55,6 +56,7 @@ fn library_module() -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         main: None,
         strings: Vec::new(),
         functions: vec![FuncProto {
@@ -97,6 +99,7 @@ fn an_entrypoint_index_is_never_the_sentinel() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         main: Some(0),
         ..library_module()
     }
@@ -255,13 +258,13 @@ fn a_class_index_on_a_non_handle_type_is_rejected() {
 fn bytes_after_the_last_section_are_rejected() {
     // `exporting_module` has exports but no foreign imports, so its bytes
     // end after the exports section. Each appended section is complete when
-    // it carries a count of zero — four zero bytes — and there are four of
-    // them: foreign imports, aggregates, callbacks, and retained parameters.
-    // The release section cannot be empty the same way: its entries are
-    // positional, so a complete one names every function, here two, each
-    // asking for every local. Three more bytes past all of that is trailing
-    // garbage the decoder must reject once every section is read, rather than
-    // run half an artifact.
+    // it carries a count of zero — four zero bytes — and there are five of
+    // them: foreign imports, aggregates, callbacks, retained parameters, and
+    // module constants. The release section cannot be empty the same way: its
+    // entries are positional, so a complete one names every function, here
+    // two, each asking for every local. Three more bytes past all of that is
+    // trailing garbage the decoder must reject once every section is read,
+    // rather than run half an artifact.
     let module = exporting_module();
     let mut bytes = module.to_bytes();
     for _ in 0..3 {
@@ -271,6 +274,7 @@ fn bytes_after_the_last_section_are_rejected() {
     for _ in 0..module.functions.len() {
         bytes.extend_from_slice(&[0xff; 8]);
     }
+    bytes.extend_from_slice(&[0; 8]);
     bytes.extend_from_slice(&[0; 8]);
     bytes.extend_from_slice(&[0, 0, 0]);
     assert_eq!(
@@ -474,6 +478,86 @@ fn kbc2_rejects_an_impossible_length_without_allocating_it() {
 
     assert_eq!(
         Module::from_bytes(&bytes).unwrap_err(),
+        ModuleDecodeError::Truncated
+    );
+}
+
+/// A module whose second function is a constant init and whose main reads the
+/// slot it fills.
+fn constant_module() -> Module {
+    Module {
+        exports: Default::default(),
+        foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
+        constants: vec![1],
+        main: Some(0),
+        strings: Vec::new(),
+        functions: vec![
+            FuncProto {
+                name: "main".to_owned(),
+                param_count: 0,
+                local_count: 0,
+                execution: Execution::Runtime,
+                code: vec![
+                    Instruction::LoadConstant(0),
+                    Instruction::Pop,
+                    Instruction::ReturnVoid,
+                ],
+                releases: FrameRelease::EveryLocal,
+            },
+            FuncProto {
+                name: "answer$constant".to_owned(),
+                param_count: 0,
+                local_count: 0,
+                execution: Execution::Runtime,
+                code: vec![Instruction::ConstInt(42), Instruction::Return],
+                releases: FrameRelease::EveryLocal,
+            },
+        ],
+    }
+}
+
+#[test]
+fn a_constants_section_round_trips_through_bytes() {
+    let module = constant_module();
+    let bytes = module.to_bytes();
+    let decoded = Module::from_bytes(&bytes).unwrap();
+    assert_eq!(decoded, module);
+    assert_eq!(decoded.constants, vec![1]);
+}
+
+#[test]
+fn a_module_without_constants_writes_no_constants_section() {
+    // The last eight bytes of a constant-carrying module are its one table
+    // row; a module without constants ends at the section before it.
+    let with = constant_module().to_bytes();
+    let mut without = constant_module();
+    without.constants = Vec::new();
+    let without = without.to_bytes();
+    assert!(with.len() > without.len());
+}
+
+#[test]
+fn a_constant_row_past_the_function_table_is_rejected() {
+    let mut module = constant_module();
+    module.constants = vec![9];
+    let bytes = module.to_bytes();
+    assert_eq!(
+        Module::from_bytes(&bytes).unwrap_err(),
+        ModuleDecodeError::ConstantInitOutOfRange {
+            slot: 0,
+            init: 9,
+            functions: 2,
+        }
+    );
+}
+
+#[test]
+fn a_truncated_constants_section_is_a_typed_error() {
+    let bytes = constant_module().to_bytes();
+    assert_eq!(
+        Module::from_bytes(&bytes[..bytes.len() - 1]).unwrap_err(),
         ModuleDecodeError::Truncated
     );
 }

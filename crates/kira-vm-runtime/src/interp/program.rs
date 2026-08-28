@@ -48,9 +48,11 @@ fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutc
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
     let result = vm.enter(module, main, &[])?;
-    // The program's result is no longer referenced by anything; drop it so
-    // heap accounting reflects a fully reclaimed program.
+    // The program's result is no longer referenced by anything; drop it — and
+    // the module constants with it — so heap accounting reflects a fully
+    // reclaimed program.
     vm.heap.drop_value(result);
+    vm.release_constants();
     Ok(RunOutcome {
         result,
         heap: vm.heap.stats(),
@@ -66,6 +68,7 @@ fn run_entry_with_debug(
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
     let result = vm.enter_values_with_debug(module, main, Vec::new(), observer)?;
     vm.heap.drop_value(result);
+    vm.release_constants();
     Ok(RunOutcome {
         result,
         heap: vm.heap.stats(),
@@ -162,6 +165,7 @@ impl Program {
 
         let mut vm = Vm::new(host, Heap::new());
         let (result, captured) = vm.enter_capturing(&self.module, function_id, args, capture)?;
+        vm.release_constants();
         let mut writebacks = Vec::with_capacity(captured.len());
         for (slot, value) in captured {
             let lifted = vm.heap.lift(value);
@@ -200,6 +204,9 @@ impl Vm<'_> {
         // before this frame returns, so the reborrow does not outlive it.
         let mut nested = Vm::new(unsafe { &mut *host }, heap);
         let outcome = nested.enter_capturing(module, function_id, args, capture);
+        // The heap goes back to the outer VM below; the nested run's constants
+        // are dropped first so crossings do not accumulate copies in it.
+        nested.release_constants();
         let result = match outcome {
             Ok((value, captured)) => {
                 let mut writebacks = Vec::with_capacity(captured.len());

@@ -60,6 +60,15 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         foreign_aggregates: program.foreign_aggregates.clone(),
         foreign_callbacks: program.foreign_callbacks.clone(),
         exprs: la_arena::Arena::new(),
+        constants: program
+            .constants
+            .iter()
+            .map(|constant| crate::ir::IrConstant {
+                name: constant.name.clone(),
+                ty: constant.ty,
+                init: constant.init.0,
+            })
+            .collect(),
     };
     // Task functions are appended after source functions. Reserve their base
     // index before lowering so `.await` can reference their eventual rows.
@@ -280,6 +289,7 @@ impl Lowerer<'_> {
             HirExpr::RawPtrNull => IrExpr::RawPtrNull,
             HirExpr::ForeignCallbackPtr { callback } => IrExpr::ForeignCallbackPtr { callback },
             HirExpr::Local { local, .. } => IrExpr::Local(self.slot(local.0)),
+            HirExpr::ConstantGet { constant, ty } => IrExpr::ConstantGet { constant, ty },
             HirExpr::CellNew { value, ty } => IrExpr::CellNew {
                 value: self.lower_expr(value),
                 ty,

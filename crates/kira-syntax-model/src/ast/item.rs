@@ -36,6 +36,8 @@ pub enum Item {
     Enum(EnumDecl),
     /// A `type Name = Target` alias.
     TypeAlias(TypeAliasDecl),
+    /// A `let Name: T = value` constant at module scope.
+    Constant(ConstantDecl),
     /// An `import Module [as Alias]` declaration.
     Import(ImportDecl),
     /// A `construct Family { ... }` declaration family, or a construct-backed
@@ -288,6 +290,39 @@ pub struct TypeAliasDecl {
     pub name_span: Span,
     /// The written target type.
     pub target: TypeRefId,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// A `let Name: T = value` written at module scope.
+///
+/// One value, computed once for the program and shared by every reader. That is
+/// the whole point of it: a library that derives something from its own data — a
+/// parsed table, a decoded resource — otherwise has to derive it again on every
+/// call, because a function's parameter default and a struct's field default are
+/// both re-evaluated per use and nothing else in the language holds a value for
+/// longer than a frame.
+///
+/// It is immutable, so there is no `var` at module scope: a mutable one would
+/// need an initialization order that is observable, and shared mutable state
+/// across a program is not a thing this language is going to grow by accident.
+///
+/// The initializer is an ordinary expression evaluated at module load, in an
+/// order that puts each constant after the ones it reads. A cycle among them has
+/// no first value and is refused.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstantDecl {
+    /// The constant's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The written type, when the declaration spelled one.
+    ///
+    /// Optional for the same reason a local's is: the initializer usually says
+    /// the type already, and repeating it is noise.
+    pub declared_type: Option<TypeRefId>,
+    /// The initializer.
+    pub value: ExprId,
     /// Span covering the whole declaration.
     pub span: Span,
 }

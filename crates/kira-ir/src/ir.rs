@@ -68,6 +68,24 @@ pub struct IrProgram {
     pub foreign_callbacks: Vec<ForeignCallback>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
+    /// Every module-scope constant, in evaluation order.
+    ///
+    /// The order is the contract: a backend fills the slots front to back,
+    /// once, before `main` runs — each row after every row it depends on, as
+    /// analysis ordered them. An [`IrExpr::ConstantGet`] indexes this vector.
+    pub constants: Vec<IrConstant>,
+}
+
+/// One module-scope `let`: a single value computed once before `main`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrConstant {
+    /// The constant's name, for diagnostics and disassembly.
+    pub name: String,
+    /// The constant's type; the backend's global slot is shaped by it.
+    pub ty: Type,
+    /// Index within [`IrProgram::functions`] of the synthesized zero-argument
+    /// function whose call computes the slot's value.
+    pub init: u32,
 }
 
 /// One foreign C function the program calls through the FFI seam.
@@ -176,6 +194,7 @@ impl IrProgram {
             | IrExpr::StringOperation { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
+            IrExpr::ConstantGet { ty, .. } => *ty,
             IrExpr::ArrayLen { .. }
             | IrExpr::StringLen { .. }
             | IrExpr::StringCharAt { .. }
@@ -547,6 +566,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             exprs: Arena::new(),
+            constants: Vec::new(),
         }
     }
 

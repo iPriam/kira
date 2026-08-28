@@ -39,6 +39,25 @@ impl Analyzer<'_> {
         Some(self.analyze_closure_call(ctx, expr, repr, args, span))
     }
 
+    /// Type-checks `f(args)` when `f` names a module constant of function
+    /// type.
+    ///
+    /// `None` when no visible constant answers to the name or the one that
+    /// does holds no function, so the caller carries on to classes, constructs
+    /// and free functions.
+    pub(crate) fn analyze_constant_closure_call(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        args: &[ExprId],
+        span: Span,
+    ) -> Option<HirExprId> {
+        let ty = self.constant_type(name)?;
+        let repr = self.as_function_type(ty)?;
+        let expr = self.constant_read(name, span)?;
+        Some(self.analyze_closure_call(ctx, expr, repr, args, span))
+    }
+
     /// Type-checks `receiver.name(args)` when `name` is a field of function
     /// type rather than a method.
     ///

@@ -94,6 +94,14 @@ impl Parser<'_> {
                     self.items.push(Item::TypeAlias(declaration));
                 }
             }
+            // `let Name = value` at module scope: one value computed once for
+            // the program. There is no `var` here, so `var` still falls through
+            // to the stray-token arm below.
+            TokenKind::Let => {
+                if let Some(declaration) = self.parse_constant() {
+                    self.items.push(Item::Constant(declaration));
+                }
+            }
             TokenKind::Import => {
                 if let Some(declaration) = self.parse_import() {
                     self.items.push(Item::Import(declaration));

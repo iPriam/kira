@@ -40,6 +40,7 @@ impl FunctionLowering<'_, '_> {
                 Ok(unsafe { LLVMConstNull(self.codegen.types.ptr) })
             }
             IrExpr::Local(slot) => self.load_local(slot),
+            IrExpr::ConstantGet { constant, ty } => self.lower_constant_get(constant, ty),
             IrExpr::CellNew { value, ty } => self.lower_cell_new(value, ty),
             IrExpr::CellGet { slot, ty } => self.lower_cell_get(slot, ty),
             IrExpr::Unary { op, operand } => {
@@ -299,6 +300,13 @@ impl FunctionLowering<'_, '_> {
                 }
                 Ok(Some((self.local_pointer(slot)?, ty)))
             }
+            // A constant's global is addressable storage nothing writes after
+            // init, so a borrow reads it where it sits. The hybrid native half
+            // has no global and falls back to the evaluated copy.
+            IrExpr::ConstantGet { constant, ty } => Ok(self
+                .codegen
+                .constant_global(constant)
+                .map(|global| (global, ty))),
             IrExpr::Field { base, index, ty } => {
                 let Some((pointer, base_ty)) = self.borrowed_place_pointer(base)? else {
                     return Ok(None);
@@ -589,6 +597,26 @@ impl FunctionLowering<'_, '_> {
     ///
     /// The VM's `LoadLocal` copies the value, so the slot keeps ownership of
     /// its own storage and the reader owns an independent copy.
+    /// A read of a module constant: a copy out of its global, with the same
+    /// retain/copy split every owned read takes.
+    ///
+    /// The hybrid native half has no globals — its constants live on the VM —
+    /// so a read there crosses the bridge to the constant's init function,
+    /// which the VM answers from its own filled table.
+    fn lower_constant_get(&mut self, constant: u32, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        if let Some(global) = self.codegen.constant_global(constant) {
+            return self.read_owned(global, ty);
+        }
+        let init = self
+            .codegen
+            .program
+            .constants
+            .get(constant as usize)
+            .ok_or(LlvmError::internal("a constant read past the table"))?
+            .init;
+        self.lower_runtime_call(init, &[], &[])
+    }
+
     fn load_local(&mut self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
         let ty = self.local_type(slot)?;
         if let Some(type_id) = self

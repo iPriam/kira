@@ -70,6 +70,21 @@ impl Codegen<'_> {
             // corrupting memory at run time.
             self.call_runtime(self.runtime.abi_marker, &mut [], c"");
 
+            // Module constants are filled before `@Main` runs — each by one
+            // call of its init, in the compiler's dependency order — so the
+            // first read anywhere in the program finds its slot filled.
+            if let Some(init) = self.lower_constants_init()? {
+                let init_ty = LLVMFunctionType(self.types.void, std::ptr::null_mut(), 0, 0);
+                LLVMBuildCall2(
+                    self.builder,
+                    init_ty,
+                    init,
+                    std::ptr::null_mut(),
+                    0,
+                    c"".as_ptr(),
+                );
+            }
+
             let name = if main_function.return_type == Type::Void {
                 c"".as_ptr()
             } else {
@@ -86,6 +101,9 @@ impl Codegen<'_> {
             if main_function.return_type == Type::String {
                 self.call_runtime(self.runtime.str_free, &mut [result], c"");
             }
+            // The constants go back before the heap is asked to balance, so a
+            // clean program still reports every allocation reclaimed.
+            self.lower_constants_release()?;
             // The native counterpart of the VM's `current == 0`: after the
             // program's last value is released and before the process is gone,
             // ask the runtime whether everything it allocated came back. Silent

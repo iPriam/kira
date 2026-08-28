@@ -64,6 +64,8 @@ impl<'a> Analyzer<'a> {
             ffi_array_counts: HashMap::new(),
             ffi_callback_signatures: HashMap::new(),
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),
+            constants: Vec::new(),
+            constant_index: HashMap::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
             definitions: Vec::new(),
@@ -195,6 +197,13 @@ impl<'a> Analyzer<'a> {
         // construct header was collected. Re-run the value-cycle break after
         // those edges become concrete, before any instance default is lowered.
         self.break_remaining_value_cycles();
+        // Module constants are collected before any default or body resolves:
+        // a read anywhere below finds the finished table. Each initializer is
+        // analyzed here, in dependency order, so a constant an initializer
+        // reads already has its slot — and a struct default an initializer
+        // constructs through resolves lazily on first use, so the pass below
+        // only re-walks what this one already forced.
+        self.collect_constants(&callables);
         // A field default belongs to its declaration. Resolve every one now, with
         // signatures and foreign callables available but before a construction
         // site can supply some unrelated file scope, and reuse that HIR at every

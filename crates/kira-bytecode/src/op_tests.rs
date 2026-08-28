@@ -12,6 +12,7 @@ fn round_trips_a_mixed_instruction_stream() {
         Instruction::ConstStr(7),
         Instruction::LoadLocal(3),
         Instruction::StoreLocal(9),
+        Instruction::LoadConstant(4),
         Instruction::AddInt,
         Instruction::ConcatStr,
         Instruction::JumpIfFalse(12),

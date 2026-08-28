@@ -88,6 +88,11 @@ fn item_metadata(item: &Item, names: &Names) -> Option<(String, String, Span)> {
             names.resolve(declaration.name).to_owned(),
             declaration.span,
         )),
+        Item::Constant(declaration) => Some((
+            "let".to_owned(),
+            names.resolve(declaration.name).to_owned(),
+            declaration.span,
+        )),
         Item::Construct(declaration) => Some((
             "construct".to_owned(),
             names.resolve(declaration.name).to_owned(),

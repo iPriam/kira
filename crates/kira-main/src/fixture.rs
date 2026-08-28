@@ -53,6 +53,7 @@ pub(crate) fn library() -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         exports: ExportTable {
             classes: vec!["Button".to_owned()],
             functions: vec![

@@ -62,7 +62,11 @@ impl<'a> Analyzer<'a> {
                 // each lowers to a synthesized function whose receiver is the
                 // family value, built after signatures exist. See
                 // `constructs::extend`.
-                Item::Enum(_)
+                // A module-scope `let` is a value, not a callable. Its
+                // initializer is folded during analysis and substituted at every
+                // read, so nothing about it reaches this table.
+                Item::Constant(_)
+                | Item::Enum(_)
                 | Item::TypeAlias(_)
                 | Item::Import(_)
                 | Item::Extend(_)

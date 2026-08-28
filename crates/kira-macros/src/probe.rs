@@ -140,6 +140,8 @@ mod tests {
         assert!(is_statements("let x = 1\nx = 2"));
         assert!(is_declarations("function f() -> Int { return 1 }"));
         assert!(is_declarations(""));
-        assert!(!is_declarations("let x = 1"));
+        // A module-scope `let` is a declaration; an assignment never is.
+        assert!(is_declarations("let x = 1"));
+        assert!(!is_declarations("x = 2"));
     }
 }

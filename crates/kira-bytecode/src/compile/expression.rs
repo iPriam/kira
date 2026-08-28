@@ -30,6 +30,10 @@ impl FnCompiler<'_> {
                     false => Instruction::LoadLocal(slot),
                 });
             }
+            IrExpr::ConstantGet { constant, .. } => {
+                self.code
+                    .push(Instruction::LoadConstant(u64::from(*constant)));
+            }
             IrExpr::CellNew { value, .. } => {
                 let value = *value;
                 self.compile_expr(value)?;

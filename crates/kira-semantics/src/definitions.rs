@@ -117,7 +117,13 @@ impl DeclSpans {
                         FileSpan::new(source, declaration.name_span),
                     );
                 }
-                Item::Function(_) | Item::Import(_) | Item::Extend(_) | Item::Unsupported(_) => {}
+                // A constant shares the value namespace with functions, which
+                // this index does not carry: it maps types, fields and variants.
+                Item::Constant(_)
+                | Item::Function(_)
+                | Item::Import(_)
+                | Item::Extend(_)
+                | Item::Unsupported(_) => {}
             }
         }
         spans

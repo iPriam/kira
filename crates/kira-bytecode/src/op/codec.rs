@@ -69,6 +69,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::STORE_LOCAL);
             out.extend_from_slice(&slot.to_le_bytes());
         }
+        Instruction::LoadConstant(slot) => {
+            out.push(o::LOAD_CONSTANT);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
         Instruction::Jump(target) => {
             out.push(o::JUMP);
             out.extend_from_slice(&target.to_le_bytes());
@@ -415,6 +419,7 @@ impl Cursor<'_> {
             o::CELL_GET => Instruction::CellGet(self.read_slot(legacy)?),
             o::CELL_SET => Instruction::CellSet(self.read_slot(legacy)?),
             o::STORE_LOCAL => Instruction::StoreLocal(self.read_slot(legacy)?),
+            o::LOAD_CONSTANT => Instruction::LoadConstant(self.read_slot(legacy)?),
             o::JUMP => Instruction::Jump(self.read_word(legacy)?),
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(self.read_word(legacy)?),
             o::CALL => Instruction::Call(self.read_word(legacy)?),

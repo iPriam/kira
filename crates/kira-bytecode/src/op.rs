@@ -48,6 +48,12 @@ pub enum Instruction {
     TakeLocal(u64),
     /// Pop the stack top into local slot `n`, dropping the slot's old value.
     StoreLocal(u64),
+    /// Push a copy of module-constant slot `n` (strings are cloned).
+    ///
+    /// The host filled every constant slot — each by one call of its init
+    /// function, front to back in the module's table order — before the
+    /// entrypoint ran, so a read never observes an empty slot.
+    LoadConstant(u64),
     /// Pop and drop the stack top.
     Pop,
     /// Integer negation.
@@ -876,6 +882,11 @@ mod opcode {
     /// Reading a local that runs a user `Drop`, which takes it. Appended after
     /// `NEW_STRUCT_DROPPING`; adding an opcode is not an ABI change.
     pub const TAKE_LOCAL: u8 = 0x72;
+
+    /// Reading a module-constant slot. Appended after `TAKE_LOCAL`; adding an
+    /// opcode is not an ABI change. Carries a wide slot into the module's
+    /// constants table.
+    pub const LOAD_CONSTANT: u8 = 0x73;
 }
 
 #[cfg(test)]

@@ -131,6 +131,18 @@ pub(crate) struct Vm<'h> {
     native_writebacks: Vec<Writeback>,
     /// Temporary buffers used to marshal the next native crossing.
     native_scratch: NativeCallScratch,
+    /// The module-constant slots, in the module's table order.
+    ///
+    /// Filled front to back by [`Vm::ensure_constants`] before an embedder
+    /// entry's first frame runs, and read by `LoadConstant` the way a local is
+    /// read — a copy out, value semantics intact. The vector travels with
+    /// [`VmScratch`], so a persistent [`crate::Instance`] fills it once and
+    /// keeps it; a per-call VM fills it per call, which is the hybrid seam's
+    /// per-call isolation applied to constants.
+    constants: Vec<Value>,
+    /// Guards [`Vm::ensure_constants`] against re-entering itself while the
+    /// init calls it makes are running.
+    initializing_constants: bool,
     /// The user `Drop` bodies running right now, with the frame depth each was
     /// entered at.
     ///
@@ -249,6 +261,9 @@ pub(crate) struct VmScratch {
     frame_cache: Vec<Frame>,
     native_writebacks: Vec<Writeback>,
     native_scratch: NativeCallScratch,
+    /// Module-constant slots, kept with the heap that owns their storage: an
+    /// [`crate::Instance`] hands both back to the next call together.
+    constants: Vec<Value>,
 }
 
 impl Vm<'_> {

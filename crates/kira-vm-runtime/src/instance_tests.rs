@@ -77,6 +77,7 @@ fn library() -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             make_button,
@@ -530,6 +531,7 @@ fn ill_typed() -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             bad_div,
@@ -604,6 +606,7 @@ fn dropping_library() -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), make_handle, body],
         main: Some(0),
         strings: vec!["ok".to_owned()],

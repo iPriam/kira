@@ -149,6 +149,11 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             .collect(),
         foreign_aggregates: program.foreign_aggregates.clone(),
         foreign_callbacks: program.foreign_callbacks.clone(),
+        constants: program
+            .constants
+            .iter()
+            .map(|constant| u64::from(constant.init))
+            .collect(),
     };
     // The compiler checks its own output against the rules every loader checks
     // it against. Without this the rules guard the VM's front door and nothing

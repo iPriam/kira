@@ -31,6 +31,10 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
             .iter()
             .filter_map(|def| def.drop_glue),
     );
+    // A module constant's init is a root too: nothing calls it — the entry (or
+    // the load-time constructor) invokes it once to fill the constant's slot,
+    // before any body the walk below can see runs.
+    pending.extend(program.constants.iter().map(|constant| constant.init));
 
     while let Some(index) = pending.pop_front() {
         let index = index as usize;
@@ -137,6 +141,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
                 walk_expr(program, *arg, facts);
             }
         }
+        // A constant read names a slot, not a function; the slot's init is a
+        // root above, so nothing here adds to the facts.
+        IrExpr::ConstantGet { .. } => {}
         IrExpr::Unary { operand, .. } => walk_expr(program, *operand, facts),
         IrExpr::Binary { lhs, rhs, .. } => {
             walk_expr(program, *lhs, facts);

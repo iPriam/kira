@@ -113,6 +113,8 @@ impl<'h> Vm<'h> {
             frame_cache: scratch.frame_cache,
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,
+            constants: scratch.constants,
+            initializing_constants: false,
             running_drops: Vec::new(),
             trap_probe: None,
         }
@@ -175,6 +177,7 @@ impl<'h> Vm<'h> {
             frame_cache,
             native_writebacks,
             native_scratch,
+            constants,
             ..
         } = self;
         (
@@ -190,6 +193,7 @@ impl<'h> Vm<'h> {
                 frame_cache,
                 native_writebacks,
                 native_scratch,
+                constants,
             },
         )
     }
@@ -257,6 +261,10 @@ impl<'h> Vm<'h> {
         function_id: u32,
         args: Vec<Value>,
     ) -> Result<Value, VmError> {
+        if let Err(error) = self.ensure_constants(module) {
+            self.discard(args);
+            return Err(error);
+        }
         let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
@@ -299,6 +307,10 @@ impl<'h> Vm<'h> {
         args: Vec<Value>,
         observer: &mut dyn VmDebugObserver,
     ) -> Result<Value, VmError> {
+        if let Err(error) = self.ensure_constants(module) {
+            self.discard(args);
+            return Err(error);
+        }
         let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
@@ -323,6 +335,48 @@ impl<'h> Vm<'h> {
         }
         frame.capture = std::mem::take(&mut self.pending_capture);
         self.run_with_debug(module, frame, observer)
+    }
+
+    /// Fills every module-constant slot this VM has not filled yet.
+    ///
+    /// Each slot is computed by one call of its init function, front to back
+    /// in the module's table order — the compiler's dependency order, so a
+    /// later init's `LoadConstant` of an earlier slot always finds it. Runs
+    /// before an embedder entry's first frame; the init calls re-enter
+    /// [`Vm::enter_values`], and the guard flag is what keeps that re-entry
+    /// from starting the fill again.
+    fn ensure_constants(&mut self, module: &Module) -> Result<(), VmError> {
+        if self.initializing_constants || self.constants.len() >= module.constants.len() {
+            return Ok(());
+        }
+        self.initializing_constants = true;
+        while self.constants.len() < module.constants.len() {
+            let init = module.constants[self.constants.len()];
+            let Ok(init) = u32::try_from(init) else {
+                self.initializing_constants = false;
+                return Err(VmError::UnknownFunction(init));
+            };
+            match self.enter_values(module, init, Vec::new()) {
+                Ok(value) => self.constants.push(value),
+                Err(error) => {
+                    self.initializing_constants = false;
+                    return Err(error);
+                }
+            }
+        }
+        self.initializing_constants = false;
+        Ok(())
+    }
+
+    /// Frees every filled module-constant slot.
+    ///
+    /// A one-shot run calls this before reading heap accounting, so a clean
+    /// program still reports `current == 0`; a per-call VM on a shared heap
+    /// calls it before handing the heap back, so constants do not accumulate
+    /// across crossings.
+    pub(crate) fn release_constants(&mut self) {
+        let values = std::mem::take(&mut self.constants);
+        self.discard(values);
     }
 
     /// Frees a batch of values this VM owns.

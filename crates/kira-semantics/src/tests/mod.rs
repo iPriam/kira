@@ -12,6 +12,7 @@ mod classes;
 mod closures;
 mod collectors;
 mod compiler;
+mod constants;
 mod constructs;
 mod conversions;
 mod copyable;

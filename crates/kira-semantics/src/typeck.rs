@@ -185,6 +185,12 @@ impl Analyzer<'_> {
                                 expr
                             }
                             None => {
+                                // Constants share the value namespace with
+                                // functions and clashes were refused, so the
+                                // two lookups can run in either order.
+                                if let Some(read) = self.constant_read(&name, span) {
+                                    return read;
+                                }
                                 if let Some(reference) =
                                     self.analyze_named_function_reference(&name, span, expected)
                                 {
@@ -365,6 +371,14 @@ impl Analyzer<'_> {
                 }
                 if let Some(call) =
                     self.analyze_local_closure_call(ctx, &name, &values, callee_span)
+                {
+                    return call;
+                }
+                // A module constant of function type is called the same way a
+                // local binding is; a local shadows it, so it is tried second.
+                if ctx.resolve(&name).is_none()
+                    && let Some(call) =
+                        self.analyze_constant_closure_call(ctx, &name, &values, callee_span)
                 {
                     return call;
                 }

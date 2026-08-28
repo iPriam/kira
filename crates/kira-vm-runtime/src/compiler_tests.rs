@@ -20,6 +20,7 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         functions: vec![FuncProto {
             name: "main".to_owned(),
             param_count: 0,

@@ -41,6 +41,19 @@ pub enum HirExpr {
     /// struct zero-fills a pointer member to `NULL`, and a zero-fill that could
     /// not name its own zero would have to refuse the field instead.
     RawPtrNull,
+    /// A read of a module-scope constant's global slot.
+    ///
+    /// The slot indexes [`HirProgram::constants`]: it was filled once at
+    /// program start, so a read copies the stored value the way a field read
+    /// copies a field — the constant keeps what it holds.
+    ///
+    /// [`HirProgram::constants`]: super::HirProgram::constants
+    ConstantGet {
+        /// The constant's index in the program's evaluation-ordered table.
+        constant: u32,
+        /// The constant's type.
+        ty: Type,
+    },
     /// A read of a local slot.
     Local {
         /// The referenced local.
@@ -672,7 +685,8 @@ impl HirExpr {
             | HirExpr::CStringNull
             | HirExpr::CLayoutAddress { .. }
             | HirExpr::ArrayElements { .. } => Type::CBlock,
-            HirExpr::Local { ty, .. }
+            HirExpr::ConstantGet { ty, .. }
+            | HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
             | HirExpr::Select { ty, .. }

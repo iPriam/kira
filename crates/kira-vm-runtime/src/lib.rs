@@ -122,6 +122,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func(
                 "main",
                 0,
@@ -146,6 +147,72 @@ mod tests {
         assert!(probe.events[2].stack.is_empty());
         assert_eq!(probe.events[3].stack, [Value::Int(7)]);
         assert_eq!(probe.events[3].locals, [Value::Int(7)]);
+    }
+
+    #[test]
+    fn module_constants_fill_once_before_main_and_release_after() {
+        // Slot 0 is a string built by an init that also prints, so the run's
+        // output proves the init ran exactly once, before `main`, however many
+        // times the slot is read; the outcome's heap accounting proves the
+        // slot's storage went back at the end.
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
+            constants: vec![1],
+            functions: vec![
+                func(
+                    "main",
+                    0,
+                    0,
+                    vec![
+                        I::LoadConstant(0),
+                        I::Print,
+                        I::Pop,
+                        I::LoadConstant(0),
+                        I::Print,
+                        I::Pop,
+                        I::ReturnVoid,
+                    ],
+                ),
+                func(
+                    "greeting$constant",
+                    0,
+                    0,
+                    vec![I::ConstStr(1), I::Print, I::Pop, I::ConstStr(0), I::Return],
+                ),
+            ],
+            main: Some(0),
+            strings: vec!["hello".to_owned(), "init-ran".to_owned()],
+        };
+        let (lines, outcome) = run(&module);
+        assert_eq!(lines, ["init-ran", "hello", "hello"]);
+        assert_eq!(outcome.heap.current, 0);
+    }
+
+    #[test]
+    fn a_constant_read_ahead_of_the_table_is_a_typed_trap() {
+        // Validation bounds `LoadConstant` by the module's table, so the only
+        // way to read an unfilled slot is a table whose *own* init reads a
+        // later slot — bytecode ahead of the compiler's dependency order.
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
+            constants: vec![1, 2],
+            functions: vec![
+                func("main", 0, 0, vec![I::ReturnVoid]),
+                func("first$constant", 0, 0, vec![I::LoadConstant(1), I::Return]),
+                func("second$constant", 0, 0, vec![I::ConstInt(2), I::Return]),
+            ],
+            main: Some(0),
+            strings: Vec::new(),
+        };
+        let mut host = CapturingHost::new();
+        let error = execute(&module, &mut host).unwrap_err();
+        assert_eq!(error, VmError::ConstantUninitialized(1));
     }
 
     /// A host with a native half: answers `shout(n, s)` with `s` repeated `n`
@@ -205,6 +272,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main, shout],
             main: Some(0),
             strings: vec!["hi".to_owned()],
@@ -265,6 +333,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: Vec::new(),
@@ -302,6 +371,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), greet],
             main: Some(0),
             strings: vec!["hi, ".to_owned()],
@@ -339,6 +409,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -373,6 +444,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), native],
             main: Some(0),
             strings: Vec::new(),
@@ -394,6 +466,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -429,6 +502,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -453,6 +527,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -494,6 +569,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -541,6 +617,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -590,6 +667,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -637,6 +715,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main, fib],
             main: Some(0),
             strings: vec![],
@@ -675,6 +754,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["foo".to_owned(), "bar".to_owned()],
@@ -708,6 +788,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -728,6 +809,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![])],
                 main: Some(0),
                 strings: vec![],
@@ -738,6 +820,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ConstInt(1)])],
                 main: Some(0),
                 strings: vec![],
@@ -748,6 +831,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ConstStr(3), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -758,6 +842,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 0, 1, vec![I::LoadLocal(9), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -768,6 +853,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 2, 0, vec![I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -778,6 +864,7 @@ mod tests {
                 foreign_imports: Vec::new(),
                 foreign_aggregates: Default::default(),
                 foreign_callbacks: Vec::new(),
+                constants: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ReturnVoid])],
                 main: Some(7),
                 strings: vec![],
@@ -816,6 +903,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["a".to_owned(), "bb".to_owned()],

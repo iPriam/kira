@@ -33,6 +33,7 @@ fn a_reused_frame_starts_with_void_locals_after_heap_and_scalar_releases() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
         functions: vec![
             function(
                 "main",

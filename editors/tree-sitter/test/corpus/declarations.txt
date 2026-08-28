@@ -276,3 +276,34 @@ Package KikHarness {
         name: (identifier)
         value: (dot_member_expression
           name: (identifier))))))
+
+================================================================================
+Module constant
+================================================================================
+
+let answer = 6 * 7
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (constant_declaration
+    name: (identifier)
+    value: (binary_expression
+      left: (integer_literal)
+      right: (integer_literal))))
+
+================================================================================
+Module constant with a type annotation and a call
+================================================================================
+
+let greeting: String = audience()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (constant_declaration
+    name: (identifier)
+    type: (type_identifier)
+    value: (call_expression
+      function: (identifier)
+      arguments: (arguments))))

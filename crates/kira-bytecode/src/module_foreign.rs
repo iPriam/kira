@@ -388,6 +388,7 @@ mod tests {
             exports: Default::default(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             foreign_imports: vec![
                 ForeignImport::new(
                     "ffimath",

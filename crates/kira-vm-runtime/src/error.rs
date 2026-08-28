@@ -216,6 +216,10 @@ pub enum VmError {
     /// A `ConstStr` named no entry in the module string pool.
     #[error("string constant index {0} is out of range")]
     StringConstantOutOfRange(u64),
+    /// A `LoadConstant` read a module-constant slot before it was filled —
+    /// bytecode ahead of the compiler's dependency order.
+    #[error("module constant {0} was read before it was initialized")]
+    ConstantUninitialized(u64),
     /// A `StoreField` carried no path, so it named no field to write.
     #[error("a field store must name at least one field")]
     EmptyFieldPath,

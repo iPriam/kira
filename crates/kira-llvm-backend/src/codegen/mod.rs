@@ -22,6 +22,7 @@
 mod boxing;
 mod bridge;
 mod callback;
+mod constants;
 mod debug;
 mod elements;
 mod entry;
@@ -584,6 +585,11 @@ pub(crate) struct Codegen<'a> {
     /// Only functions this module defines have a real entry; a function that
     /// lives in the other half is reached through the bridge instead.
     functions: Vec<Option<Callable>>,
+    /// One global per module constant, in [`IrProgram::constants`] order.
+    ///
+    /// Empty for the hybrid native half, whose constants live on the VM and
+    /// are read across the bridge. See [`constants`].
+    constant_globals: Vec<LLVMValueRef>,
     /// One compact shared-graph descriptor per foreign import.
     foreign_ffi_descriptors: Vec<LLVMValueRef>,
     /// One compact shared-graph descriptor per foreign callback.
@@ -679,6 +685,7 @@ impl<'a> Codegen<'a> {
                 .filter_map(|def| def.drop_glue)
                 .collect(),
             functions: Vec::with_capacity(program.functions.len()),
+            constant_globals: Vec::with_capacity(program.constants.len()),
             foreign_ffi_descriptors: Vec::with_capacity(program.foreign_imports.len()),
             callback_ffi_descriptors: Vec::with_capacity(program.foreign_callbacks.len()),
             struct_types: Vec::with_capacity(program.types.structs().len()),
@@ -697,6 +704,7 @@ impl<'a> Codegen<'a> {
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
         codegen.declare_structs()?;
+        codegen.declare_constant_globals()?;
         codegen.declare_foreign_ffi_descriptors()?;
         for (index, function) in program.functions.iter().enumerate() {
             // A function that runs on the other engine has no body here; its

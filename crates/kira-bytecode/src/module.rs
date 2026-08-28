@@ -80,6 +80,16 @@ pub struct Module {
     /// `ForeignCallback(id)` instruction indexes it, and the host resolves the
     /// entry thunk the backend generated for the same id.
     pub foreign_callbacks: Vec<ForeignCallback>,
+    /// The module-constant table: one function index per constant, in
+    /// evaluation order.
+    ///
+    /// The host calls each named function once, front to back, and stores the
+    /// results before the entrypoint runs; a `LoadConstant(slot)` reads the
+    /// stored value at the same index. The order is the compiler's dependency
+    /// order, so front-to-back is always correct. Empty for a module with no
+    /// module-scope `let`, which is also what a module written before this
+    /// section existed decodes as.
+    pub constants: Vec<u64>,
 }
 
 /// One compiled function: its signature shape and its code.
@@ -296,6 +306,16 @@ pub enum ModuleDecodeError {
         /// The repeated parameter position.
         position: usize,
     },
+    /// A module-constant row named an init function the module does not have.
+    #[error("constant slot {slot} names init function {init}; the module has {functions}")]
+    ConstantInitOutOfRange {
+        /// The constant slot whose row is out of range.
+        slot: usize,
+        /// The decoded init-function index.
+        init: u64,
+        /// How many functions the module has.
+        functions: usize,
+    },
     /// Bytes remained after the last section the format defines.
     ///
     /// Every section is self-delimiting, so leftovers mean the stream was
@@ -338,10 +358,12 @@ impl Module {
         // Each later section forces the ones before it to be written, empty or
         // not, for the same reason: a section is only unambiguous when every
         // section it follows is present to be consumed first.
+        let has_constants = !self.constants.is_empty();
         let has_retained = self
             .foreign_imports
             .iter()
-            .any(|import| import.signature().any_retained());
+            .any(|import| import.signature().any_retained())
+            || has_constants;
         let has_releases = self
             .functions
             .iter()
@@ -372,6 +394,14 @@ impl Module {
         // declaration is byte-for-byte what it was before the section existed.
         if has_retained {
             write_foreign_retained(&mut out, &self.foreign_imports);
+        }
+        // The constants section is last: a module with no module-scope `let`
+        // is byte-for-byte what it was before the section existed.
+        if has_constants {
+            write_u64(&mut out, self.constants.len() as u64);
+            for &init in &self.constants {
+                write_u64(&mut out, init);
+            }
         }
         out
     }
@@ -463,6 +493,7 @@ impl Module {
         let foreign_callbacks = read_foreign_callbacks(&mut reader, format, &foreign_aggregates)?;
         read_releases(&mut reader, &mut functions, format)?;
         read_foreign_retained(&mut reader, &mut foreign_imports, format)?;
+        let constants = read_constants(&mut reader, format, functions.len())?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -476,6 +507,7 @@ impl Module {
             foreign_imports,
             foreign_aggregates,
             foreign_callbacks,
+            constants,
         })
     }
 }
@@ -486,6 +518,33 @@ impl Module {
 /// that absence is the whole compatibility story: no exports, which is exactly
 /// what such a module has. A *partial* section is a different thing entirely and
 /// is a truncation error, never an empty table.
+/// Reads the appended module-constant section: one init-function index per
+/// constant slot, in evaluation order. Absent means no constants, which is
+/// also what a module written before the section existed decodes as.
+fn read_constants(
+    reader: &mut Reader<'_>,
+    format: Format,
+    functions: usize,
+) -> Result<Vec<u64>, ModuleDecodeError> {
+    if reader.is_at_end() {
+        return Ok(Vec::new());
+    }
+    let count = reader.read_count(format)?;
+    let mut constants = Vec::new();
+    for slot in 0..count {
+        let init = reader.read_u64()?;
+        if init >= functions as u64 {
+            return Err(ModuleDecodeError::ConstantInitOutOfRange {
+                slot: slot as usize,
+                init,
+                functions,
+            });
+        }
+        constants.push(init);
+    }
+    Ok(constants)
+}
+
 fn read_exports(reader: &mut Reader<'_>, format: Format) -> Result<ExportTable, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(ExportTable::default());

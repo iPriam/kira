@@ -89,6 +89,30 @@ pub struct HirProgram {
     pub exprs: Arena<HirExpr>,
     /// Arena backing every [`HirStmtId`].
     pub stmts: Arena<HirStmt>,
+    /// Every module-scope `let`, in evaluation order.
+    ///
+    /// The order is the contract: each constant sits after every constant its
+    /// initializer depends on, so evaluating the list front to back at program
+    /// start is correct on every backend. A dependency cycle was refused during
+    /// analysis, which is what makes the order total.
+    pub constants: Vec<HirConstant>,
+}
+
+/// One module-scope `let Name = value`: a single value computed once at
+/// program start, before `@Main` runs, and shared by every reader.
+///
+/// The initializer is carried as a synthesized zero-argument function rather
+/// than a bare expression because analyzing it can mint locals and statements
+/// of its own — a construction filling defaults does — and a function is the
+/// one thing the model has that owns a frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirConstant {
+    /// The constant's name, as written.
+    pub name: String,
+    /// The constant's resolved type: declared when written, inferred otherwise.
+    pub ty: Type,
+    /// The synthesized zero-argument function whose body computes the value.
+    pub init: FuncId,
 }
 
 /// One `@FFI.Extern` foreign callable: a C symbol Kira calls seamlessly.

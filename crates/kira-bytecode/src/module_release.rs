@@ -110,6 +110,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             main: Some(0),
             strings: Vec::new(),
             functions: vec![func("main", releases)],

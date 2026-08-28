@@ -42,6 +42,28 @@ var ratio: Float = 0.8  // the initializer must already match
 
 A declaration with no initializer stays uninitialized until an assignment gives it a value, and reading it earlier is refused. An annotated initializer is strict: `var ratio: Float = 0` is rejected because an integer literal is not a `Float`.
 
+## Module Constants
+
+`let` at module scope declares a constant: one value per program, computed once at program start — before `@Main` runs — and shared by every reader.
+
+```kira
+let answer = 6 * 7
+let greeting = "hello " + audience()
+let table = buildTable()
+
+function audience() -> String { return "world" }
+
+function buildTable() -> [Int] {
+    var xs: [Int] = []
+    xs.append(answer)
+    return xs
+}
+```
+
+The initializer is an ordinary expression and may call functions, so a value that is expensive to build — a parsed table, a decoded resource — is built once instead of at every use. Declaration order does not matter: each constant is evaluated after the constants it depends on, and a dependency cycle is refused (`KSEM317`).
+
+Constants share one namespace with top-level functions (a collision is `KSEM316`), a local of the same name shadows one inside a body, and there is no module-scope `var` — a program-wide mutable binding would be shared mutable state with an observable initialization order.
+
 ## Statement Terminators
 
 A statement ends at a newline or at a `;`. Both spellings are accepted everywhere and mean the same thing.
@@ -74,4 +96,4 @@ Imports are resolved entirely in the frontend. By the time the IR exists a progr
 
 ## Top-Level Declarations
 
-`import`, `function`, `struct`, `class`, `enum`, `trait`, `construct`, `extend`, `type`, `macro`, `comptime macro`, and `comptime function`. Every one of them is covered in a later chapter.
+`import`, `function`, `let`, `struct`, `class`, `enum`, `trait`, `construct`, `extend`, `type`, `macro`, `comptime macro`, and `comptime function`. Every one of them is covered in a later chapter or above.

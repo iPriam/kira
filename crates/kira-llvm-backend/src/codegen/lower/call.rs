@@ -365,7 +365,7 @@ impl FunctionLowering<'_, '_> {
     /// array of `BridgeValue`s, `kira_hybrid_call_runtime` hands them to the
     /// host's invoker, and the result is unpacked. The array is an `alloca`, so
     /// a crossing costs no heap allocation on this side either.
-    fn lower_runtime_call(
+    pub(super) fn lower_runtime_call(
         &mut self,
         index: u32,
         args: &[IrExprId],

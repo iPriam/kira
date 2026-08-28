@@ -40,6 +40,32 @@ impl Vm<'_> {
         Ok(())
     }
 
+    /// Pushes a copy of module-constant slot `slot`.
+    ///
+    /// The slot was filled before this run's first frame started; reading one
+    /// that was not is malformed bytecode (a `LoadConstant` ahead of the
+    /// compiler's dependency order) and traps rather than guessing a value.
+    pub(super) fn load_constant(&mut self, slot: u64) -> Result<(), VmError> {
+        let index = usize::try_from(slot).map_err(|_| VmError::ConstantUninitialized(slot))?;
+        let value = *self
+            .constants
+            .get(index)
+            .ok_or(VmError::ConstantUninitialized(slot))?;
+        // The same copy split `load_local` makes: scalars are already
+        // independent, heap-backed values take the value-semantic copy.
+        match value {
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::RawPtr(_)
+            | Value::NativeState(_)
+            | Value::NativeView { .. }
+            | Value::Void => self.stack.push(value),
+            _ => self.stack.push(self.heap.copy_value(value)),
+        }
+        Ok(())
+    }
+
     /// Pushes local `slot`, leaving unit behind.
     ///
     /// The read of a value that runs a user `Drop`: binding one moves, so a
@@ -139,6 +165,7 @@ impl Vm<'_> {
                 self.stack.push(Value::Str(id));
             }
             Instruction::LoadLocal(slot) => self.load_local(frame, *slot)?,
+            Instruction::LoadConstant(slot) => self.load_constant(*slot)?,
             Instruction::TakeLocal(slot) => self.take_local(frame, *slot)?,
             Instruction::StoreLocal(slot) => self.store_local(frame, *slot)?,
             Instruction::Pop => {

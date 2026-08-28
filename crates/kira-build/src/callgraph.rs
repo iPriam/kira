@@ -79,6 +79,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, *arg, found);
             }
         }
+        // A constant read names a slot, not a callee; the slot's init runs
+        // before any body does, outside every call graph this answers.
+        IrExpr::ConstantGet { .. } => {}
         IrExpr::Unary { operand, .. } => walk_expr(program, *operand, found),
         IrExpr::Binary { lhs, rhs, .. } => {
             walk_expr(program, *lhs, found);

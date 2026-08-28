@@ -1,0 +1,73 @@
+// TlxConstants.kira
+// Module-scope `let` coverage for the kik harness. Every top-level name is
+// prefixed `tlx`. Entry point: tlxSection() -> Int.
+//
+// The declarations deliberately read each other across declaration order —
+// `tlxGreeting` is written before the function it calls, `tlxTable` reads
+// `tlxAnswer` through a call — because evaluation order is the compiler's
+// dependency order, not file order.
+
+let tlxAnswer = 6 * 7
+let tlxScaled: Int = tlxAnswer * 10
+let tlxGreeting = "tlx-" + tlxSuffix()
+let tlxRatio: Float = 0.25
+let tlxFlag = tlxAnswer > 40
+let tlxTable = tlxBuildTable()
+let tlxPoint = TlxPoint { x: tlxAnswer, y: tlxScaled }
+let tlxAdder: (Int) -> Int = { x in return x + tlxAnswer }
+
+struct TlxPoint {
+    var x: Int = 0
+    var y: Int = 0
+}
+
+function tlxSuffix() -> String {
+    return "constants"
+}
+
+function tlxBuildTable() -> [Int] {
+    var xs: [Int] = []
+    var index = 0
+    while index < 5 {
+        xs.append(tlxAnswer + index)
+        index = index + 1
+    }
+    return xs
+}
+
+// A method body reads a constant like any other body does.
+struct TlxReader {
+    var bias: Int = 1
+
+    function read() -> Int {
+        return tlxAnswer + bias
+    }
+}
+
+// A closure body reads a constant through the same one path every name takes.
+function tlxThroughClosure() -> Int {
+    let f: (Int) -> Int = { x in return tlxAnswer + tlxPoint.y + x }
+    return f(3)
+}
+
+function tlxSection() -> Int {
+    var sum = 0
+    sum = sum + tlxAnswer
+    sum = sum + tlxScaled
+    sum = sum + tlxGreeting.count
+    sum = sum + (tlxRatio == 0.25 ? 1 : 0)
+    sum = sum + (tlxFlag ? 10 : 0)
+    sum = sum + tlxTable.count
+    sum = sum + tlxTable[4]
+    sum = sum + tlxPoint.x + tlxPoint.y
+    sum = sum + tlxAdder(8)
+    let reader = TlxReader { bias: 5 }
+    sum = sum + reader.read()
+    sum = sum + tlxThroughClosure()
+    // Two reads of one constant see one value: the aggregate was built once,
+    // so both copies agree element for element.
+    let first = tlxTable
+    let second = tlxTable
+    sum = sum + (first[0] == second[0] ? 1 : 0)
+    return sum
+}

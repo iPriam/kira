@@ -73,6 +73,17 @@ pub enum ModuleValidateError {
         /// The offending function's name.
         function: String,
     },
+    /// A module-constant row names an init function the host cannot call: out
+    /// of range, native, or not a zero-argument body.
+    #[error(
+        "constant slot {slot} names init function {init}, which is not a callable bytecode function"
+    )]
+    ConstantInitInvalid {
+        /// The constant slot whose row is invalid.
+        slot: u64,
+        /// The init-function index the row named.
+        init: u64,
+    },
     /// An instruction operand points outside its table (string pool, local
     /// slots, function table, or code range).
     #[error(
@@ -184,6 +195,18 @@ impl Module {
                 function_count,
             });
         }
+        // A constant's init is entered the way a `Call`'s callee is — the host
+        // pushes a frame for it — so it is bounded the same way: a bytecode
+        // body, in range. Hybrid modules whose init bodies live in the native
+        // half fill their slots there and carry no row here.
+        for (slot, &init) in self.constants.iter().enumerate() {
+            if !non_native_function(&self.functions, init) {
+                return Err(ModuleValidateError::ConstantInitInvalid {
+                    slot: slot as u64,
+                    init,
+                });
+            }
+        }
         for (callback, entry) in self.foreign_callbacks.iter().enumerate() {
             if function_at(&self.functions, u64::from(entry.function())).is_none() {
                 return Err(ModuleValidateError::CallbackFunctionOutOfRange {
@@ -285,6 +308,7 @@ impl Module {
                     Instruction::LoadLocal(slot)
                     | Instruction::TakeLocal(slot)
                     | Instruction::StoreLocal(slot) => *slot < function.local_count,
+                    Instruction::LoadConstant(slot) => *slot < self.constants.len() as u64,
                     // A bytecode `Call` must land on a bytecode body. A native
                     // callee is reached with `CallNative`, which goes through
                     // the host; letting `Call` target one would push a frame
@@ -473,10 +497,46 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions,
             main: Some(main),
             strings,
         }
+    }
+
+    #[test]
+    fn a_constant_table_names_callable_inits_only() {
+        let body = vec![Instruction::ConstInt(1), Instruction::Return];
+        let mut module = module_of(vec![func("init", 0, 0, body)], 0, vec![]);
+        module.constants = vec![0];
+        assert_eq!(module.validate(), Ok(()));
+
+        // A row past the function table has nothing to call.
+        module.constants = vec![1];
+        assert!(matches!(
+            module.validate(),
+            Err(ModuleValidateError::ConstantInitInvalid { slot: 0, init: 1 })
+        ));
+
+        // A native init has no bytecode body for the host to push a frame on.
+        module.constants = vec![0];
+        module.functions[0].execution = kira_runtime_abi::Execution::Native;
+        module.functions[0].code = Vec::new();
+        module.main = None;
+        assert!(matches!(
+            module.validate(),
+            Err(ModuleValidateError::ConstantInitInvalid { slot: 0, init: 0 })
+        ));
+    }
+
+    #[test]
+    fn a_load_constant_operand_is_bounded_by_the_table() {
+        let body = vec![Instruction::LoadConstant(0), Instruction::ReturnVoid];
+        let module = module_of(vec![func("f", 0, 0, body)], 0, vec![]);
+        assert!(matches!(
+            module.validate(),
+            Err(ModuleValidateError::OperandOutOfRange { .. })
+        ));
     }
 
     /// A library exporting one function that takes a string and hands back a
@@ -487,6 +547,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func(
                 "makeButton",
                 1,
@@ -617,6 +678,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func("add", 2, 2, vec![Instruction::ReturnVoid])],
             main: None,
             strings: vec![],
@@ -632,6 +694,7 @@ mod tests {
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
             functions: vec![func("add", 0, 0, vec![])],
             main: None,
             strings: vec![],

@@ -1,0 +1,53 @@
+// TlxConstantTests.kira
+// `Test` cases over the module constants declared in TlxConstants.kira.
+
+construct TlxAnswerHoldsItsValue() extends Test {
+    test { return tlxAnswer }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+construct TlxAnnotatedConstantHoldsItsValue() extends Test {
+    test { return tlxScaled }
+    expect { let e: Result<Int, TestFailure> = .Ok(420); return e }
+}
+
+construct TlxStringConstantBuiltFromACall() extends Test {
+    test { return tlxGreeting }
+    expect { let e: Result<String, TestFailure> = .Ok("tlx-constants"); return e }
+}
+
+construct TlxBoolConstantIsComputed() extends Test {
+    test { return tlxFlag }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+construct TlxArrayConstantIsBuiltOnce() extends Test {
+    test { return tlxTable.count * 100 + tlxTable[0] + tlxTable[4] }
+    expect { let e: Result<Int, TestFailure> = .Ok(588); return e }
+}
+
+construct TlxStructConstantHoldsItsFields() extends Test {
+    test { return tlxPoint.x + tlxPoint.y }
+    expect { let e: Result<Int, TestFailure> = .Ok(462); return e }
+}
+
+construct TlxClosureConstantIsCallable() extends Test {
+    test { return tlxAdder(58) }
+    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+}
+
+construct TlxReadsCopyNotAlias() extends Test {
+    test {
+        // A read is a copy with value semantics: growing the copy leaves the
+        // constant exactly as its initializer built it.
+        var copy = tlxTable
+        copy.append(999)
+        return copy.count * 10 + tlxTable.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(65); return e }
+}
+
+construct TlxConstantReadInsideAClosure() extends Test {
+    test { return tlxThroughClosure() }
+    expect { let e: Result<Int, TestFailure> = .Ok(465); return e }
+}

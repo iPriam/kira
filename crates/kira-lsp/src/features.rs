@@ -279,6 +279,14 @@ fn collect_item(symbols: &mut BTreeMap<String, Symbol>, names: &Names, item: &It
             CompletionItemKind::TYPE_PARAMETER,
             text,
         ),
+        Item::Constant(declaration) => add_declared(
+            symbols,
+            names,
+            declaration.name,
+            declaration.name_span,
+            CompletionItemKind::CONSTANT,
+            text,
+        ),
         Item::Import(declaration) => {
             if let Some(alias) = declaration.alias
                 && let Some(span) = declaration.alias_span

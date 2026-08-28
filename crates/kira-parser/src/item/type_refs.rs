@@ -7,7 +7,9 @@
 
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Param, ReceiverDecl, TypeAliasDecl, TypeRef, TypeRefId};
+use kira_syntax_model::ast::{
+    ConstantDecl, Param, ReceiverDecl, TypeAliasDecl, TypeRef, TypeRefId,
+};
 use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
@@ -30,6 +32,48 @@ enum TypeEnd {
 }
 
 impl Parser<'_> {
+    /// Parses `let Name: T = value` at module scope.
+    ///
+    /// The type annotation is optional for the reason a local's is: the
+    /// initializer usually says the type already. There is no `var` counterpart
+    /// — a module-scope binding is one value shared by a whole program, and a
+    /// mutable one would be shared mutable state with an observable
+    /// initialization order.
+    pub(crate) fn parse_constant(&mut self) -> Option<ConstantDecl> {
+        let start = self.current().span;
+        self.expect(TokenKind::Let);
+        if !self.at(TokenKind::Identifier) {
+            self.error(self.current().span, "KPAR080", "expected a constant name");
+            return None;
+        }
+        let name_span = self.current().span;
+        let name = self.intern_span(name_span);
+        self.bump();
+        let declared_type = if self.eat(TokenKind::Colon) {
+            Some(self.parse_type_ref())
+        } else {
+            None
+        };
+        // `=` is required: a constant with no value names nothing.
+        if !self.eat(TokenKind::Equals) {
+            self.error(
+                self.current().span,
+                "KPAR081",
+                "a module-scope `let` needs an `=` initializer",
+            );
+            return None;
+        }
+        let value = self.parse_expr();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(ConstantDecl {
+            name,
+            name_span,
+            declared_type,
+            value,
+            span,
+        })
+    }
+
     /// Parses `type Name = Target`.
     ///
     /// The target is an ordinary type reference, so `type ByteMatrix =

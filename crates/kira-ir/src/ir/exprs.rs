@@ -36,6 +36,18 @@ pub enum IrExpr {
     },
     /// A read of a local slot.
     Local(u32),
+    /// A read of a module constant's global slot.
+    ///
+    /// The slot indexes [`IrProgram::constants`]; the backend's init sequence
+    /// filled it before `main` ran, so a read copies the stored value.
+    ///
+    /// [`IrProgram::constants`]: super::IrProgram::constants
+    ConstantGet {
+        /// The constant's index in the program's evaluation-ordered table.
+        constant: u32,
+        /// The constant's type.
+        ty: Type,
+    },
     /// A unary operation.
     Unary {
         /// The operator.

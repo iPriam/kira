@@ -101,6 +101,7 @@ module.exports = grammar({
       choice(
         $.import_declaration,
         $.function_definition,
+        $.constant_declaration,
         $.struct_declaration,
         $.class_declaration,
         $.enum_declaration,
@@ -114,6 +115,17 @@ module.exports = grammar({
         $.comptime_macro_declaration,
         $.comptime_function_declaration,
         $.macro_invocation,
+      ),
+
+    // `let Name[: T] = value` at module scope: one value computed once for
+    // the program. There is no module-scope `var`.
+    constant_declaration: ($) =>
+      seq(
+        'let',
+        field('name', $.identifier),
+        optional(seq(':', field('type', $._type))),
+        '=',
+        field('value', $._expression),
       ),
 
     // `import Module[.Sub…] [as Alias]`. A module name is a name, not a path.
