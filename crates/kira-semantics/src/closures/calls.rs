@@ -2,7 +2,7 @@
 
 use kira_semantics_model::hir::{
     Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirStmtId,
-    HirWriteback, LocalId,
+    HirWriteback, LocalId, TaskTarget,
 };
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
@@ -192,8 +192,11 @@ impl Analyzer<'_> {
     pub(crate) fn finalize_closures(&mut self) {
         self.finalize_closure_values();
         self.build_dispatchers();
-        // Synthesized functions sit after every declared one, which is what
-        // makes a reserved id an index into the finished list.
+        // Generic function bodies are already in the ordinary prefix. Rewrite
+        // the temporary synthesized ids in every HIR expression before those
+        // bodies are appended at their final contiguous positions.
+        let final_base = self.program.functions.len() as u32;
+        self.remap_synth_calls(final_base);
         let synth = std::mem::take(&mut self.synth);
         for function in synth {
             if let Some(function) = function {
@@ -215,6 +218,27 @@ impl Analyzer<'_> {
                     mutates_self: false,
                     name_span: Span::new(0, 0),
                 });
+            }
+        }
+    }
+
+    /// Replaces temporary synthesized ids with their final function-vector
+    /// positions. Calls can be nested in ordinary, generic, or synthesized
+    /// bodies, so the expression arena is the one complete place to rewrite.
+    fn remap_synth_calls(&mut self, final_base: u32) {
+        let temporary_base = self.synth_base;
+        let temporary_count = self.synth.len() as u32;
+        for (_, expr) in self.program.exprs.iter_mut() {
+            match expr {
+                HirExpr::Call {
+                    callee: Callee::User(id),
+                    ..
+                } => remap_synth_id(id, temporary_base, temporary_count, final_base),
+                HirExpr::TaskSpawn {
+                    target: TaskTarget::Call(id),
+                    ..
+                } => remap_synth_id(id, temporary_base, temporary_count, final_base),
+                _ => {}
             }
         }
     }
@@ -603,5 +627,16 @@ impl Analyzer<'_> {
             mutates_self: false,
             name_span: Span::new(0, 0),
         }
+    }
+}
+
+/// Maps a temporary synthesized id to the slot it occupies after all ordinary
+/// and generic functions have been appended.
+fn remap_synth_id(id: &mut FuncId, temporary_base: u32, count: u32, final_base: u32) {
+    let Some(index) = id.0.checked_sub(temporary_base) else {
+        return;
+    };
+    if index < count {
+        *id = FuncId(final_base + index);
     }
 }

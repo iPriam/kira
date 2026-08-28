@@ -295,3 +295,29 @@ trait Hashable {
           (self_parameter))
         return_type: (return_type
           (type_identifier))))))
+
+================================================================================
+A generic function declaration
+================================================================================
+
+function identity<Value>(value: Value) -> Value {
+    return value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (identifier)))))

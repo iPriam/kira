@@ -116,7 +116,10 @@ fn an_extend_block_with_a_colon_is_an_impl_block() {
     let [Item::Extend(declaration)] = result.tree.items() else {
         panic!("expected an extend, got {:?}", result.tree.items());
     };
-    let claimed = declaration.conforms.expect("the block names a trait");
+    let claimed = declaration
+        .conforms
+        .as_ref()
+        .expect("the block names a trait");
     assert_eq!(result.interner.resolve(claimed.name), "Hashable");
 }
 
@@ -187,16 +190,10 @@ fn a_parameter_named_self_still_parses_as_a_parameter() {
 }
 
 #[test]
-fn a_trait_takes_no_type_parameters() {
+fn a_trait_records_type_parameters() {
     let result = parse_text("trait Holder<Value> {}\n");
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|item| item.message.contains("trait")),
-        "{:?}",
-        result.diagnostics
-    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(only_trait(&result).type_params.len(), 1);
 }
 
 #[test]

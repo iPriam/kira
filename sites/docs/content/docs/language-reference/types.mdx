@@ -43,9 +43,14 @@ A function type is `Send` and `Sync` for neither: its values are closures, and a
 
 ## Named Types
 
-`struct`, `class`, and `enum` each declare a type by name. A `class` is a struct that inherits and flattens; its static type is always its dynamic type.
+`struct`, `class`, and `enum` each declare a type by name. A `class` is a struct that inherits and flattens; its static type is always its dynamic type. A parameterized aggregate or enum declares one nominal row for each concrete argument list.
 
-An `enum` is the only declaration that takes type parameters. `Result<Int, AppError>` names one type; `Result` alone names none (`KSEM172`). An arity mismatch is `KSEM174`, type arguments on a non-generic type are `KSEM173`, and a template that grows its own argument without end is `KSEM175`.
+Enums, structs, classes, traits, and functions may take type parameters.
+`Result<Int, AppError>` and `Box<Int>` name concrete rows; a bare generic enum
+names none (`KSEM172`). Generic functions infer from value arguments or accept
+explicit type arguments. An arity mismatch is `KSEM174`, type arguments on a
+non-generic type are `KSEM173`, and a template that grows its own argument
+without end is `KSEM175`.
 
 ## Trait Existentials
 

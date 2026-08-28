@@ -103,22 +103,60 @@ A payload may be `Int`, `Float`, `Bool`, `String`, an array, a struct, another e
 
 **`print(someEnum)` is rejected (`KSEM081`)**, for the reason a struct is.
 
-### Generic Enums
+### Generic Types
 
-An enum may take **type parameters**, which is what lets the standard library declare `Result` once.
+An enum, struct, class, trait, or free function may take **type parameters**. A
+declaration with parameters is a template; it becomes a concrete semantic row
+only when a use supplies all of its arguments.
 
 ```kira
 enum Result<Value, Failure> {
     Ok(Value)
     Error(Failure)
 }
+
+struct Box<Value> {
+    let value: Value
+}
+
+struct Parent<Value> {
+    let value: Value
+}
+
+class Child<Value> extends Parent<Value> {
+    function read(borrow self) -> Value { return self.value }
+}
+
+function identity<Value>(value: Value) -> Value {
+    return value
+}
 ```
 
-That declaration names no type. Each written instantiation does: `Result<Int, AppError>` substitutes the arguments into the variants and produces an ordinary enum. Two writings of the same arguments name the same type; different arguments name different types and do not assign to each other.
+Those declarations name no concrete type or callable by themselves. Each written
+instantiation does: `Result<Int, AppError>` substitutes the arguments into the
+variants, and `Box<Int>` substitutes them into fields and methods. Two writings
+of the same arguments name the same row; different arguments name different
+nominal types. A generic function infers its arguments from value arguments, or
+accepts them explicitly: `identity<Int>(7)`. If inference cannot determine all
+parameters, write the type arguments (`KSEM316`).
 
-Substitution happens during analysis, so nothing below semantics learns that generics exist: no opcode, no IR node, no wire format. A monomorphized `Result` is `Result`-shaped, so [`attempt`/`try`](/docs/language-guide/control-flow#attempt-try-and-handle) unwrap it with nothing added.
+Generic classes may extend a concrete specialization of a generic class or
+struct. The parent is flattened into the child, so inherited fields participate
+in construction and inherited methods use the parent's specialization. A child
+such as `Child<Value> extends Parent<Value>` can infer `Value` from a required
+inherited constructor argument.
 
-The **enum is the only declaration that takes type parameters**. A generic `struct`, `class`, or `function` is refused by name (`KPAR047`). The other edges are typed diagnostics too: an arity mismatch is `KSEM174`, a generic enum written bare is `KSEM172`, type arguments on a non-generic type are `KSEM173`, and a template that grows its own argument without end is `KSEM175` rather than a stack overflow.
+Substitution happens during analysis, so nothing below semantics learns that
+generics exist: no opcode, no IR node, no wire format. A monomorphized `Result`
+is `Result`-shaped, so [`attempt`/`try`](/docs/language-guide/control-flow#attempt-try-and-handle)
+unwraps it with nothing added.
+
+Every type parameter may carry trait bounds, such as `Box<Value: Scored>`.
+The concrete argument must satisfy every bound; a failed obligation is
+`KSEM315`. An arity mismatch is `KSEM174`, a generic enum written bare is
+`KSEM172`, type arguments on a non-generic type are `KSEM173`, and a template
+that grows its own argument without end is `KSEM175` rather than a stack
+overflow.
 
 ### Widening
 

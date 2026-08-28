@@ -33,7 +33,29 @@ class Panel: Hashable extends Surface { }
 
 A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement's parameters or result is `KSEM293`.
 
-A trait takes no type parameters. `enum` is the only declaration that does.
+## Generic Traits
+
+A trait may take type parameters. Its concrete contract is instantiated where a
+conformance or bound names it, so the parameterized members are checked against
+the substituted types.
+
+```kira
+trait Provider<Value> {
+    function get(borrow self) -> Value
+}
+
+struct Box: Provider<Int> {
+    let value: Int
+
+    function get(borrow self) -> Int { return self.value }
+}
+```
+
+`Provider<Int>` and `Provider<String>` are different contracts. A type must
+implement the contract's substituted requirements, and every bound on the
+trait's parameters must hold (`KSEM315`). A generic type can carry the
+conformance with its own parameters, for example `struct Holder<Value:
+Scored>: Provider<Value> { … }`.
 
 ## Dispatch
 

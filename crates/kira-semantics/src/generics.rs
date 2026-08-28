@@ -30,12 +30,11 @@
 //! opcode, no IR node, no runtime tag, and no wire format learns that
 //! generics exist. This module is the whole feature.
 //!
-//! # Why only an enum is generic
+//! # One model for every generic declaration
 //!
-//! The reference corpus contains exactly one generic declaration, and it is
-//! `Result`. A generic struct, class, or function has no call site anywhere, so
-//! building one would be speculative surface; the parser refuses those by name
-//! instead (`KPAR047`).
+//! Enums, structs, classes, traits, and free functions are all templates. A
+//! concrete use substitutes its arguments into the ordinary semantic tables;
+//! nothing below semantics needs a generic-specific representation.
 //!
 //! # Bounds
 //!
@@ -60,13 +59,23 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kira_semantics_model::{EnumId, Instantiation, StructId, Type};
+use kira_semantics_model::{EnumId, FieldDef, Instantiation, StructDef, StructId, Type};
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::{EnumDecl, TypeRefId};
+use kira_syntax_model::ast::{
+    ClassDecl, EnumDecl, Function, Item, StructDecl, TraitRef, TypeRefId,
+};
 
 use crate::analyze::Analyzer;
+use crate::analyze::{Callable, FieldDefault};
+use crate::classes::{ClassInfo, OwnMethod};
 use crate::traits::is_builtin_trait;
 use crate::types::NameContext;
+
+mod aggregate_inference;
+mod aggregates;
+mod bounds;
+mod enums;
+mod functions;
 
 /// How deep a chain of generic instantiations may go before it is refused.
 ///
@@ -89,9 +98,16 @@ pub(crate) struct PendingBoundCheck {
     args: Vec<Type>,
     /// The file the instantiation was written in.
     source: SourceId,
+    /// The file the generic declaration was written in. Bound type arguments
+    /// resolve against this file's imports, not the use site.
+    declaration_source: SourceId,
     /// The span a refusal points at: the instantiation site, which is where
     /// the fix goes.
     span: Span,
+    /// The source-level declaration kind, used only to keep diagnostics
+    /// specific without making the bound checker know about each template's
+    /// storage representation.
+    kind: &'static str,
 }
 
 /// One registered `enum Name<Params>` declaration, waiting for a use site.
@@ -112,177 +128,326 @@ pub(crate) struct GenericEnum<'a> {
 /// never leak into a body that never declared one.
 pub(crate) type TypeBindings = Vec<(String, Type)>;
 
-impl<'a> Analyzer<'a> {
-    /// Registers `declaration` as a generic template, or reports why it cannot
-    /// be one.
-    ///
-    /// Returns `true` when the declaration was generic — the caller then skips
-    /// declaring it as an ordinary enum, because a template names no type.
-    pub(crate) fn register_generic_enum(
-        &mut self,
-        declaration: &'a EnumDecl,
+/// A generic aggregate declaration waiting for a use site to provide its
+/// arguments. Structs and classes share one runtime representation, so their
+/// templates share the same table too; a class's inheritance metadata is
+/// filled when its concrete row is minted.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GenericAggregate<'a> {
+    /// A `struct Name<T> { ... }` template.
+    Struct {
+        /// The declaration as written.
+        decl: &'a StructDecl,
+        /// The file whose imports resolve its fields and methods.
         source: SourceId,
-    ) -> bool {
-        if declaration.type_params.is_empty() {
-            return false;
+    },
+    /// A `class Name<T> { ... }` template.
+    Class {
+        /// The declaration as written.
+        decl: &'a ClassDecl,
+        /// The file whose imports resolve its fields and methods.
+        source: SourceId,
+    },
+}
+
+impl GenericAggregate<'_> {
+    /// The declaration's type-parameter list.
+    pub(crate) fn type_params(&self) -> &[kira_syntax_model::ast::TypeParamDecl] {
+        match self {
+            Self::Struct { decl, .. } => &decl.type_params,
+            Self::Class { decl, .. } => &decl.type_params,
         }
-        let name = self.interner.resolve(declaration.name).to_owned();
-        let mut seen: Vec<String> = Vec::with_capacity(declaration.type_params.len());
-        for param in &declaration.type_params {
-            let param_name = self.interner.resolve(param.name).to_owned();
-            if Type::from_name(&param_name).is_some() {
+    }
+
+    /// The declaration's source file.
+    pub(crate) fn source(&self) -> SourceId {
+        match self {
+            Self::Struct { source, .. } | Self::Class { source, .. } => *source,
+        }
+    }
+}
+
+/// Every generic struct or class template, keyed by its bare source name.
+pub(crate) type GenericAggregateTable<'a> = HashMap<String, GenericAggregate<'a>>;
+
+/// A generic free-function declaration. Methods use the aggregate table's
+/// callable path, while this table is what lets a call infer a free function's
+/// parameters before a concrete signature exists.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GenericFunction<'a> {
+    /// The declaration as written.
+    pub(crate) function: &'a Function,
+    /// The source file whose imports resolve the declaration.
+    pub(crate) source: SourceId,
+}
+
+/// Every generic free function template, keyed by its written name.
+pub(crate) type GenericFunctionTable<'a> = HashMap<String, GenericFunction<'a>>;
+
+impl<'a> Analyzer<'a> {
+    /// Registers generic declarations before the ordinary type and callable
+    /// passes. A template is deliberately absent from the concrete tables: its
+    /// name becomes a type or function only after a use site supplies all of
+    /// its arguments.
+    pub(crate) fn collect_generic_declarations(&mut self) {
+        let tree = self.tree;
+        for (source, item) in tree.items_with_source() {
+            self.source = source;
+            match item {
+                Item::Struct(decl) if !decl.type_params.is_empty() => {
+                    let name = self.interner.resolve(decl.name).to_owned();
+                    self.validate_type_params(&name, &decl.type_params);
+                    if self.generic_aggregates.contains_key(&name)
+                        || self.generic_enums.contains_key(&name)
+                    {
+                        self.emit(
+                            decl.name_span,
+                            "KSEM169",
+                            format!("generic declaration `{name}` is already defined"),
+                        );
+                    } else {
+                        self.generic_aggregates
+                            .insert(name, GenericAggregate::Struct { decl, source });
+                    }
+                }
+                Item::Class(decl) if !decl.type_params.is_empty() => {
+                    let name = self.interner.resolve(decl.name).to_owned();
+                    self.validate_type_params(&name, &decl.type_params);
+                    if self.generic_aggregates.contains_key(&name)
+                        || self.generic_enums.contains_key(&name)
+                    {
+                        self.emit(
+                            decl.name_span,
+                            "KSEM169",
+                            format!("generic declaration `{name}` is already defined"),
+                        );
+                    } else {
+                        self.generic_aggregates
+                            .insert(name, GenericAggregate::Class { decl, source });
+                    }
+                }
+                Item::Function(function) if !function.type_params.is_empty() => {
+                    let name = self.interner.resolve(function.name).to_owned();
+                    self.validate_type_params(&name, &function.type_params);
+                    if self.generic_functions.contains_key(&name) {
+                        self.emit(
+                            function.name_span,
+                            "KSEM003",
+                            format!("function `{name}` is already defined"),
+                        );
+                    } else {
+                        self.generic_functions
+                            .insert(name, GenericFunction { function, source });
+                    }
+                }
+                Item::Trait(declaration) if !declaration.type_params.is_empty() => {
+                    let name = self.interner.resolve(declaration.name).to_owned();
+                    self.validate_type_params(&name, &declaration.type_params);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Checks the declaration-local part of a generic parameter list. Trait
+    /// existence is checked after all trait declarations are collected, while
+    /// duplicate parameters and builtin shadowing can be diagnosed immediately.
+    fn validate_type_params(
+        &mut self,
+        owner: &str,
+        params: &[kira_syntax_model::ast::TypeParamDecl],
+    ) {
+        let mut seen = HashSet::new();
+        for param in params {
+            let name = self.interner.resolve(param.name).to_owned();
+            if Type::from_name(&name).is_some() {
                 self.emit(
                     param.span,
                     "KSEM170",
-                    format!(
-                        "type parameter `{param_name}` of enum `{name}` shadows a builtin type; \
-                         pick a name no type already has"
-                    ),
+                    format!("type parameter `{name}` of `{owner}` shadows a builtin type"),
                 );
-                continue;
             }
-            if seen.contains(&param_name) {
+            if !seen.insert(name.clone()) {
                 self.emit(
                     param.span,
                     "KSEM171",
-                    format!("enum `{name}` already declares a type parameter `{param_name}`"),
+                    format!("`{owner}` already declares a type parameter `{name}`"),
                 );
-                continue;
             }
-            seen.push(param_name.clone());
             for bound in &param.bounds {
                 let bound_name = self.interner.resolve(bound.name).to_owned();
-                // A compiler-known trait is known here without a declaration,
-                // so it names a bound the same way it names a conformance.
-                if is_builtin_trait(&bound_name) || self.traits.contains_key(&bound_name) {
-                    continue;
+                if !is_builtin_trait(&bound_name) && !self.traits.contains_key(&bound_name) {
+                    self.emit(
+                        bound.span,
+                        "KSEM289",
+                        format!("`{bound_name}` is not a trait, so it cannot bound `{name}`"),
+                    );
                 }
-                self.emit(
-                    bound.span,
-                    "KSEM289",
-                    format!(
-                        "`{bound_name}` is not a trait, so it cannot bound `{name}`'s type \
-                         parameter `{param_name}`"
-                    ),
-                );
             }
         }
-        if self.generic_enums.contains_key(&name)
-            || self.visible_enum(&name).is_some()
-            || self.visible_struct(&name).is_some()
-        {
-            self.emit(
-                declaration.name_span,
-                "KSEM169",
-                format!("generic enum `{name}` is already defined"),
-            );
-            return true;
+    }
+
+    /// Whether a name is a generic struct or class template.
+    pub(crate) fn is_generic_aggregate(&self, name: &str) -> bool {
+        self.generic_aggregates.contains_key(name)
+    }
+
+    /// Whether a name is a generic free-function template.
+    pub(crate) fn is_generic_function(&self, name: &str) -> bool {
+        self.generic_functions.contains_key(name)
+    }
+
+    /// Whether `name` denotes a generic trait template. Trait templates live
+    /// in the ordinary trait table so their declaration remains the single
+    /// source of member bodies; concrete instances are added beside it under
+    /// their mangled names.
+    pub(crate) fn is_generic_trait(&self, name: &str) -> bool {
+        self.traits
+            .get(name)
+            .is_some_and(|trait_info| !trait_info.type_params.is_empty())
+    }
+
+    /// Resolves a trait reference in a conformance or bound clause to the
+    /// concrete trait row it names. A parameterized trait is a contract
+    /// template just like a parameterized enum is a value template: its
+    /// arguments are resolved in the current type-binding frame and the
+    /// resulting `TraitInfo` is memoized under `Trait<Args>`.
+    pub(crate) fn resolve_trait_ref(&mut self, reference: &TraitRef) -> Option<String> {
+        let base = self.interner.resolve(reference.name).to_owned();
+        self.resolve_trait_parts(&base, &reference.args, reference.span)
+    }
+
+    /// Resolves a trait name whose syntax was already stored as text (as in a
+    /// concrete instance's supertrait list), avoiding a second interner just to
+    /// reconstruct an AST symbol.
+    fn resolve_trait_parts(
+        &mut self,
+        base: &str,
+        arguments: &[TypeRefId],
+        span: Span,
+    ) -> Option<String> {
+        if is_builtin_trait(base) {
+            if !arguments.is_empty() {
+                self.emit(
+                    span,
+                    "KSEM222",
+                    format!("trait `{base}` does not take explicit type arguments"),
+                );
+                return None;
+            }
+            return Some(base.to_owned());
         }
-        self.generic_enums.insert(
-            name,
-            GenericEnum {
-                decl: declaration,
-                source,
-            },
-        );
-        true
-    }
-
-    /// Whether `name` is a registered generic enum, so a bare use of it can say
-    /// what is missing rather than "unknown type".
-    pub(crate) fn is_generic_enum(&self, name: &str) -> bool {
-        self.generic_enums.contains_key(name)
-    }
-
-    /// The instantiation of the template `name` that `expected` already asks
-    /// for, if that is what it asks for.
-    ///
-    /// This is what lets `Result.Ok(1)` mean the same thing `.Ok(1)` does: a
-    /// qualified spelling carries no type arguments, so the *position* is what
-    /// supplies them, and the template name written in front only has to agree
-    /// with what the position already said. It agrees when the expected enum is
-    /// an instantiation of exactly this template — `Result<Int, Bool>` for
-    /// `Result`, and not for `Outcome`.
-    pub(crate) fn generic_instantiation_expected(
-        &self,
-        name: &str,
-        expected: Option<Type>,
-    ) -> Option<EnumId> {
-        let Some(Type::Enum(id)) = expected else {
+        let Some(template) = self.traits.get(base).cloned() else {
             return None;
         };
-        (self.program.types.enums().template_of(id) == Some(name)).then_some(id)
-    }
-
-    /// Resolves the type parameter `name` stands for in the substitution
-    /// currently in force, if any.
-    pub(crate) fn bound_type_param(&self, name: &str) -> Option<Type> {
-        self.type_bindings
-            .iter()
-            .rev()
-            .find(|(bound, _)| bound == name)
-            .map(|&(_, ty)| ty)
-    }
-
-    /// Resolves a written `Name<Args>` to the enum its instantiation declares.
-    pub(crate) fn resolve_generic_instantiation(
-        &mut self,
-        name: kira_core::Symbol,
-        name_span: Span,
-        args: &[TypeRefId],
-        span: Span,
-        context: &NameContext,
-    ) -> Type {
-        let written = self.interner.resolve(name).to_owned();
-        // A generic template is keyed by its bare name, so the qualifier here
-        // buys only the file-scope check the split performs.
-        let Some(text) = self
-            .split_module_qualifier(&written, name_span)
-            .map(|qualified| qualified.text)
-        else {
-            // Reported already; still resolve the arguments so their own
-            // mistakes are not hidden behind one unimported module.
-            for &arg in args {
-                self.resolve_type_in(arg, context);
+        if template.type_params.is_empty() {
+            if !arguments.is_empty() {
+                self.emit(
+                    span,
+                    "KSEM222",
+                    format!("trait `{base}` does not take explicit type arguments"),
+                );
+                return None;
             }
-            return Type::Error;
-        };
-        // Arguments resolve in the *use site's* scope, which is the current
-        // binding frame — that is what makes `Result<Value, E>` inside another
-        // template's body mean what it says.
-        let mut resolved: Vec<Type> = Vec::with_capacity(args.len());
-        let mut any_error = false;
-        for &arg in args {
-            let ty = self.resolve_type_in(arg, context);
-            any_error |= ty == Type::Error;
-            resolved.push(ty);
+            return Some(base.to_owned());
         }
-        let Some(template) = self.generic_enums.get(&text).copied() else {
-            self.report_not_generic(&text, name_span, span);
-            return Type::Error;
-        };
-        let arity = template.decl.type_params.len();
-        if resolved.len() != arity {
+        let args: Vec<Type> = arguments
+            .iter()
+            .map(|&arg| self.resolve_type_ref(arg))
+            .collect();
+        let has_error = args.iter().any(|ty| *ty == Type::Error);
+        let arity = template.type_params.len();
+        if args.len() != arity {
             self.emit(
                 span,
                 "KSEM174",
                 format!(
-                    "generic enum `{text}` takes {arity} type argument{}, but {} {} written",
+                    "generic trait `{base}` takes {arity} type argument{}, but {} {} written",
                     if arity == 1 { "" } else { "s" },
-                    resolved.len(),
-                    if resolved.len() == 1 { "was" } else { "were" }
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" },
                 ),
             );
-            return Type::Error;
+            return None;
         }
-        // An argument that did not resolve would mint a row named
-        // `Result<<error>, E>` that a second unresolved name would compare
-        // *equal* to — turning one mistake into two unrelated types that
-        // type-check against each other. Same reasoning as `[<error>]`.
-        if any_error {
-            return Type::Error;
+        if has_error {
+            return None;
         }
-        self.instantiate(&text, template, &resolved, span)
+        let key = self.mangle(&base, &args);
+        if !self.traits.contains_key(&key) {
+            self.instantiate_trait(base, &key, &template, &args, span);
+        }
+        if template
+            .type_params
+            .iter()
+            .any(|param| !param.bounds.is_empty())
+            && !self.pending_bounds.iter().any(|entry| entry.key == key)
+        {
+            self.pending_bounds.push(PendingBoundCheck {
+                key: key.clone(),
+                template: base.to_owned(),
+                args: args.clone(),
+                source: self.source,
+                declaration_source: template.source,
+                span,
+                kind: "trait",
+            });
+        }
+        self.traits.contains_key(&key).then_some(key)
+    }
+
+    /// Mints one concrete trait contract from `template`, substituting its
+    /// parameters into member signatures and supertrait references. Trait
+    /// instances are semantic rows only: no backend or runtime representation
+    /// is needed, and all members still point at the source function bodies.
+    fn instantiate_trait(
+        &mut self,
+        base: &str,
+        key: &str,
+        template: &crate::traits::TraitInfo<'a>,
+        args: &[Type],
+        span: Span,
+    ) {
+        if self.instantiation_depth >= MAX_INSTANTIATION_DEPTH {
+            self.emit(
+                span,
+                "KSEM175",
+                format!(
+                    "generic trait `{base}` instantiates itself without end (gave up at `{key}`)"
+                ),
+            );
+            return;
+        }
+        let bindings: TypeBindings = template
+            .type_params
+            .iter()
+            .map(|param| self.interner.resolve(param.name).to_owned())
+            .zip(args.iter().copied())
+            .collect();
+        let outer_bindings = std::mem::replace(&mut self.type_bindings, bindings.clone());
+        let outer_source = self.source;
+        self.source = template.source;
+        self.instantiation_depth += 1;
+        let mut instance = template.clone();
+        instance.type_params = Vec::new();
+        instance.type_bindings = bindings;
+        let supertraits = template
+            .supertraits
+            .iter()
+            .filter_map(|supertrait| {
+                self.resolve_trait_parts(&supertrait.name, &supertrait.args, supertrait.span)
+                    .map(|name| crate::traits::SupertraitRef {
+                        name,
+                        span: supertrait.span,
+                        args: Vec::new(),
+                    })
+            })
+            .collect();
+        instance.supertraits = supertraits;
+        self.instantiation_depth -= 1;
+        self.source = outer_source;
+        self.type_bindings = outer_bindings;
+        self.traits.insert(key.to_owned(), instance);
     }
 
     /// Reports `Name<...>` where `Name` is not a generic enum, saying which of
@@ -350,7 +515,9 @@ impl<'a> Analyzer<'a> {
                     template: text.to_owned(),
                     args: args.to_vec(),
                     source: self.source,
+                    declaration_source: template.source,
                     span,
+                    kind: "enum",
                 });
             }
         }
@@ -453,153 +620,6 @@ impl<'a> Analyzer<'a> {
             }
             other => self.type_name(other),
         }
-    }
-
-    /// Answers every queued instantiation's bounds, now that the tables the
-    /// answers read are final.
-    ///
-    /// Called twice per analysis — once after drop recording, once after bodies
-    /// and synthesized functions have finished minting rows — because an
-    /// instantiation can be minted at any point a type resolves. Each entry is
-    /// answered once and dropped; the second call sees only what bodies added.
-    pub(crate) fn check_pending_generic_bounds(&mut self) {
-        if self.pending_bounds.is_empty() {
-            return;
-        }
-        for entry in std::mem::take(&mut self.pending_bounds) {
-            let Some(template) = self.generic_enums.get(&entry.template).copied() else {
-                continue;
-            };
-            let params: Vec<(String, Vec<String>)> = template
-                .decl
-                .type_params
-                .iter()
-                .map(|param| {
-                    (
-                        self.interner.resolve(param.name).to_owned(),
-                        param
-                            .bounds
-                            .iter()
-                            .map(|bound| self.interner.resolve(bound.name).to_owned())
-                            .collect(),
-                    )
-                })
-                .collect();
-            for ((param_name, bounds), &arg) in params.iter().zip(entry.args.iter()) {
-                for bound in bounds {
-                    // A bound whose name resolved to nothing was refused at
-                    // registration; there is nothing to discharge against.
-                    if !is_builtin_trait(bound) && !self.traits.contains_key(bound) {
-                        continue;
-                    }
-                    let Some(reason) = self.bound_unmet(bound, arg) else {
-                        continue;
-                    };
-                    let spelling = self.type_name(arg);
-                    self.source = entry.source;
-                    self.emit(
-                        entry.span,
-                        "KSEM315",
-                        format!(
-                            "type argument `{spelling}` for parameter `{param_name}` of generic \
-                             enum `{}` does not satisfy its bound `{bound}`: {reason}",
-                            entry.template
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
-    /// Why `arg` fails the bound `bound`, or `None` when it keeps it.
-    ///
-    /// Three kinds of bound, each answered by the machinery that already owns
-    /// the question: a compiler-known derived marker by the structural fact,
-    /// `Drop` by whether the type's release runs a user body, and a declared
-    /// trait by the conformance table plus its supertrait closure — slice 1a's
-    /// answers, reused rather than restated.
-    fn bound_unmet(&self, bound: &str, arg: Type) -> Option<String> {
-        if crate::traits::is_derived_trait(bound) {
-            return self.derived_bound_unmet(bound, arg);
-        }
-        if bound == crate::traits::DROP {
-            let name = self.type_name(arg);
-            return (!self.program.types.runs_user_drop(arg))
-                .then(|| format!("`{name}` runs no user `Drop` body"));
-        }
-        let Type::Struct(id) = arg else {
-            return Some(format!(
-                "only a struct, class, or construct-backed declaration can conform to \
-                 `{bound}`, and `{}` is not one",
-                self.type_name(arg)
-            ));
-        };
-        let name = self.type_name(arg);
-        if !self.conforms_to(id, bound) {
-            return Some(format!(
-                "`{name}` does not conform to `{bound}`; add it to the conformance list, or \
-                 write `extend {name}: {bound} {{ … }}`"
-            ));
-        }
-        self.supertrait_obligation_unmet(bound, id, &mut HashSet::new())
-            .map(|(unmet, reason)| format!("`{bound}` requires `{unmet}`, and {reason}"))
-    }
-
-    /// Why `ty` fails the *derived* marker `bound`, phrased for a use site.
-    fn derived_bound_unmet(&self, bound: &str, ty: Type) -> Option<String> {
-        let claimed = self.type_name(ty);
-        match crate::traits::markers::Marker::from_name(bound) {
-            Some(marker) => self.marker_reason(&claimed, ty, marker),
-            None => self.not_copyable_reason(&claimed, ty, &mut HashSet::new()),
-        }
-    }
-
-    /// The first unmet obligation in `trait_name`'s supertrait closure, with
-    /// the trait that left it on.
-    ///
-    /// Direct obligations first, then theirs: a conformance that is itself
-    /// checked discharges its own closure, so only the unmet leaf needs naming.
-    /// `visited` stops a shared subgraph being walked twice; cycles were
-    /// refused where they were declared (`KSEM309`).
-    fn supertrait_obligation_unmet(
-        &self,
-        trait_name: &str,
-        ty: StructId,
-        visited: &mut HashSet<String>,
-    ) -> Option<(String, String)> {
-        let edges: Vec<String> = self
-            .traits
-            .get(trait_name)?
-            .supertraits
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect();
-        for edge in edges {
-            if !visited.insert(edge.clone()) {
-                continue;
-            }
-            if let Some(reason) = self.single_conformance_unmet(&edge, ty) {
-                return Some((edge, reason));
-            }
-            if let Some(found) = self.supertrait_obligation_unmet(&edge, ty, visited) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    /// Why `ty` does not carry one obligation — a derived marker, `Drop`, or a
-    /// declared trait's row — without walking further.
-    fn single_conformance_unmet(&self, name: &str, ty: StructId) -> Option<String> {
-        let spelled = self.type_name(Type::Struct(ty));
-        if crate::traits::is_derived_trait(name) {
-            return self.derived_trait_unmet(name, ty);
-        }
-        if name == crate::traits::DROP {
-            return (!self.program.types.runs_user_drop(Type::Struct(ty)))
-                .then(|| format!("`{spelled}` runs no user `Drop` body"));
-        }
-        (!self.conforms_to(ty, name)).then(|| format!("`{spelled}` does not conform to `{name}`"))
     }
 }
 

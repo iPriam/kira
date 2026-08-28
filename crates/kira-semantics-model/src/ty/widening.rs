@@ -29,9 +29,9 @@
 //! - **An array is invariant, and a struct field is not a widening position at
 //!   all.** `[Result<Int, E>]` is not `[Result<Any, E>]` for the same reason
 //!   `[Int]` is not `[Any]`: array element types match exactly, and this adds no
-//!   exception. A struct is never generic (`KPAR047`), so two structs with
-//!   different field types are unrelated nominal types and there is nothing to
-//!   widen between.
+//!   exception. Generic aggregate specializations are nominal rows, so two
+//!   specializations with different field types are unrelated unless their own
+//!   template instantiation is the widening operation being asked for.
 //! - **Widening composes with itself.** A type argument that is itself an
 //!   instantiation widens by this same rule, so `Result<Result<Int, E>, E>`
 //!   reaches `Result<Result<Any, E>, E>`, and the rebuild recurses to match.

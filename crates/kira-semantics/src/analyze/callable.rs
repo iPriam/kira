@@ -23,6 +23,9 @@ impl<'a> Analyzer<'a> {
                 // `HirFunction`, so it is skipped here and handled by
                 // `collect_foreign`.
                 Item::Function(function) if function.foreign.is_some() => {}
+                // A generic free function is a template. Its concrete body is
+                // appended when a call infers an argument substitution.
+                Item::Function(function) if !function.type_params.is_empty() => {}
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
                     origin: None,
@@ -30,8 +33,12 @@ impl<'a> Analyzer<'a> {
                     initializes: None,
                     function,
                     source,
+                    type_bindings: Vec::new(),
                 }),
                 Item::Struct(declaration) => {
+                    if !declaration.type_params.is_empty() {
+                        continue;
+                    }
                     // The struct this declaration minted, under its own
                     // package: a bare name is not unique across packages, and
                     // this is registering what *this* declaration provides.
@@ -49,10 +56,14 @@ impl<'a> Analyzer<'a> {
                             initializes: None,
                             function: method,
                             source,
+                            type_bindings: Vec::new(),
                         });
                     }
                 }
                 Item::Class(declaration) => {
+                    if !declaration.type_params.is_empty() {
+                        continue;
+                    }
                     self.class_callables(declaration, source, &mut callables)
                 }
                 Item::Construct(declaration) => {
@@ -70,6 +81,11 @@ impl<'a> Analyzer<'a> {
                 | Item::Unsupported(_) => {}
             }
         }
+        // Concrete generic aggregate rows are minted while the type passes
+        // run, before this list is built. Their methods are ordinary methods
+        // from this point onward and therefore share the same signature and
+        // lowering path.
+        callables.extend(self.generic_method_callables.iter().cloned());
         // Before specialization, so a trait default a class inherits specializes
         // on its class-typed parameters exactly as a written method does.
         self.trait_callables(&mut callables);

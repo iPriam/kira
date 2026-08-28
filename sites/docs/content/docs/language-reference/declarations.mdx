@@ -28,12 +28,16 @@ function name(param: T, other: U = default) -> R { … }
 function name(param: T): (Int) -> Int { … }         // a function-typed result
 function method(borrow self) -> R { … }
 function method(borrow mut self, by: Int) { … }
+function identity<Value>(value: Value) -> Value { … }
 @FFI.Extern { … } function foreign(a: I32) -> I32;  // bodyless
 ```
 
 Parameters require explicit types. A parameter mode is `borrow`, `borrow mut`, `copy`, or nothing. A result type follows `->`, or `:` when it is itself a function type. A bare `self` receiver is `KPAR075`; a receiver on a non-method is `KSEM299`.
 
 Several declarations may share a name when their parameter lists differ.
+Type-parameterized functions are instantiated at a call. Arguments are inferred
+from values, or supplied explicitly as `identity<Int>(7)`; an unresolved
+specialization is `KSEM316`.
 
 ## `struct`
 
@@ -46,6 +50,8 @@ struct Name {
 ```
 
 Members may be `let` or `var` and may carry a default. Field type order does not matter; a by-value cycle is `KSEM052`. A struct is constructed by a literal (`Name { field = value }`) or by its memberwise constructor (`Name(value)`, `Name(field: value)`).
+`struct Name<Value> { … }` is a generic template; `Name<Int>` is the concrete
+type used by a constructor or annotation.
 
 ## `class`
 
@@ -54,11 +60,23 @@ class Child: Trait extends Parent, Other {
     override let member = newDefault
     function method() -> R { … }
 }
+
+class BoxChild<Value> extends Box<Value> {
+    function read(borrow self) -> Value { return self.value }
+}
 ```
 
-`:` is conformance and `extends` is a parent, traits first. `extends` takes a comma-separated list and may name a `struct`. Two parents declaring one name keeps both, so the bare name is `KSEM067` for a method and `KSEM068` for a field.
+`:` is conformance and `extends` is a parent, traits first. `extends` takes a
+comma-separated list and may name a `struct` or a concrete generic aggregate
+such as `Box<Value>`. A generic child substitutes its parameters into the
+parent before flattening fields and methods. Two parents declaring one name
+keeps both, so the bare name is `KSEM067` for a method and `KSEM068` for a field.
 
-A class is built by calling it. There is no subtyping (`KSEM063`).
+A class is built by calling it. A child value is assignable to any of its
+parents, and the flattened parent fields and methods remain available on the
+child.
+Classes may also be generic, such as `class Box<Value> { … }`; each concrete
+`Box<Type>` is a separate flattened class row.
 
 ## `enum`
 
@@ -79,7 +97,10 @@ enum Result<Value, Failure> {
 
 Variants are separated by newlines or spaces, never commas. A variant carries at most one payload, written `(T)` or `: T`, optionally with `= default`. A payload may be `Int`, `Float`, `Bool`, `String`, an array, a struct, another enum, or `Any`; `Void`, `CString`, `RawPtr`, and runtime handles are `KSEM118`.
 
-`enum` is the only declaration that takes type parameters; a generic `struct`, `class`, or `function` is `KPAR047`.
+Enums, structs, classes, traits, and functions may take type parameters. A
+generic declaration is instantiated only when a complete argument list is
+available; an arity mismatch is `KSEM174`, while a type argument on a
+non-generic declaration is `KSEM173`.
 
 ## `trait`
 
@@ -90,7 +111,7 @@ trait Ordered: Equated {
 }
 ```
 
-A bodyless member is a requirement; one with a body is a default. A trait with no members is a marker. A `:` clause on a trait names supertraits. A trait takes no type parameters. Declaring `Copyable`, `Drop`, `Send`, or `Sync` is `KSEM288`.
+A bodyless member is a requirement; one with a body is a default. A trait with no members is a marker. A `:` clause on a trait names supertraits. Traits may be generic (`trait Provider<Value> { … }`), and `Provider<Int>` is the concrete contract named by a conformance or bound. Declaring `Copyable`, `Drop`, `Send`, or `Sync` is `KSEM288`.
 
 ## `construct`
 

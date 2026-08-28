@@ -89,7 +89,7 @@ impl Parser<'_> {
         // trait: a block implements the members of one trait for one type, so a
         // second name would have no members of its own to carry.
         let conformance = self.parse_trait_list();
-        let conforms = conformance.first().copied();
+        let conforms = conformance.first().cloned();
         for extra in conformance.iter().skip(1) {
             self.error(
                 extra.span,
@@ -108,7 +108,10 @@ impl Parser<'_> {
             }
             match self.current_kind() {
                 TokenKind::Function => {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut function) =
+                        self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut function);
                         methods.push(function);
                     }
                 }
@@ -122,7 +125,8 @@ impl Parser<'_> {
                 TokenKind::At => {
                     let annotations = self.parse_annotations();
                     if self.at(TokenKind::Function) {
-                        if let Some(function) = self.parse_function_annotated(&annotations) {
+                        if let Some(mut function) = self.parse_function_annotated(&annotations) {
+                            self.refuse_generic_member(&mut function);
                             methods.push(function);
                         }
                     } else {
@@ -222,6 +226,7 @@ impl Parser<'_> {
             kind,
             name,
             name_span,
+            type_params: Vec::new(),
             traits,
             fields: body.fields,
             methods: body.methods,
@@ -261,6 +266,7 @@ impl Parser<'_> {
             kind,
             name,
             name_span,
+            type_params: Vec::new(),
             traits: Vec::new(),
             fields: body.fields,
             methods: body.methods,
@@ -410,7 +416,8 @@ impl Parser<'_> {
                 self.parse_construct_let(body, true);
             }
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                if let Some(mut function) = self.parse_function(false, Execution::Inherited, None) {
+                    self.refuse_generic_member(&mut function);
                     body.methods.push(ConstructMethod {
                         computed: false,
                         lifecycle: false,

@@ -60,6 +60,8 @@ impl<'a> Analyzer<'a> {
         // was written in — not the entry file's, and not the union of all of
         // them. That is what "file-scoped" means.
         self.source = callable.source;
+        let outer_bindings =
+            std::mem::replace(&mut self.type_bindings, callable.type_bindings.clone());
         let sig_return = self.sigs[id.0 as usize].return_type;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(sig_return);
@@ -137,7 +139,7 @@ impl<'a> Analyzer<'a> {
                 format!("`{name}` may finish without returning a value"),
             );
         }
-        HirFunction {
+        let result = HirFunction {
             // The symbol, not the written name: two overloads share a name and
             // a backend has one function per symbol.
             name: self.function_symbol(id),
@@ -150,6 +152,8 @@ impl<'a> Analyzer<'a> {
             execution: function.execution,
             mutates_self: self.mutates_self(id),
             name_span: function.name_span,
-        }
+        };
+        self.type_bindings = outer_bindings;
+        result
     }
 }

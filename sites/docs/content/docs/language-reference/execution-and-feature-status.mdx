@@ -94,7 +94,7 @@ The one shape a target cannot express is a SPIR-V compute entry point that decla
 | A returned borrow | Refused rather than accepted with incomplete lifetime checking. |
 | Field-sensitive partial moves | A struct moves whole. |
 | A `Drop` value read out of a member, an element, or a payload | `KSEM302`. Bind the owner. |
-| A generic `struct`, `class`, or `function` | `KPAR047`. Only `enum` takes type parameters. |
+| Generic declaration members with their own type parameters | `KPAR047`. Type parameters belong on the enclosing function or aggregate declaration. |
 | Subtyping between classes | `KSEM063`. Use a trait or a construct family. |
 | `print` of a struct, array, or enum | `KSEM081`. No rendering is pinned anywhere. |
 | Payload-carrying enums as direct C values | Refused with a typed diagnostic. Payload-less enums cross as C integers. |
