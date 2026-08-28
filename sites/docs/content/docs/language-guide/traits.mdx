@@ -25,7 +25,7 @@ struct Mesh: Hashable, Tagged {
 }
 ```
 
-`:` is always conformance and `extends` is always a parent. Both clauses follow the declaration's name, traits first.
+`:` is always conformance and `extends` is always a parent. Both clauses follow the declaration's name, traits first. Any concrete value type may conform: structs, classes, construct-backed declarations, enums, scalars, strings, arrays, and aliases that resolve to one of them.
 
 ```kira
 class Panel: Hashable extends Surface { }
@@ -73,7 +73,27 @@ The colon form also reaches a construct family: `construct Widget: Hashable { â€
 
 A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, and `Sync` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
 
-A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. A block may carry only members the trait declares (`KSEM294`).
+A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. An enum or another type without members can put the conformance in its declaration and provide behavioral members in a single impl block. A block may carry only members the trait declares (`KSEM294`).
+
+Enums use the same declaration syntax as other aggregates, and a trait implementation can be attached to an enum, scalar, string, or array:
+
+```kira
+trait Scored {
+    function score(borrow self) -> Int
+}
+
+enum Tag: Scored { Red Blue } // marker or requirements may be declared here
+
+extend Int: Scored {
+    function score(borrow self) -> Int { return 1 }
+}
+
+extend [Int]: Scored {
+    function score(borrow self) -> Int { return 2 }
+}
+```
+
+The type identity includes an integer or float width and an array's element type, so `I32` and `U32`, or `[Int]` and `[Float]`, can keep separate conformances. A type alias contributes no new identity: `type Count = Int` uses `Int`'s conformance.
 
 ## Coherence
 

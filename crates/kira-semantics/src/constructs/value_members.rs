@@ -191,7 +191,15 @@ impl Analyzer<'_> {
             local: receiver,
             ty: Type::Enum(family),
         });
-        let concrete_ty = Type::Struct(variant.struct_id);
+        let Some(struct_id) = variant.struct_id() else {
+            let value = self.default_value(result);
+            return vec![
+                self.program
+                    .stmts
+                    .alloc(HirStmt::Return { value: Some(value) }),
+            ];
+        };
+        let concrete_ty = Type::Struct(struct_id);
         let concrete = self.program.exprs.alloc(HirExpr::EnumPayload {
             value: family_value,
             ty: concrete_ty,
@@ -214,7 +222,7 @@ impl Analyzer<'_> {
                 .program
                 .types
                 .structs()
-                .get(variant.struct_id)
+                .get(struct_id)
                 .and_then(|def| def.field_index(member).map(|index| (index, def)))
                 .and_then(|(index, def)| def.field(index).map(|field| (index, field.ty)))
             {

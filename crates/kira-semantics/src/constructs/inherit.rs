@@ -389,8 +389,10 @@ impl<'a> Analyzer<'a> {
         for name in reachable {
             if let Some(info) = self.construct_families.get_mut(&name) {
                 let tag = info.variants.len() as u32;
-                info.variants
-                    .push(super::ConstructVariant { struct_id: id, tag });
+                info.variants.push(super::ConstructVariant {
+                    ty: Type::Struct(id),
+                    tag,
+                });
                 registered.push((info.enum_id, tag));
             }
         }

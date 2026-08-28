@@ -77,7 +77,7 @@ A class is built by calling it. There is no subtyping (`KSEM063`).
 ## `enum`
 
 ```kira
-enum Color { Red Green Blue }
+enum Color: Renderable { Red Green Blue }
 
 enum Message {
     Empty
@@ -93,7 +93,19 @@ enum Result<Value, Failure> {
 
 Variants are separated by newlines or spaces, never commas. A variant carries at most one payload, written `(T)` or `: T`, optionally with `= default`. A payload may be `Int`, `Float`, `Bool`, `String`, an array, a struct, another enum, or `Any`; `Void`, `CString`, `RawPtr`, and runtime handles are `KSEM118`.
 
-`enum` is the only declaration that takes type parameters; a generic `struct`, `class`, or `function` is `KPAR047`.
+An enum may claim traits after its optional type parameters, just like a struct or class. Any concrete type can also be the target of an `extend` impl, including a scalar, string, array, or alias that resolves to one:
+
+```kira
+extend Int: Renderable {
+    function render(borrow self) -> String { return "integer" }
+}
+
+extend [Int]: Renderable {
+    function render(borrow self) -> String { return "array" }
+}
+```
+
+The conformance table uses the resolved type identity, not a declaration kind, so fixed-width scalar spellings remain distinct and aliases do not create duplicate types. A generic declaration may also carry a conformance; each monomorphized instantiation keeps its own resolved identity.
 
 ## `trait`
 

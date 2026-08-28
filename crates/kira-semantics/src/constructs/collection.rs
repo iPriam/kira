@@ -236,11 +236,8 @@ impl<'a> Analyzer<'a> {
                     .variants
                     .iter()
                     .map(|variant| VariantDef {
-                        name: self
-                            .program
-                            .types
-                            .type_name(Type::Struct(variant.struct_id)),
-                        payload: Some(Type::Struct(variant.struct_id)),
+                        name: self.program.types.type_name(variant.ty),
+                        payload: Some(variant.ty),
                     })
                     .collect();
                 (info.enum_id, variants)
@@ -440,7 +437,7 @@ impl<'a> Analyzer<'a> {
             }
             own.insert(self.interner.resolve(method.function.name));
             callables.push(Callable {
-                receiver: Some(id),
+                receiver: Some(Type::Struct(id)),
                 origin: None,
                 specialize: Vec::new(),
                 initializes: None,
@@ -463,7 +460,7 @@ impl<'a> Analyzer<'a> {
                     continue;
                 }
                 callables.push(Callable {
-                    receiver: Some(id),
+                    receiver: Some(Type::Struct(id)),
                     origin: None,
                     specialize: Vec::new(),
                     initializes: None,

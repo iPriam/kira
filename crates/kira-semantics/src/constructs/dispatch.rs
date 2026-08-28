@@ -412,19 +412,19 @@ impl Analyzer<'_> {
             // is what guarantees that surface still satisfies this one. Checking
             // it again here would compare it against the parent's un-narrowed
             // signature and report a conformance failure that is not one.
+            let Some(struct_id) = variant.struct_id() else {
+                continue;
+            };
             let declared_here = self
                 .constructs
-                .get(&variant.struct_id)
+                .get(&struct_id)
                 .and_then(|info| info.families.first())
                 .is_some_and(|(declaring, _)| *declaring == enum_id);
             if !declared_here {
                 continue;
             }
             self.source = source;
-            let owner = self
-                .program
-                .types
-                .type_name(Type::Struct(variant.struct_id));
+            let owner = self.program.types.type_name(variant.ty);
             let qualified = format!("{owner}.{method}");
             let Some((id, actual_params, actual_result)) = self.lookup_function(&qualified) else {
                 self.emit(
@@ -830,10 +830,7 @@ impl Analyzer<'_> {
         variant: ConstructVariant,
         method: &str,
     ) -> Option<(FuncId, Type)> {
-        let owner = self
-            .program
-            .types
-            .type_name(Type::Struct(variant.struct_id));
+        let owner = self.program.types.type_name(variant.ty);
         self.lookup_function(&format!("{owner}.{method}"))
             .map(|(id, _, result)| (id, result))
     }
@@ -853,7 +850,7 @@ impl Analyzer<'_> {
             local: receiver,
             ty: Type::Enum(family),
         });
-        let concrete_ty = Type::Struct(variant.struct_id);
+        let concrete_ty = variant.ty;
         let concrete = self.program.exprs.alloc(HirExpr::EnumPayload {
             value: family_value,
             ty: concrete_ty,

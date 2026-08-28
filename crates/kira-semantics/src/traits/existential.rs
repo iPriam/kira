@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 
 use kira_semantics_model::hir::{Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt};
-use kira_semantics_model::{EnumId, Execution, OwnershipMode, StructId, Type};
+use kira_semantics_model::{EnumId, Execution, OwnershipMode, Type};
 use kira_source::Span;
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -142,31 +142,28 @@ impl Analyzer<'_> {
         {
             return;
         }
-        let mut seen: Vec<StructId> = Vec::new();
+        let mut seen: Vec<Type> = Vec::new();
         for entry in &self.conformances {
-            let struct_id = entry.ty;
-            if entry.contract.trait_name() != Some(name) || seen.contains(&struct_id) {
+            let ty = entry.ty;
+            if entry.contract.trait_name() != Some(name) || seen.contains(&ty) {
                 continue;
             }
-            seen.push(struct_id);
+            seen.push(ty);
         }
         let variants: Vec<ConstructVariant> = seen
             .iter()
             .copied()
             .enumerate()
-            .map(|(tag, struct_id)| ConstructVariant {
-                struct_id,
+            .map(|(tag, ty)| ConstructVariant {
+                ty,
                 tag: tag as u32,
             })
             .collect();
         let variant_defs: Vec<kira_semantics_model::VariantDef> = variants
             .iter()
             .map(|variant| kira_semantics_model::VariantDef {
-                name: self
-                    .program
-                    .types
-                    .type_name(Type::Struct(variant.struct_id)),
-                payload: Some(Type::Struct(variant.struct_id)),
+                name: self.program.types.type_name(variant.ty),
+                payload: Some(variant.ty),
             })
             .collect();
         self.program
@@ -216,17 +213,15 @@ impl Analyzer<'_> {
         {
             self.fill_single_trait_existential(&trait_name);
         }
-        let Type::Struct(struct_id) = self.program.expr(value).type_of() else {
-            return None;
-        };
-        if !self.conforms_to(struct_id, &trait_name) {
+        let ty = self.program.expr(value).type_of();
+        if !self.conforms_to(ty, &trait_name) {
             return None;
         }
         let existential = self.trait_existentials.get(&trait_name)?;
         let tag = existential
             .variants
             .iter()
-            .find(|variant| variant.struct_id == struct_id)?
+            .find(|variant| variant.ty == ty)?
             .tag;
         Some(self.program.exprs.alloc(HirExpr::EnumNew {
             enum_id: existential_id,
@@ -509,10 +504,7 @@ impl Analyzer<'_> {
         variant: ConstructVariant,
         method: &str,
     ) -> Option<(FuncId, Type)> {
-        let owner = self
-            .program
-            .types
-            .type_name(Type::Struct(variant.struct_id));
+        let owner = self.program.types.type_name(variant.ty);
         self.lookup_function(&format!("{owner}.{method}"))
             .map(|(id, _, result)| (id, result))
     }

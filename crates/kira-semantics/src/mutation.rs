@@ -55,6 +55,12 @@ impl<'a> Analyzer<'a> {
                 let Some(owner) = callable.receiver else {
                     continue;
                 };
+                let Some(owner) = (match owner {
+                    Type::Struct(id) => Some(id),
+                    _ => None,
+                }) else {
+                    continue;
+                };
                 if self.body_mutates_self(callable.function, owner) {
                     self.mutating_methods[index] = true;
                     changed = true;

@@ -38,7 +38,7 @@ pub(crate) mod markers;
 
 use std::collections::{BTreeMap, HashSet};
 
-use kira_semantics_model::StructId;
+use kira_semantics_model::Type;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::Function;
 
@@ -144,7 +144,7 @@ pub(crate) struct Conformance {
     /// The contract kept.
     pub(crate) contract: Contract,
     /// The conforming type.
-    pub(crate) ty: StructId,
+    pub(crate) ty: Type,
     /// The file the conformance was declared in, whose package coherence is
     /// measured against.
     pub(crate) source: SourceId,

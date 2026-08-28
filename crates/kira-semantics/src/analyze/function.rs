@@ -86,8 +86,11 @@ impl<'a> Analyzer<'a> {
             } else {
                 (false, OwnershipMode::BorrowRead)
             };
-            ctx.declare_param("self", Type::Struct(owner), mutable, mode);
-            ctx.receiver = Some(owner);
+            ctx.declare_param("self", owner, mutable, mode);
+            ctx.receiver = match owner {
+                Type::Struct(id) => Some(id),
+                _ => None,
+            };
         }
         // Parameters become the next locals, each carrying the mode its
         // declaration asked for. Reading the mode off the signature rather

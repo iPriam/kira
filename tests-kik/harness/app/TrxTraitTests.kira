@@ -32,10 +32,78 @@ trait TrxScored {
 
 trait TrxTagged {}
 
+type TrxCount = U16
+
+enum TrxBox<Value> {
+    Value(Value)
+}
+
 struct TrxLeaf: TrxScored, TrxTagged {
     let n: Int
     function score(borrow self) -> Int {
         return n + 1
+    }
+}
+
+// Traits are not limited to struct-shaped values. Enums may claim a marker in
+// their declaration and receive behavioral members through an impl block; the
+// scalar and array impls below exercise the same existential representation.
+enum TrxColor: TrxTagged {
+    Red
+    Blue
+}
+
+extend TrxColor: TrxScored {
+    function score(borrow self) -> Int {
+        return 21
+    }
+}
+
+extend Int: TrxScored {
+    function score(borrow self) -> Int {
+        return 22
+    }
+}
+
+extend Float: TrxScored {
+    function score(borrow self) -> Int {
+        return 23
+    }
+}
+
+extend Bool: TrxScored {
+    function score(borrow self) -> Int {
+        return 24
+    }
+}
+
+extend String: TrxScored {
+    function score(borrow self) -> Int {
+        return 25
+    }
+}
+
+extend [Int]: TrxScored {
+    function score(borrow self) -> Int {
+        return 26
+    }
+}
+
+extend I32: TrxScored {
+    function score(borrow self) -> Int {
+        return 27
+    }
+}
+
+extend TrxCount: TrxScored {
+    function score(borrow self) -> Int {
+        return 28
+    }
+}
+
+extend TrxBox<Int>: TrxScored {
+    function score(borrow self) -> Int {
+        return 29
     }
 }
 
@@ -118,6 +186,76 @@ construct TrxARequirementIsCalledDirectly() extends Test {
         return leaf.score()
     }
     expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+construct TrxAEnumConformerEntersTheExistential() extends Test {
+    test {
+        let color = TrxColor.Red
+        let erased: TrxScored = color
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+}
+
+construct TrxAIntConformerEntersTheExistential() extends Test {
+    test {
+        let erased: TrxScored = 1
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
+}
+
+construct TrxAFloatConformerEntersTheExistential() extends Test {
+    test {
+        let erased: TrxScored = 1.0
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
+}
+
+construct TrxABoolConformerEntersTheExistential() extends Test {
+    test {
+        let erased: TrxScored = true
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+construct TrxAStringConformerEntersTheExistential() extends Test {
+    test {
+        let erased: TrxScored = "value"
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+}
+
+construct TrxAArrayConformerEntersTheExistential() extends Test {
+    test {
+        var values: [Int] = []
+        values.append(1)
+        let erased: TrxScored = move values
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
+}
+
+construct TrxAFixedWidthConformerKeepsItsSpelling() extends Test {
+    test {
+        let value: I32 = 1
+        let erased: TrxScored = value
+        return erased.score()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+}
+
+construct TrxAAliasConformerUsesTheResolvedIdentity() extends Test {
+    test { let value: U16 = 1; let erased: TrxScored = value; return erased.score() }
+    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+}
+
+construct TrxAGenericEnumInstantiationConforms() extends Test {
+    test { let value: TrxBox<Int> = .Value(1); let erased: TrxScored = value; return erased.score() }
+    expect { let e: Result<Int, TestFailure> = .Ok(29); return e }
 }
 
 construct TrxADefaultIsInheritedAndCallsTheRequirement() extends Test {

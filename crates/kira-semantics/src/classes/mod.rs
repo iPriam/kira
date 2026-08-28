@@ -614,7 +614,7 @@ impl<'a> Analyzer<'a> {
                 continue;
             };
             callables.push(crate::analyze::Callable {
-                receiver: Some(id),
+                receiver: Some(Type::Struct(id)),
                 origin: Some(*owner),
                 specialize: Vec::new(),
                 initializes: None,

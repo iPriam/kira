@@ -60,7 +60,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kira_semantics_model::{EnumId, Instantiation, StructId, Type};
+use kira_semantics_model::{EnumId, Instantiation, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{EnumDecl, TypeRefId};
 
@@ -527,21 +527,14 @@ impl<'a> Analyzer<'a> {
             return (!self.program.types.runs_user_drop(arg))
                 .then(|| format!("`{name}` runs no user `Drop` body"));
         }
-        let Type::Struct(id) = arg else {
-            return Some(format!(
-                "only a struct, class, or construct-backed declaration can conform to \
-                 `{bound}`, and `{}` is not one",
-                self.type_name(arg)
-            ));
-        };
         let name = self.type_name(arg);
-        if !self.conforms_to(id, bound) {
+        if !self.conforms_to(arg, bound) {
             return Some(format!(
                 "`{name}` does not conform to `{bound}`; add it to the conformance list, or \
                  write `extend {name}: {bound} {{ … }}`"
             ));
         }
-        self.supertrait_obligation_unmet(bound, id, &mut HashSet::new())
+        self.supertrait_obligation_unmet(bound, arg, &mut HashSet::new())
             .map(|(unmet, reason)| format!("`{bound}` requires `{unmet}`, and {reason}"))
     }
 
@@ -564,7 +557,7 @@ impl<'a> Analyzer<'a> {
     fn supertrait_obligation_unmet(
         &self,
         trait_name: &str,
-        ty: StructId,
+        ty: Type,
         visited: &mut HashSet<String>,
     ) -> Option<(String, String)> {
         let edges: Vec<String> = self
@@ -590,13 +583,13 @@ impl<'a> Analyzer<'a> {
 
     /// Why `ty` does not carry one obligation — a derived marker, `Drop`, or a
     /// declared trait's row — without walking further.
-    fn single_conformance_unmet(&self, name: &str, ty: StructId) -> Option<String> {
-        let spelled = self.type_name(Type::Struct(ty));
+    fn single_conformance_unmet(&self, name: &str, ty: Type) -> Option<String> {
+        let spelled = self.type_name(ty);
         if crate::traits::is_derived_trait(name) {
             return self.derived_trait_unmet(name, ty);
         }
         if name == crate::traits::DROP {
-            return (!self.program.types.runs_user_drop(Type::Struct(ty)))
+            return (!self.program.types.runs_user_drop(ty))
                 .then(|| format!("`{spelled}` runs no user `Drop` body"));
         }
         (!self.conforms_to(ty, name)).then(|| format!("`{spelled}` does not conform to `{name}`"))
