@@ -116,9 +116,9 @@ let encoded = 1.055 * pow(channel, 1.0 / 2.4) - 0.055   // an sRGB transfer curv
 let angle = atan2(dy, dx)
 ```
 
-`round` takes halves away from zero, `trunc` drops the fraction toward zero, and `fmod` is what `%` means on floats — the remainder truncated toward zero, so its sign follows the dividend.
+`round` takes halves away from zero, `trunc` drops the fraction toward zero, and `fmod` is what `%` means on floats, with the remainder truncated toward zero, so its sign follows the dividend.
 
-They are primitives rather than library code because every target already has them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language whose users reach a square root through eight Newton iterations has an approximation where it should have an answer. `sqrt(2.0)` is exact to the last bit.
+They are primitives rather than library code because every target already has them, as an `sqrtsd` on x86, an LLVM intrinsic, or a libm call, and a language whose users reach a square root through eight Newton iterations has an approximation where it should have an answer. `sqrt(2.0)` is exact to the last bit. The operations use the platform's full-precision math implementation on every backend.
 
 They travel as one `MathOp` instruction told apart by an operand byte, so a new operation costs a number in that table and nothing in the opcode table.
 

@@ -209,6 +209,56 @@ function main() {
     assert_eq!(output, "12\n1.4142135623730951\n-2\n-1\n1.5\n0\n1\n0\n");
 }
 
+/// Every floating-point primitive uses the same operand order and result on the
+/// VM, LLVM, and hybrid paths. The two-operand cases are included here because
+/// a one-slot lowering can make the unary half look correct while ignoring the
+/// second value.
+#[test]
+fn all_floating_point_primitives_agree_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print(sqrt(2.0))
+    print(sin(1.0))
+    print(cos(1.0))
+    print(tan(1.0))
+    print(floor(-1.5))
+    print(ceil(-1.5))
+    print(abs(-1.5))
+    print(exp(1.0))
+    print(log(1.0))
+    print(log2(8.0))
+    print(log10(100.0))
+    print(exp2(3.0))
+    print(round(-1.5))
+    print(trunc(-1.5))
+    print(asin(1.0))
+    print(acos(1.0))
+    print(atan(1.0))
+    print(sinh(0.0))
+    print(cosh(0.0))
+    print(tanh(0.0))
+    print(pow(2.0, 3.0))
+    print(atan2(1.0, 1.0))
+    print(min(2.0, 3.0))
+    print(max(2.0, 3.0))
+    print(hypot(3.0, 4.0))
+    print(copysign(2.0, -3.0))
+    print(fmod(7.0, 4.0))
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "1.4142135623730951\n0.8414709848078965\n0.5403023058681398\n\
+         1.557407724654902\n-2\n-1\n1.5\n2.718281828459045\n0\n3\n2\n8\n\
+         -2\n-1\n1.5707963267948966\n0\n0.7853981633974483\n0\n1\n0\n\
+         8\n0.7853981633974483\n2\n3\n5\n-2\n3\n"
+    );
+}
+
 /// A program may still name a function `sqrt` itself.
 ///
 /// The primitive answers only when nothing else does, so adding it shadowed
