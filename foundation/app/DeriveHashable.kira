@@ -65,12 +65,6 @@ comptime macro Hashable {
                     at: field.syntax
                 )
             }
-            if field.type == "Float" {
-                Diagnostics.error(
-                    "Derive(Hashable): a `Float` field cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
-                    at: field.syntax
-                )
-            }
             if field.type == "F32" {
                 Diagnostics.error(
                     "Derive(Hashable): a `F32` field cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
