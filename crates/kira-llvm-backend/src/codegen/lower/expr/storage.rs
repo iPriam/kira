@@ -31,7 +31,16 @@ impl FunctionLowering<'_, '_> {
         // second use of this local. Reading it therefore *takes* it: the local
         // no longer holds anything, and the release at the end of the frame
         // must not run a body the value's new owner will run.
-        self.clear_live_flag(slot);
+        // Only a user-`Drop` value is moved by an ordinary read. Other
+        // heap-backed values are copied by `read_owned`, so their local keeps
+        // owning the original share and remains eligible for a later scope or
+        // frame release.
+        if self
+            .local_type(slot)
+            .is_ok_and(|ty| self.codegen.program.types.runs_user_drop(ty))
+        {
+            self.clear_live_flag(slot);
+        }
         Ok(value)
     }
 
@@ -49,7 +58,14 @@ impl FunctionLowering<'_, '_> {
             return self.lower_expr(expr);
         };
         let value = self.lower_expr(expr)?;
-        self.set_live_flag(slot);
+        // A borrowed read of an ordinary heap value leaves its local live; the
+        // flag only tracks the move-sensitive user-`Drop` case.
+        if self
+            .local_type(slot)
+            .is_ok_and(|ty| self.codegen.program.types.runs_user_drop(ty))
+        {
+            self.set_live_flag(slot);
+        }
         Ok(value)
     }
 

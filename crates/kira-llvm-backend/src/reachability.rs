@@ -121,7 +121,7 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, facts: &mut BodyFacts) {
                 walk_stmt(program, statement, facts);
             }
         }
-        IrStmt::Break | IrStmt::Continue => {}
+        IrStmt::Break | IrStmt::Continue | IrStmt::ReleaseLocals { .. } => {}
     }
 }
 

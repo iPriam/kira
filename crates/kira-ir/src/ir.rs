@@ -477,6 +477,25 @@ pub enum IrStmt {
     /// Jumps to the condition test. As with [`IrStmt::Break`], an enclosing
     /// loop is guaranteed by analysis.
     Continue,
+    /// Release the bindings that die here, because the block that declared
+    /// them is ending.
+    ///
+    /// Lowering places one at the end of every statement list whose bindings
+    /// are dead past it, and before every [`IrStmt::Break`] and
+    /// [`IrStmt::Continue`] — which end every block between themselves and
+    /// their loop at once. A `Return` needs none: a return releases the whole
+    /// frame plan anyway.
+    ///
+    /// The list names candidate slots as lowering computed them; each engine
+    /// releases those *its* release plan owns (a lent borrow parameter never
+    /// appears, but a slot's candidacy is engine-independent while ownership
+    /// is not). A slot whose value was moved out holds nothing and releases
+    /// nothing, so re-executing the same statement in a loop releases exactly
+    /// once per iteration.
+    ReleaseLocals {
+        /// The slots whose bindings die at this point, ascending.
+        locals: Vec<u32>,
+    },
 }
 
 /// One step of an [`IrPlace`]'s walk.

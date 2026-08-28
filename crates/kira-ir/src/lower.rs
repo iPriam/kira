@@ -91,6 +91,9 @@ pub fn lower(program: &HirProgram) -> IrProgram {
     ir.functions = functions;
     if uses_tasks {
         crate::tasks::synthesize(&mut ir, task_base, &targets);
+        for function in ir.functions.iter_mut().skip(task_base as usize) {
+            crate::mid::scope_releases(function, &ir.exprs, &ir.types);
+        }
     }
     ir
 }
@@ -176,7 +179,7 @@ impl Lowerer<'_> {
         self.aliases = crate::borrow_alias::borrow_aliases(self.hir, function);
         let by_reference = by_reference_params(function);
         let body = self.lower_stmts(&function.body);
-        IrFunction {
+        let mut lowered = IrFunction {
             name: function.name.clone(),
             param_count: function.param_count,
             locals: function.locals.iter().map(|local| local.ty).collect(),
@@ -190,7 +193,12 @@ impl Lowerer<'_> {
             by_reference_params: by_reference.clone(),
             by_pointer_params: by_pointer_params(function, &self.hir.types, &by_reference),
             body,
-        }
+        };
+        // Scope-exit releases are placed once, here where the source's block
+        // structure is still what was walked; both engines lower the statements
+        // this adds.
+        crate::mid::scope_releases(&mut lowered, &self.ir.exprs, &self.hir.types);
+        lowered
     }
 
     fn lower_stmts(&mut self, stmts: &[HirStmtId]) -> Vec<IrStmt> {
