@@ -65,7 +65,7 @@ struct Handle: Drop {
 }
 ```
 
-The body runs **once, before the type's own members are released**, at every point either engine releases a value of the type: a binding going out of scope, a container being freed, a value moved into a callee dying there rather than at the binding it was moved out of, and a write replacing what a binding, a member, or an element held.
+The body runs **once, before the type's own members are released**, at every point either engine releases a value of the type: a binding going out of its lexical block, a loop iteration ending, a container being freed, a value moved into a callee dying there rather than at the binding it was moved out of, and a write replacing what a binding, a member, or an element held. A value declared in a nested block is released before execution resumes after that block; a `break` or `continue` releases bindings in the loop body before it jumps.
 
 The guarantee is that **every `Drop` body runs before the run that made the value ends.** Nothing can enter a body where no engine is executing, so a type that runs one is refused at each position that would outlive the run.
 

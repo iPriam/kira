@@ -59,7 +59,7 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, found: &mut BTreeSet<u32>)
                 walk_stmt(program, statement, found);
             }
         }
-        IrStmt::Break | IrStmt::Continue => {}
+        IrStmt::Break | IrStmt::Continue | IrStmt::ReleaseLocals { .. } => {}
     }
 }
 

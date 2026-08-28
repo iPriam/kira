@@ -61,6 +61,14 @@ impl FunctionLowering<'_, '_> {
                 self.branch_to(test);
                 Ok(())
             }
+            IrStmt::ReleaseLocals { locals } => {
+                for &slot in locals {
+                    let ty = self.local_type(slot)?;
+                    let pointer = self.local_pointer(slot)?;
+                    self.release_local_if_live(slot, pointer, ty)?;
+                }
+                Ok(())
+            }
         }
     }
 

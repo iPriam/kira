@@ -16,6 +16,7 @@
 //! [`stmt`] for statements and control flow, [`expr`] for expressions and
 //! operators, and [`call`] for calls, including the crossing into the VM half.
 
+mod array;
 mod boxes;
 mod call;
 mod cells;
@@ -156,8 +157,10 @@ impl<'a> Codegen<'a> {
         Ok(locals)
     }
 
-    /// Allocates the liveness flag of every local whose type runs a user
-    /// `Drop`, and initializes it.
+    /// Allocates the liveness flag of every heap-owning local and initializes
+    /// it. Scope releases can happen before a frame returns, so the final
+    /// release plan needs the same empty/non-empty bit for strings, arrays,
+    /// enums, and ordinary aggregates as it already needs for user `Drop`.
     ///
     /// A parameter arrives holding a value, so its flag starts set; every other
     /// slot starts holding its type's zero, which is nothing.
@@ -168,7 +171,7 @@ impl<'a> Codegen<'a> {
     ) -> Result<Vec<Option<LLVMValueRef>>, LlvmError> {
         let mut flags = Vec::with_capacity(locals.len());
         for (slot, &ty) in function.locals.iter().enumerate() {
-            if !self.program.types.runs_user_drop(ty) {
+            if !self.program.types.owns_heap(ty) {
                 flags.push(None);
                 continue;
             }
