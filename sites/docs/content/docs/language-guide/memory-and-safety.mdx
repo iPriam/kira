@@ -119,6 +119,20 @@ A `var` a closure mentions moves into a share-counted heap box that outlives the
 
 Nothing in the core runtime hot path reference-counts an ordinary value. A struct copies, an array detaches on write, and a `String` owns its bytes. Share counting exists in exactly two places: a capture cell, and an array's element block under copy-on-write.
 
+## Native Heap Reports
+
+Debug native and hybrid runs can prove their runtime heap balance by setting
+`KIRA_HEAP_REPORT=1`. The runtime prints the total blocks allocated, released,
+and deliberately retained by C, then exits unsuccessfully if those numbers do
+not account for every block. The `imbalance` field is positive for an unowned
+allocation and negative when release accounting runs ahead of allocation; a
+negative value is not hidden by the saturating `live` count.
+
+Accounting is enabled in development and test builds. Release builds do not pay
+for the counters and say so instead of claiming that a zero live count was
+measured. A retained block is not a leak: it is storage handed to C through a
+`retains:` parameter and released with the owning runtime instance.
+
 ## What Is Still Refused
 
 - A returned borrow is refused rather than accepted with incomplete lifetime checking.
