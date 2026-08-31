@@ -145,11 +145,23 @@ jobs:
           # Apple export links a per-slice runner-support archive; release
           # toolchains carry them beside the compiler in the per-triple
           # layout `locate_support_archive` searches, so exported projects
-          # build without a source checkout. visionOS has no stable Rust
-          # std target yet; its slices report themselves unavailable.
-          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
-            cargo build --release -p kira-app-runner --target "$triple"
-          done
+          # build without a source checkout. Only macOS toolchains carry these
+          # archives because Apple export requires Xcode SDKs.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            apple_targets=(
+              aarch64-apple-darwin
+              aarch64-apple-ios
+              aarch64-apple-ios-sim
+              aarch64-apple-tvos
+              aarch64-apple-tvos-sim
+              aarch64-apple-visionos
+              aarch64-apple-visionos-sim
+            )
+            rustup target add "${apple_targets[@]}"
+            for triple in "${apple_targets[@]}"; do
+              cargo build --release -p kira-app-runner --target "$triple"
+            done
+          fi
 
       - name: Package the toolchain and tools archives
         run: |
@@ -187,10 +199,21 @@ jobs:
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
           # The app-runner support archives ride in their per-triple
           # directories, which is where Apple export's archive lookup looks.
-          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
-            mkdir -p "$stage/bin/$triple"
-            cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
-          done
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            apple_targets=(
+              aarch64-apple-darwin
+              aarch64-apple-ios
+              aarch64-apple-ios-sim
+              aarch64-apple-tvos
+              aarch64-apple-tvos-sim
+              aarch64-apple-visionos
+              aarch64-apple-visionos-sim
+            )
+            for triple in "${apple_targets[@]}"; do
+              mkdir -p "$stage/bin/$triple"
+              cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
+            done
+          fi
           cp -R foundation "$stage/foundation"
           mkdir -p dist
           tar -czf "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "kira-$KIRA_VERSION"

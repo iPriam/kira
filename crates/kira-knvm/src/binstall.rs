@@ -25,6 +25,7 @@ use kira_toolchain::{
     LANGUAGE_SERVER_BINARY, executable_name, static_archive_name,
 };
 
+use crate::APPLE_RUNNER_TARGETS;
 use crate::install::{
     InstallError, Installed, PRIMARY_BINARY, Staging, toolchain_root, validate, write_current,
 };
@@ -86,6 +87,15 @@ pub enum BinstallError {
     /// `cargo` is required to build the checkout and is not on PATH.
     #[error("`cargo` was not found on PATH; binstall builds the checkout with it")]
     CargoUnavailable,
+    /// `rustup` is required to install cross-compilation targets on macOS.
+    #[error("`rustup` was not found on PATH; binstall provisions Apple Rust targets with it")]
+    RustupUnavailable,
+    /// Rustup could not install a cross-compilation target.
+    #[error("`rustup target add {target}` failed; its output names the error")]
+    RustTargetInstallFailed {
+        /// The target rustup could not install.
+        target: String,
+    },
     /// Cargo could not report the target directory used by this checkout.
     #[error("could not resolve Cargo's target directory for `{checkout}`: {detail}")]
     CargoMetadataFailed {
@@ -221,6 +231,43 @@ pub fn binstall(
         return Err(BinstallError::BuildFailed { checkout });
     }
 
+    for target in APPLE_RUNNER_TARGETS {
+        let installed = Command::new("rustup")
+            .args(["target", "add", target])
+            .status()
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => BinstallError::RustupUnavailable,
+                _ => BinstallError::RustTargetInstallFailed {
+                    target: target.to_owned(),
+                },
+            })?;
+        if !installed.success() {
+            return Err(BinstallError::RustTargetInstallFailed {
+                target: target.to_owned(),
+            });
+        }
+    }
+
+    for target in APPLE_RUNNER_TARGETS {
+        let mut runner_build = Command::new("cargo");
+        runner_build.args(["build", "-p", "kira-app-runner", "--target", target]);
+        runner_build.args(profile.cargo_flags());
+        let built = runner_build
+            .current_dir(&checkout)
+            .status()
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => BinstallError::CargoUnavailable,
+                _ => BinstallError::BuildFailed {
+                    checkout: checkout.clone(),
+                },
+            })?;
+        if !built.success() {
+            return Err(BinstallError::BuildFailed {
+                checkout: checkout.clone(),
+            });
+        }
+    }
+
     // The same archive again, cross-built for emscripten, since a Web build
     // links against a bridge compiled for wasm32 rather than the host's.
     let mut cross_build = Command::new("cargo");
@@ -263,6 +310,18 @@ pub fn binstall(
         .join("wasm32-unknown-emscripten")
         .join(profile.target_subdirectory())
         .join("libkira_native_bridge.a");
+    let apple_runner_archives: Vec<(&str, PathBuf)> = APPLE_RUNNER_TARGETS
+        .iter()
+        .map(|target| {
+            (
+                *target,
+                target_dir
+                    .join(*target)
+                    .join(profile.target_subdirectory())
+                    .join("libkira_app_runner.a"),
+            )
+        })
+        .collect();
     for artifact in [
         &compiler,
         &language_server,
@@ -276,6 +335,13 @@ pub fn binstall(
         if !artifact.is_file() {
             return Err(BinstallError::MissingBuildArtifact {
                 expected: artifact.clone(),
+            });
+        }
+    }
+    for (_, archive) in &apple_runner_archives {
+        if !archive.is_file() {
+            return Err(BinstallError::MissingBuildArtifact {
+                expected: archive.clone(),
             });
         }
     }
@@ -355,6 +421,14 @@ pub fn binstall(
     std::fs::copy(&wasm_archive, &staged_wasm).map_err(|error| {
         InstallError::io("copy the Web runtime archive to", &staged_wasm, error)
     })?;
+    for (target, archive) in &apple_runner_archives {
+        let target_dir = bin.join(target);
+        create_dir(&target_dir)?;
+        let staged = target_dir.join("libkira_app_runner.a");
+        std::fs::copy(archive, &staged).map_err(|error| {
+            InstallError::io("copy the Apple runner archive to", &staged, error)
+        })?;
+    }
     copy_tree(&checkout.join("foundation"), &payload.join("foundation"))?;
     validate(&payload)?;
 
@@ -595,6 +669,28 @@ mod tests {
             BUILD_PACKAGES.contains(&"kira-hybrid-launcher"),
             "a hybrid build stages the launcher from beside the compiler, so \
              the toolchain has to install one"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apple_runner_targets_cover_every_export_slice() {
+        assert_eq!(APPLE_RUNNER_TARGETS.len(), 7);
+        for target in [
+            "aarch64-apple-ios",
+            "aarch64-apple-ios-sim",
+            "aarch64-apple-tvos",
+            "aarch64-apple-tvos-sim",
+            "aarch64-apple-visionos",
+            "aarch64-apple-visionos-sim",
+        ] {
+            assert!(APPLE_RUNNER_TARGETS.contains(&target), "missing {target}");
+        }
+        assert!(
+            APPLE_RUNNER_TARGETS
+                .iter()
+                .any(|target| target.ends_with("-apple-darwin")),
+            "macOS export needs the current Mac architecture"
         );
     }
 }

@@ -242,13 +242,16 @@ pub(crate) fn locate_support_archive(rust_triple: &str) -> Result<PathBuf, Strin
         return Ok(found.clone());
     }
     Err(format!(
-        "no application runner archive for `{rust_triple}` was found (looked in {}); \
-         build it with `cargo build -p kira-app-runner --target {rust_triple}`",
+        "application runner archive missing for `{rust_triple}`\n\
+         searched:\n  - {}\n\
+         help: reinstall this Kira toolchain; `knvm binstall` builds and installs all \
+         Apple runner archives for a dev toolchain. To override this archive directly, \
+         set `{variable}`",
         searched
             .iter()
             .map(|path| format!("`{}`", path.display()))
             .collect::<Vec<_>>()
-            .join(", "),
+            .join("\n  - "),
     ))
 }
 

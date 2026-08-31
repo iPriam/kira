@@ -92,13 +92,7 @@ pub(crate) fn run(
         .filter(|spec| spec.spec.unavailable_reason.is_none())
         .count();
     if healthy == 0 {
-        for (platform, reason) in &failures {
-            err!(
-                "kira export: {} could not be exported: {reason}",
-                platform.label()
-            );
-        }
-        err!("kira export: no Apple platform could be built, so there is no workspace to write");
+        err!("{}", failed_export_report(&failures));
         return EXIT_FAILURE;
     }
 
@@ -114,8 +108,8 @@ pub(crate) fn run(
     for spec in &specs {
         out!("  {} → {}", spec.platform.label(), spec.product_name());
     }
-    for (platform, reason) in &failures {
-        err!("note: {} target is unavailable: {reason}", platform.label());
+    if !failures.is_empty() {
+        err!("{}", unavailable_platform_report(&failures));
     }
     audit_tools(["xcodebuild", "xcrun"]);
     EXIT_OK
@@ -222,13 +216,8 @@ fn build_slice(
         .map_err(|_| "the program did not compile".to_owned())?;
     let ir = crate::pipeline::entrypoint_ir("export", compiled)
         .map_err(|_| "the package has no runnable program to export".to_owned())?;
-    let device = crate::options::Device::Cross(CrossTarget::new(
-        triple.clone(),
-        RelocationModel::Pic,
-        Linkage::Dynamic,
-    ));
-    let foreign = crate::pipeline::foreign_inputs(&source, &ir, &device)
-        .map_err(|_| "foreign libraries could not be resolved".to_owned())?;
+    let foreign = crate::foreign_libs::resolve(Path::new(&source), &ir, triple.clone())
+        .map_err(|error| error.to_string())?;
     let link = crate::pipeline::foreign_link_of(&foreign).clone();
 
     let work_root = context.apple_root.join("build").join(slice.label);
@@ -269,7 +258,14 @@ fn build_slice(
     let payloads = hybrid_embedded_payloads(&ir, stem, &trampolines, &link)?;
     assemble_bundle_once(context, payloads)?;
 
-    Ok(ldflags_value(&support, &libffi, &object_path, &link))
+    let retained = retained_static_foreign_symbols(&ir, &link);
+    Ok(ldflags_value(
+        &support,
+        &libffi,
+        &object_path,
+        &link,
+        &retained,
+    ))
 }
 
 /// The payloads of the bundle an embedded app plays: its hybrid manifest
@@ -425,12 +421,21 @@ fn ldflags_value(
     libffi: &Path,
     object: &Path,
     link: &kira_native_lib_definition::NativeLinkInputs,
+    retained_symbols: &[String],
 ) -> String {
     let mut parts = vec![
         format!("\"-Wl,-force_load,{}\"", support.display()),
         format!("\"{}\"", libffi.display()),
         format!("\"{}\"", object.display()),
     ];
+    // The VM half reaches these symbols through `dlsym` after launch, so no
+    // object-file relocation asks ld64 to extract their archive members. `-u`
+    // makes only the imports the program actually calls participate in the app
+    // image; force-loading whole archives would also pull unrelated entrypoints
+    // and private duplicate symbols into one executable.
+    for symbol in retained_symbols {
+        parts.push(format!("\"-Wl,-u,_{symbol}\""));
+    }
     for archive in link.archives() {
         parts.push(format!("\"{}\"", archive.display()));
     }
@@ -445,6 +450,27 @@ fn ldflags_value(
     parts.join(", ")
 }
 
+/// Static-archive symbols the embedded VM resolves from the application image.
+fn retained_static_foreign_symbols(
+    ir: &kira_ir::IrProgram,
+    link: &kira_native_lib_definition::NativeLinkInputs,
+) -> Vec<String> {
+    let static_libraries: std::collections::HashSet<&str> = link
+        .static_archives()
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let mut symbols = Vec::new();
+    for entry in &ir.foreign_imports {
+        if static_libraries.contains(entry.import.library())
+            && !symbols.iter().any(|known| known == entry.import.symbol())
+        {
+            symbols.push(entry.import.symbol().to_owned());
+        }
+    }
+    symbols
+}
+
 /// `ARCHS`/`VALID_ARCHS` for a platform's slices, deduplicated in order.
 fn unique_archs(slc: &[slices::ArchSlice]) -> String {
     let mut seen: Vec<&'static str> = Vec::new();
@@ -455,6 +481,39 @@ fn unique_archs(slc: &[slices::ArchSlice]) -> String {
         }
     }
     seen.join(" ")
+}
+
+/// One grouped failure report, with multiline causes kept under their platform.
+fn failed_export_report(failures: &[(ApplePlatform, String)]) -> String {
+    let mut report = String::from(
+        "kira export apple: no Apple platform could be exported; no Xcode workspace was written\n\
+         unavailable platforms:\n",
+    );
+    append_platform_failures(&mut report, failures);
+    report.pop();
+    report
+}
+
+/// The unavailable subset reported after a partial Apple export succeeds.
+fn unavailable_platform_report(failures: &[(ApplePlatform, String)]) -> String {
+    let mut report = String::from("kira export apple: unavailable platforms:\n");
+    append_platform_failures(&mut report, failures);
+    report.pop();
+    report
+}
+
+/// Appends platform labels and indented cause lines to `report`.
+fn append_platform_failures(report: &mut String, failures: &[(ApplePlatform, String)]) {
+    for (platform, reason) in failures {
+        report.push_str("- ");
+        report.push_str(platform.label());
+        report.push('\n');
+        for line in reason.lines() {
+            report.push_str("  | ");
+            report.push_str(line);
+            report.push('\n');
+        }
+    }
 }
 
 /// The content-derived directory name of the app's bundle.
@@ -643,10 +702,12 @@ mod tests {
             Path::new("/pkg/exports/apple/build/macos/libffi/libkira_libffi.a"),
             Path::new("/pkg/exports/apple/build/macos/kira_app.o"),
             &Default::default(),
+            &["kira_ui_platform_appearance".to_owned()],
         );
         assert!(value.starts_with("\"-Wl,-force_load,/tool/"));
         assert!(value.contains("\"/pkg/exports/apple/build/macos/libffi/libkira_libffi.a\""));
         assert!(value.contains("\"/pkg/exports/apple/build/macos/kira_app.o\""));
+        assert!(value.contains("\"-Wl,-u,_kira_ui_platform_appearance\""));
         assert!(value.ends_with("\"-Wl,-export_dynamic\""));
     }
 
@@ -681,5 +742,33 @@ mod tests {
             assert_ne!(kind, RunnerKind::Desktop);
             assert_eq!(kind.runner_id(), crate::export::runner_id_for(platform));
         }
+    }
+
+    #[test]
+    fn failed_export_report_groups_multiline_causes_by_platform() {
+        let report = failed_export_report(&[
+            (
+                ApplePlatform::Macos,
+                "macos: runner archive missing\nhelp: install it".to_owned(),
+            ),
+            (
+                ApplePlatform::Ios,
+                "ios-device: native archive missing".to_owned(),
+            ),
+        ]);
+
+        assert_eq!(
+            report,
+            concat!(
+                "kira export apple: no Apple platform could be exported; ",
+                "no Xcode workspace was written\n",
+                "unavailable platforms:\n",
+                "- macOS\n",
+                "  | macos: runner archive missing\n",
+                "  | help: install it\n",
+                "- iOS\n",
+                "  | ios-device: native archive missing",
+            )
+        );
     }
 }

@@ -77,6 +77,38 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
             "the dev toolchain must hold `{archive}`"
         );
     }
+    #[cfg(target_os = "macos")]
+    {
+        let macos_target = format!("{}-apple-darwin", std::env::consts::ARCH);
+        assert!(
+            installed
+                .root
+                .join("bin")
+                .join(&macos_target)
+                .join("libkira_app_runner.a")
+                .is_file(),
+            "the dev toolchain must hold the {macos_target} Apple runner archive"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    for target in [
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+        "aarch64-apple-tvos",
+        "aarch64-apple-tvos-sim",
+        "aarch64-apple-visionos",
+        "aarch64-apple-visionos-sim",
+    ] {
+        assert!(
+            installed
+                .root
+                .join("bin")
+                .join(target)
+                .join("libkira_app_runner.a")
+                .is_file(),
+            "the dev toolchain must hold the {target} Apple runner archive"
+        );
+    }
     assert!(
         installed
             .root
