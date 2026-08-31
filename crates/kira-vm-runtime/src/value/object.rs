@@ -283,7 +283,69 @@ impl Heap {
             allocated: self.allocated,
             freed: self.freed,
             current: self.allocated - self.freed,
-            retained: self.retained.len() as u64,
+            retained: self.retained_slot_count(),
+        }
+    }
+
+    /// How many heap slots the retained registry owns, transitively.
+    ///
+    /// `current` counts slots, so this must too: a retained C-layout struct
+    /// is a parent block *and* the member blocks its payload points into —
+    /// several slots for one registry entry. Counting entries instead read a
+    /// balanced exit as a leak of exactly the retained values' children.
+    /// Walked at accounting time rather than tracked at transfer time because
+    /// the registry only grows, and `stats` runs at exits and in tests, never
+    /// on the dispatch path.
+    fn retained_slot_count(&self) -> u64 {
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for value in &self.retained {
+            self.count_owned_slots(*value, &mut seen);
+        }
+        seen.len() as u64
+    }
+
+    /// Adds every slot `value` owns — itself and everything under it — to
+    /// `seen`. A shared object is counted once, which is what a slot table
+    /// count needs.
+    fn count_owned_slots(&self, value: Value, seen: &mut std::collections::HashSet<u32>) {
+        let index = match value {
+            Value::Str(id) => id.0,
+            Value::Struct(id) => id.0,
+            Value::Array(id) => id.0,
+            Value::Enum(id) => id.0,
+            Value::Erased(id) => id.0,
+            Value::Cell(id) => id.0,
+            Value::NativeSnapshot(id) => id.0,
+            Value::CBlock(id) => id.0,
+            _ => return,
+        };
+        if !seen.insert(index) {
+            return;
+        }
+        match self.slots.get(index as usize) {
+            Some(Some(Object::Struct(fields))) | Some(Some(Object::Array(fields))) => {
+                for &field in fields.iter() {
+                    self.count_owned_slots(field, seen);
+                }
+            }
+            Some(Some(Object::Enum {
+                payload: Some(payload),
+                ..
+            })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::Erased { payload, .. })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::Cell { payload, .. })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::CBlock { children, .. })) => {
+                for child in children {
+                    self.count_owned_slots(Value::CBlock(child.block), seen);
+                }
+            }
+            _ => {}
         }
     }
 

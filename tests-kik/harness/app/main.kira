@@ -50,6 +50,7 @@ function main() {
 
     print(drxSection())
     print(tlxSection())
+    print(rlxSection())
 
 
     print("kik-harness-end")

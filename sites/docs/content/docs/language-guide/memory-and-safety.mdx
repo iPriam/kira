@@ -119,6 +119,15 @@ A `var` a closure mentions moves into a share-counted heap box that outlives the
 
 Nothing in the core runtime hot path reference-counts an ordinary value. A struct copies, an array detaches on write, and a `String` owns its bytes. Share counting exists in exactly two places: a capture cell, and an array's element block under copy-on-write.
 
+## VM Heap Accounting
+
+A `--backend vm` run checks its heap balance at exit, always: the interpreter
+counts every allocation and every release, and a program that ends holding
+storage beyond what a `retains:` parameter deliberately handed to C fails with
+a diagnostic naming the unaccounted objects. Kira's contract is that a program
+that compiles does not leak, so an unbalanced exit is a toolchain defect to
+report, never something a program has to plan for.
+
 ## Native Heap Reports
 
 Debug native and hybrid runs can prove their runtime heap balance by setting

@@ -306,11 +306,13 @@ pub struct HeapStats {
     pub freed: u64,
     /// Live strings right now (`allocated - freed`).
     pub current: u64,
-    /// Values a `retains:` foreign parameter transferred to the heap.
+    /// Heap slots the `retains:` registry owns, counted transitively.
     ///
     /// Counted apart from `current` because they are alive by contract — C
     /// holds their pointers until instance teardown — so a program that exits
-    /// with `current == retained` balanced everything it still owned.
+    /// with `current == retained` balanced everything it still owned. Slots
+    /// rather than registry entries, in `current`'s own units: one retained
+    /// C-layout struct is a parent block plus every member block under it.
     pub retained: u64,
 }
 

@@ -288,7 +288,7 @@ fn run_vm_module(
             env::with_arguments(program_arguments, || {
                 let mut host = NativeStateHost::new(StdoutHost);
                 match kira_vm_runtime::execute_with_main_thread(&module, &mut host) {
-                    Ok(outcome) => vm_result_code(outcome.result),
+                    Ok(outcome) => vm_outcome_code(outcome),
                     Err(trap) => {
                         err!("kira: runtime trap: {trap}");
                         EXIT_FAILURE
@@ -332,7 +332,7 @@ fn run_vm_module(
     // SAFETY: this is the same CLI-owned run boundary with the direct foreign
     // libraries loaded.
     match unsafe { env::with_arguments(program_arguments, || session.run()) } {
-        Ok(outcome) => vm_result_code(outcome.result),
+        Ok(outcome) => vm_outcome_code(outcome),
         Err(trap) => {
             err!("kira: runtime trap: {trap}");
             EXIT_FAILURE
@@ -340,8 +340,28 @@ fn run_vm_module(
     }
 }
 
-fn vm_result_code(result: kira_vm_runtime::Value) -> i32 {
-    match result {
+/// Turns a completed run into a process exit code, refusing a leaked heap.
+///
+/// The VM's contract is that a run reclaims every allocation: `current` counts
+/// live objects at exit and `retained` the values a `retains:` foreign
+/// parameter deliberately handed to C, so anything past `retained` is storage
+/// the run allocated and lost. Kira's promise is that a compiled program does
+/// not leak; a run that ends unbalanced is a compiler or runtime defect, and
+/// failing here is what keeps every VM run in the test corpus a proof of that
+/// promise rather than a hope.
+fn vm_outcome_code(outcome: kira_vm_runtime::RunOutcome) -> i32 {
+    if outcome.heap.current != outcome.heap.retained {
+        err!(
+            "kira: the run leaked {} heap object(s) ({} allocated, {} freed, {} retained); \
+             this is a toolchain defect — please report it",
+            outcome.heap.current - outcome.heap.retained,
+            outcome.heap.allocated,
+            outcome.heap.freed,
+            outcome.heap.retained,
+        );
+        return EXIT_FAILURE;
+    }
+    match outcome.result {
         kira_vm_runtime::Value::Int(code) => match i32::try_from(code) {
             Ok(code) => code,
             Err(_) => {
