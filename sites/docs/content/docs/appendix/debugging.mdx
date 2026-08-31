@@ -69,3 +69,11 @@ Each is spelled `kira_lldb_…`. Three of them answer things a native debugger c
 Stepping means different things on the two engines, and the server does both. A native frame is stepped by the debugger. A bytecode frame is resumed to the next probe stop, and `over` and `out` keep resuming until the Kira call depth comes back down, which is why a step reports how many VM stops it passed through and stops at a budget rather than running forever.
 
 Two environment variables select what it drives: `KIRA_EXECUTABLE` is the compiler it builds with, and `KIRA_LLDB_DAP` is the debug adapter it runs.
+
+## macOS Debug Authorization
+
+Attaching a debugger on macOS needs the `system.privilege.taskport` right. With Developer mode off, a desktop session answers an authorization prompt once; a headless session — SSH, CI, an agent — has nowhere to show it, so `debugserver` blocks forever and every LLDB launch looks like a silent hang. `kira debug` prints a warning when it detects that state, and the fix is one command, run once:
+
+```sh
+sudo DevToolsSecurity -enable
+```

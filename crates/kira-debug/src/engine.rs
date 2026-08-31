@@ -90,6 +90,31 @@ fn developer_tool(name: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// Whether this host refuses debugger attachment without a prompt.
+///
+/// On macOS, `debugserver` needs the `system.privilege.taskport` right. With
+/// Developer mode off, a headless session has nothing to show the
+/// authorization prompt on, so every launch and attach blocks forever rather
+/// than failing — an LLDB session that will never answer. `DevToolsSecurity`
+/// reports that state without needing privileges. Off macOS, and when the
+/// tool cannot answer, debugging is assumed available so nothing new is
+/// refused.
+#[must_use]
+pub fn debugging_unauthorized() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let Ok(output) = Command::new("DevToolsSecurity").arg("-status").output() else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout).contains("disabled")
+}
+
+/// The operator instruction that lifts [`debugging_unauthorized`].
+pub const ENABLE_DEBUGGING_HINT: &str = "Developer mode is disabled on this host, so the debugger blocks waiting for an \
+     authorization no headless session can grant; run `sudo DevToolsSecurity -enable` once to \
+     allow debugging";
+
 /// Prepares `command` so the LLDB executable can load its own libraries.
 pub fn configure(command: &mut Command, executable: &Path) {
     let extra = support_directories(executable);
