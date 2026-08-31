@@ -36,7 +36,8 @@ fn types() -> TypeTable {
 #[test]
 fn only_the_slots_that_own_storage_are_released() {
     let function = function(vec![Type::INT, Type::String, Type::Bool, Type::String]);
-    let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
+    let plan =
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[1, 3]);
     assert!(plan.releases(1));
     assert!(!plan.releases(0), "an integer has nothing to release");
@@ -50,7 +51,8 @@ fn a_by_reference_parameter_lent_by_pointer_is_left_to_its_caller() {
     let mut function = function(vec![Type::String, Type::String]);
     function.param_count = 1;
     function.by_reference_params = vec![0];
-    let plan = plan_function(&function, &types(), BY_POINTER, false).expect("a plan");
+    let plan =
+        plan_function(&function, &types(), BY_POINTER, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[1]);
 }
 
@@ -62,7 +64,8 @@ fn a_by_reference_parameter_passed_by_value_is_the_callee_s_to_release() {
     let mut function = function(vec![Type::String, Type::String]);
     function.param_count = 1;
     function.by_reference_params = vec![0];
-    let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
+    let plan =
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[0, 1]);
 }
 
@@ -81,7 +84,7 @@ fn each_kind_of_borrow_is_lent_on_its_own_terms() {
         write_through: BorrowLending::ByValue,
         user_drop: BorrowLending::ByPointer,
     };
-    let plan = plan_function(&function, &types(), mixed, false).expect("a plan");
+    let plan = plan_function(&function, &types(), mixed, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[0, 2]);
 }
 
@@ -90,7 +93,8 @@ fn each_kind_of_borrow_is_lent_on_its_own_terms() {
 fn a_callback_state_local_is_left_to_its_store() {
     let mut function = function(vec![Type::String, Type::String]);
     function.native_state_locals = vec![None, Some(kira_runtime_abi::NativeStateTypeId::new(0))];
-    let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
+    let plan =
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[0]);
 }
 
@@ -102,7 +106,7 @@ fn a_slot_cannot_be_both_borrowed_and_state_backed() {
     function.by_reference_params = vec![0];
     function.native_state_locals = vec![Some(kira_runtime_abi::NativeStateTypeId::new(0))];
     assert!(matches!(
-        plan_function(&function, &types(), BY_VALUE, false),
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false),
         Err(MidError::ConflictingSlotRole { slot: 0, .. })
     ));
 }
@@ -114,9 +118,63 @@ fn a_parameter_naming_no_local_is_refused() {
     let mut function = function(vec![Type::String]);
     function.by_reference_params = vec![7];
     assert!(matches!(
-        plan_function(&function, &types(), BY_VALUE, false),
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false),
         Err(MidError::UnknownParameter { slot: 7, .. })
     ));
+}
+
+/// A struct of nothing but scalars, declared into `types`.
+fn scalar_only_struct(types: &mut TypeTable, name: &str) -> Type {
+    let fields = ["r", "a"]
+        .into_iter()
+        .map(|field| kira_semantics_model::FieldDef {
+            name: field.to_owned(),
+            ty: Type::FLOAT,
+            mutable: false,
+        })
+        .collect();
+    let id = types
+        .structs_mut()
+        .declare(kira_semantics_model::StructDef {
+            name: name.to_owned(),
+            fields,
+            c_layout: false,
+            drop_glue: None,
+        })
+        .expect("a fresh struct declares");
+    Type::Struct(id)
+}
+
+/// The one place the two heap models disagree: a struct with no heap-owning
+/// field is inline storage on the native frame and a heap object on the VM.
+/// A plan built under `Inline` and run under a boxed heap is the leak that
+/// sank a real application — a frame full of colour structs, none released.
+#[test]
+fn a_scalar_only_struct_is_the_boxed_engine_s_to_release() {
+    let mut types = TypeTable::default();
+    let scalar_only = scalar_only_struct(&mut types, "Color");
+    let function = function(vec![scalar_only, Type::INT]);
+    let inline = plan_function(&function, &types, BY_VALUE, HeapModel::Inline, false)
+        .expect("an inline plan");
+    assert!(inline.is_empty(), "inline storage frees nothing");
+    let boxed =
+        plan_function(&function, &types, BY_VALUE, HeapModel::Boxed, false).expect("a boxed plan");
+    assert_eq!(boxed.slots(), &[0], "every struct is a heap object here");
+}
+
+/// A borrow that arrives by value is a copy the callee owns; under the boxed
+/// model that copy is a heap object even when the type is scalar-only, so
+/// the parameter slot must be planned or every call leaks one copy.
+#[test]
+fn a_scalar_only_struct_borrow_passed_by_value_is_planned_under_the_boxed_model() {
+    let mut types = TypeTable::default();
+    let scalar_only = scalar_only_struct(&mut types, "Probe");
+    let mut function = function(vec![scalar_only]);
+    function.param_count = 1;
+    function.by_pointer_params = vec![0];
+    let plan =
+        plan_function(&function, &types, BY_VALUE, HeapModel::Boxed, false).expect("a boxed plan");
+    assert_eq!(plan.slots(), &[0]);
 }
 
 /// The plan is ascending, which is what makes `releases` a binary search
@@ -124,7 +182,8 @@ fn a_parameter_naming_no_local_is_refused() {
 #[test]
 fn the_plan_is_in_slot_order() {
     let function = function(vec![Type::String; 5]);
-    let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
+    let plan =
+        plan_function(&function, &types(), BY_VALUE, HeapModel::Inline, false).expect("a plan");
     assert_eq!(plan.slots(), &[0, 1, 2, 3, 4]);
     assert!(plan.slots().windows(2).all(|pair| pair[0] < pair[1]));
 }

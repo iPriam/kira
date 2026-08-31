@@ -486,11 +486,11 @@ impl<'h> Vm<'h> {
             self.heap.drop_value(result);
             return Err(VmError::UnknownFunction(finished.func));
         };
-        // Most generated functions use the conservative `EveryLocal` release
-        // plan and have no written-through parameters. Their return has no
+        // An `EveryLocal` frame with no written-through parameters — a module
+        // built by hand, or written before release plans existed — has no
         // writeback or capture work to do, so keep this branch ahead of the
         // general plan walker. It also avoids taking the empty capture vector
-        // and matching the release-plan variants on every ordinary call.
+        // and matching the release-plan variants on that path.
         if finished.writebacks.is_empty()
             && finished.capture.is_empty()
             && matches!(&function.releases, FrameRelease::EveryLocal)

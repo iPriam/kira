@@ -75,7 +75,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
     let mut functions = Vec::with_capacity(program.functions.len());
     let function_count = program.functions.len() as u64;
     let mut widens = widen::WidenHelpers::new(function_count);
-    let plans = kira_ir::mid::plan(program, VM_LENDING)?;
+    let plans = kira_ir::mid::plan(program, VM_LENDING, kira_ir::mid::HeapModel::Boxed)?;
     for (index, function) in program.functions.iter().enumerate() {
         let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
         let lifecycle_entry = program.main_thread_lifecycles.contains(&(index as u32));

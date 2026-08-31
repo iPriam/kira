@@ -347,6 +347,7 @@ mod tests {
             &program.functions[0],
             &program.types,
             kira_ir::mid::Lending::BY_VALUE,
+            kira_ir::mid::HeapModel::Boxed,
             false,
         )
         .expect("a plan");
