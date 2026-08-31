@@ -13,8 +13,8 @@
 //! archive at all. So what comes back is a [`NativeLinkInputs`], not a path
 //! list.
 //!
-//! Selection is exact and structured: a host-only library asked for on wasm is a
-//! clean structural miss, named as such before any code generation.
+//! Selection is exact and structured: a library without a row for the selected
+//! target is a clean structural miss, named before any code generation.
 
 use std::path::Path;
 
@@ -49,9 +49,9 @@ pub enum ForeignResolveError {
     },
     /// A declared library has no row for the selected target.
     #[error(
-        "native library `{library}` has no native artifact for target `{target}`\n\
-         note: this is the host-only-library-on-wasm case; add a target row for \
-         `{target}`"
+        "native library `{library}` does not declare a native artifact for target `{target}`\n\
+         help: add a `{target}` target row to `{library}` in `package.kira` or \
+         `NativeLibs/{library}.toml`"
     )]
     NoArtifactForTarget {
         /// The declared library missing an artifact for `target`.
@@ -215,4 +215,23 @@ pub fn resolve(
     }
 
     Ok(Some(inputs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_target_help_names_the_target_and_declaration_locations() {
+        let error = ForeignResolveError::NoArtifactForTarget {
+            library: "dawn".to_owned(),
+            target: TargetTriple::parse("aarch64-visionos-none").expect("test target is valid"),
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("aarch64-visionos-none"));
+        assert!(message.contains("package.kira"));
+        assert!(message.contains("NativeLibs/dawn.toml"));
+        assert!(!message.contains("wasm"));
+    }
 }

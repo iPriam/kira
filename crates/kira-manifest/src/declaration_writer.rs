@@ -280,11 +280,6 @@ fn push_native_library(text: &mut String, library: &NativeLibrarySpec) {
             AutobindMode::AllPublic => "AllPublic",
             AutobindMode::Selected => "Selected",
         });
-        if let Some(profile) = &autobind.profile {
-            inline_separator(text, &mut first);
-            text.push_str("profile: ");
-            push_quoted(text, profile.as_str());
-        }
         if let Some(output) = &autobind.output {
             inline_separator(text, &mut first);
             text.push_str("output: ");

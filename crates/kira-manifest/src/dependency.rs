@@ -109,7 +109,7 @@ mod tests {
             name: "vulkan",
             linkMode: LinkMode.Dynamic,
             headers: Headers { entrypoint: "${VULKAN_SDK}/Include/vulkan/vulkan.h", includeDirs: ["${VULKAN_SDK}/Include"], defines: ["VK_USE_PLATFORM_WIN32_KHR"] },
-            autobind: Autobind { module: "vulkan", headers: ["${VULKAN_SDK}/Include/vulkan/vulkan.h", "${VULKAN_SDK}/Include/vulkan/vulkan_core.h", "${VULKAN_SDK}/Include/vulkan/vulkan_win32.h"], mode: AutobindMode.AllPublic, profile: AutobindProfile.Vulkan },
+            autobind: Autobind { module: "vulkan", headers: ["${VULKAN_SDK}/Include/vulkan/vulkan.h", "${VULKAN_SDK}/Include/vulkan/vulkan_core.h", "${VULKAN_SDK}/Include/vulkan/vulkan_win32.h"], mode: AutobindMode.AllPublic },
             nativeTargets: [
                 NativeTarget { triple: "x86_64-windows-msvc", dynamicLib: "" },
                 NativeTarget { triple: "x86_64-linux-gnu", dynamicLib: "" },

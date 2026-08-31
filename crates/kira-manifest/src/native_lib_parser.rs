@@ -1,9 +1,9 @@
 //! Parses `NativeLibs/<name>.toml` text into the native-library model.
 
 use kira_native_lib_definition::{
-    AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,
-    NativeHeaders, NativeLibraryError, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec,
-    TargetTriple, TripleError,
+    AutobindMode, AutobindSpec, Availability, LinkMode, NativeArtifact, NativeHeaders,
+    NativeLibraryError, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
+    TripleError,
 };
 
 use crate::native_lib_manifest::{RawFlatManifest, RawSectionedManifest, RawSectionedTarget};
@@ -91,7 +91,6 @@ fn sectioned(raw: RawSectionedManifest) -> Result<NativeLibrarySpec, NativeLibPa
             functions: autobinding.functions,
             structs: autobinding.structs,
             mode,
-            profile: bindings.profile.map(AutobindProfile::new),
             output: autobinding.output,
         });
     }

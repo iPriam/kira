@@ -22,7 +22,6 @@
 //! headers are read here and nowhere else. It also never decides *when* to run:
 //! the build drives it, once, before semantic analysis.
 
-mod builtin;
 mod cache;
 mod emit;
 mod harvest;
@@ -162,12 +161,8 @@ pub fn plan(
         return Ok(None);
     }
 
-    let builtin_profile = builtin::profile(spec);
-    let headers = match builtin_profile {
-        Some(_) => Vec::new(),
-        None => resolve_headers(spec, context)?,
-    };
-    if builtin_profile.is_none() && headers.is_empty() {
+    let headers = resolve_headers(spec, context)?;
+    if headers.is_empty() {
         return Ok(None);
     }
 
@@ -177,10 +172,7 @@ pub fn plan(
         .unwrap_or_else(|| spec.name().to_owned());
     let output = output_path(autobind.output.as_deref(), &module, context);
     let stamp_file = cache::stamp_path(&context.package_root.join(".kira-build"), spec.name());
-    let arguments = match builtin_profile {
-        Some(profile) => vec![format!("builtin:{profile}")],
-        None => clang_arguments(spec, context, &headers),
-    };
+    let arguments = clang_arguments(spec, context, &headers);
     let stamp = cache::Stamp {
         key: format!(
             "{} {} {} {}",
@@ -192,13 +184,10 @@ pub fn plan(
                 Availability::Optional => "optional",
             }
         ),
-        inputs: match builtin_profile {
-            Some(profile) => vec![format!("builtin:{profile}:v2")],
-            None => headers
-                .iter()
-                .map(|header| cache::describe_input(header))
-                .collect(),
-        },
+        inputs: headers
+            .iter()
+            .map(|header| cache::describe_input(header))
+            .collect(),
     };
     let status = match cache::freshness(&stamp_file, &output, &stamp) {
         cache::Freshness::Current => AutobindStatus::Current,
@@ -238,24 +227,19 @@ pub fn generate(
             message: "the library declares no `autobind` record".to_owned(),
         });
     };
-    let mut module = if let Some(profile) = builtin::profile(spec) {
-        builtin::module(profile)
-    } else {
-        // One translation unit including every declared header in order, rather
-        // than one unit per header. A C header set is a sequence, not a set of
-        // independent files: `sokol_glue.h` refuses to compile unless
-        // `sokol_gfx.h` came first, and parsing them apart binds nothing for every
-        // header that depends on its predecessors.
-        let umbrella = write_umbrella(plan)?;
-        let unit =
-            clang
-                .parse(&umbrella, &plan.arguments)
-                .map_err(|source| AutobindError::Parse {
-                    library: plan.library.clone(),
-                    source,
-                })?;
-        harvest::harvest(&unit, &plan.library, autobind, &plan.headers)
-    };
+    // One translation unit including every declared header in order, rather
+    // than one unit per header. A C header set is a sequence, not a set of
+    // independent files: `sokol_glue.h` refuses to compile unless
+    // `sokol_gfx.h` came first, and parsing them apart binds nothing for every
+    // header that depends on its predecessors.
+    let umbrella = write_umbrella(plan)?;
+    let unit = clang
+        .parse(&umbrella, &plan.arguments)
+        .map_err(|source| AutobindError::Parse {
+            library: plan.library.clone(),
+            source,
+        })?;
+    let mut module = harvest::harvest(&unit, &plan.library, autobind, &plan.headers);
     module.sort();
 
     let text = emit::render(&module);
@@ -382,7 +366,7 @@ fn clang_arguments(
     // the active SDK, `<math.h>` and every other C library header is simply
     // not found and the harvest binds nothing.
     if matches!(context.target.os(), "macos" | "ios" | "tvos" | "xros")
-        && let Some(sdk) = crate::native_sources::apple_sdk_root()
+        && let Some(sdk) = crate::native_sources::apple_sdk_root(&context.target)
     {
         arguments.push("-isysroot".to_owned());
         arguments.push(sdk);
@@ -433,14 +417,16 @@ fn clang_arguments(
 /// sysroot and its `long` width. A cross build states the target, so the
 /// generated widths are the ones the program will run with rather than the ones
 /// the machine generating it happens to have.
-fn clang_triple(target: &TargetTriple) -> Option<String> {
+pub(crate) fn clang_triple(target: &TargetTriple) -> Option<String> {
     if target == &host_target() {
         return None;
     }
     let triple = match (target.arch(), target.os(), target.abi()) {
         (arch, "macos", _) => format!("{arch}-apple-darwin"),
-        (arch, "ios", "simulator") => format!("{arch}-apple-ios-simulator"),
-        (arch, "ios", _) => format!("{arch}-apple-ios"),
+        (arch, os @ ("ios" | "tvos" | "xros"), "sim" | "simulator") => {
+            format!("{arch}-apple-{os}-simulator")
+        }
+        (arch, os @ ("ios" | "tvos" | "xros"), _) => format!("{arch}-apple-{os}"),
         (arch, "linux", abi) => format!("{arch}-unknown-linux-{abi}"),
         (arch, "windows", abi) => format!("{arch}-pc-windows-{abi}"),
         (arch, "emscripten", _) => format!("{arch}-unknown-emscripten"),

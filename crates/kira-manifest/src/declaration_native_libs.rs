@@ -30,8 +30,8 @@
 //! field it *does* know but cannot make sense of is an error, never a guess.
 
 use kira_native_lib_definition::{
-    AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,
-    NativeHeaders, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
+    AutobindMode, AutobindSpec, Availability, LinkMode, NativeArtifact, NativeHeaders,
+    NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
 };
 
 use crate::declaration_loader::{
@@ -136,10 +136,6 @@ fn autobind_value(value: &str) -> Result<AutobindSpec, DeclarationError> {
                 autobind.mode =
                     AutobindMode::parse(qualified_case(value)).ok_or_else(|| malformed(KEY))?;
             }
-            // The profile names a generator's own ruleset, so it is carried as
-            // written rather than matched against a closed set this compiler
-            // would have to grow for every new backend.
-            "profile" => autobind.profile = Some(AutobindProfile::new(qualified_case(value))),
             "output" => autobind.output = Some(non_empty_string(KEY, value)?),
             _ => {}
         }
