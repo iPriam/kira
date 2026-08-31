@@ -310,10 +310,8 @@ function ovxSection() -> Int {
     // A rolling fold so position matters too.
     var mix = 17
     let parts = [o1, o2, o3, o4, o5, o6, o7, o8]
-    var i = 0
-    while i < parts.count {
+    for i in 0..parts.count {
         mix = mix * 33 + parts[i]
-        i = i + 1
     }
     checksum = checksum + mix
 

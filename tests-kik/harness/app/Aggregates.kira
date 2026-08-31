@@ -166,10 +166,8 @@ function aggBumpWide(w: borrow mut AggWide) {
 
 function aggSumLeaves(leaves: borrow [AggLeaf]) -> Int {
     var total = 0
-    var i = 0
-    while i < leaves.count {
+    for i in 0..leaves.count {
         total = total + leaves[i].a + leaves[i].b
-        i = i + 1
     }
     return total
 }
@@ -256,11 +254,9 @@ function aggSection() -> Int {
     acc = acc + aggSumLeaves(leaves)
 
     // -- 6. Nested array-element mutation. ----------------------------------
-    var u = 0
-    while u < leaves.count {
+    for u in 0..leaves.count {
         leaves[u].a = leaves[u].a + 10
         leaves[u].b = leaves[u].b * 2
-        u = u + 1
     }
     acc = acc + aggSumLeaves(leaves)
 
@@ -271,17 +267,13 @@ function aggSection() -> Int {
         wides.append(aggMakeWide(q))
         q = q + 1
     }
-    var wq = 0
-    while wq < wides.count {
+    for wq in 0..wides.count {
         wides[wq].f0 = wides[wq].f0 + 5
         wides[wq].f11 = wides[wq].f11 + 7
-        wq = wq + 1
     }
     var wsum = 0
-    var ws = 0
-    while ws < wides.count {
+    for ws in 0..wides.count {
         wsum = wsum + wides[ws].total()
-        ws = ws + 1
     }
     acc = acc + wsum
 

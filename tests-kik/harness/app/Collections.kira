@@ -12,10 +12,8 @@ struct ColRow {
 
 function colSumArray(xs: borrow [Int]) -> Int {
     var total = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         total = total + xs[i]
-        i = i + 1
     }
     return total
 }
@@ -60,10 +58,8 @@ function collectionsSection() -> Int {
         grid.append(ColRow { cells: move row })
         r = r + 1
     }
-    var gi = 0
-    while gi < grid.count {
+    for gi in 0..grid.count {
         acc = acc + colSumArray(grid[gi].cells)
-        gi = gi + 1
     }
 
     // Arrays of structs, with mutation through indexing.
@@ -74,10 +70,8 @@ function collectionsSection() -> Int {
         p = p + 1
     }
     var ps = 0
-    var pi = 0
-    while pi < pts.count {
+    for pi in 0..pts.count {
         ps = ps + pts[pi].x + pts[pi].y
-        pi = pi + 1
     }
     acc = acc + ps
 

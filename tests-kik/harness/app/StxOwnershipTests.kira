@@ -45,20 +45,16 @@ function stxoConsumeBox(b: StxoBox) -> Int { return b.min.x + b.max.x + b.id }
 
 function stxoConsumeBag(b: StxoBag) -> Int {
     var s = b.label
-    var i = 0
-    while i < b.items.count {
+    for i in 0..b.items.count {
         s = s + b.items[i]
-        i = i + 1
     }
     return s
 }
 
 function stxoConsumeArr(xs: [Int]) -> Int {
     var s = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         s = s + xs[i]
-        i = i + 1
     }
     return s
 }

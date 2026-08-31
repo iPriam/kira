@@ -36,10 +36,8 @@ function emxScoreTag(tag: borrow EmxTag) -> Int {
 
 function emxCountNamed(bag: borrow EmxBag) -> Int {
     var n = 0
-    var i = 0
-    while i < bag.tags.count {
+    for i in 0..bag.tags.count {
         n = n + emxScoreTag(bag.tags[i])
-        i = i + 1
     }
     return n
 }
@@ -164,10 +162,8 @@ function emxSumRange(r: borrow EmxRangeResult) -> Int {
     match r {
         Ok(xs) -> {
             var total = 0
-            var i = 0
-            while i < xs.count {
+            for i in 0..xs.count {
                 total = total + xs[i]
-                i = i + 1
             }
             return total
         }

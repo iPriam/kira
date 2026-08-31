@@ -41,10 +41,8 @@ function ltxHold(root: borrow String, outer: borrow LtxOuter) -> LtxHolder {
 
 function ltxScore(holder: borrow LtxHolder) -> Int {
     var total = holder.outers.count * 100
-    var index = 0
-    while index < holder.outers.count {
+    for index in 0..holder.outers.count {
         total = total + holder.outers[index].items.count
-        index = index + 1
     }
     if holder.root == "App" {
         total = total + 10

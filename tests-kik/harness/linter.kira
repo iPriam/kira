@@ -30,10 +30,12 @@ construct QualifiedVariant() extends Lint {
     let enabled: Bool = false
 }
 
-// A `while` counting an index by hand, where a `for` does it for you. Off for
-// the same reason: the corpus tests both spellings on purpose.
+// A `while` counting an index by hand, where a `for` does it for you. The
+// `while` spelling itself is covered by the control-flow suites' loops over
+// non-linear conditions, so a counted loop written long here is only harder
+// to read.
 construct ManualIndexLoop() extends Lint {
     let code: String = "KLINT002"
     let severity: String = "warning"
-    let enabled: Bool = false
+    let enabled: Bool = true
 }

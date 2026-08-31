@@ -50,10 +50,8 @@ function owyMakeTree13(seed: Int) -> OwyClosureNode13 {
 
 function owyVisit13(node: borrow OwyClosureNode13) -> Int {
     var total = node.onPress(1)
-    var i = 0
-    while i < node.children.count {
+    for i in 0..node.children.count {
         total = total + owyVisit13(node.children[i])
-        i = i + 1
     }
     return total
 }
@@ -278,10 +276,8 @@ struct OwyPair18 {
 
 function owySink18(values: [Int]) -> Int {
     var sum = 0
-    var index = 0
-    while index < values.count {
+    for index in 0..values.count {
         sum = sum + values[index]
-        index = index + 1
     }
     return sum
 }
@@ -402,11 +398,9 @@ struct OwyOuter24 {
 
 function owyRenderNested24(outer: OwyOuter24) -> Int {
     var total = 0
-    var i = 0
-    while i < outer.inner.children.count {
+    for i in 0..outer.inner.children.count {
         let lines = outer.inner.children[i].render()
         total = total + lines.count
-        i = i + 1
     }
     return total
 }

@@ -11,10 +11,8 @@ function clApplyTwice(f: (Int) -> Int, x: Int) -> Int {
 
 function clReduce(xs: borrow [Int], f: (Int) -> Int) -> Int {
     var total = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         total = total + f(xs[i])
-        i = i + 1
     }
     return total
 }

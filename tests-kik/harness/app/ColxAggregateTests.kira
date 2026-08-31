@@ -63,8 +63,7 @@ function colxaStatFrom(xs: borrow [Int]) -> ColxAStat {
     var sum = 0
     var minVal = 0
     var maxVal = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         let v = xs[i]
         if count == 0 {
             minVal = v
@@ -77,7 +76,6 @@ function colxaStatFrom(xs: borrow [Int]) -> ColxAStat {
         }
         count = count + 1
         sum = sum + v
-        i = i + 1
     }
     return ColxAStat { count: count, sum: sum, minVal: minVal, maxVal: maxVal }
 }
@@ -136,10 +134,8 @@ function colxaFilterLt(xs: borrow [Int], thresh: Int) -> [Int] {
 // Dot product of two equal-length arrays.
 function colxaDot(xs: borrow [Int], ys: borrow [Int]) -> Int {
     var s = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         s = s + xs[i] * ys[i]
-        i = i + 1
     }
     return s
 }

@@ -206,12 +206,10 @@ function clsH3() -> Int {
 
     // Loop: overridden method (scaledArea) + inherited field (sides) +
     // inherited never-overridden method (baseCost).
-    var j = 0
-    while j < squares.count {
+    for j in 0..squares.count {
         acc = acc + squares[j].scaledArea(2)   // side^2 * 2
         acc = acc + squares[j].sides            // 4 each
         acc = acc + squares[j].baseCost()       // 1 each
-        j = j + 1
     }
     // scaledArea: (1+4+9+16+25+36)*2 = 91*2 = 182 ; sides 4*6 = 24 ; baseCost 6
     // subtotal so far for the loop = 212
@@ -310,10 +308,8 @@ function clsSection() -> Int {
     // Mix in a rolling fold so position matters too.
     var fold = 17
     let parts = [h1, h2, h3, h4]
-    var i = 0
-    while i < parts.count {
+    for i in 0..parts.count {
         fold = fold * 33 + parts[i]
-        i = i + 1
     }
     checksum = checksum + fold
 

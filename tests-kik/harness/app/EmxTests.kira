@@ -137,10 +137,8 @@ function emxAreaOf(c: borrow EmxCell) -> Int {
 
 function emxTotalArea(grid: borrow EmxGrid) -> Int {
     var sum = 0
-    var index = 0
-    while index < grid.cells.count {
+    for index in 0..grid.cells.count {
         sum = sum + emxAreaOf(grid.cells[index])
-        index = index + 1
     }
     return sum
 }

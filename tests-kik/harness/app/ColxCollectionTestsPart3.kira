@@ -357,14 +357,10 @@ struct ColxNestBox {
 
 function colxSumNest(b: borrow ColxNestBox) -> Int {
     var total = 0
-    var gi = 0
-    while gi < b.rows.count {
-        var gj = 0
-        while gj < b.rows[gi].count {
+    for gi in 0..b.rows.count {
+        for gj in 0..b.rows[gi].count {
             total = total + b.rows[gi][gj]
-            gj = gj + 1
         }
-        gi = gi + 1
     }
     return total
 }

@@ -40,20 +40,16 @@ function strxCApplyN(f: (Int) -> Int, x: Int, n: Int) -> Int {
 
 function strxCReduce(xs: borrow [Int], f: (Int) -> Int) -> Int {
     var total = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         total = total + f(xs[i])
-        i = i + 1
     }
     return total
 }
 
 function strxCFold(xs: borrow [Int], f: (Int, Int) -> Int, init: Int) -> Int {
     var acc = init
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         acc = f(acc, xs[i])
-        i = i + 1
     }
     return acc
 }

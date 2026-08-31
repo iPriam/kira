@@ -17,10 +17,8 @@ import Foundation
 // The same fold over bytes the fixtures' expected values were taken with.
 function imageChecksum(bytes: borrow [U8]) -> Int {
     var total = 0
-    var index = 0
-    while index < bytes.count {
+    for index in 0..bytes.count {
         total = ((total * 31) + Int(bytes[index])) & 1073741823
-        index = index + 1
     }
     return total
 }

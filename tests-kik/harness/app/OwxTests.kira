@@ -131,10 +131,8 @@ function owxMakeTree(seed: Int) -> OwxTreeNode {
 
 function owxVisit(node: borrow OwxTreeNode) -> Int {
     var total = node.onPress(1)
-    var i = 0
-    while i < node.children.count {
+    for i in 0..node.children.count {
         total = total + owxVisit(node.children[i])
-        i = i + 1
     }
     return total
 }

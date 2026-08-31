@@ -50,10 +50,8 @@ struct ColxGrid {
 
 function colxSum(xs: borrow [Int]) -> Int {
     var total = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         total = total + xs[i]
-        i = i + 1
     }
     return total
 }
@@ -83,12 +81,10 @@ function colxMax(xs: borrow [Int]) -> Int {
 }
 
 function colxContainsVal(xs: borrow [Int], val: Int) -> Bool {
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         if xs[i] == val {
             return true
         }
-        i = i + 1
     }
     return false
 }
@@ -145,22 +141,18 @@ function colxReverse(xs: borrow [Int]) -> [Int] {
 
 function colxCountGt(xs: borrow [Int], thresh: Int) -> Int {
     var c = 0
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         if xs[i] > thresh {
             c = c + 1
         }
-        i = i + 1
     }
     return c
 }
 
 function colxProduct(xs: borrow [Int]) -> Int {
     var p = 1
-    var i = 0
-    while i < xs.count {
+    for i in 0..xs.count {
         p = p * xs[i]
-        i = i + 1
     }
     return p
 }

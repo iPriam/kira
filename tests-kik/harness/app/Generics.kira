@@ -148,10 +148,8 @@ function genSumRange(n: Int) -> Int {
     match r {
         Ok(xs) -> {
             var total = 0
-            var i = 0
-            while i < xs.count {
+            for i in 0..xs.count {
                 total = total + xs[i]
-                i = i + 1
             }
             return total
         }
@@ -222,10 +220,8 @@ function genArrayOfResults() -> Int {
         i = i + 1
     }
     var acc = 0
-    var j = 0
-    while j < results.count {
+    for j in 0..results.count {
         acc = acc + genResultValue(results[j])
-        j = j + 1
     }
     return acc + genDeclarationSection()
 }

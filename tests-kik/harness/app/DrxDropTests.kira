@@ -172,10 +172,8 @@ function drxTick(held: borrow mut DrxCounter) {
 
 function drxBagTotal(bag: borrow DrxBag) -> Int {
     var total = 0
-    var index = 0
-    while index < bag.items.count {
+    for index in 0..bag.items.count {
         total = total + bag.items[index].tag
-        index = index + 1
     }
     return total
 }

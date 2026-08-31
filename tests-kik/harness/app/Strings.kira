@@ -196,10 +196,8 @@ function strSection() -> Int {
         k = k + 1
     }
     var indexedTotal = 0
-    var bi = 0
-    while bi < built.count {
+    for bi in 0..built.count {
         indexedTotal = indexedTotal + built[bi].count
-        bi = bi + 1
     }
     acc = acc + buildTotal + indexedTotal // 60/5 = 12 periods * 13 = 156 each -> 312
     acc = acc + built.count               // 60
@@ -215,10 +213,8 @@ function strSection() -> Int {
         pj = pj + 1
     }
     var fieldTotal = 0
-    var fp = 0
-    while fp < pairs.count {
+    for fp in 0..pairs.count {
         fieldTotal = fieldTotal + pairs[fp].first.count + pairs[fp].second.count
-        fp = fp + 1
     }
     acc = acc + fieldTotal + pairs.count
 
@@ -235,10 +231,8 @@ function strSection() -> Int {
         ti = ti + 1
     }
     var tokTotal = 0
-    var tj = 0
-    while tj < toks.count {
+    for tj in 0..toks.count {
         tokTotal = tokTotal + strTokLen(toks[tj])
-        tj = tj + 1
     }
     // Per period of 3: "redred"(6) + Blank(0) + "xy"(2) = 8; 45/3 = 15 -> 120.
     acc = acc + tokTotal

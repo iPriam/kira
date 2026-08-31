@@ -110,12 +110,10 @@ class SkxClassBucket5 {
 }
 
 function skxFindNodeIndex5(nodes: borrow [SkxRetainedNode5], id: Int) -> Int {
-    var index = 0
-    while index < nodes.count {
+    for index in 0..nodes.count {
         if nodes[index].id == id {
             return index
         }
-        index = index + 1
     }
     return -1
 }
@@ -250,10 +248,8 @@ function skxFreshItems8() -> [SkxItem8] {
 
 function skxTotal8(bag: borrow SkxBag8) -> Int {
     var sum = 0
-    var index = 0
-    while index < bag.items.count {
+    for index in 0..bag.items.count {
         sum = sum + bag.items[index].v
-        index = index + 1
     }
     return sum
 }
