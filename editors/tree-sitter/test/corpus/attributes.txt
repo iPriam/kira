@@ -16,6 +16,53 @@ function main() {}
     body: (block)))
 
 ================================================================================
+Main-thread attribute
+================================================================================
+
+@MainThread
+function ui() {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block)))
+
+================================================================================
+Main-thread lifecycle attribute
+================================================================================
+
+@MainThreadLifecycle
+function graphicsLifecycle() {}
+
+@Main
+function main() { graphicsLifecycle() }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block))
+  (function_definition
+    (attribute
+      name: (identifier))
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments))))))
+
+================================================================================
 Attributes compose
 ================================================================================
 

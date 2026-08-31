@@ -26,6 +26,7 @@ mod file_system;
 mod frames;
 mod host;
 mod instructions;
+mod main_thread;
 mod native_state;
 mod operators;
 mod place;
@@ -152,6 +153,25 @@ pub(crate) struct Vm<'h> {
     /// it before doing anything else with it.
     running_drops: Vec<(usize, crate::value::StructId)>,
     trap_probe: Option<TrapProbe>,
+    /// Instructions this slice may still execute before the dispatch loop
+    /// suspends, or `None` for a run that owns the thread until it ends.
+    ///
+    /// A `@MainThreadLifecycle` function is a long-lived loop sharing one
+    /// thread with its siblings and with dispatched `@MainThread` work, so it
+    /// is run in slices rather than waited on.
+    slice_budget: Option<u64>,
+}
+
+/// Why a dispatch loop stopped.
+#[derive(Debug)]
+pub(crate) enum Dispatched {
+    /// The entered function returned this value.
+    Completed(Value),
+    /// The slice ran out of budget with frames still live.
+    ///
+    /// The frame stack, operand stack and heap are left intact, so resuming
+    /// continues at the instruction the loop stopped before.
+    Suspended,
 }
 
 /// Temporary native-call storage detached from [`Vm`] while a host call runs.
@@ -220,6 +240,28 @@ pub fn call_active(
     })
 }
 
+/// Re-enters the active VM's heap with a caller-supplied host.
+///
+/// A native callback can arrive while the active VM's host is holding a
+/// synchronization guard around the native call. Reusing that host for the
+/// nested VM would deadlock when the nested body crosses the native seam
+/// again. The hybrid session supplies a fresh stateless host here while the
+/// active VM still supplies its heap and capture cells.
+pub fn call_active_with_host(
+    function_id: u32,
+    args: &[kira_runtime_abi::NativeArg<'_>],
+    capture: &[u32],
+    host: &mut dyn HostCapabilities,
+) -> Option<Result<kira_runtime_abi::NativeReturn, VmError>> {
+    ACTIVE_VM.with(|active| {
+        let context = active.get();
+        // SAFETY: a non-null `ACTIVE_VM` is the frame this thread is executing
+        // inside, so the context outlives this reentrant call.
+        (!context.is_null())
+            .then(|| unsafe { call_on_active_with_host(context, function_id, args, capture, host) })
+    })
+}
+
 unsafe fn call_on_active(
     context: *mut ActiveVmContext,
     function_id: u32,
@@ -236,6 +278,25 @@ unsafe fn call_on_active(
     // the same duration as the context.
     let module = unsafe { &*context.module };
     vm.call_capturing_on_shared_heap(module, function_id, args, capture)
+}
+
+unsafe fn call_on_active_with_host(
+    context: *mut ActiveVmContext,
+    function_id: u32,
+    args: &[kira_runtime_abi::NativeArg<'_>],
+    capture: &[u32],
+    host: &mut dyn HostCapabilities,
+) -> Result<kira_runtime_abi::NativeReturn, VmError> {
+    // SAFETY: the context and module invariants are the same as
+    // `call_on_active`; only the host is supplied by the callback's session.
+    let context = unsafe { &*context };
+    // SAFETY: the active VM is suspended while native code calls back, so its
+    // heap can be lent to a nested interpreter without touching its frames.
+    let vm = unsafe { &mut *context.vm.cast::<Vm<'_>>() };
+    // SAFETY: the module belongs to the suspended VM call and remains live for
+    // the same duration as the context.
+    let module = unsafe { &*context.module };
+    vm.call_capturing_on_shared_heap_with_host(module, function_id, args, capture, host)
 }
 
 impl NativeCallScratch {
@@ -301,8 +362,27 @@ impl Vm<'_> {
         entry: Frame,
         observer: Option<&mut dyn VmDebugObserver>,
     ) -> Result<Value, VmError> {
+        match self.dispatch_frames(module, Some(entry), observer)? {
+            Dispatched::Completed(value) => Ok(value),
+            // Only a sliced run can suspend, and a sliced run is entered
+            // through `resume`. Reaching here would mean a budget was left on
+            // a VM that owns its thread.
+            Dispatched::Suspended => Err(VmError::UnexpectedSuspend),
+        }
+    }
+
+    /// Dispatches `entry` when given one, or continues the frames already on
+    /// this VM when resuming a suspended slice.
+    fn dispatch_frames(
+        &mut self,
+        module: &Module,
+        entry: Option<Frame>,
+        observer: Option<&mut dyn VmDebugObserver>,
+    ) -> Result<Dispatched, VmError> {
         let mut frames = std::mem::take(&mut self.frames);
-        frames.push(entry);
+        if let Some(entry) = entry {
+            frames.push(entry);
+        }
         let dispatched = match observer {
             Some(observer) => {
                 self.dispatch_inner::<true, false>(module, &mut frames, Some(observer))
@@ -313,7 +393,7 @@ impl Vm<'_> {
             None => self.dispatch_inner::<false, false>(module, &mut frames, None),
         };
         let result = match dispatched {
-            Ok(value) => Ok(value),
+            Ok(outcome) => Ok(outcome),
             Err(error) => {
                 self.report_trap_context(&error);
                 self.unwind(&mut frames);
@@ -404,7 +484,7 @@ impl Vm<'_> {
         module: &Module,
         frames: &mut Vec<Frame>,
         mut observer: Option<&mut dyn VmDebugObserver>,
-    ) -> Result<Value, VmError> {
+    ) -> Result<Dispatched, VmError> {
         // A debug observer borrows the backtrace only for the duration of one
         // callback. Reuse one buffer across stops so stepping through a large
         // function does not allocate once per instruction. The non-debug
@@ -443,7 +523,17 @@ impl Vm<'_> {
             if let Some(value) = completed
                 && frames.is_empty()
             {
-                return Ok(value);
+                return Ok(Dispatched::Completed(value));
+            }
+            // Suspend between instructions, with the frame stack and operand
+            // stack in the state the next one expects. Checked after the drop
+            // and completion tests so a slice never stops holding work the
+            // heap is owed.
+            if let Some(budget) = self.slice_budget.as_mut() {
+                if *budget == 0 {
+                    return Ok(Dispatched::Suspended);
+                }
+                *budget -= 1;
             }
             let depth = frames.len() - 1;
             let function_id = frames[depth].func;

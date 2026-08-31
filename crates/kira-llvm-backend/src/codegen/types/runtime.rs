@@ -77,6 +77,18 @@ pub(in crate::codegen) struct Runtime {
     pub(in crate::codegen) task_op: Callable,
     /// Resets the native task table at a process or hybrid run boundary.
     pub(in crate::codegen) task_reset: Callable,
+    /// Enters the helper-thread/main-thread event loop for a native entry.
+    pub(in crate::codegen) main_thread_run: Callable,
+    /// Installs the generated dispatcher used by main-thread requests.
+    pub(in crate::codegen) main_thread_install_dispatcher: Callable,
+    /// Installs the generated lifecycle-id to body resolver.
+    pub(in crate::codegen) main_thread_install_lifecycle_resolver: Callable,
+    /// Yields a lifecycle after its current cooperative slice is exhausted.
+    pub(in crate::codegen) main_thread_lifecycle_checkpoint: Callable,
+    /// Sends one owned bridge-value request to the main-thread loop.
+    pub(in crate::codegen) main_thread_call: Callable,
+    /// Joins one main-thread task and writes its bridge-value result.
+    pub(in crate::codegen) main_thread_join: Callable,
     /// `kira_rt_trap_foreign`: how a generated adapter's non-success status
     /// becomes a native trap at a foreign call site.
     pub(in crate::codegen) trap_foreign: Callable,

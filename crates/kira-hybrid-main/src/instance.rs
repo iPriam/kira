@@ -58,7 +58,10 @@ use std::rc::Rc;
 
 use kira_hybrid_runtime::NativeLibrary;
 use kira_main::{Handle, Instance as VmLibraryInstance, StdoutHost};
-use kira_runtime_abi::{HostCapabilities, NativeArg, NativeCallError, NativeResult, NativeReturn};
+use kira_runtime_abi::{
+    HostCapabilities, MainThreadError, MainThreadHandle, MainThreadRequest, MainThreadResponse,
+    NativeArg, NativeCallError, NativeResult, NativeReturn, NativeStateValue,
+};
 
 use crate::error::HybridMainError;
 
@@ -120,6 +123,20 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
         }
         .map_err(|_| NativeCallError::MalformedResult(function_id))?;
         Ok(NativeReturn { result, writebacks })
+    }
+
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        self.inner.main_thread(request)
+    }
+
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        self.inner.main_thread_join(handle)
     }
 }
 

@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use kira_runtime_abi::{NativeStateToken, NativeStateTypeId, NativeStateValue};
+use kira_runtime_abi::{MainThreadHandle, NativeStateToken, NativeStateTypeId, NativeStateValue};
 
 /// A handle to a heap-allocated string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +155,11 @@ pub enum Value {
     RawPtr(u64),
     /// An opaque owning handle to native callback state.
     NativeState(NativeStateToken),
+    /// An opaque handle to work queued on the host main-thread event loop.
+    ///
+    /// The host owns the task; this value only carries the typed handle word
+    /// until a `MainThreadJoin` consumes it.
+    MainThreadTask(MainThreadHandle),
     /// A typed mutable view through an opaque callback-state token.
     NativeView {
         /// The stable userdata token.

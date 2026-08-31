@@ -287,6 +287,7 @@ impl Parser<'_> {
             && !self.no_struct_literal
             && !self.at_closure_start()
             && let Some(prefix) = self.name_path_text(base)
+            && prefix != "MainThread"
         {
             let qualified = format!("{prefix}.{}", self.text_of(field_span));
             let name_span = Span::from_bounds(base_span.start, field_span.end());

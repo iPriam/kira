@@ -106,11 +106,11 @@ impl<'a> Analyzer<'a> {
     /// silent lie about what was compiled, so each is named where it was
     /// written.
     fn refuse_annotations_a_modifier_cannot_carry(&mut self, method: &Function) {
-        if method.is_main {
+        if method.is_main || method.is_main_thread_lifecycle {
             self.emit(
                 method.name_span,
                 "KSEM258",
-                "`@Main` cannot annotate an `extend` modifier: a modifier is \
+                "an entrypoint annotation cannot decorate an `extend` modifier: a modifier is \
                  called on a family value, so there is nothing for the operating \
                  system to start"
                     .to_owned(),
@@ -297,6 +297,7 @@ impl<'a> Analyzer<'a> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             // The engine the modifier was written to run on. A modifier's body
             // is synthesized, but it is the body the author wrote, so `@Native`
@@ -317,6 +318,7 @@ impl<'a> Analyzer<'a> {
             locals: Vec::new(),
             body: Vec::new(),
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,

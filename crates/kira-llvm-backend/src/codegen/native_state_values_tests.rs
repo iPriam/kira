@@ -53,6 +53,7 @@ fn a_c_string_member_crosses_the_hybrid_seam_as_an_opaque_word() {
         }],
         body: vec![ret],
         is_main: false,
+        is_main_thread: false,
         is_async: false,
         execution: Execution::Native,
         mutates_self: false,

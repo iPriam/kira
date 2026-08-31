@@ -158,6 +158,32 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                 &mut [types.i64, types.i64, types.i64, types.i64],
             ),
             task_reset: declare(c"kira_rt_task_reset", types.void, &mut []),
+            main_thread_run: declare(c"kira_rt_main_thread_run", types.i32, &mut [types.ptr]),
+            main_thread_install_dispatcher: declare(
+                c"kira_rt_main_thread_install_dispatcher",
+                types.void,
+                &mut [types.ptr],
+            ),
+            main_thread_install_lifecycle_resolver: declare(
+                c"kira_rt_main_thread_install_lifecycle_resolver",
+                types.void,
+                &mut [types.ptr],
+            ),
+            main_thread_lifecycle_checkpoint: declare(
+                c"kira_rt_main_thread_lifecycle_checkpoint",
+                types.void,
+                &mut [],
+            ),
+            main_thread_call: declare(
+                c"kira_rt_main_thread_call",
+                types.void,
+                &mut [types.i64, types.i32, types.ptr, types.i32, types.ptr],
+            ),
+            main_thread_join: declare(
+                c"kira_rt_main_thread_join",
+                types.void,
+                &mut [types.i64, types.ptr],
+            ),
             stack_save: declare(c"llvm.stacksave.p0", types.ptr, &mut []),
             stack_restore: declare(c"llvm.stackrestore.p0", types.void, &mut [types.ptr]),
             trap_foreign_unavailable: declare(

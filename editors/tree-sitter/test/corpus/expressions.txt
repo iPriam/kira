@@ -755,6 +755,54 @@ function f() {
       (return_statement))))
 
 ================================================================================
+Main-thread capability calls use a trailing block
+================================================================================
+
+function f() {
+    let value = MainThread.invoke { ui(1) }
+    MainThread.spawn { ui(value) }
+    MainThread.post { ui(value) }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (integer_literal)))))))
+      (expression_statement
+        (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))))
+      (expression_statement
+        (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))))
+      (return_statement))))
+
+================================================================================
 `move` and `copy` are operators only when an operand follows
 ================================================================================
 

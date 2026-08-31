@@ -52,6 +52,13 @@ pub(crate) struct FnCtx {
     /// accidentally capture a same-named local from its construction site.
     scope_floor: usize,
     pub(crate) return_type: Type,
+    /// Whether this body is entered through a `@MainThread` function.
+    ///
+    /// The bit is lexical analysis context, not an engine choice: an
+    /// unannotated helper called by a main-thread function still runs on that
+    /// thread at runtime, while the same helper called from ordinary Kira runs
+    /// on the helper thread.
+    pub(crate) main_thread: bool,
     /// The struct this body is a method of, when it is one.
     ///
     /// A method's body may name a field bare — `return value + step` rather
@@ -118,6 +125,7 @@ impl FnCtx {
             scopes: vec![HashMap::new()],
             scope_floor: 0,
             return_type,
+            main_thread: false,
             receiver: None,
             loop_depth: 0,
             enclosing: None,
@@ -127,6 +135,11 @@ impl FnCtx {
             closure_mentions: Rc::new(HashSet::new()),
             cell_temps: HashMap::new(),
         }
+    }
+
+    /// Marks this frame as executing in the host main-thread context.
+    pub(crate) fn set_main_thread(&mut self, main_thread: bool) {
+        self.main_thread = main_thread;
     }
 
     /// Records which names this function's closure literals mention, so a `var`

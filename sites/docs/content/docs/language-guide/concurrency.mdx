@@ -1,6 +1,6 @@
 ---
 title: Concurrency
-description: async functions, Task spawns, the three handle operations, cooperative yielding, the virtual clock, and the Send rule at the spawn boundary.
+description: async functions, Task spawns, host-main-thread requests, cooperative yielding, the virtual clock, and the Send rules at both boundaries.
 ---
 
 `async function` marks a body meant to be *spawned*. Calling one directly is an ordinary call: the marker changes nothing about a call, only about what a task may run. `async` is contextual, so a local named `async` still binds.
@@ -49,3 +49,24 @@ The task table belongs to one run. A VM creates it when execution starts; a
 native or hybrid host resets its thread-local table at the same boundary and
 clears it when the run ends. A task handle is therefore never valid in a later
 run, even when a hybrid library stays loaded between runs.
+
+## Host Main Thread
+
+`@Main` runs on Kira's helper thread. A framework that must use the operating-system main thread marks its target `@MainThread` and requests it with one of three explicit operations:
+
+```kira
+@MainThread function makeView(text: String) -> String { return text }
+
+@Main function main() {
+    let view = MainThread.invoke { makeView("Kira") }
+    let later = MainThread.spawn { makeView("later") }
+    MainThread.post { makeView("notification") }
+    print(later.await)
+    print(view)
+    return
+}
+```
+
+`invoke` waits for the target and returns its value. `spawn` queues it and returns a handle whose only operation is `.await`. `post` queues it without a result. The event loop continues to service accepted posts and spawned work while the helper is running. Arguments and results are owned copies and must be `Send`; borrowed mutable parameters are not available across this boundary. Direct calls from the helper to an `@MainThread` function are rejected, and WebAssembly rejects the annotation because it has no process main thread.
+
+Use `@MainThreadLifecycle` for a preserved event loop that shares the process main thread with other lifecycles and `@MainThread` work. Start it by calling the lifecycle from `@Main`. The call queues a new instance and returns `Void`; the instance keeps its locals and call stack between cooperative slices. A stalled application thread cannot stop an already-started lifecycle.

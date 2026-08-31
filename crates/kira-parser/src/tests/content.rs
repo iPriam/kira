@@ -138,6 +138,25 @@ function build() {
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
+#[test]
+fn a_dotted_method_call_inside_content_is_not_a_field_override() {
+    let result = parse_text("function build() { let value = MainThread.invoke { window.read() } }");
+    let call = only_initializer(&result);
+    let Expr::MethodCall {
+        children, method, ..
+    } = result.tree.expr(call)
+    else {
+        panic!("expected a method call, got {:?}", result.tree.expr(call));
+    };
+    assert_eq!(result.interner.resolve(*method), "invoke");
+    assert_eq!(children.len(), 1);
+    assert!(matches!(
+        result.tree.expr(children[0]),
+        Expr::MethodCall { .. }
+    ));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
 /// A struct literal's fields are separated by nothing, so a field name after a
 /// braced value opens the next field rather than filling that value's slot.
 #[test]

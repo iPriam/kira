@@ -20,6 +20,11 @@ impl Analyzer<'_> {
         expected: Option<Type>,
     ) -> HirExprId {
         let MethodCallContent { args, children } = content;
+        if let Some(call) =
+            self.analyze_main_thread_namespace(ctx, receiver, method, method_span, args, children)
+        {
+            return call;
+        }
         // `Support.hello()` is a *module-qualified free call*, not a method
         // call, and it is recognized here because the parser cannot tell the
         // two apart: both are `<expr> . name ( args )`. What separates them is
@@ -145,6 +150,15 @@ impl Analyzer<'_> {
         // would report a missing type rather than the opaque-handle rule.
         if matches!(receiver_ty, Type::Task(_)) {
             return self.analyze_task_method(ctx, receiver_hir, &name, args, method_span);
+        }
+        if matches!(receiver_ty, Type::MainThreadTask(_)) {
+            return self.analyze_main_thread_task_method(
+                ctx,
+                receiver_hir,
+                &name,
+                args,
+                method_span,
+            );
         }
         if receiver_ty == Type::String {
             if has_user_method && !is_builtin_string_method(&name) {

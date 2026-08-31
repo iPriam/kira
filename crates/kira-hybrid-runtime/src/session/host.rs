@@ -28,6 +28,7 @@ impl HostCapabilities for Host<'_> {
         function_id: u32,
         args: &[NativeArg<'_>],
     ) -> Result<NativeReturn, NativeCallError> {
+        let _active = ActiveSession::bind(self.session);
         self.session.call_native(function_id, args)
     }
 
@@ -51,6 +52,7 @@ impl HostCapabilities for Host<'_> {
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        let _active = ActiveSession::bind(self.session);
         // The bytecode half reaches a `@FFI.Syscall` only when a `@Runtime`
         // function called one directly; `packages/linux` marks its wrappers
         // `@Native`, so the usual route is the emitted instruction. Served here

@@ -11,6 +11,7 @@ fn function(locals: Vec<Type>) -> IrFunction {
         return_type: Type::Void,
         body: Vec::new(),
         execution: Execution::Runtime,
+        is_main_thread: false,
         by_reference_params: Vec::new(),
         by_pointer_params: Vec::new(),
     }

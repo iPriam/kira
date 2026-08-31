@@ -161,6 +161,18 @@ pub fn prepare_target(
     prepare::run(ir, source, foreign_link, options, info)
 }
 
+/// Warns before an LLDB session on a host that will never authorize one.
+///
+/// A warning rather than a refusal: a desktop session may still grant the
+/// taskport right through its own prompt, and refusing would break exactly
+/// the machine that can answer it. Headless hosts get the one line that
+/// explains an otherwise-silent hang.
+fn warn_when_debugging_unauthorized() {
+    if kira_debug::debugging_unauthorized() {
+        err!("kira debug: {}", kira_debug::ENABLE_DEBUGGING_HINT);
+    }
+}
+
 /// Runs a verified IR program under the VM debugger or real LLDB.
 pub fn run_vm(
     ir: &IrProgram,
@@ -186,9 +198,11 @@ pub fn run_vm(
         }
     };
     if options.lldb_dap {
+        warn_when_debugging_unauthorized();
         return vm_lldb::run_under_lldb_dap(ir, &module, source, foreign_link, options, info);
     }
     if options.lldb {
+        warn_when_debugging_unauthorized();
         return vm_lldb::run_under_lldb(ir, &module, source, foreign_link, options, info);
     }
     let mode = if options.batch {
@@ -212,7 +226,12 @@ pub fn run_vm(
         return unsafe {
             env::with_arguments(&options.compile.program_arguments, || {
                 let mut host = NativeStateHost::new(StdoutHost);
-                match kira_vm_runtime::execute_with_debug(&module, &mut host, &mut debugger) {
+                let result = kira_vm_runtime::execute_with_main_thread_debug(
+                    &module,
+                    &mut host,
+                    &mut debugger,
+                );
+                match result {
                     Ok(_) => EXIT_OK,
                     Err(error) => runtime_error(error),
                 }
@@ -279,9 +298,11 @@ pub fn run_hybrid(
         };
     out!("hybrid debug bundle: {}", bundle.manifest.display());
     if options.lldb_dap {
+        warn_when_debugging_unauthorized();
         return run_hybrid_under_lldb_dap(source, options, info, &bundle);
     }
     if options.lldb {
+        warn_when_debugging_unauthorized();
         return run_hybrid_under_lldb(source, options, info, &bundle);
     }
     let session = match kira_hybrid_runtime::Session::load(&bundle.manifest) {
@@ -705,6 +726,7 @@ pub fn run_llvm(
         err!("kira debug: the LLVM build produced no executable");
         return EXIT_FAILURE;
     };
+    warn_when_debugging_unauthorized();
     if options.lldb_dap {
         return run_llvm_under_lldb_dap(ir.main, source, options, info, target);
     }

@@ -40,6 +40,13 @@ pub struct IrProgram {
     /// single function that starts it. Backends read this to decide whether to
     /// emit an entry point at all.
     pub main: Option<u32>,
+    /// Indices of every `@MainThreadLifecycle` function within
+    /// [`IrProgram::functions`], in declaration order.
+    ///
+    /// Independent of [`IrProgram::main`]: these run on the process main
+    /// thread, several at a time, while the entrypoint runs on the application
+    /// thread.
+    pub main_thread_lifecycles: Vec<u32>,
     /// The `@Export` surface a library offers its consumer, in declaration
     /// order; empty for an application and for a library that exports nothing.
     ///
@@ -205,6 +212,7 @@ impl IrProgram {
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::IntoAny { .. } => Type::Any,
             IrExpr::Widen { to, .. } => *to,
+            IrExpr::MainThreadCall { ty, .. } | IrExpr::MainThreadJoin { ty, .. } => *ty,
             IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
             // Every primitive answers with one machine word, spelled `Int`.
             IrExpr::TaskOp { .. } => Type::INT,
@@ -318,6 +326,8 @@ pub struct IrFunction {
     /// A hybrid build splits the program on this; a single-backend build
     /// resolves it against that backend's default.
     pub execution: Execution,
+    /// Whether this function is entered through the host main-thread runtime.
+    pub is_main_thread: bool,
     /// The parameter slots this function takes by reference, ascending.
     ///
     /// A statically-typed backend reads this to give those parameters a pointer
@@ -580,6 +590,7 @@ mod tests {
             functions: Vec::new(),
             types: TypeTable::default(),
             main: None,
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),

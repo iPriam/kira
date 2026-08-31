@@ -91,6 +91,13 @@ impl FunctionLowering<'_, '_> {
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::TaskOp { prim, operands } => self.lower_task_op(prim, operands),
+            IrExpr::MainThreadCall {
+                operation,
+                function,
+                args,
+                ty,
+            } => self.lower_main_thread_call(operation, function, &args, ty),
+            IrExpr::MainThreadJoin { handle, ty } => self.lower_main_thread_join(handle, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::StringLen { text } => self.lower_string_len(text),
             IrExpr::StringCharAt { text, index } => self.lower_string_char_at(text, index),

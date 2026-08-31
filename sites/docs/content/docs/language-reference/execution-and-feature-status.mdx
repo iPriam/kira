@@ -10,6 +10,8 @@ description: Which language and toolchain surfaces run on the VM, on LLVM/native
 | Surface | VM | LLVM | Hybrid | Web |
 | --- | --- | --- | --- | --- |
 | `@Main`, functions, parameter defaults, overloading | Yes | Yes | Yes | Yes |
+| `@MainThreadLifecycle` start calls, preserved state, and transitive pinning | Yes | Yes | Yes | `KSEM338` |
+| `@MainThread` and `MainThread.invoke`, `spawn`, `post`, `.await` | Yes | Yes | Yes | `KSEM338` |
 | `Int`, `Float`, `Bool`, `String`, `Void` | Yes | Yes | Yes | Yes |
 | Floating-point primitives: `sqrt`, trigonometry, rounding, logs, powers, and binary math | Yes | Yes | Yes | Yes |
 | Fixed-width scalars and unsigned `/`, `%`, orderings, `>>` | Yes | Yes | Yes | Yes |

@@ -239,6 +239,7 @@ fn export_type(
         | Type::Any
         | Type::NativeState(_)
         | Type::Task(_)
+        | Type::MainThreadTask(_)
         | Type::Cell(_)
         | Type::Error => {
             return Err(CompileError::UncrossableExport {

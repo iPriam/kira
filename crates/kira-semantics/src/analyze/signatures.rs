@@ -36,6 +36,8 @@ pub(crate) struct FuncSig {
     /// can link to it.
     pub(crate) source: SourceId,
     pub(crate) is_main: bool,
+    pub(crate) is_main_thread_lifecycle: bool,
+    pub(crate) is_main_thread: bool,
 }
 
 impl<'a> Analyzer<'a> {
@@ -138,11 +140,53 @@ impl<'a> Analyzer<'a> {
                 self.sig_index.entry(name.clone()).or_default().push(id);
             }
             let is_main = function.is_main;
+            if function.is_main && function.is_main_thread_lifecycle {
+                self.emit(
+                    function.name_span,
+                    "KSEM339",
+                    "the entrypoint runs on the application thread, so it cannot also be \
+                     `@MainThreadLifecycle`: declare the main-thread loop as its own function",
+                );
+            }
+            if function.is_main && function.is_main_thread {
+                self.emit(
+                    function.name_span,
+                    "KSEM337",
+                    "an entrypoint cannot also be `@MainThread`",
+                );
+            }
+            if function.is_main_thread_lifecycle && !params.is_empty() {
+                self.emit(
+                    function.name_span,
+                    "KSEM341",
+                    "a `@MainThreadLifecycle` function must take no parameters: calling it \
+                     starts an independent preserved stack and transfers no arguments",
+                );
+            }
+            if function.is_main_thread_lifecycle && return_type != Type::Void {
+                self.emit(
+                    function.name_span,
+                    "KSEM344",
+                    "a `@MainThreadLifecycle` function must return `Void`: its call starts the \
+                     lifecycle and does not wait for its eventual result",
+                );
+            }
+            if (function.is_main_thread || function.is_main_thread_lifecycle)
+                && (self.machine.platform() == "emscripten"
+                    || self.machine.architecture().starts_with("wasm"))
+            {
+                self.emit(
+                    function.name_span,
+                    "KSEM338",
+                    "a main-thread annotation requires an operating-system main thread and is \
+                     unavailable on WebAssembly",
+                );
+            }
             if is_main && main_seen {
                 self.emit(
                     function.name_span,
                     "KSEM010",
-                    "a program may declare only one `@Main` function",
+                    "a program may declare only one `@Main` entrypoint",
                 );
             }
             main_seen = main_seen || is_main;
@@ -158,6 +202,8 @@ impl<'a> Analyzer<'a> {
                 name_span: function.name_span,
                 source: callable.source,
                 is_main,
+                is_main_thread_lifecycle: function.is_main_thread_lifecycle,
+                is_main_thread: function.is_main_thread,
             });
             // Pushed in lockstep with `sigs` so a `FuncId` indexes both. A
             // synthesized function reserves a later id with no row here, so the

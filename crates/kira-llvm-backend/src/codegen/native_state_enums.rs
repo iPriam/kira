@@ -420,6 +420,7 @@ mod tests {
             }],
             body: vec![ret],
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Native,
             mutates_self: false,

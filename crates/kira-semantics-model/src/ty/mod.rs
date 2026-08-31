@@ -27,7 +27,7 @@ pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructOrigin, StructTable};
 pub use table::TypeTable;
-pub use tasks::TaskResult;
+pub use tasks::{MainThreadTaskResult, TaskResult};
 
 /// A resolved Kira type in the v0 subset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,6 +107,12 @@ pub enum Type {
     /// operations (`.await`, `.requestCancel()`, `.detach()`); every other use
     /// is `KSEM158`, which is why this is its own type rather than an `Int`.
     Task(TaskResult),
+    /// An opaque handle to work queued on the host's main-thread event loop.
+    ///
+    /// This is distinct from [`Type::Task`]: an ordinary task belongs to the
+    /// compiler-generated virtual scheduler, while this handle belongs to the
+    /// host main-thread runtime.
+    MainThreadTask(MainThreadTaskResult),
     /// The top type (`Any`): a value of any other type, with its own type
     /// erased at the point it crossed in.
     ///
@@ -230,7 +236,7 @@ impl Type {
             // A task handle does not widen either, for a different reason: it
             // is opaque by design, and `Any` is the one type that would let one
             // be stored, passed, and dropped without ever being joined.
-            (Type::Task(_), Type::Any) => false,
+            (Type::Task(_), Type::Any) | (Type::MainThreadTask(_), Type::Any) => false,
             // A cell does not widen into `Any`, and nothing widens into a cell.
             // Erasing one would put shared mutable storage in a box whose
             // holders may only read, and there is no surface that would ever
@@ -316,6 +322,7 @@ impl Type {
                 | Type::ForeignPtr(_)
                 | Type::NativeState(_)
                 | Type::Task(_)
+                | Type::MainThreadTask(_)
         )
     }
 
@@ -357,7 +364,8 @@ impl Type {
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::NativeState(_)
-            | Type::Task(_) => true,
+            | Type::Task(_)
+            | Type::MainThreadTask(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -429,6 +437,7 @@ impl Type {
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             // A cell *is* meant to alias — that is what makes a capture shared
             // — so binding one must not consume the binding it came from. Every
             // cell-typed read the analyzer emits is synthetic anyway; no source

@@ -88,6 +88,14 @@ pub enum CompileError {
         /// The offending function's name.
         function: String,
     },
+    /// Internal invariant: a main-thread request named no lowered function.
+    #[error("main-thread request in `{function}` names function {target}, which is not in the IR")]
+    UnknownMainThreadTarget {
+        /// The function containing the request.
+        function: String,
+        /// The requested target index.
+        target: u32,
+    },
     /// Internal invariant: an export's signature names a type that cannot cross
     /// the export boundary, which the frontend refuses before this runs.
     #[error(

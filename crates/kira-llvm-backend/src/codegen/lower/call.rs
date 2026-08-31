@@ -2,7 +2,7 @@
 //! the VM half of a hybrid program.
 
 use kira_ir::{IrCallee, IrExprId, IrWriteback};
-use kira_runtime_abi::NativeStateTypeId;
+use kira_runtime_abi::{MainThreadOp, NativeStateTypeId};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -22,6 +22,127 @@ struct LentTemporary {
 }
 
 impl FunctionLowering<'_, '_> {
+    /// Routes a resolved `@MainThread` call through the host event loop.
+    ///
+    /// The bridge array is an owned transfer: strings and native-value nodes
+    /// written into it belong to the main-thread runtime after this call, while
+    /// the output is decoded back into this function's native representation.
+    pub(super) fn lower_main_thread_call(
+        &mut self,
+        operation: MainThreadOp,
+        index: u32,
+        args: &[IrExprId],
+        result_ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let target =
+            self.codegen
+                .program
+                .functions
+                .get(index as usize)
+                .ok_or(LlvmError::internal(
+                    "a main-thread call to an unknown function",
+                ))?;
+        if !target.by_reference_params.is_empty() || target.param_count as usize != args.len() {
+            return Err(LlvmError::internal(
+                "a main-thread call has an invalid target signature",
+            ));
+        }
+        let param_modes: Vec<bool> = (0..args.len())
+            .map(|position| target.param_by_pointer(position as u32))
+            .collect();
+        let _ = target;
+
+        let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"main.stack.save");
+        let types = self.codegen.types;
+        let builder = self.codegen.builder;
+        // SAFETY: the builder is positioned in this live function and every
+        // element is initialized before the runtime is called.
+        let (argv, out) = unsafe {
+            let count = LLVMConstInt(types.i64, args.len() as u64, 0);
+            let argv = LLVMBuildArrayAlloca(
+                builder,
+                types.bridge_value,
+                count,
+                c"main.thread.args".as_ptr(),
+            );
+            for (slot, (&argument, borrowed)) in args.iter().zip(&param_modes).enumerate() {
+                let value = if *borrowed {
+                    self.lower_borrowed_expr(argument)?
+                } else {
+                    self.lower_expr(argument)?
+                };
+                let mut offset = [LLVMConstInt(types.i32, slot as u64, 0)];
+                let element = LLVMBuildInBoundsGEP2(
+                    builder,
+                    types.bridge_value,
+                    argv,
+                    offset.as_mut_ptr(),
+                    1,
+                    c"main.thread.arg".as_ptr(),
+                );
+                self.codegen
+                    .write_bridge_value(element, value, self.type_of(argument))?;
+            }
+            let out = LLVMBuildAlloca(builder, types.bridge_value, c"main.thread.out".as_ptr());
+            (argv, out)
+        };
+        let operation_value = self.codegen.const_int(i64::from(operation.as_byte()));
+        // SAFETY: both integer type handles belong to the live LLVM context.
+        let (function, count) = unsafe {
+            (
+                LLVMConstInt(types.i32, u64::from(index), 0),
+                LLVMConstInt(types.i32, args.len() as u64, 0),
+            )
+        };
+        self.call(
+            self.codegen.runtime.main_thread_call,
+            &mut [operation_value, function, argv, count, out],
+            c"main.thread.call",
+        );
+
+        let value = match operation {
+            // SAFETY: `i1` belongs to the live LLVM context.
+            MainThreadOp::Post | MainThreadOp::LifecycleStart => unsafe {
+                LLVMConstInt(types.i1, 0, 0)
+            },
+            // SAFETY: `i1` belongs to the live LLVM context.
+            MainThreadOp::Invoke if result_ty == Type::Void => unsafe {
+                LLVMConstInt(types.i1, 0, 0)
+            },
+            MainThreadOp::Invoke => self.codegen.read_bridge_payload(out, result_ty)?,
+            MainThreadOp::Spawn => self.codegen.read_bridge_payload(out, result_ty)?,
+        };
+        self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
+        Ok(value)
+    }
+
+    /// Joins a `MainThread.spawn` handle and decodes its typed result.
+    pub(super) fn lower_main_thread_join(
+        &mut self,
+        handle: IrExprId,
+        result_ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"main.join.save");
+        let value = self.lower_expr(handle)?;
+        // SAFETY: the builder is positioned in a live block and the allocated
+        // type belongs to the same LLVM context.
+        let out = unsafe {
+            LLVMBuildAlloca(
+                self.codegen.builder,
+                self.codegen.types.bridge_value,
+                c"main.join.out".as_ptr(),
+            )
+        };
+        self.call(
+            self.codegen.runtime.main_thread_join,
+            &mut [value, out],
+            c"main.thread.join",
+        );
+        let result = self.codegen.read_bridge_payload(out, result_ty)?;
+        self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
+        Ok(result)
+    }
+
     /// Lowers a call to `print` or a user function.
     ///
     /// `writebacks` is non-empty only for a call whose callee writes through one
@@ -86,6 +207,7 @@ impl FunctionLowering<'_, '_> {
                     | Type::CBlock
                     | Type::NativeState(_)
                     | Type::Task(_)
+                    | Type::MainThreadTask(_)
                     | Type::Cell(_) => {
                         return Err(LlvmError::internal("a print of a raw pointer"));
                     }

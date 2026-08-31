@@ -391,6 +391,7 @@ impl Analyzer<'_> {
                 locals: ctx.locals,
                 body,
                 is_main: false,
+                is_main_thread: false,
                 is_async: false,
                 // The engine the reference was written on, exactly as a closure
                 // literal takes it in `lift_closure`. A wrapper is not a function

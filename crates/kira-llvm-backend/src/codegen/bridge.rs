@@ -82,7 +82,12 @@ fn bridge_tag_of(
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
-        Type::CString | Type::CBlock | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+        Type::CString
+        | Type::CBlock
+        | Type::NativeState(_)
+        | Type::Task(_)
+        | Type::MainThreadTask(_)
+        | Type::Cell(_) => {
             return Err(LlvmError::internal(
                 "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
             ));
@@ -163,6 +168,7 @@ impl Codegen<'_> {
                     self.decode_native_state_value(node, ty)?
                 }
                 Type::RawPtr | Type::ForeignPtr(_) => payload,
+                Type::MainThreadTask(_) => payload,
                 Type::CString
                 | Type::CBlock
                 | Type::NativeState(_)
@@ -281,6 +287,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![ret],
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Native,
             mutates_self: false,
@@ -319,6 +326,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![main_return],
             is_main: true,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Runtime,
             mutates_self: false,
@@ -335,6 +343,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![unused_return],
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Native,
             mutates_self: false,

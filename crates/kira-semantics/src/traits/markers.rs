@@ -292,7 +292,9 @@ impl Analyzer<'_> {
             ),
             // A row index in an executor's table, which is per-thread on native and
             // per-instance on the VM.
-            Type::Task(_) => Some("is a row in the executor's table, which no other thread has"),
+            Type::Task(_) | Type::MainThreadTask(_) => {
+                Some("is a row in an executor's table, which no other thread has")
+            }
             // Uniquely owned foreign storage a `retains:` parameter may hand away.
             // One owner may move it; a second concurrent holder would be a second
             // owner of storage the foreign side may already have freed.

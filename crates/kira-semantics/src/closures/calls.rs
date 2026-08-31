@@ -240,6 +240,7 @@ impl Analyzer<'_> {
                     locals: Vec::new(),
                     body: Vec::new(),
                     is_main: false,
+                    is_main_thread: false,
                     is_async: false,
                     execution: kira_semantics_model::Execution::Inherited,
                     mutates_self: false,
@@ -497,6 +498,7 @@ impl Analyzer<'_> {
             | Type::CBlock
             | Type::Any
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::NativeState(_) => HirExpr::Int(0),
         };
         Some(self.program.exprs.alloc(node))
@@ -560,6 +562,7 @@ impl Analyzer<'_> {
                 locals: Vec::new(),
                 body: Vec::new(),
                 is_main: false,
+                is_main_thread: false,
                 is_async: false,
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self: false,
@@ -649,6 +652,7 @@ impl Analyzer<'_> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution,
             mutates_self: false,

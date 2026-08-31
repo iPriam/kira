@@ -139,6 +139,13 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, *operand, found);
             }
         }
+        IrExpr::MainThreadCall { function, args, .. } => {
+            found.insert(*function);
+            for arg in args {
+                walk_expr(program, *arg, found);
+            }
+        }
+        IrExpr::MainThreadJoin { handle, .. } => walk_expr(program, *handle, found),
         IrExpr::ArrayLen { array } => walk_expr(program, *array, found),
         IrExpr::StringLen { text } => walk_expr(program, *text, found),
         IrExpr::StringOf { value } => walk_expr(program, *value, found),

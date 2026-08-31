@@ -11,8 +11,8 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MathOp, PathStep, PlacePath, StringOp,
-    TaskPrim, WritebackTarget, opcode as o, step_tag,
+    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MainThreadOp, MathOp, PathStep,
+    PlacePath, StringOp, TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.
@@ -208,6 +208,18 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::TASK_OP);
             out.push(prim.as_byte());
         }
+        Instruction::MainThreadCall {
+            operation,
+            function,
+            args,
+        } => {
+            out.push(o::MAIN_THREAD_CALL);
+            out.push(operation.as_byte());
+            out.extend_from_slice(&function.to_le_bytes());
+            out.extend_from_slice(&args.to_le_bytes());
+        }
+        Instruction::MainThreadJoin => out.push(o::MAIN_THREAD_JOIN),
+        Instruction::MainThreadLifecycle => out.push(o::MAIN_THREAD_LIFECYCLE),
         Instruction::CStringNew => out.push(o::CSTRING_NEW),
         Instruction::CLayoutAddress(aggregate) => {
             out.push(o::CLAYOUT_ADDRESS);
@@ -571,6 +583,21 @@ impl Cursor<'_> {
                 })?;
                 Instruction::TaskOp(prim)
             }
+            o::MAIN_THREAD_CALL => {
+                let operation_offset = self.offset;
+                let [operation] = self.take::<1>()?;
+                let operation =
+                    MainThreadOp::from_byte(operation).ok_or(DecodeError::UnknownOpcode {
+                        opcode: operation,
+                        offset: operation_offset,
+                    })?;
+                Instruction::MainThreadCall {
+                    operation,
+                    function: self.read_word(legacy)?,
+                    args: self.read_word(legacy)?,
+                }
+            }
+            o::MAIN_THREAD_JOIN => Instruction::MainThreadJoin,
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
@@ -683,6 +710,7 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,
         o::RETURN_VOID => Instruction::ReturnVoid,
+        o::MAIN_THREAD_LIFECYCLE => Instruction::MainThreadLifecycle,
         _ => return None,
     })
 }

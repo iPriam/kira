@@ -36,6 +36,17 @@ pub enum ModuleValidateError {
         /// The offending function's name.
         function: String,
     },
+    /// The lifecycle marker was not instruction zero of the entrypoint.
+    #[error(
+        "main-thread lifecycle marker appears in function `{function}` at instruction \
+         {instruction}; it is valid only at instruction 0 of the module entrypoint"
+    )]
+    MisplacedMainThreadLifecycle {
+        /// The function carrying the misplaced marker.
+        function: String,
+        /// The marker's instruction index.
+        instruction: usize,
+    },
     /// A function has no instructions at all.
     #[error("function `{function}` has empty code")]
     EmptyCode {
@@ -238,7 +249,7 @@ impl Module {
                 }
             }
         }
-        for function in &self.functions {
+        for function in self.functions.iter() {
             if usize::try_from(function.local_count).is_err() {
                 return Err(ModuleValidateError::LocalCountTooLarge {
                     function: function.name.clone(),
@@ -279,7 +290,8 @@ impl Module {
             // It still has to be well-formed: a signature to marshal against,
             // and nothing pretending to be a body.
             if function.is_native() {
-                if !function.code.is_empty() {
+                let lifecycle_stub = function.code.as_slice() == [Instruction::MainThreadLifecycle];
+                if !function.code.is_empty() && !lifecycle_stub {
                     return Err(ModuleValidateError::NativeWithCode {
                         function: function.name.clone(),
                     });
@@ -301,6 +313,12 @@ impl Module {
             }
             let code_len = function.code.len() as u64;
             for (index, instruction) in function.code.iter().enumerate() {
+                if matches!(instruction, Instruction::MainThreadLifecycle) && index != 0 {
+                    return Err(ModuleValidateError::MisplacedMainThreadLifecycle {
+                        function: function.name.clone(),
+                        instruction: index,
+                    });
+                }
                 let in_range = match instruction {
                     Instruction::ConstStr(string) => usize::try_from(*string)
                         .ok()
@@ -355,6 +373,10 @@ impl Module {
                     // an index into this module's table, so there is nothing
                     // here to bound it against.
                     Instruction::CallNative(_) => true,
+                    Instruction::MainThreadCall { function, args, .. } => {
+                        function_at(&self.functions, *function)
+                            .is_some_and(|callee| *args == callee.param_count)
+                    }
                     // Its native mirror is bounded only where this module can
                     // bound it: each target's caller slot roots a place in
                     // *this* frame. The `param` is not checked against a callee
@@ -502,6 +524,40 @@ mod tests {
             main: Some(main),
             strings,
         }
+    }
+
+    #[test]
+    fn lifecycle_marker_is_valid_only_at_entry_instruction_zero() {
+        let valid = module_of(
+            vec![func(
+                "main",
+                0,
+                0,
+                vec![Instruction::MainThreadLifecycle, Instruction::ReturnVoid],
+            )],
+            0,
+            vec![],
+        );
+        assert_eq!(valid.validate(), Ok(()));
+
+        let misplaced = module_of(
+            vec![func(
+                "main",
+                0,
+                0,
+                vec![
+                    Instruction::ConstVoid,
+                    Instruction::MainThreadLifecycle,
+                    Instruction::ReturnVoid,
+                ],
+            )],
+            0,
+            vec![],
+        );
+        assert!(matches!(
+            misplaced.validate(),
+            Err(ModuleValidateError::MisplacedMainThreadLifecycle { instruction: 1, .. })
+        ));
     }
 
     #[test]

@@ -94,7 +94,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }
-redb = "4.1"
 bytes = "1"
 futures-util = "0.3"
 h3 = "0.0.8"
@@ -159,4 +158,3 @@ opt-level = 3
 
 [profile.dev.package.kira-runtime-abi]
 opt-level = 3
-

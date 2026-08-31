@@ -375,7 +375,7 @@ impl RunnerHost for BundleHost {
                 // traps the moment an app boxes state for a native callback —
                 // which every UI app does, on its first frame.
                 let mut host = NativeStateHost::new(StdoutHost);
-                program.run(&mut host)?;
+                kira_vm_runtime::execute_with_main_thread(program.module(), &mut host)?;
                 Ok(())
             }
             Staged::VmForeignLinked { session } => {

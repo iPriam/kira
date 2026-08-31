@@ -275,9 +275,11 @@ impl DebugBuilder {
             Type::Int(_) => ("Int", 64, 0x05),
             Type::Float(_) => ("Float", 64, 0x04),
             Type::Bool => ("Bool", 1, 0x02),
-            Type::RawPtr | Type::ForeignPtr(_) | Type::NativeState(_) | Type::Task(_) => {
-                ("Pointer", 64, 0x01)
-            }
+            Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::NativeState(_)
+            | Type::Task(_)
+            | Type::MainThreadTask(_) => ("Pointer", 64, 0x01),
             Type::String
             | Type::Array(_)
             | Type::Enum(_)

@@ -372,6 +372,7 @@ impl Analyzer<'_> {
             | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::Any => false,
         };
         visiting.remove(&ty);

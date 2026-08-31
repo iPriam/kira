@@ -8,8 +8,8 @@
 
 use kira_bytecode::ModuleValidateError;
 use kira_runtime_abi::{
-    CompilerError, FileSystemError, ForeignCallError, ForeignTypeSpec, NativeCallError,
-    NativeStateError,
+    CompilerError, FileSystemError, ForeignCallError, ForeignTypeSpec, MainThreadError,
+    NativeCallError, NativeStateError,
 };
 
 /// A trap raised while executing bytecode.
@@ -18,6 +18,13 @@ pub enum VmError {
     /// The module failed structural validation before execution began.
     #[error("invalid module: {0}")]
     Module(#[from] ModuleValidateError),
+    /// A run that owns its thread suspended, which only a sliced run may do.
+    ///
+    /// Reported rather than ignored because a suspended run has live frames:
+    /// treating it as finished would hand back a value the program never
+    /// produced.
+    #[error("a run with no instruction budget suspended")]
+    UnexpectedSuspend,
     /// Execution was asked to run a module that carries no entrypoint.
     ///
     /// A library module is well-formed and validates cleanly; it simply has
@@ -107,6 +114,26 @@ pub enum VmError {
     /// only if its embedder hands it one.
     #[error("compiler operation failed: {0}")]
     Compiler(CompilerError),
+    /// A main-thread request could not be serviced by the host event loop.
+    #[error("main-thread operation failed: {0}")]
+    MainThread(#[from] MainThreadError),
+    /// The host answered a main-thread operation with a response shape that
+    /// does not match the instruction that requested it.
+    #[error("main-thread operation `{operation}` received an incompatible response")]
+    MainThreadResponse {
+        /// The operation whose response was invalid.
+        operation: &'static str,
+    },
+    /// A value could not be represented in the owned tree used between the
+    /// helper and main-thread contexts.
+    #[error("function {function} returned a value that cannot cross the main-thread boundary")]
+    MainThreadValue {
+        /// The target function involved in the request.
+        function: u64,
+    },
+    /// A join instruction found a value that was not a main-thread task handle.
+    #[error("main-thread join expected a main-thread task handle")]
+    MainThreadHandleMismatch,
     /// A Kira array held more elements than the inline C array of a
     /// `@FFI.Array` member reserves.
     ///

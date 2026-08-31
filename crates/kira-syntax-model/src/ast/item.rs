@@ -583,6 +583,10 @@ pub struct Function {
     pub type_params: Vec<TypeParamDecl>,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
+    /// Whether the declaration carried the `@MainThreadLifecycle` annotation.
+    pub is_main_thread_lifecycle: bool,
+    /// Whether the declaration carried the `@MainThread` annotation.
+    pub is_main_thread: bool,
     /// Whether the declaration was written `async function`.
     ///
     /// `async` is contextual, not a keyword: it is an ordinary identifier

@@ -67,6 +67,7 @@ impl<'a> Codegen<'a> {
             reachable,
             exports: exports.clone(),
             engines,
+            lifecycle_functions: crate::reachability::lifecycle_functions(program),
             drop_glue: program
                 .types
                 .structs()
@@ -227,6 +228,20 @@ impl<'a> Codegen<'a> {
             }
             self.lower_function(index, function)?;
         }
+        // A main-thread target needs a bridge-shaped entry even when no hybrid
+        // host is involved. In a split native build the target's owning unit
+        // emits the body and the first unit's dispatcher links to this symbol;
+        // in a whole module both happen here.
+        for (index, function) in program.functions.iter().enumerate() {
+            if function.is_main_thread
+                && self.engine_of(index) == Execution::Native
+                && self.carries_body(index)
+                && self.reachable.get(index).copied().unwrap_or(false)
+                && self.unit.owns(index)
+            {
+                self.lower_trampoline(index, function)?;
+            }
+        }
         // One module owns the callback thunks. A later codegen unit keeps only
         // declarations, so callback addresses remain unique in a split build.
         if self.unit.is_first() {
@@ -250,8 +265,11 @@ impl<'a> Codegen<'a> {
             ModuleKind::Library => self.lower_export_surface(),
             // A hybrid library is entered by its host, one call at a time.
             ModuleKind::HybridLibrary => {
+                self.lower_main_thread_dispatcher()?;
+                self.lower_main_thread_lifecycle_resolver()?;
                 for (index, function) in program.functions.iter().enumerate() {
                     if self.engine_of(index) == Execution::Native
+                        && !function.is_main_thread
                         && self.reachable.get(index).copied().unwrap_or(false)
                         && self.unit.owns(index)
                     {
@@ -372,6 +390,7 @@ impl<'a> Codegen<'a> {
             | Type::NativeState(_)
             | Type::CString
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::CBlock => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self

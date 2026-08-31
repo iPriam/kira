@@ -26,6 +26,7 @@ pub mod erased;
 pub mod execution;
 pub mod file_system;
 pub mod foreign;
+pub mod main_thread;
 pub mod math_op;
 pub mod native_state;
 pub mod ownership;
@@ -71,6 +72,7 @@ pub fn foreign_adapter_name(index: usize) -> String {
 pub fn foreign_callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
 }
+pub use main_thread::*;
 pub use math_op::MathOp;
 pub use native_state::{
     CBlockOffset, NativeCBlock, NativeCBlockChild, NativeCBlockError, NativeCell, NativeStateError,
@@ -101,7 +103,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 11;
+pub const RUNTIME_ABI_VERSION: u32 = 13;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -133,7 +135,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_11";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_13";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -206,6 +208,16 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_native_value_cblock_from_handle",
     "kira_rt_native_value_cblock_to_handle",
     "kira_rt_cblock_release_retained",
+    "kira_rt_main_thread_call",
+    "kira_rt_main_thread_join",
+    "kira_rt_main_thread_run",
+    "kira_rt_main_thread_install_dispatcher",
+    "kira_main_thread_dispatch",
+    "kira_rt_main_thread_install_lifecycle_resolver",
+    "kira_main_thread_lifecycle_resolve",
+    "kira_rt_main_thread_lifecycle_start_local",
+    "kira_rt_main_thread_lifecycle_pump_local",
+    "kira_rt_main_thread_lifecycle_reset_local",
 ];
 
 /// An argument the VM hands to a native function.
@@ -390,6 +402,29 @@ pub trait HostCapabilities {
     ) -> Result<NativeReturn, NativeCallError> {
         let _ = (function_id, args);
         Err(NativeCallError::NoNativeHalf)
+    }
+
+    /// Services one request on the host's main-thread event loop.
+    ///
+    /// The default refuses because a portable VM host may not have a process
+    /// main thread at all. An application runner installs the capability and
+    /// owns the loop; the VM only supplies the copied request.
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        let _ = request;
+        Err(MainThreadError::NoHost)
+    }
+
+    /// Joins a task previously returned by [`Self::main_thread`] with
+    /// [`MainThreadOp::Spawn`].
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        let _ = handle;
+        Err(MainThreadError::NoHost)
     }
 
     /// Runs the generated adapter for `foreign_id`.

@@ -174,6 +174,7 @@ impl TypeTable {
             | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::Any => {
                 return None;
             }
@@ -291,6 +292,7 @@ impl TypeTable {
             | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::Any => mix_native_state_bytes(hash, b"unsupported"),
         }
     }
@@ -319,6 +321,9 @@ impl TypeTable {
                 None => "<unknown native state>".to_owned(),
             },
             Type::Task(result) => format!("Task<{}>", result.label()),
+            Type::MainThreadTask(result) => {
+                format!("MainThreadTask<{}>", self.type_name(result.value_type()))
+            }
             Type::Error => "<error>".to_owned(),
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.name.clone(),

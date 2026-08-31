@@ -53,6 +53,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![print_stmt, return_stmt],
             is_main: true,
+            is_main_thread: false,
             is_async: false,
             execution: kira_runtime_abi::Execution::Inherited,
             mutates_self: false,

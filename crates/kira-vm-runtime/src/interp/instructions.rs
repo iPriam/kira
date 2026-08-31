@@ -34,6 +34,7 @@ impl Vm<'_> {
             | Value::RawPtr(_)
             | Value::NativeState(_)
             | Value::NativeView { .. }
+            | Value::MainThreadTask(_)
             | Value::Void => self.stack.push(value),
             _ => self.stack.push(self.heap.copy_value(value)),
         }
@@ -60,6 +61,7 @@ impl Vm<'_> {
             | Value::RawPtr(_)
             | Value::NativeState(_)
             | Value::NativeView { .. }
+            | Value::MainThreadTask(_)
             | Value::Void => self.stack.push(value),
             _ => self.stack.push(self.heap.copy_value(value)),
         }
@@ -315,6 +317,13 @@ impl Vm<'_> {
                 let answer = self.tasks.perform(*prim, first, second, third)?;
                 self.stack.push(Value::Int(answer));
             }
+            Instruction::MainThreadCall {
+                operation,
+                function,
+                args,
+            } => self.main_thread_call(*operation, *function, *args)?,
+            Instruction::MainThreadJoin => self.main_thread_join()?,
+            Instruction::MainThreadLifecycle => {}
             Instruction::ArrayGetLocal(slot) => self.array_get_local(frame, *slot)?,
             Instruction::ArrayLen => self.array_len()?,
             Instruction::StringLen => {

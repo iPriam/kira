@@ -19,6 +19,12 @@
  * lexer. They are written as literals here, which tree-sitter's keyword
  * extraction resolves per parse state, so a binding named `handle` still parses
  * everywhere the `attempt … handle` clause is not expected.
+ *
+ * `MainThread.invoke { … }`, `MainThread.spawn { … }`, and `MainThread.post
+ * { … }` are explicit capability calls with a trailing content block. They
+ * have their own node so editor tooling does not mistake the namespace for a
+ * struct literal, even though the compiler's general postfix parser stores
+ * the same source shape as a method call with children.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />
@@ -812,6 +818,7 @@ module.exports = grammar({
         $.try_expression,
         $.call_expression,
         $.method_call_expression,
+        $.main_thread_operation,
         $.construction_expression,
         $.trailing_closure_expression,
         $.macro_invocation,
@@ -943,6 +950,21 @@ module.exports = grammar({
           '.',
           field('method', $.identifier),
           field('arguments', $.arguments),
+        ),
+      ),
+
+    // The compiler recognizes these three no-parentheses calls before the
+    // general content-block construction rule. Keep the operation list closed
+    // so a typo falls through to an ordinary expression and gets an editor
+    // error instead of a false capability node.
+    main_thread_operation: ($) =>
+      prec(
+        PREC.postfix + 1,
+        seq(
+          field('namespace', alias('MainThread', $.identifier)),
+          '.',
+          field('operation', choice('invoke', 'spawn', 'post')),
+          field('body', $.content_block),
         ),
       ),
 

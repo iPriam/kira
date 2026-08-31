@@ -58,6 +58,13 @@ pub struct HirProgram {
     pub types: TypeTable,
     /// The index of the `@Main` entrypoint, when the program has a valid one.
     pub main: Option<FuncId>,
+    /// Every `@MainThreadLifecycle` function, in declaration order.
+    ///
+    /// Independent of [`HirProgram::main`]: the entrypoint runs on the
+    /// application thread while these run on the process main thread. A
+    /// program may declare several, so one thread can carry a graphics loop, a
+    /// UI loop, and dispatched `@MainThread` tasks together.
+    pub main_thread_lifecycles: Vec<FuncId>,
     /// The `@Export` surface, in declaration order.
     ///
     /// Empty for an application and for a library that exports nothing. Only
@@ -224,6 +231,11 @@ pub struct HirFunction {
     pub body: Vec<HirStmtId>,
     /// Whether this is the `@Main` entrypoint.
     pub is_main: bool,
+    /// Whether this function is an entrypoint for the host main-thread loop.
+    ///
+    /// `@MainThread` does not make a function run by itself. It marks a callable
+    /// that may be reached through `MainThread.invoke`, `spawn`, or `post`.
+    pub is_main_thread: bool,
     /// Whether the declaration was written `async function`.
     ///
     /// An `async` body is an ordinary body when it is *called*: the marker says

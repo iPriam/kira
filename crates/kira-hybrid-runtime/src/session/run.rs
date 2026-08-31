@@ -11,6 +11,16 @@
 use super::callback::ffi_callback_entry;
 use super::*;
 
+use kira_runtime_abi::MainThreadError;
+use kira_vm_runtime::MainThreadRunner;
+use std::sync::OnceLock;
+
+static NATIVE_ENTRY_CONTEXT: OnceLock<Mutex<Option<(usize, u32)>>> = OnceLock::new();
+
+fn native_entry_context() -> &'static Mutex<Option<(usize, u32)>> {
+    NATIVE_ENTRY_CONTEXT.get_or_init(|| Mutex::new(None))
+}
+
 /// The deepest native-state aggregate the seam will walk.
 ///
 /// Chosen far above any shape a real program returns and far below what would
@@ -49,35 +59,32 @@ impl Session {
             .manifest
             .entry_function()
             .ok_or(HybridError::NoEntrypoint)?;
+        let (program, _, _) = self.current_program();
 
         match entry.execution {
-            Execution::Native => {
-                let trampoline = self.library.trampoline(entry.id).ok_or_else(|| {
-                    HybridError::Mismatch(format!(
-                        "the entrypoint `{}` is native but bound no trampoline",
-                        entry.name,
-                    ))
-                })?;
-                // SAFETY: the trampoline is this library's, and validation
-                // proved the entrypoint takes no parameters, so an empty
-                // argument array is its signature.
-                let out = unsafe { self.library.call(trampoline, &mut []) };
-                // SAFETY: `out` is what the trampoline just wrote, and its
-                // string handle (if any) is unfreed.
-                unsafe { marshal::lift_result(&self.library, out) }.map_err(|error| {
-                    HybridError::Mismatch(format!(
-                        "the entrypoint `{}` returned a value this runtime cannot read: {error}",
-                        entry.name,
-                    ))
-                })?;
-                Ok(())
-            }
+            Execution::Native => run_native_entry(self, entry.id, &entry.name),
             _ => {
+                self.library.install_main_thread_dispatcher();
+                self.library.reset_main_thread_lifecycles();
                 let mut host = Host { session: self };
-                let (program, _, _) = self.current_program();
                 let result = match observer {
-                    Some(observer) => program.run_with_debug(&mut host, observer),
-                    None => program.run(&mut host),
+                    Some(observer) => {
+                        let runner = HybridMainThreadRunner { session: self };
+                        kira_vm_runtime::execute_with_main_thread_using_debug(
+                            program.module(),
+                            &mut host,
+                            runner,
+                            observer,
+                        )
+                    }
+                    None => {
+                        let runner = HybridMainThreadRunner { session: self };
+                        kira_vm_runtime::execute_with_main_thread_using(
+                            program.module(),
+                            &mut host,
+                            runner,
+                        )
+                    }
                 };
                 result.map(|_| ()).map_err(HybridError::Trap)
             }
@@ -302,6 +309,186 @@ impl Session {
         *slot = Some(closure);
         Ok(address)
     }
+}
+
+/// Runs a native entry through the native image's helper-thread/main-thread
+/// runtime.
+fn run_native_entry(session: &Session, function: u32, name: &str) -> Result<(), HybridError> {
+    let context = native_entry_context();
+    {
+        let mut slot = context.lock().unwrap_or_else(|held| held.into_inner());
+        if slot.is_some() {
+            return Err(HybridError::Mismatch(
+                "another native hybrid entry is already running".to_owned(),
+            ));
+        }
+        *slot = Some((ptr::from_ref(session) as usize, function));
+    }
+    // The entrypoint always runs on the application thread: a
+    // `@MainThreadLifecycle` function owns the main thread separately, so the
+    // dispatcher is installed either way.
+    session.library.install_main_thread_dispatcher();
+    let code = session.library.run_main_thread(native_entry_helper);
+    *context.lock().unwrap_or_else(|held| held.into_inner()) = None;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(HybridError::Mismatch(format!(
+            "native entrypoint `{name}` returned status {code}"
+        )))
+    }
+}
+
+/// The no-argument helper the native runtime invokes on its worker thread.
+extern "C" fn native_entry_helper() -> i32 {
+    let Some((session, function)) = native_entry_context()
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .as_ref()
+        .copied()
+    else {
+        fatal("native hybrid entry started without a session context");
+    };
+    // SAFETY: `run_native_entry` stores this pointer only while it owns the
+    // active `Session` borrow, and the native runtime joins this helper before
+    // that function clears the context.
+    let session = unsafe { &*(session as *const Session) };
+    let _active = ActiveSession::bind(session);
+    let Some(trampoline) = session.library.trampoline(function) else {
+        fatal(&format!(
+            "the native entrypoint {function} has no bound trampoline"
+        ));
+    };
+    // SAFETY: the trampoline is the loaded image's generated entry and the
+    // manifest validated that the entry has no parameters.
+    let out = unsafe { session.library.call(trampoline, &mut []) };
+    // SAFETY: the output belongs to this native call and any owned string or
+    // value node is consumed by `lift_result`.
+    if let Err(error) = unsafe { marshal::lift_result(&session.library, out) } {
+        fatal(&format!(
+            "native entry returned an unreadable value: {error}"
+        ));
+    }
+    0
+}
+
+/// Dispatches a main-thread request to either the native half or the current
+/// VM half of a hybrid session.
+struct HybridMainThreadRunner<'a> {
+    session: &'a Session,
+}
+
+impl MainThreadRunner for HybridMainThreadRunner<'_> {
+    fn call(
+        &self,
+        host: &mut dyn HostCapabilities,
+        function: u32,
+        args: &[NativeStateValue],
+    ) -> Result<Option<NativeStateValue>, MainThreadError> {
+        let entry = self
+            .session
+            .manifest
+            .functions
+            .get(function as usize)
+            .ok_or(MainThreadError::UnknownFunction(function))?;
+        match entry.execution {
+            Execution::Runtime => {
+                let (program, _, _) = self.session.current_program();
+                program
+                    .call_state(host, function, args)
+                    .map_err(|error| MainThreadError::Function(error.to_string()))
+            }
+            Execution::Native => {
+                let owned = args
+                    .iter()
+                    .map(owned_main_thread_arg)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let borrowed: Vec<NativeArg<'_>> = owned.iter().map(OwnedArg::borrow).collect();
+                let _active = ActiveSession::bind(self.session);
+                let returned = self
+                    .session
+                    .call_native(function, &borrowed)
+                    .map_err(|error| MainThreadError::Function(error.to_string()))?;
+                native_result_state(returned.result)
+            }
+            Execution::Inherited => Err(MainThreadError::Function(
+                "hybrid manifest left a function's execution engine inherited".to_owned(),
+            )),
+        }
+    }
+
+    fn start_lifecycle(&self, function: u32) -> Result<bool, MainThreadError> {
+        let entry = self
+            .session
+            .manifest
+            .functions
+            .get(function as usize)
+            .ok_or(MainThreadError::UnknownFunction(function))?;
+        if entry.execution != Execution::Native {
+            return Ok(false);
+        }
+        if self.session.library.start_main_thread_lifecycle(function) {
+            Ok(true)
+        } else {
+            Err(MainThreadError::UnknownFunction(function))
+        }
+    }
+
+    fn pump_lifecycles(&self, budget: u64) -> Result<bool, MainThreadError> {
+        Ok(self.session.library.pump_main_thread_lifecycles(budget))
+    }
+
+    fn reset_lifecycles(&self) {
+        self.session.library.reset_main_thread_lifecycles();
+    }
+}
+
+/// Converts one owned state tree into the VM/native argument vocabulary.
+fn owned_main_thread_arg(value: &NativeStateValue) -> Result<OwnedArg, MainThreadError> {
+    Ok(match value {
+        NativeStateValue::Int(value) => OwnedArg::Int(*value),
+        NativeStateValue::Float(value) => OwnedArg::Float(*value),
+        NativeStateValue::Bool(value) => OwnedArg::Bool(*value),
+        NativeStateValue::String(value) => OwnedArg::Str(value.clone()),
+        NativeStateValue::RawPtr(value) => OwnedArg::RawPtr(*value),
+        NativeStateValue::Enum { tag, payload: None } => OwnedArg::Enum(i64::from(*tag)),
+        NativeStateValue::Struct(_)
+        | NativeStateValue::Array(_)
+        | NativeStateValue::Enum {
+            payload: Some(_), ..
+        }
+        | NativeStateValue::Any { .. }
+        | NativeStateValue::CBlock(_) => OwnedArg::Aggregate(value.clone()),
+        NativeStateValue::Cell(_) => {
+            return Err(MainThreadError::Function(
+                "a captured cell cannot cross the main-thread boundary".to_owned(),
+            ));
+        }
+    })
+}
+
+/// Converts a native target's owned result into the main-thread runner tree.
+fn native_result_state(value: NativeResult) -> Result<Option<NativeStateValue>, MainThreadError> {
+    Ok(match value {
+        NativeResult::Void => None,
+        NativeResult::Int(value) => Some(NativeStateValue::Int(value)),
+        NativeResult::Float(value) => Some(NativeStateValue::Float(value)),
+        NativeResult::Bool(value) => Some(NativeStateValue::Bool(value)),
+        NativeResult::Str(value) => Some(NativeStateValue::String(value)),
+        NativeResult::RawPtr(value) => Some(NativeStateValue::RawPtr(value)),
+        NativeResult::Enum(value) => Some(NativeStateValue::enum_of(
+            u32::try_from(value).map_err(|_| {
+                MainThreadError::Function("native enum tag is too large".to_owned())
+            })?,
+            None,
+        )),
+        NativeResult::Aggregate(value) => Some(value),
+        NativeResult::Handle(_) => {
+            return Err(MainThreadError::Function(
+                "an opaque native handle cannot cross the main-thread runner".to_owned(),
+            ));
+        }
+    })
 }
 
 /// Gives every hybrid run a fresh native task table, then clears it again.

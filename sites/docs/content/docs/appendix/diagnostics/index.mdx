@@ -58,7 +58,9 @@ These are the ones that come up most often while learning the language. Each is 
 | `KPAR075` | A bare `self` receiver. |
 | `KPAR077` / `KPAR078` | A construct parameter list with no `extends`, or a declaration naming two families. |
 | `KSEM003` | A duplicate declaration. |
-| `KSEM011` / `KSEM255` | No `@Main` in an application, or one in a library. |
+| `KSEM011` / `KSEM255` | No `@Main` entrypoint in an application, or an entrypoint in a library. |
+| `KSEM339` | One function carries both entry lifecycle annotations. |
+| `KSEM341` / `KSEM344` | A `@MainThreadLifecycle` function takes parameters or returns a value. |
 | `KSEM027` / `KSEM032` | A namespace root this file did not import, or an import naming no readable file. |
 | `KSEM052` | A by-value struct cycle. |
 | `KSEM062` | A missing argument for a parameter with no default. |
@@ -83,6 +85,7 @@ These are the ones that come up most often while learning the language. Each is 
 | `KSEM288`–`KSEM298` | The trait rules. |
 | `KSEM300`–`KSEM307` | The `Drop` rules. |
 | `KSEM308`–`KSEM312` | Supertraits, `Send`, `Sync`, and the task boundary. |
+| `KSEM330`–`KSEM344` | Main-thread affinity, request shape, value transfer, lifecycle signatures, task joins, and WebAssembly refusal. |
 | `KIR005` | `@Derive(Copy)` on a type that moves. |
 | `KPK025` | A `*_types.kira` file outside `bind-types/`. |
 | `KPK041` | A generated binding adopted as package source because it carries no stamp. |

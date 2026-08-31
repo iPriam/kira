@@ -283,6 +283,7 @@ impl Analyzer<'_> {
             | Type::CBlock
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::Cell(_) => {
                 self.emit(
                     span,

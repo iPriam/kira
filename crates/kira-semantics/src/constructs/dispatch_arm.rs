@@ -87,6 +87,7 @@ impl Analyzer<'_> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self,

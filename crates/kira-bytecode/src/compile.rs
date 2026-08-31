@@ -16,6 +16,7 @@ use kira_ir::{IrBinOp, IrProgram, IrUnOp};
 mod error;
 mod expression;
 mod function;
+mod main_thread;
 mod widen;
 
 pub use error::CompileError;
@@ -77,12 +78,16 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
     let plans = kira_ir::mid::plan(program, VM_LENDING)?;
     for (index, function) in program.functions.iter().enumerate() {
         let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
+        let lifecycle_entry = program.main_thread_lifecycles.contains(&(index as u32));
         let param_count = u64::from(function.param_count);
         let local_count = u64::from(function.local_count());
         // A native function's body is not ours to emit; it is compiled into the
         // shared library instead.
         let code = if execution == Execution::Native {
-            Vec::new()
+            lifecycle_entry
+                .then_some(Instruction::MainThreadLifecycle)
+                .into_iter()
+                .collect()
         } else {
             let mut compiler = FnCompiler {
                 program,
@@ -90,7 +95,10 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
                 function_name: &function.name,
                 strings: &mut strings,
                 engines,
-                code: Vec::new(),
+                code: lifecycle_entry
+                    .then_some(Instruction::MainThreadLifecycle)
+                    .into_iter()
+                    .collect(),
                 widens: &mut widens,
                 loops: Vec::new(),
             };

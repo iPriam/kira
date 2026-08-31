@@ -10,6 +10,8 @@ An annotation is `@Name`, optionally with a payload. Every one the compiler answ
 | Annotation | Where | Meaning |
 | --- | --- | --- |
 | `@Main` | A function | The program's entrypoint. Exactly one per application (`KSEM011`), none in a library (`KSEM255`), and it takes no parameters. |
+| `@MainThreadLifecycle` | A zero-argument `Void` function | A call starts a preserved loop on the process main thread and returns immediately. Its transitive call tree stays on that thread. Multiple instances share main-thread slices and may coexist with `@MainThread` targets. |
+| `@MainThread` | A function | The function runs on the operating-system main thread's event loop. Call it through `MainThread.invoke`, `MainThread.spawn`, or `MainThread.post`. It cannot also be `@Main` and is unavailable on WebAssembly. |
 | `@Runtime` | A function | On a hybrid build, this body stays bytecode. |
 | `@Native` | A function | On a hybrid build, this body compiles to machine code. |
 

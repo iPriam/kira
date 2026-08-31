@@ -496,6 +496,17 @@ impl FunctionLowering<'_, '_> {
         // condition is re-evaluated on each iteration as the VM does.
         unsafe { LLVMBuildBr(self.codegen.builder, test_block) };
         self.position_at(test_block);
+        if self.lifecycle {
+            // SAFETY: the runtime declaration belongs to this module and the
+            // builder is positioned on the live loop-test block.
+            unsafe {
+                self.codegen.call_runtime(
+                    self.codegen.runtime.main_thread_lifecycle_checkpoint,
+                    &mut [],
+                    c"",
+                );
+            }
+        }
         let condition = self.lower_expr(cond)?;
         // SAFETY: the test block is unterminated and `condition` is an `i1`.
         unsafe { LLVMBuildCondBr(self.codegen.builder, condition, body_block, exit_block) };

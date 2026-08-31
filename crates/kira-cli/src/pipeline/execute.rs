@@ -287,7 +287,7 @@ fn run_vm_module(
         return unsafe {
             env::with_arguments(program_arguments, || {
                 let mut host = NativeStateHost::new(StdoutHost);
-                match kira_vm_runtime::execute(&module, &mut host) {
+                match kira_vm_runtime::execute_with_main_thread(&module, &mut host) {
                     Ok(outcome) => vm_result_code(outcome.result),
                     Err(trap) => {
                         err!("kira: runtime trap: {trap}");

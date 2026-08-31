@@ -8,7 +8,9 @@
 use super::ops::{Callee, HirBinaryOp, HirUnaryOp};
 use super::{FuncId, HirPlace, HirWriteback, LocalId};
 use crate::ty::{EnumId, StructId, Type};
-use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, NativeStateTypeId};
+use kira_runtime_abi::{
+    CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, MainThreadOp, NativeStateTypeId,
+};
 use la_arena::Idx;
 
 /// Handle to a HIR expression.
@@ -604,6 +606,31 @@ pub enum HirExpr {
         /// The handle being cancelled.
         handle: HirExprId,
     },
+    /// A call routed through the host's main-thread event loop.
+    ///
+    /// The target is a named `@MainThread` function. Arguments are evaluated
+    /// on the requesting context and copied into an owned state tree before
+    /// the host sees them, so no VM heap or native local is shared between
+    /// threads.
+    MainThreadCall {
+        /// The scheduling operation requested by the source.
+        operation: MainThreadOp,
+        /// The target function.
+        function: FuncId,
+        /// The evaluated call arguments, including a method receiver when the
+        /// source used a method call.
+        args: Vec<HirExprId>,
+        /// The expression's result type. For `spawn`, this is the distinct
+        /// main-thread task handle type.
+        ty: Type,
+    },
+    /// Join a handle returned by `MainThread.spawn`.
+    MainThreadJoin {
+        /// The main-thread task handle.
+        handle: HirExprId,
+        /// The value returned by the target function.
+        ty: Type,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
 }
@@ -705,6 +732,8 @@ impl HirExpr {
             | HirExpr::Env { ty, .. }
             | HirExpr::TaskSpawn { ty, .. }
             | HirExpr::TaskJoin { ty, .. }
+            | HirExpr::MainThreadCall { ty, .. }
+            | HirExpr::MainThreadJoin { ty, .. }
             | HirExpr::CellNew { ty, .. }
             | HirExpr::CellNull { ty }
             | HirExpr::CellGet { ty, .. }

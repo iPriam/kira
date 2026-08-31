@@ -61,6 +61,7 @@ impl Analyzer<'_> {
         }
 
         let mut inner = FnCtx::new(result);
+        inner.set_main_thread(ctx.main_thread);
         // A closure body is part of the same function's text, so it boxes its
         // own `var`s against the same set of mentioned names — which is what
         // makes a `var` declared in one closure and captured by a nested one
@@ -176,6 +177,7 @@ impl Analyzer<'_> {
                 locals: inner.locals,
                 body: stmts,
                 is_main: false,
+                is_main_thread: false,
                 is_async: false,
                 execution,
                 mutates_self: false,

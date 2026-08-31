@@ -326,6 +326,44 @@ pub enum ModuleDecodeError {
 }
 
 impl Module {
+    /// Returns every `@MainThreadLifecycle` function index, in module order.
+    ///
+    /// The marker sits at instruction zero of the owning function rather than
+    /// in a header field, so a module carries it through the same append-only
+    /// code section every other body uses.
+    #[must_use]
+    pub fn main_thread_lifecycles(&self) -> Vec<u32> {
+        self.functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| {
+                function.code.first().is_some_and(|instruction| {
+                    matches!(instruction, Instruction::MainThreadLifecycle)
+                })
+            })
+            .map(|(index, _)| index as u32)
+            .collect()
+    }
+
+    /// Returns whether the module contains a main-thread boundary instruction.
+    ///
+    /// Debuggers and profilers use this to keep ordinary VM runs on their
+    /// existing thread while selecting the helper-thread entry only when the
+    /// program actually needs the process main-thread event loop.
+    #[must_use]
+    pub fn uses_main_thread(&self) -> bool {
+        self.functions.iter().any(|function| {
+            function.code.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::MainThreadCall { .. }
+                        | Instruction::MainThreadJoin
+                        | Instruction::MainThreadLifecycle
+                )
+            })
+        })
+    }
+
     /// Serializes the module to its byte format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();

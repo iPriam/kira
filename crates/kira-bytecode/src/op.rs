@@ -19,11 +19,11 @@ mod codec;
 pub(crate) use codec::decode_legacy;
 pub use codec::{DecodeError, decode, encode, encode_one};
 
-use kira_runtime_abi::ForeignType;
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
 pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
+use kira_runtime_abi::{ForeignType, MainThreadOp};
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -370,6 +370,24 @@ pub enum Instruction {
     /// is the task *table*, not the policy. Its native mirror is
     /// `kira_rt_task_op`, called with the same four numbers.
     TaskOp(TaskPrim),
+    /// Pop `args` values, request `function` on the host main-thread loop, and
+    /// push the operation's result or handle.
+    MainThreadCall {
+        /// The host operation to perform.
+        operation: MainThreadOp,
+        /// The target function index.
+        function: u64,
+        /// Number of values to take from the operand stack.
+        args: u64,
+    },
+    /// Pop a main-thread task handle, join it through the host, and push its
+    /// result.
+    MainThreadJoin,
+    /// Marks the entry function as owning the process main-thread lifecycle.
+    ///
+    /// Metadata and a runtime no-op. It must be instruction zero of the module
+    /// entrypoint and may occur nowhere else.
+    MainThreadLifecycle,
     /// Pop a string, push its length in bytes as an `Int`, and drop the string.
     ///
     /// Bytes, not characters: `charAt` and `substring` index the same units, so
@@ -887,11 +905,22 @@ mod opcode {
     /// opcode is not an ABI change. Carries a wide slot into the module's
     /// constants table.
     pub const LOAD_CONSTANT: u8 = 0x73;
+    // Main-thread event-loop operations. Appended after LOAD_CONSTANT; the
+    // operation byte is append-only in the runtime ABI.
+    pub const MAIN_THREAD_CALL: u8 = 0x74;
+    pub const MAIN_THREAD_JOIN: u8 = 0x75;
+    // Main-thread lifecycle entry marker. Appended after MAIN_THREAD_JOIN;
+    // nullary and valid only as instruction zero of the entrypoint.
+    pub const MAIN_THREAD_LIFECYCLE: u8 = 0x76;
 }
 
 #[cfg(test)]
 #[path = "op_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "op_main_thread_tests.rs"]
+mod main_thread_tests;
 
 #[cfg(test)]
 #[path = "op_legacy_tests.rs"]

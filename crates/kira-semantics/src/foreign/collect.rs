@@ -138,13 +138,24 @@ impl<'a> Analyzer<'a> {
             ForeignKind::Syscall => "a system call",
         };
         let mut ok = true;
-        if function.is_main {
+        if function.is_main || function.is_main_thread_lifecycle {
             self.emit(
                 mark.span,
                 "KSEM177",
                 format!(
-                    "an `{annotation}` function cannot also be `@Main`: {outside} is called, not \
-                     run as the program's entrypoint"
+                    "an `{annotation}` function cannot also be an entrypoint: {outside} is called, \
+                     not run as the program's lifecycle"
+                ),
+            );
+            ok = false;
+        }
+        if function.is_main_thread {
+            self.emit(
+                mark.span,
+                "KSEM177",
+                format!(
+                    "an `{annotation}` function cannot also be `@MainThread`: {outside} is called, not \
+                     scheduled by Kira's main-thread event loop"
                 ),
             );
             ok = false;

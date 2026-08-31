@@ -33,6 +33,11 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
         types: program.types.clone(),
         main: program.main.map(|main| main.0),
+        main_thread_lifecycles: program
+            .main_thread_lifecycles
+            .iter()
+            .map(|lifecycle| lifecycle.0)
+            .collect(),
         exports: program
             .exports
             .iter()
@@ -190,6 +195,7 @@ impl Lowerer<'_> {
                 .collect(),
             return_type: function.return_type,
             execution: function.execution,
+            is_main_thread: function.is_main_thread,
             by_reference_params: by_reference.clone(),
             by_pointer_params: by_pointer_params(function, &self.hir.types, &by_reference),
             body,
@@ -532,6 +538,21 @@ impl Lowerer<'_> {
                 value: self.lower_expr(value),
                 from,
                 to,
+            },
+            HirExpr::MainThreadCall {
+                operation,
+                function,
+                args,
+                ty,
+            } => IrExpr::MainThreadCall {
+                operation,
+                function: function.0,
+                args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
+                ty,
+            },
+            HirExpr::MainThreadJoin { handle, ty } => IrExpr::MainThreadJoin {
+                handle: self.lower_expr(handle),
+                ty,
             },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless

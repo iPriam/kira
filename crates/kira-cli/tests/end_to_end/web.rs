@@ -27,6 +27,11 @@ const PROGRAM: &str = "@Main function main() {\n\
      return\n\
    }";
 
+const LIFECYCLE_PROGRAM: &str = "function leaf(value: Int) -> Int { return value + 1 }\n\
+     function middle(value: Int) -> Int { return leaf(value) + 1 }\n\
+     @MainThreadLifecycle function lifecycle() { print(middle(40)) return }\n\
+     @Main function main() { lifecycle() return }";
+
 /// Runs the built module under node, returning its stdout.
 fn run_under_node(js: &Path) -> std::process::Output {
     Command::new("node")
@@ -78,6 +83,23 @@ fn a_web_build_links_and_runs_with_the_vms_exact_output() {
         String::from_utf8_lossy(&node.stdout),
         String::from_utf8_lossy(&vm.stdout),
         "the Web build and the VM disagree on the same program"
+    );
+}
+
+#[test]
+fn a_main_thread_lifecycle_is_refused_on_web() {
+    let path = write_source(LIFECYCLE_PROGRAM);
+    let source = path.to_str().expect("utf-8 path");
+    let web = kira(&["build", "--device", "wasm32", source]);
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !web.status.success(),
+        "the Web build must refuse an operating-system main-thread lifecycle"
+    );
+    assert!(
+        String::from_utf8_lossy(&web.stderr).contains("KSEM338"),
+        "the refusal must identify the unavailable main-thread capability: {}",
+        String::from_utf8_lossy(&web.stderr)
     );
 }
 

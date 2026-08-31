@@ -455,6 +455,7 @@ impl Analyzer<'_> {
                         args: &args,
                         trailing: &trailing,
                         span: callee_span,
+                        allow_main_thread_target: false,
                     })
                 }
             }
@@ -546,6 +547,10 @@ impl Analyzer<'_> {
                 // report the wrong thing.
                 if let Type::Task(result) = base_ty {
                     return self.analyze_task_property(base_hir, result, &name, field_span);
+                }
+                if let Type::MainThreadTask(result) = base_ty {
+                    return self
+                        .analyze_main_thread_task_property(base_hir, result, &name, field_span);
                 }
                 // An array has no fields, but it does have `.count` — a
                 // property, written with the same syntax a field read uses.

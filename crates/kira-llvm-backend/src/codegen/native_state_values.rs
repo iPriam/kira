@@ -141,7 +141,11 @@ impl Codegen<'_> {
                 node
             }
             Type::Any => self.encode_any_node_through_leaf(value)?,
-            Type::Void | Type::Error | Type::Task(_) | Type::NativeState(_) => {
+            Type::Void
+            | Type::Error
+            | Type::Task(_)
+            | Type::MainThreadTask(_)
+            | Type::NativeState(_) => {
                 return Err(no_node_form(ty));
             }
         })
@@ -229,7 +233,11 @@ impl Codegen<'_> {
                 cell
             }
             Type::Any => self.decode_any_node_through_leaf(node)?,
-            Type::Void | Type::Error | Type::Task(_) | Type::NativeState(_) => {
+            Type::Void
+            | Type::Error
+            | Type::Task(_)
+            | Type::MainThreadTask(_)
+            | Type::NativeState(_) => {
                 return Err(no_node_form(ty));
             }
         })

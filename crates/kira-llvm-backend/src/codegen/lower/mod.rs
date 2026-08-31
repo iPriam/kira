@@ -81,9 +81,15 @@ impl<'a> Codegen<'a> {
             .iter()
             .any(|def| def.drop_glue == Some(index as u32));
         let live = self.allocate_live_flags(function, &locals)?;
+        let lifecycle = self
+            .lifecycle_functions
+            .get(index)
+            .copied()
+            .unwrap_or(false);
         let mut body = FunctionLowering {
             codegen: self,
             function,
+            lifecycle,
             drop_glue,
             locals,
             live,
@@ -283,6 +289,7 @@ impl<'a> Codegen<'a> {
                 | Type::ForeignPtr(_)
                 | Type::NativeState(_)
                 | Type::Task(_)
+                | Type::MainThreadTask(_)
                 | Type::CBlock => LLVMConstInt(llvm_type, 0, 0),
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
@@ -368,6 +375,8 @@ impl<'a> Codegen<'a> {
 pub(super) struct FunctionLowering<'a, 'p> {
     pub(super) codegen: &'a mut Codegen<'p>,
     pub(super) function: &'p IrFunction,
+    /// Whether this body can execute as part of a lifecycle stack.
+    lifecycle: bool,
     /// Whether this function is a type's user `Drop` body, which is what
     /// excludes its receiver from the release plan.
     pub(super) drop_glue: bool,

@@ -117,6 +117,7 @@ impl<'h> Vm<'h> {
             initializing_constants: false,
             running_drops: Vec::new(),
             trap_probe: None,
+            slice_budget: None,
         }
     }
 
@@ -255,6 +256,31 @@ impl<'h> Vm<'h> {
     /// Takes ownership of `args`: every one of them is either moved into a
     /// parameter slot — and dropped with the frame — or freed here, on every
     /// path out, including the ones that never start the function.
+    /// Sets how many instructions the next slice may run before suspending.
+    pub(crate) fn set_slice_budget(&mut self, budget: Option<u64>) {
+        self.slice_budget = budget;
+    }
+
+    /// Enters `function_id` with no arguments under the current slice budget.
+    ///
+    /// The lifecycle entry: a `@MainThreadLifecycle` function takes no
+    /// parameters, so there is nothing to marshal, and the run may suspend
+    /// before it returns.
+    pub(crate) fn enter_sliced(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+    ) -> Result<super::Dispatched, VmError> {
+        self.ensure_constants(module)?;
+        let frame = self.take_frame(module, u64::from(function_id))?;
+        self.dispatch_frames(module, Some(frame), None)
+    }
+
+    /// Continues the frames a previous slice suspended on.
+    pub(crate) fn resume_sliced(&mut self, module: &Module) -> Result<super::Dispatched, VmError> {
+        self.dispatch_frames(module, None, None)
+    }
+
     pub(crate) fn enter_values(
         &mut self,
         module: &Module,
@@ -349,22 +375,28 @@ impl<'h> Vm<'h> {
         if self.initializing_constants || self.constants.len() >= module.constants.len() {
             return Ok(());
         }
+        // Constants are program-start work, not part of any slice: their
+        // initializers run through `enter_values`, which cannot suspend, so a
+        // budget installed for a sliced entry must not count them — a heavy
+        // initializer exhausting it would trap the run instead of yielding.
+        let budget = self.slice_budget.take();
         self.initializing_constants = true;
+        let result = self.fill_constants(module);
+        self.initializing_constants = false;
+        self.slice_budget = budget;
+        result
+    }
+
+    /// Runs each unfilled module-constant initializer, in slot order.
+    fn fill_constants(&mut self, module: &Module) -> Result<(), VmError> {
         while self.constants.len() < module.constants.len() {
             let init = module.constants[self.constants.len()];
             let Ok(init) = u32::try_from(init) else {
-                self.initializing_constants = false;
                 return Err(VmError::UnknownFunction(init));
             };
-            match self.enter_values(module, init, Vec::new()) {
-                Ok(value) => self.constants.push(value),
-                Err(error) => {
-                    self.initializing_constants = false;
-                    return Err(error);
-                }
-            }
+            let value = self.enter_values(module, init, Vec::new())?;
+            self.constants.push(value);
         }
-        self.initializing_constants = false;
         Ok(())
     }
 
@@ -659,5 +691,6 @@ fn is_heap_value(value: &Value) -> bool {
             | Value::Cell(_)
             | Value::NativeSnapshot(_)
             | Value::CBlock(_)
+            | Value::MainThreadTask(_)
     )
 }

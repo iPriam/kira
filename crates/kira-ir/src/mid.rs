@@ -563,6 +563,12 @@ impl Scan<'_> {
                     self.expr(*operand, path, owners);
                 }
             }
+            IrExpr::MainThreadCall { args, .. } => {
+                for arg in args {
+                    self.expr(*arg, path, owners);
+                }
+            }
+            IrExpr::MainThreadJoin { handle, .. } => self.expr(*handle, path, owners),
         }
     }
 }

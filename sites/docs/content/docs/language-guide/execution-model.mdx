@@ -1,6 +1,6 @@
 ---
 title: Execution Model
-description: The VM, LLVM/native, hybrid, and Web engines; what @Runtime and @Native mean on each; standalone hybrid deployment; and the parity rule that holds them together.
+description: The VM, LLVM/native, hybrid, and Web engines; helper-thread execution; what @Runtime and @Native mean on each; standalone hybrid deployment; and the parity rule that holds them together.
 ---
 
 One program, four engines.
@@ -30,6 +30,59 @@ On hybrid, and only on hybrid, the two annotations are real: a `@Runtime` body s
 Neither annotation is contagious. A `@Runtime` function calls a `@Native` one directly and a `@Native` function calls back into `@Runtime`, both through generated trampolines. Values crossing are marshalled as described in [Crossing the Native Seam](/docs/language-guide/structures-and-types#crossing-the-native-seam).
 
 A system call is an instruction, so a body holding one has to be native. `--backend llvm` needs nothing said; on hybrid, `packages/linux` carries `@Native` on every function so the instruction lands where an instruction can live.
+
+## The Main Thread Event Loop
+
+Native process entry starts a synchronous event loop on the operating-system main thread. Kira's `@Main` function runs on a named `kira-helper` thread, so a slow Kira operation does not stop a UI framework that owns the process main thread.
+
+`@MainThreadLifecycle` marks a zero-argument `Void` function that runs as a long-lived main-thread loop. `@Main` starts it with an ordinary-looking call:
+
+```kira
+function createApplication() -> Int {
+    return 1
+}
+
+@MainThreadLifecycle function applicationLifecycle() {
+    let application = createApplication()
+    runApplication(application)
+    return
+}
+
+@Main function main() {
+    applicationLifecycle()
+    return
+}
+```
+
+Calling a lifecycle schedules a new instance and returns `Void`; it does not run the body on the application thread. Each instance keeps its call stack and locals between turns. Its ordinary transitive call tree stays on the process main thread, including calls crossing the runtime/native boundary in a hybrid build.
+
+Started lifecycles share the main thread in cooperative slices. One lifecycle receives every lifecycle slice. Multiple lifecycles take turns, with accepted `@MainThread` work serviced between them. Returning ends that instance. The process main-thread loop remains alive after `@Main` returns until every started lifecycle returns.
+
+The application thread and main-thread loop are structurally separate. A stalled `@Main` body cannot stop an already-started lifecycle. `@MainThreadLifecycle` and `@MainThread` may coexist: use lifecycle calls for preserved event loops and `MainThread.invoke`, `spawn`, or `post` for one-off main-thread work.
+
+`@MainThread` marks a function that a framework requires on the operating-system main thread. The helper asks for that function explicitly:
+
+```kira
+@MainThread function createWindow(title: String) -> Int {
+    return 1
+}
+
+@MainThread function present(window: Int) {
+    return
+}
+
+@Main function main() {
+    let window = MainThread.invoke { createWindow("Kira") }
+    let shown = MainThread.spawn { present(window) }
+    MainThread.post { present(window) }
+    shown.await
+    return
+}
+```
+
+`invoke` runs the target synchronously and returns its value. `spawn` queues the target and returns an opaque handle; `.await` drives that work and returns the target value. `post` queues fire-and-forget work and returns immediately after the event loop accepts it. Arguments and returned values are owned copies, and every value crossing the boundary must be `Send`. A target cannot use `borrow mut` writeback across the boundary.
+
+The annotation is an execution contract, not a framework choice. Kira does not choose priorities or name a UI toolkit. From the helper context, an annotated function is reachable only through `MainThread.invoke`, `MainThread.spawn`, or `MainThread.post`; a direct helper call is rejected. `@Main` and `@MainThread` cannot decorate the same function. This capability is unavailable on WebAssembly because a Web build has no Kira process main thread.
 
 ## Standalone Hybrid Programs
 

@@ -207,6 +207,13 @@ impl FnCompiler<'_> {
                 }
                 self.code.push(Instruction::TaskOp(prim));
             }
+            IrExpr::MainThreadCall {
+                operation,
+                function,
+                args,
+                ..
+            } => self.compile_main_thread_call(*operation, *function, args)?,
+            IrExpr::MainThreadJoin { handle, .. } => self.compile_main_thread_join(*handle)?,
             IrExpr::ArrayLen { array } => {
                 let array = *array;
                 // Counting an array does not consume it, so the base is

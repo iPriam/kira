@@ -9,7 +9,9 @@
 //! deliberately — it resolves a local against the enclosing function's slot
 //! types, so it is a question about a program, not about a node.
 
-use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, NativeStateTypeId, TaskPrim};
+use kira_runtime_abi::{
+    CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
+};
 use kira_semantics_model::{EnumId, StructId, Type};
 
 use super::{ConvertKind, IrBinOp, IrExprId, IrPlace, IrUnOp, IrWriteback};
@@ -449,6 +451,24 @@ pub enum IrExpr {
         from: Type,
         /// The instantiation the position declared.
         to: Type,
+    },
+    /// A call routed through the host's main-thread event loop.
+    MainThreadCall {
+        /// The requested scheduling operation.
+        operation: MainThreadOp,
+        /// The target function in the program's function table.
+        function: u32,
+        /// Arguments evaluated by the requesting context.
+        args: Vec<IrExprId>,
+        /// The result type, including `MainThreadTask` for `spawn`.
+        ty: Type,
+    },
+    /// A join of a handle returned by `MainThread.spawn`.
+    MainThreadJoin {
+        /// The handle expression.
+        handle: IrExprId,
+        /// The target's result type.
+        ty: Type,
     },
     /// One primitive of the deferred-task executor.
     ///

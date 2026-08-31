@@ -14,6 +14,7 @@ description: Literals, operators and precedence, calls and labeled arguments, tr
 - Constructions: `Vec3(1, 2, 3)`, `Vec3(x: 1, y: 2)`, `Account()`, `Text(content: "hi")`.
 - Closures: `{ value in return value + 1 }`, `{ in return 1 }`.
 - `Task { call(args) }`.
+- `MainThread.invoke { call(args) }`, `MainThread.spawn { call(args) }`, and `MainThread.post { call(args) }`.
 - `quote { … }` and `#{ value }`, inside a `comptime macro` only.
 - `nativeState(v)`, `nativeUserData(s)`, `nativeRecover(t)`.
 
@@ -49,6 +50,12 @@ doThing { return 1 } second: { return 2 } third: { return 3 }
 ```
 
 A block with an `in` is a closure. A block whose first item is `name =` or `name :` is a struct literal. Everything else after a construction or a call with a content parameter is a content block, whose items are bare child expressions plus the `For(x in xs) { … }` and `if` builders. Later closures are labeled with the parameter name.
+
+### Main-thread Operations
+
+The three `MainThread` operations take one direct call in a trailing content block. The call must name a function marked `@MainThread`. `invoke` returns the target value, `spawn` returns a handle whose only property is `.await`, and `post` returns `Void`. Arguments and returned values are owned `Send` values.
+
+A direct call to a `@MainThreadLifecycle` function is a start expression. It takes no arguments, returns `Void` after the event loop accepts the instance, and never executes the lifecycle body on the caller's application thread. Calls made from inside the lifecycle body are ordinary pinned calls on its preserved main-thread stack.
 
 ## Member Access and Indexing
 

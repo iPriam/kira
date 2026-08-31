@@ -14,6 +14,10 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
     if let Some(main) = program.main {
         pending.push_back(main);
     }
+    // A `@MainThreadLifecycle` function is a root: the main thread starts it,
+    // so no body the walk below can see calls it, and everything it calls has
+    // to be emitted with it.
+    pending.extend(program.main_thread_lifecycles.iter().copied());
     pending.extend(
         program
             .foreign_callbacks
@@ -44,6 +48,20 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
         for callee in body_facts(program, &program.functions[index].body).calls {
             pending.push_back(callee);
         }
+    }
+    reachable
+}
+
+/// Functions whose execution may be part of a lifecycle's preserved stack.
+pub(crate) fn lifecycle_functions(program: &IrProgram) -> Vec<bool> {
+    let mut reachable = vec![false; program.functions.len()];
+    let mut pending: VecDeque<u32> = program.main_thread_lifecycles.iter().copied().collect();
+    while let Some(index) = pending.pop_front() {
+        let index = index as usize;
+        if index >= reachable.len() || std::mem::replace(&mut reachable[index], true) {
+            continue;
+        }
+        pending.extend(body_facts(program, &program.functions[index].body).calls);
     }
     reachable
 }
@@ -237,6 +255,13 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
                 walk_expr(program, *operand, facts);
             }
         }
+        IrExpr::MainThreadCall { function, args, .. } => {
+            facts.calls.insert(*function);
+            for arg in args {
+                walk_expr(program, *arg, facts);
+            }
+        }
+        IrExpr::MainThreadJoin { handle, .. } => walk_expr(program, *handle, facts),
         IrExpr::ArrayAppend { place, value } => {
             walk_place(program, place, facts);
             walk_expr(program, *value, facts);

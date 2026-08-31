@@ -207,7 +207,10 @@ impl Vm<'_> {
                 // A deferred read is refused with them, and is unreachable:
                 // `own_arguments` above rebuilt every one on this stack, so a
                 // state read arrives as the struct, array or enum it holds.
-                Value::NativeState(_) | Value::NativeSnapshot(_) | Value::Cell(_) => {
+                Value::NativeState(_)
+                | Value::MainThreadTask(_)
+                | Value::NativeSnapshot(_)
+                | Value::Cell(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }
                 Value::Erased(_) => match &trees[index] {

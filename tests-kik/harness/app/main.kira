@@ -26,6 +26,7 @@ function main() {
     print(scalarsSection())
     print(aliasesSection())
     print(asyncSpineSection())
+    print(mainThreadSection())
 
     print(collectionsSection())
     print(structsSection())

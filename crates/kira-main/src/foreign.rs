@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
-    HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeReturn, NativeStateError,
+    HostCapabilities, LinuxSyscall, MainThreadError, MainThreadHandle, MainThreadRequest,
+    MainThreadResponse, NativeArg, NativeCallError, NativeReturn, NativeStateError,
     NativeStateToken, NativeStateTypeId, NativeStateValue, SyscallError, syscall,
 };
 
@@ -241,6 +242,20 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
     ) -> Result<NativeReturn, NativeCallError> {
         // A VM-plus-sidecar host has no `@Native` half; only the foreign seam.
         self.inner.call_native(function_id, args)
+    }
+
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        self.inner.main_thread(request)
+    }
+
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        self.inner.main_thread_join(handle)
     }
 
     fn native_state_create(

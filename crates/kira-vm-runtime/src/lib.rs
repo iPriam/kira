@@ -22,8 +22,11 @@
 
 pub mod debug;
 pub mod error;
+pub mod fiber;
 pub mod instance;
 pub mod interp;
+#[cfg(not(target_family = "wasm"))]
+pub mod main_thread;
 pub mod profile;
 pub mod value;
 
@@ -32,8 +35,14 @@ pub use debug::{
     VmLldbObserver, format_debug_state, kira_vm_debug_dump, kira_vm_debug_probe,
 };
 pub use error::{NativeStateOperation, VmError};
+pub use fiber::{Fiber, FiberStep};
 pub use instance::{Instance, RootId};
 pub use interp::{Program, RunOutcome, execute, execute_with_debug};
+#[cfg(not(target_family = "wasm"))]
+pub use main_thread::{
+    MainThreadRunner, execute_with_main_thread, execute_with_main_thread_debug,
+    execute_with_main_thread_using, execute_with_main_thread_using_debug,
+};
 pub use value::{Heap, HeapStats, StrId, Value};
 
 #[cfg(test)]

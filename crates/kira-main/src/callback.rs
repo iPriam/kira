@@ -42,6 +42,9 @@ use kira_vm_runtime::{Program, RunOutcome, VmError, debug::VmDebugObserver};
 
 use crate::{ForeignBinding, ForeignBindingTarget};
 
+mod main_thread;
+use main_thread::ForeignMainThreadRunner;
+
 thread_local! {
     /// The session the invoker on this thread should call back into.
     ///
@@ -172,8 +175,23 @@ impl ForeignSession {
         let _active = ActiveSession::install(self);
         let mut host = SessionHost { session: self };
         match observer {
-            Some(observer) => self.program.run_with_debug(&mut host, observer),
-            None => self.program.run(&mut host),
+            Some(observer) => {
+                let runner = ForeignMainThreadRunner { session: self };
+                kira_vm_runtime::execute_with_main_thread_using_debug(
+                    self.program.module(),
+                    &mut host,
+                    runner,
+                    observer,
+                )
+            }
+            None => {
+                let runner = ForeignMainThreadRunner { session: self };
+                kira_vm_runtime::execute_with_main_thread_using(
+                    self.program.module(),
+                    &mut host,
+                    runner,
+                )
+            }
         }
     }
 
@@ -396,6 +414,7 @@ impl HostCapabilities for SessionHost<'_> {
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        let _active = ActiveSession::bind(self.session);
         // Served here rather than on the session, because entering the kernel is
         // the *host's* capability: the session owns libraries and closures, and
         // a system call needs neither.
@@ -530,6 +549,13 @@ struct ActiveSession {
 
 impl ActiveSession {
     fn install(session: &ForeignSession) -> ActiveSession {
+        let previous = ACTIVE_SESSION.replace(session);
+        ActiveSession { previous }
+    }
+
+    /// Binds the session on this thread without changing the process-wide
+    /// callback installation owned by the outer run.
+    fn bind(session: &ForeignSession) -> ActiveSession {
         let previous = ACTIVE_SESSION.replace(session);
         ActiveSession { previous }
     }

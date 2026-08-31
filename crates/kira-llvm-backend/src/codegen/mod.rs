@@ -155,6 +155,8 @@ pub(crate) struct Codegen<'a> {
     /// Resolved: no `Inherited` survives here, because a backend has to know
     /// where every function actually runs.
     engines: Vec<Execution>,
+    /// Functions that can execute on a lifecycle fiber's preserved stack.
+    lifecycle_functions: Vec<bool>,
     /// The functions that are some type's user `Drop` body.
     ///
     /// This module carries one whatever engine owns it. A release happens

@@ -31,6 +31,7 @@ impl Analyzer<'_> {
             args,
             trailing: &[],
             span,
+            allow_main_thread_target: false,
         })
     }
 
@@ -58,6 +59,31 @@ impl Analyzer<'_> {
             args,
             trailing,
             span,
+            allow_main_thread_target: false,
+        })
+    }
+
+    /// The syntax-call path for the direct target inside a main-thread
+    /// operation. It has the same argument and ownership rules as an ordinary
+    /// call, but permits the selected declaration to be `@MainThread` while
+    /// the surrounding helper context is still on the requesting thread.
+    pub(in crate::typeck) fn analyze_user_call_from_syntax_on_main_thread(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        leading: &[HirExprId],
+        args: &[CallArg],
+        span: Span,
+    ) -> HirExprId {
+        self.analyze_user_call_from_syntax_with_type_args(CallSyntax {
+            ctx,
+            name,
+            leading,
+            type_args: &[],
+            args,
+            trailing: &[],
+            span,
+            allow_main_thread_target: true,
         })
     }
 
@@ -76,6 +102,7 @@ impl Analyzer<'_> {
             args,
             trailing,
             span,
+            allow_main_thread_target,
         } = syntax;
         let (id, params) =
             match self.resolve_call_target(ctx, name, leading, type_args, args, trailing) {
@@ -111,6 +138,20 @@ impl Analyzer<'_> {
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
             };
+        let starts_lifecycle = self.sigs[id.0 as usize].is_main_thread_lifecycle;
+        let refused_main_thread = self.sigs[id.0 as usize].is_main_thread
+            && !ctx.main_thread
+            && !allow_main_thread_target;
+        if refused_main_thread {
+            self.emit(
+                span,
+                "KSEM330",
+                format!(
+                    "`{name}` is a `@MainThread` function; call it through `MainThread.invoke`, \
+                     `MainThread.spawn`, or `MainThread.post`"
+                ),
+            );
+        }
         // Arguments bind by position; a label on one is decorative. See
         // `super::labels` for the measurement behind that.
         let positional = Self::argument_slots(args);
@@ -174,6 +215,17 @@ impl Analyzer<'_> {
                 Some(default) => all.push(default),
                 None => break,
             }
+        }
+        if refused_main_thread {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if starts_lifecycle {
+            return self.program.exprs.alloc(HirExpr::MainThreadCall {
+                operation: kira_runtime_abi::MainThreadOp::LifecycleStart,
+                function: id,
+                args: all,
+                ty: Type::Void,
+            });
         }
         // The declaration was already chosen, from the argument types as
         // written. Re-choosing here would see them *after* each was coerced

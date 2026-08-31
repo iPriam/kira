@@ -74,7 +74,7 @@ pub struct ErasedTypeId(u64);
 impl ErasedTypeId {
     /// The id of `ty`, or `None` for a type that never erases.
     ///
-    /// `Void`, `Error`, `Cell`, `Task`, `NativeState`, and `Any` itself are the
+    /// `Void`, `Error`, `Cell`, `Task`, `MainThreadTask`, `NativeState`, and `Any` itself are the
     /// types with no id: none of them is assignable to `Any`
     /// ([`Type::assignable_to`]), so reaching here with one means analysis let
     /// through something it refuses, and the caller reports that rather than
@@ -96,6 +96,7 @@ impl ErasedTypeId {
             | Type::CBlock
             | Type::Cell(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             | Type::NativeState(_)
             | Type::Any => return None,
         };

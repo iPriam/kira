@@ -254,7 +254,8 @@ fn run_without_bindings(
     // does not access it from another thread while the VM executes.
     unsafe {
         env::with_arguments(arguments, || {
-            kira_vm_runtime::execute_with_debug(&module, &mut host, observer).map(|_| ())
+            kira_vm_runtime::execute_with_main_thread_debug(&module, &mut host, observer)
+                .map(|_| ())
         })
     }
     .map_err(|error| error.to_string())

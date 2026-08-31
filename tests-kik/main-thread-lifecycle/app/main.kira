@@ -1,0 +1,52 @@
+@Native
+function lifecycleLeaf(value: Int) -> Int {
+    return value + 1
+}
+
+@Runtime
+function lifecycleMiddle(value: Int) -> Int {
+    return lifecycleLeaf(value) + 1
+}
+
+@MainThread
+function oneOffMainThreadWork() {
+    print("manual-main-thread")
+    return
+}
+
+// Owns the process main thread. Its call tree stays there across the
+// runtime/native split, so the loop keeps running independently of the
+// application thread below.
+@MainThreadLifecycle
+@Native
+function uiLifecycle() {
+    print("main-thread-lifecycle")
+    print(lifecycleMiddle(40))
+    return
+}
+
+// The entrypoint keeps the application thread and produces no output, so the
+// two threads cannot interleave what this harness asserts.
+@Main
+function main() {
+    uiLifecycle()
+    counterLifecycle()
+    MainThread.invoke { oneOffMainThreadWork() }
+    return
+}
+
+// Runs far past one scheduling slice, so the loop is suspended and resumed
+// many times. The printed total is the proof its locals survived every
+// suspension: a lifecycle restarted from scratch each turn could never reach
+// this count.
+@MainThreadLifecycle
+function counterLifecycle() {
+    var total = 0
+    var index = 0
+    while index < 20000 {
+        total = total + 1
+        index = index + 1
+    }
+    print(total)
+    return
+}

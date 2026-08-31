@@ -11,7 +11,7 @@
 //!
 //! # Why analysis needs it at all
 //!
-//! `@Main` is required by [`crate::analyze`], above the backend split, so a
+//! An entrypoint is required by [`crate::analyze`], above the backend split, so a
 //! library's absence of an entrypoint cannot be excused inside any one backend.
 //! Making the requirement conditional is therefore a frontend input, not a
 //! backend flag.
@@ -19,7 +19,7 @@
 /// Whether a program is analyzed as a runnable application or as a library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BuildKind {
-    /// A runnable program: it must declare exactly one `@Main` (`KSEM011`).
+    /// A runnable program: it must declare exactly one lifecycle entry (`KSEM011`).
     ///
     /// The default, because a bare `.kira` file handed to the compiler with no
     /// manifest is a program someone means to run — and because defaulting the
@@ -30,13 +30,13 @@ pub enum BuildKind {
     /// A library: it has no entrypoint, and declaring one is an error
     /// (`KSEM255`).
     Library,
-    /// A test run: an `@Main` is neither required nor refused.
+    /// A test run: an entrypoint is neither required nor refused.
     ///
     /// A suite is entered through the runner a collector generated rather than
-    /// through `@Main`, so demanding one would refuse a package whose only
+    /// through an entrypoint, so demanding one would refuse a package whose only
     /// purpose is tests. Refusing one would be worse: a package that is both an
     /// application and a suite is an ordinary thing to write, and `kira test`
-    /// must not force it to choose. When an `@Main` is present it is recorded
+    /// must not force it to choose. When an entrypoint is present it is recorded
     /// exactly as an application's is, so the two entrypoints coexist and the
     /// caller picks which one it enters.
     Test,
@@ -52,7 +52,7 @@ impl BuildKind {
         }
     }
 
-    /// Whether a program of this kind must declare a `@Main` entrypoint.
+    /// Whether a program of this kind must declare an entrypoint.
     pub fn requires_entrypoint(self) -> bool {
         matches!(self, Self::Application)
     }

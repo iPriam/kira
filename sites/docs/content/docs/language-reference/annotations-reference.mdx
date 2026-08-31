@@ -10,6 +10,8 @@ An annotation is `@Name`, optionally with a `{ key: value; … }` block or a par
 | Annotation | Target | Payload | Meaning |
 | --- | --- | --- | --- |
 | `@Main` | function | none | The entrypoint. One per application (`KSEM011`), none in a library (`KSEM255`), no parameters. |
+| `@MainThreadLifecycle` | zero-argument `Void` function | none | Calling it starts a preserved main-thread loop and returns `Void`. Its transitive call tree remains main-thread pinned. Multiple instances share cooperative slices and may coexist with `@MainThread` targets. WebAssembly reports `KSEM338`. |
+| `@MainThread` | function | none | Runs on the operating-system main-thread event loop. The function is reachable only through `MainThread.invoke`, `MainThread.spawn`, or `MainThread.post`; WebAssembly reports `KSEM338`. |
 | `@Runtime` | function | none | On a hybrid build, this body stays bytecode. |
 | `@Native` | function | none | On a hybrid build, this body compiles to machine code. |
 | `@Export` | function, class | none | The consumer-facing surface of a library package. `@Export` on a `struct` is `KPAR043`, in an application package `KSEM256`, on a method `KSEM167`, and with a payload `KSEM166`. |

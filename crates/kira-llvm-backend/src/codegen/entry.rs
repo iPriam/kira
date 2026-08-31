@@ -13,9 +13,9 @@ use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::LLVMValueRef;
 
-use super::Codegen;
 use super::ffi::c_string;
 use super::symbols::trampoline_name;
+use super::{Codegen, CodegenTarget};
 use crate::LlvmError;
 
 impl Codegen<'_> {
@@ -38,9 +38,10 @@ impl Codegen<'_> {
     /// Emits a zero-argument process entry that calls `@Main` and returns a
     /// runner-friendly status code.
     fn lower_process_entry(&mut self, symbol: &CStr, exported: bool) -> Result<(), LlvmError> {
-        let main_function = self
+        let main_return = self
             .program
             .main_function()
+            .map(|function| function.return_type)
             .ok_or(LlvmError::internal("an executable with no entrypoint"))?;
         let index = self
             .program
@@ -48,20 +49,26 @@ impl Codegen<'_> {
             .ok_or(LlvmError::internal("an executable with no entrypoint"))?;
         let entry = self.functions[index as usize]
             .ok_or(LlvmError::internal("an entrypoint with no native body"))?;
+        // WebAssembly has no process main thread. Its frontend refuses
+        // `@MainThread`, and its entry must therefore call the helper body
+        // directly instead of importing the native thread runtime.
+        let native_event_loop = matches!(&self.target, CodegenTarget::Native(_));
+        let dispatcher = native_event_loop
+            .then(|| self.lower_main_thread_dispatcher())
+            .transpose()?
+            .flatten();
+        let lifecycle_resolver = native_event_loop
+            .then(|| self.lower_main_thread_lifecycle_resolver())
+            .transpose()?;
 
         // SAFETY: every value and type below belongs to this live module, and
         // the builder is positioned on a block of the function being built.
         unsafe {
-            let main_ty = LLVMFunctionType(self.types.i32, std::ptr::null_mut(), 0, 0);
-            let main = LLVMAddFunction(self.module, symbol.as_ptr(), main_ty);
-            if exported && cfg!(target_env = "msvc") {
-                LLVMSetDLLStorageClass(
-                    main,
-                    llvm_sys::LLVMDLLStorageClass::LLVMDLLExportStorageClass,
-                );
-            }
-            let block = LLVMAppendBasicBlockInContext(self.context, main, c"entry".as_ptr());
-            LLVMPositionBuilderAtEnd(self.builder, block);
+            let entry_ty = LLVMFunctionType(self.types.i32, std::ptr::null_mut(), 0, 0);
+            let helper = LLVMAddFunction(self.module, c"kira_main_helper".as_ptr(), entry_ty);
+            let helper_block =
+                LLVMAppendBasicBlockInContext(self.context, helper, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, helper_block);
 
             // Reference the runtime's ABI marker before anything else. The call
             // is empty and free; emitting it is what makes a runtime archive
@@ -90,7 +97,7 @@ impl Codegen<'_> {
                 );
             }
 
-            let name = if main_function.return_type == Type::Void {
+            let name = if main_return == Type::Void {
                 c"".as_ptr()
             } else {
                 c"kira.main.result".as_ptr()
@@ -103,7 +110,7 @@ impl Codegen<'_> {
                 0,
                 name,
             );
-            if main_function.return_type == Type::String {
+            if main_return == Type::String {
                 self.call_runtime(self.runtime.str_free, &mut [result], c"");
             }
             // The constants go back before the heap is asked to balance, so a
@@ -116,8 +123,208 @@ impl Codegen<'_> {
             // `getenv` here and nothing else.
             self.call_runtime(self.runtime.heap_report, &mut [], c"");
             LLVMBuildRet(self.builder, LLVMConstInt(self.types.i32, 0, 0));
+
+            let main = LLVMAddFunction(self.module, symbol.as_ptr(), entry_ty);
+            if exported && cfg!(target_env = "msvc") {
+                LLVMSetDLLStorageClass(
+                    main,
+                    llvm_sys::LLVMDLLStorageClass::LLVMDLLExportStorageClass,
+                );
+            }
+            let block = LLVMAppendBasicBlockInContext(self.context, main, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, block);
+            let result = if native_event_loop {
+                if let Some(dispatcher) = dispatcher {
+                    self.call_runtime(
+                        self.runtime.main_thread_install_dispatcher,
+                        &mut [dispatcher],
+                        c"",
+                    );
+                }
+                self.call_runtime(
+                    self.runtime.main_thread_install_lifecycle_resolver,
+                    &mut [lifecycle_resolver.ok_or(LlvmError::internal(
+                        "a native entry with no lifecycle resolver",
+                    ))?],
+                    c"",
+                );
+                let mut helper_args = [helper];
+                LLVMBuildCall2(
+                    self.builder,
+                    self.runtime.main_thread_run.ty,
+                    self.runtime.main_thread_run.value,
+                    helper_args.as_mut_ptr(),
+                    1,
+                    c"kira.main.status".as_ptr(),
+                )
+            } else {
+                LLVMBuildCall2(
+                    self.builder,
+                    entry_ty,
+                    helper,
+                    std::ptr::null_mut(),
+                    0,
+                    c"kira.main.status".as_ptr(),
+                )
+            };
+            LLVMBuildRet(self.builder, result);
         }
         Ok(())
+    }
+
+    /// Emits the function-id resolver used when a lifecycle call is serviced.
+    pub(super) fn lower_main_thread_lifecycle_resolver(
+        &mut self,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let symbol = c_string("kira_main_thread_lifecycle_resolve");
+        let mut params = [self.types.i32];
+        // SAFETY: both types belong to this module's live context.
+        let signature = unsafe { LLVMFunctionType(self.types.ptr, params.as_mut_ptr(), 1, 0) };
+        // SAFETY: this module owns the resolver and every block appended below.
+        let resolver = unsafe { LLVMAddFunction(self.module, symbol.as_ptr(), signature) };
+        // SAFETY: the resolver, builder, and every referenced function value
+        // belong to this module's live context.
+        unsafe {
+            let entry = LLVMAppendBasicBlockInContext(self.context, resolver, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, entry);
+            let requested = LLVMGetParam(resolver, 0);
+            for index in self.program.main_thread_lifecycles.iter().copied() {
+                if self.engine_of(index as usize) != kira_runtime_abi::Execution::Native {
+                    continue;
+                }
+                let Some(target) = self.functions.get(index as usize).copied().flatten() else {
+                    continue;
+                };
+                let selected = LLVMAppendBasicBlockInContext(
+                    self.context,
+                    resolver,
+                    c"lifecycle.selected".as_ptr(),
+                );
+                let next = LLVMAppendBasicBlockInContext(
+                    self.context,
+                    resolver,
+                    c"lifecycle.next".as_ptr(),
+                );
+                let matches = LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    requested,
+                    LLVMConstInt(self.types.i32, u64::from(index), 0),
+                    c"lifecycle.matches".as_ptr(),
+                );
+                LLVMBuildCondBr(self.builder, matches, selected, next);
+                LLVMPositionBuilderAtEnd(self.builder, selected);
+                LLVMBuildRet(self.builder, target.value);
+                LLVMPositionBuilderAtEnd(self.builder, next);
+            }
+            LLVMBuildRet(self.builder, LLVMConstPointerNull(self.types.ptr));
+        }
+        Ok(resolver)
+    }
+
+    /// Emits the C-callable dispatcher the main-thread runtime uses to enter a
+    /// resolved `@MainThread` target.
+    ///
+    /// Native targets go through the same bridge trampoline a hybrid host uses.
+    /// Runtime targets in a hybrid module go through the already-installed VM
+    /// invoker, which keeps the compiler unaware of the host's event-loop
+    /// implementation. A module with no reachable targets still gets an empty
+    /// dispatcher, because the hybrid linker forces this stable host symbol
+    /// into every native image and the loader may resolve it before it knows
+    /// whether this particular module uses the capability.
+    pub(super) fn lower_main_thread_dispatcher(
+        &mut self,
+    ) -> Result<Option<LLVMValueRef>, LlvmError> {
+        let targets: Vec<usize> = self
+            .program
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(index, function)| {
+                function.is_main_thread && self.reachable.get(*index).copied().unwrap_or(false)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let symbol = c_string("kira_main_thread_dispatch");
+        let mut params = [
+            self.types.i32,
+            self.types.ptr,
+            self.types.i32,
+            self.types.ptr,
+        ];
+        // SAFETY: every parameter and result type belongs to this live LLVM
+        // context, and `params` remains valid for the duration of the call.
+        let signature = unsafe {
+            LLVMFunctionType(self.types.void, params.as_mut_ptr(), params.len() as u32, 0)
+        };
+        // SAFETY: this module owns the dispatcher declaration and its context.
+        let dispatcher = unsafe { LLVMAddFunction(self.module, symbol.as_ptr(), signature) };
+        // SAFETY: the block and all values below belong to this live module.
+        unsafe {
+            let entry = LLVMAppendBasicBlockInContext(self.context, dispatcher, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, entry);
+            let function = LLVMGetParam(dispatcher, 0);
+            let args = LLVMGetParam(dispatcher, 1);
+            let count = LLVMGetParam(dispatcher, 2);
+            let out = LLVMGetParam(dispatcher, 3);
+            let trampoline_ty = {
+                let mut params = [self.types.ptr, self.types.i32, self.types.ptr];
+                LLVMFunctionType(self.types.void, params.as_mut_ptr(), params.len() as u32, 0)
+            };
+
+            for index in targets.iter().copied() {
+                let selected = LLVMAppendBasicBlockInContext(
+                    self.context,
+                    dispatcher,
+                    c"main.thread.selected".as_ptr(),
+                );
+                let next = LLVMAppendBasicBlockInContext(
+                    self.context,
+                    dispatcher,
+                    c"main.thread.next".as_ptr(),
+                );
+                let expected = LLVMConstInt(self.types.i32, index as u64, 0);
+                let matches = LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    function,
+                    expected,
+                    c"main.thread.target".as_ptr(),
+                );
+                LLVMBuildCondBr(self.builder, matches, selected, next);
+                LLVMPositionBuilderAtEnd(self.builder, selected);
+                if self.engine_of(index) == kira_runtime_abi::Execution::Native {
+                    let name = c_string(&trampoline_name(index));
+                    let trampoline = LLVMGetNamedFunction(self.module, name.as_ptr());
+                    let trampoline = if trampoline.is_null() {
+                        LLVMAddFunction(self.module, name.as_ptr(), trampoline_ty)
+                    } else {
+                        trampoline
+                    };
+                    let mut call_args = [args, count, out];
+                    LLVMBuildCall2(
+                        self.builder,
+                        trampoline_ty,
+                        trampoline,
+                        call_args.as_mut_ptr(),
+                        call_args.len() as u32,
+                        c"".as_ptr(),
+                    );
+                } else {
+                    let mut call_args = [
+                        LLVMConstInt(self.types.i32, index as u64, 0),
+                        args,
+                        count,
+                        out,
+                    ];
+                    self.call_runtime(self.runtime.call_runtime, &mut call_args, c"");
+                }
+                LLVMBuildRetVoid(self.builder);
+                LLVMPositionBuilderAtEnd(self.builder, next);
+            }
+            LLVMBuildRetVoid(self.builder);
+        }
+        Ok(Some(dispatcher))
     }
 
     /// The address of `args[slot]`, one `BridgeValue` into the argument array.

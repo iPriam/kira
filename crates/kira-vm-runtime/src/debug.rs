@@ -42,6 +42,8 @@ pub mod value_tag {
     pub const NATIVE_SNAPSHOT: u32 = 13;
     /// The slot contains a C-storage block handle.
     pub const C_BLOCK: u32 = 14;
+    /// The slot contains a main-thread task handle.
+    pub const MAIN_THREAD_TASK: u32 = 15;
 }
 
 /// One debugger-stable Kira value.
@@ -163,6 +165,12 @@ pub struct VmLldbObserver {
     encoded_stack: Vec<KiraVmDebugValue>,
     encoded_backtrace: Vec<KiraVmDebugFrame>,
 }
+
+// SAFETY: the raw pointers are a temporary C-shaped mirror of the module and
+// VM buffers. They are written and read only by the observer on the thread
+// executing the debugged VM; moving the owner to that helper thread does not
+// create concurrent access or change the pointed-to storage's lifetime.
+unsafe impl Send for VmLldbObserver {}
 
 impl VmLldbObserver {
     /// Creates an observer that probes at the first VM instruction.
@@ -465,6 +473,7 @@ fn encode_value(value: Value) -> KiraVmDebugValue {
         Value::NativeView { token, .. } => (value_tag::NATIVE_VIEW, token.as_word()),
         Value::NativeSnapshot(id) => (value_tag::NATIVE_SNAPSHOT, id.debug_word()),
         Value::CBlock(id) => (value_tag::C_BLOCK, id.debug_word()),
+        Value::MainThreadTask(handle) => (value_tag::MAIN_THREAD_TASK, handle.word()),
     };
     KiraVmDebugValue { tag, payload }
 }
@@ -514,6 +523,7 @@ fn format_value(value: KiraVmDebugValue) -> String {
         value_tag::NATIVE_STATE => format!("native-state 0x{:x}", value.payload),
         value_tag::NATIVE_VIEW => format!("native-view 0x{:x}", value.payload),
         value_tag::NATIVE_SNAPSHOT => format!("native-snapshot {}", value.payload),
+        value_tag::MAIN_THREAD_TASK => format!("main-thread-task {}", value.payload),
         tag => format!("unknown(tag={tag}, payload={})", value.payload),
     }
 }
@@ -623,7 +633,7 @@ pub enum VmDebugAction {
 }
 
 /// A synchronous observer called before every instruction in a debug run.
-pub trait VmDebugObserver {
+pub trait VmDebugObserver: Send {
     /// Inspect the next instruction and optionally pause or terminate the run.
     fn before_instruction(&mut self, event: VmDebugEvent<'_>) -> VmDebugAction;
 }

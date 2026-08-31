@@ -318,7 +318,8 @@ impl Parser<'_> {
     fn parse_override(&mut self) -> Option<CallArg> {
         let has_let = self.at(TokenKind::Let);
         let starts_bare_path = self.at(TokenKind::Identifier)
-            && matches!(self.peek(1).kind, TokenKind::Dot | TokenKind::Colon);
+            && matches!(self.peek(1).kind, TokenKind::Dot | TokenKind::Colon)
+            && self.bare_override_path_ends_in_binder();
         if (!has_let && !starts_bare_path)
             || (has_let && self.peek(1).kind != TokenKind::Identifier)
         {
@@ -362,6 +363,21 @@ impl Parser<'_> {
             value,
             span: Span::from_bounds(start, self.previous_end()),
         })
+    }
+
+    /// A dotted expression in content is a method call when its path ends at
+    /// `(`. Only a path followed by `:` or `=` is a construction override; the
+    /// distinction matters for `MainThread.invoke { window.read() }`, where a
+    /// method target is a child of the capability request rather than a field
+    /// named `window.read`.
+    fn bare_override_path_ends_in_binder(&self) -> bool {
+        let mut index = 1;
+        while self.peek(index).kind == TokenKind::Dot
+            && self.peek(index + 1).kind == TokenKind::Identifier
+        {
+            index += 2;
+        }
+        matches!(self.peek(index).kind, TokenKind::Colon | TokenKind::Equals)
     }
 
     /// Parses one item of a content block: a `For`/`if` builder, or a bare

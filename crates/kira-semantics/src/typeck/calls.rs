@@ -23,6 +23,8 @@ use crate::place::PlacePurpose;
 mod arguments;
 #[path = "calls/literal.rs"]
 mod literal;
+#[path = "calls/main_thread.rs"]
+mod main_thread;
 #[path = "calls/math.rs"]
 mod math;
 #[path = "calls/methods.rs"]
@@ -67,6 +69,13 @@ pub(super) struct CallSyntax<'a> {
     pub(super) trailing: &'a [HirExprId],
     /// Source span of the call.
     pub(super) span: Span,
+    /// Whether the call is the direct target inside a `MainThread` operation.
+    ///
+    /// Ordinary source calls must not reach an `@MainThread` function from the
+    /// helper context. The operation's inner call is the one deliberate escape
+    /// hatch, and it is converted into a main-thread request immediately after
+    /// its signature and arguments are checked.
+    pub(super) allow_main_thread_target: bool,
 }
 
 impl Analyzer<'_> {

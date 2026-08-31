@@ -29,6 +29,10 @@ use crate::Parser;
 pub(crate) struct Annotations {
     /// Whether `@Main` was written.
     pub(crate) is_main: bool,
+    /// Whether `@MainThreadLifecycle` was written.
+    pub(crate) is_main_thread_lifecycle: bool,
+    /// Whether `@MainThread` was written.
+    pub(crate) is_main_thread: bool,
     /// The engine `@Runtime` / `@Native` selected, or
     /// [`Execution::Inherited`] when neither was written.
     pub(crate) execution: Execution,
@@ -52,6 +56,8 @@ impl Default for Annotations {
     fn default() -> Self {
         Self {
             is_main: false,
+            is_main_thread_lifecycle: false,
+            is_main_thread: false,
             execution: Execution::Inherited,
             export: None,
             foreign: None,
@@ -187,12 +193,16 @@ impl Parser<'_> {
         } else if self.at(TokenKind::Class) {
             // `@Export class` is the handle-eligibility marker, so a class is
             // the one non-function item annotations reach.
-            if annotations.is_main || annotations.execution != Execution::Inherited {
+            if annotations.is_main
+                || annotations.is_main_thread_lifecycle
+                || annotations.is_main_thread
+                || annotations.execution != Execution::Inherited
+            {
                 self.error(
                     start,
                     "KPAR041",
-                    "only `@Export` may annotate a class; `@Main`, `@Runtime`, and \
-                     `@Native` select how a *function* runs",
+                    "only `@Export` may annotate a class; `@Main`, `@MainThreadLifecycle`, \
+                     `@MainThread`, `@Runtime`, and `@Native` select how a *function* runs",
                 );
             }
             if let Some(mut declaration) = self.parse_class() {
@@ -205,12 +215,16 @@ impl Parser<'_> {
             // so they say nothing about a struct either. Same rule as the class
             // arm above, so the same code: an execution or entrypoint marker on
             // a non-function item is refused rather than silently dropped.
-            if annotations.is_main || annotations.execution != Execution::Inherited {
+            if annotations.is_main
+                || annotations.is_main_thread_lifecycle
+                || annotations.is_main_thread
+                || annotations.execution != Execution::Inherited
+            {
                 self.error(
                     start,
                     "KPAR041",
-                    "`@Main`, `@Runtime`, and `@Native` select how a *function* runs, \
-                     so none of them may annotate a struct",
+                    "`@Main`, `@MainThreadLifecycle`, `@MainThread`, `@Runtime`, and `@Native` \
+                     select how a *function* runs, so none of them may annotate a struct",
                 );
             }
             // Only a class mints handles, so `@Export struct` is refused by
@@ -293,6 +307,14 @@ impl Parser<'_> {
                     annotations.is_main = true;
                     false
                 }
+                "MainThreadLifecycle" => {
+                    annotations.is_main_thread_lifecycle = true;
+                    false
+                }
+                "MainThread" => {
+                    annotations.is_main_thread = true;
+                    false
+                }
                 "Export" => true,
                 name => {
                     if let Some(selected) = Execution::from_annotation(name) {
@@ -373,6 +395,8 @@ impl Parser<'_> {
             annotations.execution,
             annotations.foreign.as_ref().map(|mark| mark.kind),
         )?;
+        function.is_main_thread_lifecycle = annotations.is_main_thread_lifecycle;
+        function.is_main_thread = annotations.is_main_thread;
         function.export = annotations.export;
         function.foreign = annotations.foreign.clone();
         Some(function)
@@ -438,6 +462,8 @@ impl Parser<'_> {
             name_span,
             type_params,
             is_main,
+            is_main_thread_lifecycle: false,
+            is_main_thread: false,
             // Set by the caller that consumed a contextual `async` before the
             // `function` keyword; a bare `function` carries none.
             is_async: false,
