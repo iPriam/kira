@@ -11,7 +11,7 @@ use kira_backend_api::BackendMode;
 use super::execute::build_native;
 use super::{
     EXIT_FAILURE, EXIT_OK, apply_manifest_defaults, command_inputs, foreign_link, options_target,
-    parse_options, resolve_foreign, resolve_path, verified,
+    parse_options, refuse_unsupported_sanitizer, resolve_foreign, resolve_path, verified,
 };
 use crate::progress::{err, out};
 use crate::{hybrid, hybrid_library, library, native, native_library, wasm};
@@ -58,6 +58,9 @@ pub fn build(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     if let Err(code) = apply_manifest_defaults("build", &mut options, &compiled) {
+        return code;
+    }
+    if let Err(code) = refuse_unsupported_sanitizer("build", &options) {
         return code;
     }
     // Again, because the manifest is what may have named another machine: the
@@ -226,6 +229,7 @@ pub fn build(args: &[String]) -> i32 {
                 ir,
                 std::path::Path::new(&options.path),
                 options.emit_llvm_ir,
+                options.sanitize,
                 link,
             ) {
                 err!("kira: {error}");

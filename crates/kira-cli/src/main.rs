@@ -56,6 +56,9 @@ fn main() {
         Some("__vm-debug-host") => {
             kira_toolchain::process::exit(debugger::run_vm_host(&args[1..]));
         }
+        Some("__hybrid-run-host") => {
+            kira_toolchain::process::exit(hybrid::run_host(&args[1..]));
+        }
         _ => {}
     }
     let Some(verb) = args.first() else {

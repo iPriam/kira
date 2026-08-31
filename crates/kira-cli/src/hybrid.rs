@@ -72,6 +72,18 @@ pub enum HybridError {
     /// Loading or running the bundle failed.
     #[error(transparent)]
     Runtime(#[from] kira_hybrid_runtime::HybridError),
+    /// The managed sanitizer runtime could not be installed in a child.
+    #[error(transparent)]
+    SanitizerLaunch(#[from] kira_hybrid_launcher::SanitizerLaunchError),
+    /// The CLI executable could not be located for a sanitized child.
+    #[error("cannot locate the Kira executable for the sanitized hybrid child: {0}")]
+    CurrentExecutable(std::io::Error),
+    /// A sanitized hybrid child could not be started.
+    #[error("cannot start the sanitized hybrid child: {0}")]
+    SpawnSanitized(std::io::Error),
+    /// A sanitized hybrid child was ended by the host without an exit code.
+    #[error("the sanitized hybrid child ended without an exit code")]
+    SanitizedChildSignal,
 }
 
 /// Builds `program` into a hybrid bundle under `.kira-build/`.
@@ -83,9 +95,10 @@ pub fn build(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
+    sanitize: kira_llvm_backend::Sanitize,
     foreign_link: &NativeLinkInputs,
 ) -> Result<HybridBundle, HybridError> {
-    build_inner(program, source, emit_llvm_ir, foreign_link, None)
+    build_inner(program, source, emit_llvm_ir, sanitize, foreign_link, None)
 }
 
 /// Builds a hybrid bundle with debug metadata on its native half.
@@ -96,13 +109,21 @@ pub fn build_debug(
     foreign_link: &NativeLinkInputs,
     debug: &DebugInfo,
 ) -> Result<HybridBundle, HybridError> {
-    build_inner(program, source, emit_llvm_ir, foreign_link, Some(debug))
+    build_inner(
+        program,
+        source,
+        emit_llvm_ir,
+        kira_llvm_backend::Sanitize::None,
+        foreign_link,
+        Some(debug),
+    )
 }
 
 fn build_inner(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
+    sanitize: kira_llvm_backend::Sanitize,
     foreign_link: &NativeLinkInputs,
     debug: Option<&DebugInfo>,
 ) -> Result<HybridBundle, HybridError> {
@@ -116,7 +137,7 @@ fn build_inner(
     // A hybrid bundle with no reachable native body can reuse its native half
     // when the crossing surface is unchanged.
     let reusable_native = !kira_llvm_backend::has_reachable_hybrid_native_functions(program);
-    let surface_key = native_surface_key(program, foreign_link);
+    let surface_key = native_surface_key(program, foreign_link, sanitize);
     let cache_path = artifacts.native_surface_key();
     let cache_hit = debug.is_none()
         && reusable_native
@@ -150,6 +171,7 @@ fn build_inner(
             // this machine's; a hybrid program has no second machine to be
             // split across.
             target: kira_llvm_backend::NativeBuildTarget::host(),
+            sanitize,
         };
         let native = match debug {
             Some(debug) => kira_llvm_backend::build_hybrid_library_debug(program, &options, debug)?,
@@ -195,6 +217,7 @@ fn build_inner(
         &exports,
         kira_build::hybrid_internal_function_count(program, &module)?,
         &foreign_paths,
+        sanitize,
     )?;
     let manifest_path = artifacts.manifest();
     write(&manifest_path, &manifest.to_bytes())?;
@@ -210,14 +233,19 @@ fn build_inner(
 /// The runtime marker makes an old compiler's `.kira-build` output conservative
 /// after a native ABI change. The ordinary Kira function bodies are deliberately
 /// not present: they do not enter the native half of a VM bundle.
-fn native_surface_key(program: &IrProgram, foreign_link: &NativeLinkInputs) -> String {
+fn native_surface_key(
+    program: &IrProgram,
+    foreign_link: &NativeLinkInputs,
+    sanitize: kira_llvm_backend::Sanitize,
+) -> String {
     format!(
-        "kira-vm-native-surface-v2\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}",
+        "kira-vm-native-surface-v3\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}\nsanitize={:?}",
         kira_runtime_abi::RUNTIME_ABI_MARKER,
         program.foreign_imports,
         program.foreign_aggregates,
         program.foreign_callbacks,
         foreign_link,
+        sanitize,
     )
 }
 
@@ -226,20 +254,56 @@ pub fn run(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
+    sanitize: kira_llvm_backend::Sanitize,
     foreign_link: &NativeLinkInputs,
     program_arguments: &[String],
 ) -> Result<i32, HybridError> {
-    let bundle = build(program, source, emit_llvm_ir, foreign_link)?;
+    let bundle = build(program, source, emit_llvm_ir, sanitize, foreign_link)?;
     run_bundle(&bundle.manifest, program_arguments)
 }
 
 /// Runs an already-built hybrid bundle in an action child.
 pub fn run_bundle(manifest: &Path, program_arguments: &[String]) -> Result<i32, HybridError> {
+    if !kira_hybrid_launcher::needs_sanitizer_child(manifest)? {
+        return run_bundle_in_process(manifest, program_arguments);
+    }
+    let executable = std::env::current_exe().map_err(HybridError::CurrentExecutable)?;
+    let mut child = std::process::Command::new(executable);
+    child
+        .arg("__hybrid-run-host")
+        .arg(manifest)
+        .args(program_arguments);
+    if kira_hybrid_launcher::configure_sanitizer_child(&mut child, manifest)? {
+        let status = child.status().map_err(HybridError::SpawnSanitized)?;
+        return status.code().ok_or(HybridError::SanitizedChildSignal);
+    }
+    run_bundle_in_process(manifest, program_arguments)
+}
+
+fn run_bundle_in_process(
+    manifest: &Path,
+    program_arguments: &[String],
+) -> Result<i32, HybridError> {
     let session = kira_hybrid_runtime::Session::load(manifest)?;
     // SAFETY: the CLI owns this run boundary and does not access the process
     // environment from another thread while the Hybrid session executes.
     unsafe { kira_runtime_abi::env::with_arguments(program_arguments, || session.run())? };
     Ok(0)
+}
+
+/// Runs the hidden host side of a sanitized hybrid invocation.
+pub(crate) fn run_host(args: &[String]) -> i32 {
+    let Some((manifest, program_arguments)) = args.split_first() else {
+        crate::progress::err!("kira: the hybrid run host needs a manifest path");
+        return crate::pipeline::EXIT_USAGE;
+    };
+    match run_bundle(Path::new(manifest), program_arguments) {
+        Ok(code) => code,
+        Err(error) => {
+            crate::progress::err!("kira: {error}");
+            crate::pipeline::EXIT_FAILURE
+        }
+    }
 }
 
 /// Describes `program` as a manifest, given the trampolines the backend
@@ -253,15 +317,25 @@ fn manifest(
     exports: &[(u32, String)],
     internal_functions: u32,
     foreign_paths: &[Option<String>],
+    sanitize: kira_llvm_backend::Sanitize,
 ) -> Result<HybridManifest, HybridError> {
-    Ok(kira_build::hybrid_manifest_with_foreign_paths(
+    let sanitizer = match sanitize {
+        kira_llvm_backend::Sanitize::None => kira_hybrid_definition::HybridSanitizer::None,
+        kira_llvm_backend::Sanitize::Address => kira_hybrid_definition::HybridSanitizer::Address,
+    };
+    let bytecode_file = file_name(&artifacts.bytecode());
+    let native_file = file_name(&artifacts.shared_library());
+    Ok(kira_build::hybrid_manifest_with_options(
         program,
-        artifacts.stem(),
-        &file_name(&artifacts.bytecode()),
-        &file_name(&artifacts.shared_library()),
-        exports,
-        internal_functions,
-        foreign_paths,
+        kira_build::HybridManifestOptions {
+            module_name: artifacts.stem(),
+            bytecode_file: &bytecode_file,
+            native_file: &native_file,
+            exports,
+            internal_functions,
+            foreign_paths,
+            sanitizer,
+        },
     )?)
 }
 

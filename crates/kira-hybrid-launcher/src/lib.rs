@@ -27,6 +27,11 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use kira_hybrid_definition::{HybridManifest, HybridSanitizer};
+
+/// Marks a child whose sanitizer runtime was installed before process start.
+const SANITIZER_ACTIVE_ENV: &str = "KIRA_HYBRID_SANITIZER_ACTIVE";
+
 /// One resolved invocation: the bundle to load, and the arguments the program
 /// sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +85,157 @@ pub enum InvocationError {
         /// Which argument, counting from the first after the manifest.
         index: usize,
     },
+}
+
+/// Why a sanitized hybrid child could not be prepared.
+#[derive(Debug, thiserror::Error)]
+pub enum SanitizerLaunchError {
+    /// The manifest could not be read.
+    #[error("cannot read hybrid manifest `{path}`: {source}")]
+    ManifestRead {
+        /// Manifest path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The manifest bytes were invalid.
+    #[error("cannot decode hybrid manifest `{path}`: {source}")]
+    ManifestDecode {
+        /// Manifest path.
+        path: PathBuf,
+        /// Wire-format failure.
+        #[source]
+        source: kira_hybrid_definition::ManifestDecodeError,
+    },
+    /// The managed LLVM bundle could not supply its sanitizer runtime.
+    #[error(transparent)]
+    Toolchain(#[from] kira_toolchain::LlvmDiscoveryError),
+    /// This host has no sanitizer loader rule.
+    #[error("AddressSanitizer hybrid runs are unsupported on host `{0}`")]
+    UnsupportedHost(String),
+    /// An existing loader path could not be preserved.
+    #[error("cannot extend `{variable}` with the managed AddressSanitizer runtime: {source}")]
+    Environment {
+        /// Loader environment variable.
+        variable: &'static str,
+        /// Invalid path-list input.
+        #[source]
+        source: std::env::JoinPathsError,
+    },
+}
+
+/// Configures `command` to start a hybrid bundle with its requested sanitizer.
+///
+/// Returns `true` when the manifest requires a sanitizer child and `false`
+/// when the current process can load it directly.
+pub fn configure_sanitizer_child(
+    command: &mut std::process::Command,
+    manifest_path: &Path,
+) -> Result<bool, SanitizerLaunchError> {
+    let manifest = read_manifest(manifest_path)?;
+    if manifest.sanitizer == HybridSanitizer::None
+        || std::env::var_os(SANITIZER_ACTIVE_ENV).is_some()
+    {
+        return Ok(false);
+    }
+
+    let target = match std::env::consts::OS {
+        "macos" => kira_toolchain::AsanTargetOs::Apple {
+            platform: kira_toolchain::ApplePlatform::Macos,
+        },
+        "linux" => kira_toolchain::AsanTargetOs::LinuxGnu {
+            triple: format!("{}-unknown-linux-gnu", std::env::consts::ARCH),
+        },
+        "windows" => kira_toolchain::AsanTargetOs::WindowsMsvc {
+            arch: std::env::consts::ARCH.to_owned(),
+        },
+        other => return Err(SanitizerLaunchError::UnsupportedHost(other.to_owned())),
+    };
+    let runtime = match staged_sanitizer_runtime(manifest_path, &manifest) {
+        Some(runtime) => runtime,
+        None => kira_toolchain::discover(None)?.asan_preload_runtime(target)?,
+    };
+    match std::env::consts::OS {
+        "macos" => prepend_command_path(command, "DYLD_INSERT_LIBRARIES", &runtime)?,
+        "linux" => prepend_command_path(command, "LD_PRELOAD", &runtime)?,
+        "windows" => {
+            let directory = runtime.parent().unwrap_or(runtime.as_path());
+            prepend_command_path(command, "PATH", directory)?;
+        }
+        _ => {}
+    }
+    command.env(SANITIZER_ACTIVE_ENV, "1");
+    Ok(true)
+}
+
+/// Whether `manifest_path` needs a sanitizer child from this process.
+pub fn needs_sanitizer_child(manifest_path: &Path) -> Result<bool, SanitizerLaunchError> {
+    let manifest = read_manifest(manifest_path)?;
+    Ok(manifest.sanitizer != HybridSanitizer::None
+        && std::env::var_os(SANITIZER_ACTIVE_ENV).is_none())
+}
+
+fn read_manifest(manifest_path: &Path) -> Result<HybridManifest, SanitizerLaunchError> {
+    let bytes =
+        std::fs::read(manifest_path).map_err(|source| SanitizerLaunchError::ManifestRead {
+            path: manifest_path.to_path_buf(),
+            source,
+        })?;
+    HybridManifest::from_bytes(&bytes).map_err(|source| SanitizerLaunchError::ManifestDecode {
+        path: manifest_path.to_path_buf(),
+        source,
+    })
+}
+
+fn staged_sanitizer_runtime(manifest_path: &Path, manifest: &HybridManifest) -> Option<PathBuf> {
+    let manifest_directory = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let native = Path::new(&manifest.native_library_path);
+    let native = match native.is_absolute() {
+        true => native.to_path_buf(),
+        false => manifest_directory.join(native),
+    };
+    let directory = native.parent()?;
+    let exact = match std::env::consts::OS {
+        "macos" => Some("libclang_rt.asan_osx_dynamic.dylib".to_owned()),
+        "windows" => Some(format!(
+            "clang_rt.asan_dynamic-{}.dll",
+            std::env::consts::ARCH
+        )),
+        _ => None,
+    };
+    if let Some(exact) = exact {
+        let runtime = directory.join(exact);
+        return runtime.is_file().then_some(runtime);
+    }
+    if std::env::consts::OS == "linux" {
+        return std::fs::read_dir(directory)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy();
+                    name.starts_with("libclang_rt.asan") && name.ends_with(".so")
+                })
+            });
+    }
+    None
+}
+
+fn prepend_command_path(
+    command: &mut std::process::Command,
+    variable: &'static str,
+    path: &Path,
+) -> Result<(), SanitizerLaunchError> {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(existing) = std::env::var_os(variable) {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    let joined = std::env::join_paths(paths)
+        .map_err(|source| SanitizerLaunchError::Environment { variable, source })?;
+    command.env(variable, joined);
+    Ok(())
 }
 
 /// Resolves `arguments` against the running executable at `executable`.

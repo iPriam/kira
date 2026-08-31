@@ -86,22 +86,32 @@ fn build_hybrid_library_inner(
     retained_symbols.sort();
     retained_symbols.dedup();
     match debug {
-        Some(debug) => link::link_hybrid_library_debug(
-            &llvm,
-            &object_path,
-            &options.runtime_archive,
-            &foreign_link,
-            &retained_symbols,
-            &library,
-            &debug_symbols(program, debug, false),
-        )?,
+        Some(debug) => {
+            let symbols = debug_symbols(program, debug, false);
+            link::link_hybrid_library(
+                &llvm,
+                &object_path,
+                &options.runtime_archive,
+                &foreign_link,
+                &library,
+                link::HybridLinkOptions {
+                    retained_symbols: &retained_symbols,
+                    debug_symbols: Some(&symbols),
+                    sanitize: options.sanitize,
+                },
+            )?
+        }
         None => link::link_hybrid_library(
             &llvm,
             &object_path,
             &options.runtime_archive,
             &foreign_link,
-            &retained_symbols,
             &library,
+            link::HybridLinkOptions {
+                retained_symbols: &retained_symbols,
+                debug_symbols: None,
+                sanitize: options.sanitize,
+            },
         )?,
     }
 
@@ -138,7 +148,7 @@ pub fn build_hybrid_object(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path, options.optimize)?;
+    module.emit_object(&options.object_path, options.optimize, options.sanitize)?;
     let object_path = options.object_path.clone();
     Ok((object_path, exported_trampolines(program)))
 }
@@ -165,7 +175,7 @@ fn emit_hybrid_object(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path, options.optimize)?;
+    module.emit_object(&options.object_path, options.optimize, options.sanitize)?;
     Ok(options.object_path.clone())
 }
 

@@ -275,6 +275,26 @@ fn apply_manifest_defaults(
     Ok(())
 }
 
+/// Refuses a sanitizer request on a code generator it cannot instrument.
+fn refuse_unsupported_sanitizer(verb: &str, options: &CompileOptions) -> Result<(), i32> {
+    if options.sanitize == kira_llvm_backend::Sanitize::None {
+        return Ok(());
+    }
+    if matches!(options.device, Device::Web(_)) {
+        err!(
+            "kira {verb}: `--sanitize address` instruments native code, but the Web target emits WebAssembly; use a native host or cross target"
+        );
+        return Err(EXIT_USAGE);
+    }
+    if options.backend == BackendMode::VmBytecode {
+        err!(
+            "kira {verb}: the VM engine interprets and carries its own exit accounting; `--sanitize address` instruments native code; use `--backend llvm` or `--backend hybrid`"
+        );
+        return Err(EXIT_USAGE);
+    }
+    Ok(())
+}
+
 /// Maps a manifest execution mode to the backend API.
 fn manifest_backend(mode: &str) -> Option<BackendMode> {
     match mode {

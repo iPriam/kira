@@ -129,6 +129,7 @@ pub(super) fn run_hybrid(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
+        options.sanitize,
         foreign_link,
         program_arguments,
     ) {
@@ -421,6 +422,7 @@ pub(super) fn build_native(
         options.release,
         foreign_link,
         &super::native_build_target(options),
+        options.sanitize,
     ) {
         Ok(artifacts) => Some(artifacts),
         Err(error) => {

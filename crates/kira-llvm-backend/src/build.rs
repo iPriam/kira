@@ -179,7 +179,7 @@ fn emit_codegen_units(
         if let Some(path) = &options.ir_path {
             module.write_ir(path)?;
         }
-        module.emit_object(&options.object_path, options.optimize)?;
+        module.emit_object(&options.object_path, options.optimize, options.sanitize)?;
         return Ok(paths);
     }
 
@@ -205,7 +205,7 @@ fn emit_codegen_units(
                         kind,
                         &options.target,
                     )?;
-                    module.emit_object(path, options.optimize)
+                    module.emit_object(path, options.optimize, options.sanitize)
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -262,7 +262,11 @@ fn build_native_inner(
                     &foreign_link,
                     path,
                     &debug_symbols(program, debug, true),
-                    &options.target,
+                    link::LinkOptions {
+                        target: &options.target,
+                        sanitize: options.sanitize,
+                        shared: false,
+                    },
                 )?,
                 None => link::link_executable(
                     &llvm,
@@ -270,7 +274,11 @@ fn build_native_inner(
                     &options.runtime_archive,
                     &foreign_link,
                     path,
-                    &options.target,
+                    link::LinkOptions {
+                        target: &options.target,
+                        sanitize: options.sanitize,
+                        shared: false,
+                    },
                 )?,
             }
             Some(path.clone())
@@ -342,6 +350,7 @@ pub fn build_native_live(
         &options.runtime_archive,
         &foreign_link,
         &library,
+        options.sanitize,
     )?;
 
     Ok(NativeArtifacts {
@@ -433,7 +442,7 @@ pub fn build_native_library(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path, options.optimize)?;
+    module.emit_object(&options.object_path, options.optimize, options.sanitize)?;
 
     let llvm = kira_toolchain::discover(None)?;
     if let Some(archive) = &options.archive_path {
@@ -450,7 +459,11 @@ pub fn build_native_library(
             &options.object_path,
             &options.runtime_archive,
             library,
-            &options.target,
+            link::LinkOptions {
+                target: &options.target,
+                sanitize: options.sanitize,
+                shared: true,
+            },
         )?;
     }
 

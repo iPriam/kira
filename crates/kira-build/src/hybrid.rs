@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam};
+use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam, HybridSanitizer};
 use kira_ir::IrProgram;
 use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 use kira_semantics_model::Type;
@@ -217,6 +217,52 @@ pub fn manifest_with_foreign_paths(
     internal_functions: u32,
     foreign_paths: &[Option<String>],
 ) -> Result<HybridManifest, HybridLibraryError> {
+    manifest_with_options(
+        program,
+        HybridManifestOptions {
+            module_name,
+            bytecode_file,
+            native_file,
+            exports,
+            internal_functions,
+            foreign_paths,
+            sanitizer: HybridSanitizer::None,
+        },
+    )
+}
+
+/// Artifact and runtime details recorded around a hybrid program's functions.
+pub struct HybridManifestOptions<'a> {
+    /// Module name used by diagnostics.
+    pub module_name: &'a str,
+    /// Bytecode payload path.
+    pub bytecode_file: &'a str,
+    /// Native payload path.
+    pub native_file: &'a str,
+    /// Native function ids and emitted symbols.
+    pub exports: &'a [(u32, String)],
+    /// Synthesized functions appended to the bytecode table.
+    pub internal_functions: u32,
+    /// Direct foreign-library paths in import order.
+    pub foreign_paths: &'a [Option<String>],
+    /// Native instrumentation required before the library loads.
+    pub sanitizer: HybridSanitizer,
+}
+
+/// Describes `program` with its artifact and runtime options.
+pub fn manifest_with_options(
+    program: &IrProgram,
+    options: HybridManifestOptions<'_>,
+) -> Result<HybridManifest, HybridLibraryError> {
+    let HybridManifestOptions {
+        module_name,
+        bytecode_file,
+        native_file,
+        exports,
+        internal_functions,
+        foreign_paths,
+        sanitizer,
+    } = options;
     let functions = program
         .functions
         .iter()
@@ -266,6 +312,7 @@ pub fn manifest_with_foreign_paths(
         entry: program.main,
         functions,
         internal_functions,
+        sanitizer,
         // One row per `@FFI.Extern` import, carrying the resolved library path
         // for the direct Libffi host. An empty path is an excluded optional
         // library and remains a call-time unavailable binding.
@@ -397,6 +444,9 @@ pub fn build_hybrid_library(
             // process, so it is this machine's by construction: there is no
             // second machine for the bytecode half to be running on.
             target: kira_llvm_backend::NativeBuildTarget::host(),
+            // A consumer-library build carries no sanitize choice yet; the
+            // program paths thread the user's flag.
+            sanitize: kira_llvm_backend::Sanitize::None,
         },
     )?;
 

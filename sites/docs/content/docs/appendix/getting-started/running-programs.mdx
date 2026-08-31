@@ -25,9 +25,14 @@ kira run --backend vm app.kira        # interpreted bytecode
 kira run --backend llvm app.kira      # machine code
 kira run --backend hybrid app.kira    # both, in one process
 kira build --device wasm32 app.kira   # a wasm32-emscripten module
+kira run --backend llvm --sanitize address app.kira
 ```
 
 The VM is the default because it needs no linker. `--backend llvm` and `--backend hybrid` both need the managed LLVM. See [Execution Model](/docs/language-guide/execution-model).
+
+`--sanitize address` instruments native memory access. It covers the whole LLVM backend and the `@Native` half of a hybrid program. Hybrid runs start a child with the managed AddressSanitizer runtime loaded before the native library. VM and Web builds refuse the flag.
+
+AddressSanitizer runtimes come only from Kira's managed LLVM bundle. A bundle without compiler-rt fails with the expected path instead of using Xcode, Command Line Tools, or another host compiler.
 
 ## Where Artifacts Land
 

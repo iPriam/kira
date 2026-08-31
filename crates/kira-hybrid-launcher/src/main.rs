@@ -33,6 +33,18 @@ fn run() -> Result<(), RunError> {
     let executable = std::env::current_exe().map_err(RunError::LocateSelf)?;
     let invocation = resolve(&arguments, &executable)?;
 
+    let mut child = std::process::Command::new(&executable);
+    child
+        .arg(&invocation.manifest)
+        .args(&invocation.program_arguments);
+    if kira_hybrid_launcher::configure_sanitizer_child(&mut child, &invocation.manifest)? {
+        let status = child.status().map_err(RunError::SpawnSanitized)?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(RunError::SanitizedChildFailed(status.code()));
+    }
+
     let session = kira_hybrid_runtime::Session::load(&invocation.manifest)?;
     // SAFETY: as above — this thread owns the process environment for the
     // whole run.
@@ -54,4 +66,13 @@ enum RunError {
     /// Loading or running the bundle failed.
     #[error(transparent)]
     Session(#[from] kira_hybrid_runtime::HybridError),
+    /// The sanitizer runtime could not be installed before the native half.
+    #[error(transparent)]
+    Sanitizer(#[from] kira_hybrid_launcher::SanitizerLaunchError),
+    /// The sanitized launcher child could not start.
+    #[error("cannot start the sanitized hybrid child: {0}")]
+    SpawnSanitized(std::io::Error),
+    /// The sanitized launcher child failed.
+    #[error("the sanitized hybrid child failed with exit code {0:?}")]
+    SanitizedChildFailed(Option<i32>),
 }

@@ -336,6 +336,7 @@ mod tests {
             foreign: Vec::new(),
             foreign_aggregates: Default::default(),
             internal_functions: 0,
+            sanitizer: kira_hybrid_definition::HybridSanitizer::None,
         }
     }
 

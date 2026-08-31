@@ -134,6 +134,14 @@ pub struct CompileOptions {
     pub linkage: Option<Linkage>,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
+    /// Which sanitizer `--sanitize` asked for.
+    ///
+    /// Instruments the native code a build emits — the whole program on the
+    /// LLVM backend, the `@Native` half of a hybrid one — and links the
+    /// managed bundle's runtime. The pure VM interprets and has its own exit
+    /// accounting, so it is refused this flag by name rather than handed one
+    /// that would watch nothing.
+    pub sanitize: kira_llvm_backend::Sanitize,
     /// Whether to generate code at the aggressive optimization level.
     ///
     /// A development build already optimizes: emitting without it is faster but
@@ -212,6 +220,12 @@ pub enum OptionsError {
     /// `--relocation-model` was given an unknown value.
     #[error("unknown relocation model `{0}`; expected one of: pic, static")]
     UnknownRelocationModel(String),
+    /// `--sanitize` was given without a value.
+    #[error("`--sanitize` expects: address")]
+    SanitizeMissingValue,
+    /// `--sanitize` was given an unknown value.
+    #[error("unknown sanitizer `{0}`; expected: address")]
+    UnknownSanitizer(String),
     /// `--linkage` was given without a value.
     #[error("`--linkage` expects one of: dynamic, static")]
     LinkageMissingValue,
@@ -274,6 +288,7 @@ impl CompileOptions {
         let mut linkage: Option<Linkage> = None;
         let mut sysroot: Option<PathBuf> = None;
         let mut emit_llvm_ir = false;
+        let mut sanitize = kira_llvm_backend::Sanitize::None;
         let mut release = false;
         let mut timings = false;
         let mut show_notes = false;
@@ -346,6 +361,16 @@ impl CompileOptions {
                     quit_after = Some(parse_duration(value)?);
                     index += 1;
                 }
+                "--sanitize" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(OptionsError::SanitizeMissingValue)?;
+                    sanitize = match value.as_str() {
+                        "address" => kira_llvm_backend::Sanitize::Address,
+                        other => return Err(OptionsError::UnknownSanitizer(other.to_owned())),
+                    };
+                    index += 1;
+                }
                 "--emit-llvm-ir" => emit_llvm_ir = true,
                 "--release" => release = true,
                 "--timings" => timings = true,
@@ -413,6 +438,7 @@ impl CompileOptions {
             relocation,
             linkage,
             emit_llvm_ir,
+            sanitize,
             release,
             timings,
             show_notes,
@@ -870,5 +896,26 @@ mod tests {
                 .expect("parses");
         assert!(options.emit_llvm_ir);
         assert_eq!(options.backend, BackendMode::LlvmNative);
+    }
+
+    #[test]
+    fn parses_address_sanitizer_and_rejects_every_other_spelling() {
+        let options = CompileOptions::parse(&args(&[
+            "--backend",
+            "llvm",
+            "--sanitize",
+            "address",
+            "m.kira",
+        ]))
+        .expect("parses");
+        assert_eq!(options.sanitize, kira_llvm_backend::Sanitize::Address);
+        assert_eq!(
+            CompileOptions::parse(&args(&["--sanitize"])),
+            Err(OptionsError::SanitizeMissingValue)
+        );
+        assert_eq!(
+            CompileOptions::parse(&args(&["--sanitize", "thread"])),
+            Err(OptionsError::UnknownSanitizer("thread".to_owned()))
+        );
     }
 }

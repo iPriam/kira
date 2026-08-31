@@ -20,8 +20,8 @@ use super::execute::{
 };
 use super::{
     EXIT_FAILURE, EXIT_OK, EXIT_USAGE, apply_manifest_defaults, compile, emit_diagnostics,
-    foreign_link, options_target, parse_options, resolve_foreign, resolve_path, runnable_ir,
-    verified, verified_as,
+    foreign_link, options_target, parse_options, refuse_unsupported_sanitizer, resolve_foreign,
+    resolve_path, runnable_ir, verified, verified_as,
 };
 use crate::debugger;
 use crate::hybrid;
@@ -91,6 +91,9 @@ pub fn run(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     if let Err(code) = apply_manifest_defaults("run", &mut options, &compiled) {
+        return code;
+    }
+    if let Err(code) = refuse_unsupported_sanitizer("run", &options) {
         return code;
     }
     let ir = match runnable_ir("run", compiled) {
@@ -194,6 +197,9 @@ pub fn debug(args: &[String]) -> i32 {
     if let Err(code) = apply_manifest_defaults("debug", &mut debug_options.compile, &compiled) {
         return code;
     }
+    if let Err(code) = refuse_unsupported_sanitizer("debug", &debug_options.compile) {
+        return code;
+    }
     if !matches!(debug_options.compile.device, Device::Host) {
         err!("kira debug: the debugger currently targets host VM/LLVM/hybrid runs");
         return EXIT_USAGE;
@@ -275,6 +281,9 @@ pub fn test(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     if let Err(code) = apply_manifest_defaults("test", &mut options, &compiled) {
+        return code;
+    }
+    if let Err(code) = refuse_unsupported_sanitizer("test", &options) {
         return code;
     }
     let mut ir = compiled.ir;
@@ -434,6 +443,7 @@ fn build_test_artifact(
             ir,
             Path::new(&options.path),
             options.emit_llvm_ir,
+            options.sanitize,
             foreign_link,
         ) {
             Ok(bundle) => Ok(TestArtifact::Hybrid {

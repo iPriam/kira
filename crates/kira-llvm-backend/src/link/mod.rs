@@ -36,14 +36,13 @@ mod carrier;
 mod driver;
 mod error;
 mod libraries;
+mod sanitizer;
 mod target;
 
 pub use carrier::link_ffi_carrier;
 pub use error::LinkError;
-pub use libraries::{
-    archive_static_library, link_hybrid_library, link_hybrid_library_debug,
-    link_native_live_library, link_shared_library,
-};
+pub(crate) use libraries::{HybridLinkOptions, link_hybrid_library};
+pub use libraries::{archive_static_library, link_native_live_library, link_shared_library};
 pub use target::{NativeBuildTarget, SYSROOT_VARIABLE};
 
 use driver::{
@@ -51,6 +50,13 @@ use driver::{
     reproducible_link_arguments, response_file_for, stage_runtime_files, tool_diagnostic,
 };
 use target::macos_sysroot;
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LinkOptions<'a> {
+    pub(super) target: &'a NativeBuildTarget,
+    pub(super) sanitize: crate::Sanitize,
+    pub(super) shared: bool,
+}
 
 /// Links `objects` against the native runtime archive into `executable`.
 ///
@@ -77,9 +83,9 @@ pub fn link_executable(
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
     executable: &Path,
-    target: &NativeBuildTarget,
+    options: LinkOptions<'_>,
 ) -> Result<(), LinkError> {
-    let extra = executable_stack_arguments(target);
+    let extra = executable_stack_arguments(options.target);
     link_executable_inner(
         llvm,
         objects,
@@ -87,7 +93,7 @@ pub fn link_executable(
         foreign_link,
         executable,
         extra,
-        target,
+        options,
     )
 }
 
@@ -100,15 +106,15 @@ pub fn link_executable_debug(
     foreign_link: &NativeLinkInputs,
     executable: &Path,
     debug_symbols: &[String],
-    target: &NativeBuildTarget,
+    options: LinkOptions<'_>,
 ) -> Result<(), LinkError> {
-    let mut extra = executable_stack_arguments(target);
+    let mut extra = executable_stack_arguments(options.target);
     // The native object carries portable DWARF plus the platform-native debug
     // records where the target needs them. `-g` asks the linker for its native
     // symbol companion (a PDB on Windows), while the object stays beside the
     // artifact for direct DWARF inspection.
     extra.push("-g".to_owned());
-    extra.extend(export_debug_symbols(target, debug_symbols));
+    extra.extend(export_debug_symbols(options.target, debug_symbols));
     link_executable_inner(
         llvm,
         objects,
@@ -116,7 +122,7 @@ pub fn link_executable_debug(
         foreign_link,
         executable,
         extra,
-        target,
+        options,
     )
 }
 
@@ -127,7 +133,7 @@ fn link_executable_inner(
     foreign_link: &NativeLinkInputs,
     executable: &Path,
     extra: Vec<String>,
-    target: &NativeBuildTarget,
+    options: LinkOptions<'_>,
 ) -> Result<(), LinkError> {
     link_with(
         llvm,
@@ -136,7 +142,7 @@ fn link_executable_inner(
         foreign_link,
         executable,
         &extra,
-        target,
+        options,
     )
 }
 
@@ -165,8 +171,11 @@ pub(crate) fn link_with(
     foreign_link: &NativeLinkInputs,
     output: &Path,
     extra: &[String],
-    target: &NativeBuildTarget,
+    options: LinkOptions<'_>,
 ) -> Result<(), LinkError> {
+    let target = options.target;
+    let sanitize = options.sanitize;
+    let shared = options.shared;
     let executable = output;
     let driver = llvm.clang();
     if !driver.is_file() {
@@ -237,6 +246,9 @@ pub(crate) fn link_with(
     for argument in driver::staged_library_runtime_arguments(target) {
         arguments.push(argument.into());
     }
+    for argument in sanitizer::link_arguments(llvm, target, sanitize, shared)? {
+        arguments.push(argument.into());
+    }
     for argument in platform_link_arguments(target) {
         arguments.push(argument.into());
     }
@@ -252,6 +264,7 @@ pub(crate) fn link_with(
     }
 
     stage_runtime_files(foreign_link, executable)?;
+    sanitizer::stage_runtime(llvm, target, sanitize, shared, executable)?;
 
     let mut command = Command::new(&driver);
     match response_file_for(&arguments, executable)? {

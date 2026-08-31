@@ -36,6 +36,8 @@ mod retained;
 use reader::Reader;
 use retained::read_foreign_retained;
 
+use crate::HybridSanitizer;
+
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
 
@@ -125,6 +127,10 @@ pub struct HybridManifest {
     /// Zero for a program that widens nothing, and for a manifest written
     /// before this field existed — which is what keeps those bytes unchanged.
     pub internal_functions: u32,
+    /// Native instrumentation that must be active before this bundle loads.
+    ///
+    /// `None` for manifests written before this field was appended.
+    pub sanitizer: HybridSanitizer,
 }
 
 /// One `@FFI.Extern` import: its C library and symbol, its exact-width
@@ -227,6 +233,9 @@ pub enum ManifestDecodeError {
     /// An ownership byte named no parameter mode this build knows.
     #[error("unknown parameter ownership `{0}` in hybrid manifest")]
     UnknownOwnership(u8),
+    /// The sanitizer byte named no instrumentation mode this runtime knows.
+    #[error("unknown hybrid sanitizer `{0}` in hybrid manifest")]
+    UnknownSanitizer(u8),
     /// The entrypoint index does not name a function in the manifest.
     #[error("hybrid manifest entrypoint {entry} names no function (of {count})")]
     EntryOutOfRange {
@@ -351,7 +360,8 @@ impl HybridManifest {
             .foreign
             .iter()
             .any(|import| import.signature.any_retained());
-        let tail = self.internal_functions != 0 || has_retained;
+        let has_sanitizer = self.sanitizer != HybridSanitizer::None;
+        let tail = self.internal_functions != 0 || has_retained || has_sanitizer;
         // The foreign-import section, written when there is something in it (or
         // when the tail below forces it): a program with no `@FFI.Extern`
         // imports writes nothing here, so its bytes are identical to a manifest
@@ -403,7 +413,7 @@ impl HybridManifest {
         if tail {
             write_u32(&mut out, self.internal_functions);
         }
-        if has_retained {
+        if has_retained || has_sanitizer {
             write_u32(&mut out, self.foreign.len() as u32);
             for import in &self.foreign {
                 let positions: Vec<usize> = import.signature.retained_positions().collect();
@@ -412,6 +422,9 @@ impl HybridManifest {
                     write_u32(&mut out, position as u32);
                 }
             }
+        }
+        if let Some(tag) = self.sanitizer.as_byte() {
+            out.push(tag);
         }
         out
     }
@@ -462,6 +475,12 @@ impl HybridManifest {
         // here, and so does one for a program that widens nothing.
         let internal_functions = if reader.is_at_end() { 0 } else { reader.u32()? };
         read_foreign_retained(&mut reader, &mut foreign)?;
+        let sanitizer = if reader.is_at_end() {
+            HybridSanitizer::None
+        } else {
+            let byte = reader.byte()?;
+            HybridSanitizer::from_byte(byte).ok_or(ManifestDecodeError::UnknownSanitizer(byte))?
+        };
         if !reader.is_at_end() {
             return Err(ManifestDecodeError::TrailingBytes(reader.remaining()));
         }
@@ -498,6 +517,7 @@ impl HybridManifest {
             foreign,
             foreign_aggregates,
             internal_functions,
+            sanitizer,
         })
     }
 }

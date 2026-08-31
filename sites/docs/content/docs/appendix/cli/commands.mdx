@@ -9,7 +9,8 @@ Every verb that takes `[file|dir]` defaults to the package directory you are sta
 
 ```bash
 kira run [file|dir] [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-         [--release] [--emit-llvm-ir] [--quit-after 5s] [--timings] [--show-notes]
+         [--sanitize address] [--release] [--emit-llvm-ir] [--quit-after 5s]
+         [--timings] [--show-notes]
          [-- <args...>]
 ```
 
@@ -27,10 +28,15 @@ A wasm device does not run on this machine: it builds a module and serves it to 
 kira build [file|dir] [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
            [--target arch-os-abi] [--sysroot <dir>]
            [--relocation-model pic|static] [--linkage dynamic|static]
-           [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]
+           [--sanitize address] [--release] [--emit-llvm-ir]
+           [--timings] [--show-notes] [-- <args...>]
 ```
 
 Compiles to an application or library artifact under `.kira-build/`. See [Running Programs](/docs/appendix/getting-started/running-programs#where-artifacts-land) for the output shapes and [Cross Compilation](/docs/appendix/toolchains/cross-compilation) for the target flags.
+
+`--sanitize address` instruments LLVM-native code and links AddressSanitizer from Kira's managed LLVM bundle. It applies to the whole LLVM backend and the `@Native` half of a hybrid build. VM and Web builds refuse it because they emit no native code for AddressSanitizer to instrument.
+
+The managed bundle must include compiler-rt for the selected macOS, iOS, tvOS, visionOS, Windows, Android, or Linux target. Kira reports the exact missing bundle path and never falls back to Xcode, Command Line Tools, or a compiler on `PATH`.
 
 ## `check`
 
@@ -46,7 +52,7 @@ The machine matters even though nothing is emitted: autobind generates per targe
 ## `test`
 
 ```bash
-kira test [file|dir] [--backend vm|llvm|hybrid] [-- <args...>]
+kira test [file|dir] [--backend vm|llvm|hybrid] [--sanitize address] [-- <args...>]
 ```
 
 The same pipeline `run` drives, with one difference: the entrypoint is the generated `kiraTestMain` rather than `@Main`. A suite therefore needs no `@Main` of its own, and one that has an application entrypoint keeps it, so `kira run` on the same package still runs that.

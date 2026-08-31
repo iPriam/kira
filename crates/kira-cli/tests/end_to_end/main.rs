@@ -32,6 +32,7 @@ mod modules;
 mod natives;
 mod packages;
 mod programs;
+mod sanitizers;
 mod scaffold;
 mod tests_verb;
 mod web;

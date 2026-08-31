@@ -1,4 +1,5 @@
 //! The loaded native half: `dlopen`, symbol binding, and the string helpers the
+//! The loaded native half: `dlopen`, symbol binding, and the string helpers the
 //! host reaches the library's heap through.
 //!
 //! # Why nothing here links against the runtime

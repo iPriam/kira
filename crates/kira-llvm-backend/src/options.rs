@@ -62,6 +62,24 @@ pub struct NativeBuildOptions {
     /// against, the code generator the object comes out of, and the machine the
     /// link line is aimed at.
     pub target: NativeBuildTarget,
+    /// Which sanitizer instruments this build, if any.
+    pub sanitize: Sanitize,
+}
+
+/// Which sanitizer a native build carries.
+///
+/// One value threaded from the command line to the emitted object and the
+/// link line together, because the two halves are useless apart: an
+/// instrumented object without the runtime fails to link, and the runtime
+/// without instrumentation watches nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sanitize {
+    /// No instrumentation, the default.
+    #[default]
+    None,
+    /// AddressSanitizer: every Kira function is instrumented and the link
+    /// carries the managed bundle's ASan runtime — never a host compiler's.
+    Address,
 }
 
 /// The artifacts a native build produced.

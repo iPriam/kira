@@ -251,6 +251,9 @@ fn build_slice(
             )),
             Some(sysroot),
         ),
+        // A sanitized device app must also carry the runtime dylib inside its
+        // bundle; the export surface grows the flag with that step.
+        sanitize: kira_llvm_backend::Sanitize::None,
     };
 
     let (_object, trampolines) =

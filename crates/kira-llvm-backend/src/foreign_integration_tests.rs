@@ -326,6 +326,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             // The test runs the program it builds, so it builds for this
             // machine.
             target: crate::NativeBuildTarget::host(),
+            sanitize: crate::Sanitize::None,
         },
     )
     .expect("the FFI program links");

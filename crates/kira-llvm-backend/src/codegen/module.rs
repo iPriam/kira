@@ -365,7 +365,12 @@ impl Module {
 
     /// Emits a native object file into `path`, for the machine this module was
     /// lowered against.
-    pub(crate) fn emit_object(&self, path: &Path, optimize: bool) -> Result<(), LlvmError> {
+    pub(crate) fn emit_object(
+        &self,
+        path: &Path,
+        optimize: bool,
+        sanitize: crate::Sanitize,
+    ) -> Result<(), LlvmError> {
         let unit = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -375,6 +380,12 @@ impl Module {
         if optimize {
             kira_diagnostics::progress!("inlining value glue for {unit}");
             machine.always_inline(self.module)?;
+        }
+        // After inlining, the way clang orders it: the checks land on the
+        // loads and stores that survive, not on glue an inline erases.
+        if sanitize == crate::Sanitize::Address {
+            kira_diagnostics::progress!("instrumenting {unit} with AddressSanitizer");
+            machine.address_sanitize(self.module)?;
         }
         kira_diagnostics::progress!(
             "emitting object with LLVM for {unit} (fast-codegen={})",

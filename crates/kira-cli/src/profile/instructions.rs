@@ -122,7 +122,14 @@ fn count_hybrid(
     emit_llvm_ir: bool,
     counter: &mut InstructionCounter,
 ) -> Counted {
-    let bundle = crate::hybrid::build(ir, source, emit_llvm_ir, foreign_link).map_err(|error| {
+    let bundle = crate::hybrid::build(
+        ir,
+        source,
+        emit_llvm_ir,
+        kira_llvm_backend::Sanitize::None,
+        foreign_link,
+    )
+    .map_err(|error| {
         err!("kira profile record: {error}");
         EXIT_FAILURE
     })?;

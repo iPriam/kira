@@ -391,6 +391,52 @@ impl TargetMachine {
         Ok(())
     }
 
+    /// Instruments every defined function in `module` with AddressSanitizer.
+    ///
+    /// Two steps, and both are needed: the `asan` pass instruments only
+    /// functions carrying the `sanitize_address` attribute — that is how clang
+    /// scopes it — so the attribute is stamped on every function with a body
+    /// first, and the pass is run second. Declarations are left alone: their
+    /// bodies belong to other objects, which carry their own instrumentation
+    /// or none.
+    pub(super) fn address_sanitize(&self, module: LLVMModuleRef) -> Result<(), LlvmError> {
+        use llvm_sys::core::{
+            LLVMAddAttributeAtIndex, LLVMCreateEnumAttribute, LLVMGetEnumAttributeKindForName,
+            LLVMGetFirstFunction, LLVMGetModuleContext, LLVMGetNextFunction, LLVMIsDeclaration,
+        };
+        use llvm_sys::transforms::pass_builder::*;
+
+        let attribute = c"sanitize_address";
+        // SAFETY: `module` is live; every function handle comes from the
+        // module's own list, and the attribute kind string is copied by LLVM.
+        unsafe {
+            let context = LLVMGetModuleContext(module);
+            let kind =
+                LLVMGetEnumAttributeKindForName(attribute.as_ptr(), attribute.to_bytes().len());
+            let value = LLVMCreateEnumAttribute(context, kind, 0);
+            let mut function = LLVMGetFirstFunction(module);
+            while !function.is_null() {
+                if LLVMIsDeclaration(function) == 0 {
+                    LLVMAddAttributeAtIndex(function, llvm_sys::LLVMAttributeFunctionIndex, value);
+                }
+                function = LLVMGetNextFunction(function);
+            }
+        }
+        let passes = c_string("asan");
+        // SAFETY: `module` and `self.machine` are live; the options are created
+        // and disposed here, and LLVM allocates an error only on failure.
+        unsafe {
+            let options = LLVMCreatePassBuilderOptions();
+            let error = LLVMRunPasses(module, passes.as_ptr(), self.machine, options);
+            LLVMDisposePassBuilderOptions(options);
+            if !error.is_null() {
+                let detail = super::ffi::take_error(error);
+                return Err(LlvmError::Emit(detail));
+            }
+        }
+        Ok(())
+    }
+
     /// Emits `module` as an object file at `path`.
     ///
     /// Written beside the object and renamed onto it, so `path` only ever holds

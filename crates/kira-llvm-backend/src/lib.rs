@@ -74,7 +74,7 @@ pub use hybrid::{
     has_reachable_hybrid_native_functions, hybrid_uses_compiler_runtime,
 };
 pub use link::{LinkError, NativeBuildTarget, SYSROOT_VARIABLE, link_ffi_carrier};
-pub use options::{NativeArtifacts, NativeBuildOptions};
+pub use options::{NativeArtifacts, NativeBuildOptions, Sanitize};
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
 
 /// The infix marking a partially written object: `<object>.pending-<pid>`.
