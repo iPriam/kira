@@ -224,7 +224,7 @@ impl Vm<'_> {
             });
         }
         let returned = {
-            let _active = super::ActiveVmGuard::install(active_vm, module);
+            let _active = super::active::ActiveVmGuard::install(active_vm, module);
             self.host
                 .call_native(id, &lowered)
                 .map_err(VmError::NativeCall)
@@ -377,7 +377,7 @@ impl Vm<'_> {
                 expected,
             }),
             (None, None) => {
-                let _active = super::ActiveVmGuard::install(active_vm, module);
+                let _active = super::active::ActiveVmGuard::install(active_vm, module);
                 self.host
                     .call_foreign(id, &lowered)
                     .map_err(VmError::ForeignCall)

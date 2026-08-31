@@ -145,6 +145,36 @@ fn a_suite_that_names_a_module_still_filters_by_name() {
     );
 }
 
+/// The toolchain suite is the one selection that runs the `#[ignore]`d
+/// self-install proofs — each builds and installs this checkout — so it must
+/// pass `--include-ignored` behind the `--` separator, and no other suite may.
+#[test]
+fn the_toolchain_suite_alone_runs_the_ignored_install_proofs() {
+    let args = cargo_arguments(Some("toolchain"), None, "debug", None, Fallback::Workspace);
+    assert_eq!(
+        args,
+        vec![
+            "test",
+            "-p",
+            "kira-cli",
+            "-p",
+            "kira-build",
+            "-p",
+            "kira-project",
+            "-p",
+            "kira-knvm",
+            "--no-fail-fast",
+            "--",
+            "--include-ignored"
+        ]
+    );
+    let all = cargo_arguments(Some("all"), None, "debug", None, Fallback::Workspace);
+    assert!(
+        !all.iter().any(|argument| argument == "--include-ignored"),
+        "the default gate must leave the install proofs ignored"
+    );
+}
+
 /// A caller's own package wins over the suite's, and the suite's binary is not
 /// forced onto it: a package with no such target would fail the run outright.
 #[test]

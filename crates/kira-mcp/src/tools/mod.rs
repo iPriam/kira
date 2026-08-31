@@ -188,15 +188,26 @@ pub fn project(detail: &str, mut value: Value) -> Value {
         return value;
     }
     let keep_evidence = detail == "failures";
-    if let Some(failures) = value["failures"].as_array_mut() {
-        for failure in failures {
-            failure["stdout"] = json!("");
-            failure["stderr"] = json!("");
-            if !keep_evidence {
-                for field in ["backtrace", "command", "reproduction"] {
-                    failure[field] = Value::Null;
+    // `failures` and `violations` both carry whole command transcripts. At
+    // the failures level a bounded tail stays — the end of a compiler or test
+    // run is where its verdict is — and a summary keeps the message alone.
+    // Either way the untrimmed run is in the session, one read away.
+    for key in ["failures", "violations"] {
+        if let Some(entries) = value[key].as_array_mut() {
+            for failure in entries {
+                for stream in ["stdout", "stderr"] {
+                    let trimmed = match keep_evidence {
+                        true => failure[stream].as_str().map(evidence_tail),
+                        false => None,
+                    };
+                    failure[stream] = json!(trimmed.unwrap_or_default());
                 }
-                failure["artifacts"] = json!([]);
+                if !keep_evidence {
+                    for field in ["backtrace", "command", "reproduction"] {
+                        failure[field] = Value::Null;
+                    }
+                    failure["artifacts"] = json!([]);
+                }
             }
         }
     }
@@ -205,6 +216,22 @@ pub fn project(detail: &str, mut value: Value) -> Value {
     value["detail"] = json!(detail);
     value["output_omitted"] = json!(true);
     value
+}
+
+/// The last stretch of one command stream, enough to hold its verdict.
+const EVIDENCE_TAIL_BYTES: usize = 4096;
+
+/// Takes the tail of `text` that fits the evidence budget, on a character
+/// boundary, marking the cut so a reader knows the head exists in the session.
+fn evidence_tail(text: &str) -> String {
+    if text.len() <= EVIDENCE_TAIL_BYTES {
+        return text.to_owned();
+    }
+    let mut start = text.len() - EVIDENCE_TAIL_BYTES;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("[… earlier output in the session …]\n{}", &text[start..])
 }
 
 /// The three engines a Kira program can run on.

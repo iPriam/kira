@@ -51,7 +51,14 @@ fn repository_root() -> PathBuf {
 
 /// The whole developer route: build, install, select, and compile a program
 /// with the result.
+///
+/// Ignored in the default gate: a binstall builds every workspace binary and
+/// the Apple runner for seven targets, which is minutes of work proving the
+/// install route rather than the change under test. The `toolchain` suite
+/// runs it (`kira_dev_validate {suite: "toolchain"}` passes
+/// `--include-ignored`), so the route is still gated where it is asked about.
 #[test]
+#[ignore = "builds and installs the whole toolchain; run via the toolchain suite"]
 fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
     let root = TempTree::create("root");
 
@@ -150,7 +157,11 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
 /// A second binstall replaces the tree. "Already installed" would mean
 /// "silently stale" for a dev build, which is the fake success this test pins
 /// out of existence.
+///
+/// Ignored in the default gate for the reason the install test is, twice
+/// over: this one binstalls the checkout two times.
 #[test]
+#[ignore = "builds and installs the whole toolchain twice; run via the toolchain suite"]
 fn a_second_binstall_replaces_the_previous_build() {
     let root = TempTree::create("root");
     let checkout = repository_root();

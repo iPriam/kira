@@ -298,6 +298,16 @@ fn cargo_arguments(
         args.push("--".to_owned());
         args.push(filter.to_owned());
     }
+    // The toolchain suite is where the self-install proofs live. Each one
+    // builds and installs this checkout — minutes of work — so they are
+    // `#[ignore]`d out of every other selection and run only where they are
+    // the question being asked.
+    if suite == Some("toolchain") && named.is_none() {
+        if by_name.is_none() {
+            args.push("--".to_owned());
+        }
+        args.push("--include-ignored".to_owned());
+    }
     args
 }
 
