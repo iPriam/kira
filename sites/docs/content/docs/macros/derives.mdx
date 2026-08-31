@@ -1,9 +1,9 @@
 ---
 title: Derives
-description: The six derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
+description: The seven derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
 ---
 
-Foundation ships six derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, and `foundation/app/DeriveTagged.kira`. All six are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
+Foundation ships seven derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`. All seven are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
 
 | Derive | Generated free function | Contract |
 | --- | --- | --- |
@@ -13,6 +13,7 @@ Foundation ships six derive macros written in pure Kira, in `foundation/app/Deri
 | `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` | value to compact wire string |
 | `Deserializable` | `function deserialize_<Type>(s: borrow String) -> <Type>` | wire string to value, trapping on malformed input |
 | `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
+| `Ordered` | `function compare_<Type>(a: borrow <Type>, b: borrow <Type>) -> Ordering` and `lt_<Type>` | declaration-order total order, with no position exposed |
 
 The generated name is glued to the derived type's exact name (`eq_Point`,
 `clone_Point`, `hash_Point`, `serialize_Point`, `deserialize_Point`,
@@ -66,6 +67,38 @@ enum Material { Flat Frosted }
 let code = code_Material(Material.Frosted)       // 1
 let value = Material_fromCode(code)              // Material.Frosted
 ```
+
+## `Ordered`
+
+`Ordered` applies to enums and generates `compare_<Type>`, returning the
+Foundation enum `Ordering` (`Less`, `Equal`, `Greater`), plus `lt_<Type>`.
+Earlier variants sort before later ones.
+
+It answers a different question from `Tagged` and deliberately answers only
+that one. A program that needs a sort but not a wire code should not have to
+take a number to get an order: once the position is a value, it reaches call
+sites, gets stored, and ends up written down, making declaration order a wire
+fact nobody declared it to be. The ordinal `Ordered` is built from stays inside
+the expansion under the reserved `__kira_ord_` prefix, so nothing above it can
+read a position or compare one against a literal.
+
+```kira
+@Derive(Ordered)
+enum Severity { Note Warning Error }
+
+let order = compare_Severity(Severity.Note, Severity.Error)   // Ordering.Less
+let sorts = lt_Severity(Severity.Note, Severity.Warning)      // true
+```
+
+**A payload-carrying variant is refused.** Ordering by position alone would
+call two `Custom` values equal when their payloads differ, silently breaking the
+total order a sort depends on; ordering by payload needs that payload type
+ordered too. Guessing which was meant ships a wrong answer instead of a
+diagnostic, so the derive refuses, the same way `Hashable` refuses an array
+field.
+
+Like `Tagged`, the order is stable exactly as long as the enum is only appended
+to: inserting a variant in the middle reorders values already written down.
 
 ## The Wire Format
 

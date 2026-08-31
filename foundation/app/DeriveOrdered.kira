@@ -1,0 +1,113 @@
+// Foundation's `@Derive(Ordered)`: an enum's declaration order as a total
+// order, without handing anyone the position it is built from.
+//
+//   @Derive(Ordered)
+//   enum Severity {
+//       Note
+//       Warning
+//       Error
+//   }
+//
+// generates
+//
+//   function compare_Severity(a: borrow Severity, b: borrow Severity) -> Ordering
+//   function lt_Severity(a: borrow Severity, b: borrow Severity) -> Bool
+//
+// The generated names are glued to the enum's exact name, the same fixed
+// contract the other Foundation derives keep.
+//
+// # Why this exists
+//
+// `@Derive(Tagged)` answers "which number is this variant", and a program that
+// only wanted to sort had to take the number to get the order. That number then
+// leaks: it reaches call sites, gets stored, gets written to a file, and now
+// declaration order is a wire fact nobody declared it to be. The two questions
+// are separate, and a program that asks the second should not be handed the
+// first.
+//
+// So the ordinal here is real but private. It exists inside the expansion,
+// under the reserved `__kira_ord_` prefix, and nothing above it can read a
+// position or compare one to a literal.
+//
+// # The order is declaration order
+//
+// Earlier variants sort before later ones. That is stable exactly as long as
+// the enum is only appended to, which is the same discipline `Tagged` already
+// asks for and the same one every wire format keeps: inserting a variant in the
+// middle reorders values that were already written down.
+//
+// # Payload-carrying variants are refused
+//
+// A variant with a payload has no one obvious order. Comparing by position
+// alone says two `Custom` values are equal when their payloads differ, which
+// silently breaks the total order a sort depends on; comparing by payload needs
+// the payload type to be ordered too, and guessing which of those was meant is
+// how a derive ships a wrong answer instead of a diagnostic. Foundation refuses
+// rather than guesses, the same way `Hashable` refuses an array field.
+//
+// An enum that needs both named variants and an open tail is asking for an open
+// enum, where the compiler orders the unrecognized carrier itself.
+
+// Where one value sits relative to another.
+//
+// A three-way answer rather than two `Bool` calls: `a < b` and `b < a` asks the
+// comparison twice and leaves "equal" to be inferred from both being false,
+// which is one place for a hand-written comparison to disagree with itself.
+enum Ordering {
+    Less
+    Equal
+    Greater
+}
+
+comptime macro Ordered {
+    kind { derive }
+    appliesTo { enum }
+    expand(target: Declaration) -> Syntax {
+        var rankArms: [Syntax] = []
+        var index: Int = 0
+        for variant in target.fields {
+            // A payload-less variant reflects with an empty written type. That
+            // is the only signal the reflection surface gives, and it is exact:
+            // a variant written `Custom(Int)` carries `Int` here.
+            if variant.type.asSyntax() != "" {
+                Diagnostics.error(
+                    "Derive(Ordered): a variant carrying a payload has no one obvious order — ordering by position alone would call two payloads equal, and ordering by payload needs that type ordered too; write the comparison you mean by hand",
+                    at: variant.syntax
+                )
+            }
+            // Matching needs no payload binding: the rank is the position, and
+            // a refused payload never reaches here anyway.
+            rankArms.append(quote {
+                #{variant.name} -> return #{index};
+            })
+            index = index + 1
+        }
+        return quote {
+            function __kira_ord_#{target.name}(value: borrow #{target.name}) -> Int {
+                match value {
+                    #{rankArms}
+                }
+            }
+
+            function compare_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Ordering {
+                let left = __kira_ord_#{target.name}(a)
+                let right = __kira_ord_#{target.name}(b)
+                if left < right {
+                    return .Less
+                }
+                if left > right {
+                    return .Greater
+                }
+                return .Equal
+            }
+
+            function lt_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Bool {
+                match compare_#{target.name}(a, b) {
+                    Less -> return true;
+                    Equal -> return false;
+                    Greater -> return false;
+                }
+            }
+        }
+    }
+}
