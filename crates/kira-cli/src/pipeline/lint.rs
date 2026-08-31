@@ -237,6 +237,13 @@ fn apply_fixes(
         let mut text = on_disk;
         // Descending by start, so each write leaves every earlier span intact.
         fixes.sort_by_key(|fix| std::cmp::Reverse(fix.span.span.start));
+        // The lowest start already written. A span reaching past it overlaps
+        // an applied fix — a loop nested in a loop reports both — and its
+        // replacement was measured against text the inner write just changed,
+        // so applying it would splice stale bytes over fresh ones. It is left
+        // for the re-run the "run again" line already asks for, measured
+        // against the file the inner fix produced.
+        let mut written_floor = usize::MAX;
         for fix in fixes {
             let start = fix.span.span.start as usize;
             let end = fix.span.span.end() as usize;
@@ -246,7 +253,11 @@ fn apply_fixes(
                     file.path
                 ));
             }
+            if end > written_floor {
+                continue;
+            }
             text.replace_range(start..end, &fix.replacement);
+            written_floor = start;
             applied += 1;
         }
         std::fs::write(&file.path, text)
