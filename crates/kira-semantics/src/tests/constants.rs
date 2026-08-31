@@ -130,6 +130,41 @@ fn a_field_default_may_read_a_constant() {
 }
 
 #[test]
+fn a_shared_method_name_is_no_cycle() {
+    // The initializer calls a method of one struct; a same-named method on an
+    // unrelated struct reads the constant. A name-level dependency walk
+    // bridged the two and refused this; the resolved call graph does not.
+    assert!(
+        codes(
+            "struct Source {\n    let width: Int\n\
+             \n    function measure() -> Int { return self.width }\n}\n\
+             struct Reader {\n    let bias: Int\n\
+             \n    function measure() -> Int { return stack + self.bias }\n}\n\
+             function load() -> Int { let s = Source { width: 4 } return s.measure() }\n\
+             let stack = load()\n\
+             @Main function main() { print(stack) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_cycle_through_a_field_default_is_refused() {
+    // The initializer constructs a struct whose field default reads the
+    // constant being initialized — a real cycle, reachable only through the
+    // resolved construction, not through any name the initializer spells.
+    assert_eq!(
+        codes(
+            "struct Holder { var value: Int = a }\n\
+             function build() -> Int { let h = Holder {} return h.value }\n\
+             let a = build()\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM317"]
+    );
+}
+
+#[test]
 fn a_local_shadows_a_constant() {
     assert!(
         codes(

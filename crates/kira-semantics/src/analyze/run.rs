@@ -75,6 +75,9 @@ impl<'a> Analyzer<'a> {
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),
             constants: Vec::new(),
             constant_index: HashMap::new(),
+            constant_decls: Vec::new(),
+            constant_progress: Vec::new(),
+            constant_stack: Vec::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
             definitions: Vec::new(),
@@ -222,11 +225,11 @@ impl<'a> Analyzer<'a> {
         self.break_remaining_value_cycles();
         // Module constants are collected before any default or body resolves:
         // a read anywhere below finds the finished table. Each initializer is
-        // analyzed here, in dependency order, so a constant an initializer
-        // reads already has its slot — and a struct default an initializer
-        // constructs through resolves lazily on first use, so the pass below
-        // only re-walks what this one already forced.
-        self.collect_constants(&callables);
+        // analyzed on first demand, so a constant an initializer reads is
+        // analyzed before the read resolves — and a struct default an
+        // initializer constructs through resolves lazily on first use, so the
+        // pass below only re-walks what this one already forced.
+        self.collect_constants();
         // A field default belongs to its declaration. Resolve every one now, with
         // signatures and foreign callables available but before a construction
         // site can supply some unrelated file scope, and reuse that HIR at every
@@ -290,6 +293,12 @@ impl<'a> Analyzer<'a> {
         // final once every literal of its type has been found, and a callback
         // state's identity is a fingerprint of the shape it boxes.
         self.finalize_native_state_type_ids();
+        // Constant slots exist in declaration order until here. With every
+        // body analyzed and every synthesized function at its final id, the
+        // real call graph decides what order the slots are filled in at
+        // program start — and whether any initializer genuinely depends on
+        // its own value.
+        self.order_constant_evaluation();
         Analysis {
             program: self.program,
             diagnostics: self.diagnostics,

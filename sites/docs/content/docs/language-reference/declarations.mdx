@@ -49,7 +49,7 @@ let table = buildTable()
 
 A module-scope constant: one value per program, computed once at program start — before `@Main` runs — and shared by every reader. The initializer is an ordinary runtime expression; function calls are allowed, so a parsed table or a decoded resource is built once instead of per use. A read copies with value semantics, exactly as a local read does.
 
-Each constant is evaluated after every constant it depends on, whatever order the declarations were written in and whichever files they sit in. The dependency walk is transitive through the functions an initializer references. A dependency cycle is `KSEM317`. A missing `=` initializer is `KPAR034`.
+Each constant is evaluated after every constant it depends on, whatever order the declarations were written in and whichever files they sit in. Dependencies are computed from resolved references, transitively through every function the initializer can call — including a field default a construction fills — so two unrelated declarations that merely share a method name never depend on each other. An initializer that reaches its own value, directly or through the call graph, is a dependency cycle: `KSEM317`. A missing `=` initializer is `KPAR034`.
 
 Constants share the value namespace with top-level functions: a constant colliding with a function or another constant is `KSEM316`. A local of the same name shadows a constant inside a body. There is no module-scope `var`, and a value whose type runs a user `Drop` cannot be a constant (`KSEM318`) — it would need one owner, and a constant has every reader.
 

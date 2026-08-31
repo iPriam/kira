@@ -50,6 +50,48 @@ function tlxThroughClosure() -> Int {
     return f(3)
 }
 
+// Two structs share a method name, and only the *unrelated* one reads a
+// constant. The initializer below calls the other; that is no cycle.
+// (Regression: a name-level dependency walk bridged the two `tlxMeasure`
+// methods and refused this file.)
+struct TlxCatalogSource {
+    var width: Int = 4
+
+    function tlxMeasure() -> Int {
+        return width
+    }
+}
+
+struct TlxCatalogReader {
+    var bias: Int = 1
+
+    function tlxMeasure() -> Int {
+        return tlxStack + bias
+    }
+}
+
+function tlxLoadStack() -> Int {
+    let source = TlxCatalogSource {}
+    return source.tlxMeasure() * 10
+}
+
+let tlxStack = tlxLoadStack()
+
+// `tlxDerived` reaches `tlxBase` only through a call that constructs a struct
+// whose field default reads it — and `tlxBase` is declared later, so the
+// evaluation order must follow the call graph, not the file.
+struct TlxDefaulted {
+    var seed: Int = tlxBase * 3
+}
+
+function tlxMakeDefaulted() -> Int {
+    let defaulted = TlxDefaulted {}
+    return defaulted.seed + 1
+}
+
+let tlxDerived = tlxMakeDefaulted()
+let tlxBase = 5
+
 function tlxSection() -> Int {
     var sum = 0
     sum = sum + tlxAnswer
@@ -69,5 +111,7 @@ function tlxSection() -> Int {
     let first = tlxTable
     let second = tlxTable
     sum = sum + (first[0] == second[0] ? 1 : 0)
+    sum = sum + tlxStack
+    sum = sum + tlxDerived
     return sum
 }

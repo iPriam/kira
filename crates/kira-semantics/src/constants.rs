@@ -7,17 +7,22 @@
 //! [`HirProgram::constants`], and every read becomes a
 //! [`HirExpr::ConstantGet`] of that row's global slot.
 //!
+//! # Analysis order
+//!
+//! Initializers are analyzed on demand: reading a constant whose initializer
+//! has not been analyzed analyzes it first, wherever the read sits — spelled
+//! directly, or hidden behind a field default the initializer's construction
+//! forces. A constant met again while its own initializer is still being
+//! analyzed has no value to start from, and that resolution cycle is refused
+//! ([`KSEM317`](#diagnostics)).
+//!
 //! # Evaluation order
 //!
-//! Each constant is evaluated after every constant it depends on, whatever
-//! order the declarations were written in and whichever files they sit in. The
-//! dependency relation is computed from syntax, conservatively: every name an
-//! initializer mentions counts, and a mention of a function (or of a type with
-//! defaulted members) pulls in every constant *that* declaration's expressions
-//! mention, transitively through the whole call graph. Over-approximating only
-//! ever moves a constant later, which is harmless; under-approximating would
-//! read an uninitialized slot. A dependency cycle has no first value and is
-//! refused ([`KSEM317`](#diagnostics)).
+//! What order the slots are *filled in* at program start is decided after
+//! every body has been analyzed, from the resolved HIR — see
+//! [`crate::constant_order`]. Resolution above only has to see each direct
+//! read's type; the runtime order additionally follows calls, and a name-level
+//! guess at that call graph refused programs whose names merely collided.
 //!
 //! # Namespace
 //!
@@ -29,16 +34,14 @@
 //! [`HirProgram::constants`]: kira_semantics_model::hir::HirProgram
 //! [`HirExpr::ConstantGet`]: kira_semantics_model::hir::HirExpr
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 
-use kira_core::Names;
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{HirConstant, HirExpr, HirExprId, HirFunction, HirStmt};
+use kira_semantics_model::hir::{FuncId, HirConstant, HirExpr, HirExprId, HirStmt};
 use kira_source::{FileSpan, SourceId, Span};
-use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{Block, ConstantDecl, Expr, ExprId, ForIterable, Item, Stmt, StmtId};
+use kira_syntax_model::ast::{ConstantDecl, Item};
 
-use crate::analyze::{Analyzer, Callable, FnCtx};
+use crate::analyze::{Analyzer, FnCtx};
 
 /// One collected module-scope constant, as the value namespace sees it.
 ///
@@ -47,7 +50,8 @@ use crate::analyze::{Analyzer, Callable, FnCtx};
 ///
 /// [`HirProgram::constants`]: kira_semantics_model::hir::HirProgram
 pub(crate) struct ConstantEntry {
-    /// The resolved type: declared when written, inferred otherwise.
+    /// The resolved type: declared when written, inferred otherwise, `Error`
+    /// until the initializer has been analyzed.
     pub(crate) ty: Type,
     /// The declaring file, which gates visibility the way a function's does.
     pub(crate) source: SourceId,
@@ -55,14 +59,28 @@ pub(crate) struct ConstantEntry {
     pub(crate) name_span: Span,
 }
 
+/// How far one constant's demand-driven initializer analysis has gone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstantProgress {
+    /// Registered; the initializer has not been analyzed yet.
+    Pending,
+    /// The initializer is being analyzed right now. Reading the constant in
+    /// this state is a resolution cycle.
+    InProgress,
+    /// The entry's type and initializer function are final.
+    Done,
+}
+
 impl<'a> Analyzer<'a> {
-    /// Collects every module-scope constant: names, types, evaluation order,
-    /// and one synthesized initializer function per constant.
+    /// Collects every module-scope constant: names, slots, and one analyzed
+    /// initializer per constant.
     ///
     /// Runs after signatures and foreign callables exist — an initializer may
     /// call anything a function body may — and before any body is analyzed, so
-    /// a read in a body resolves against the finished table.
-    pub(crate) fn collect_constants(&mut self, callables: &[Callable<'a>]) {
+    /// a read in a body resolves against the finished table. Slots are handed
+    /// out in declaration order; each initializer is analyzed on first demand,
+    /// so a forward read works no matter which file it sits in.
+    pub(crate) fn collect_constants(&mut self) {
         let tree = self.tree;
         let mut decls: Vec<(SourceId, &ConstantDecl)> = Vec::new();
         for (source, item) in tree.items_with_source() {
@@ -74,10 +92,26 @@ impl<'a> Analyzer<'a> {
             return;
         }
         let decls = self.refuse_constant_name_clashes(decls);
-        let order = self.constant_evaluation_order(callables, &decls);
-        for index in order {
-            let (source, declaration) = decls[index];
-            self.analyze_constant(source, declaration, false);
+        for (source, declaration) in decls {
+            let name = self.interner.resolve(declaration.name).to_owned();
+            let init = self.reserve_synth();
+            self.constant_index
+                .insert(name.clone(), self.constants.len() as u32);
+            self.constants.push(ConstantEntry {
+                ty: Type::Error,
+                source,
+                name_span: declaration.name_span,
+            });
+            self.constant_decls.push((source, declaration));
+            self.constant_progress.push(ConstantProgress::Pending);
+            self.program.constants.push(HirConstant {
+                name,
+                ty: Type::Error,
+                init,
+            });
+        }
+        for slot in 0..self.constants.len() as u32 {
+            self.ensure_constant(slot);
         }
     }
 
@@ -120,176 +154,97 @@ impl<'a> Analyzer<'a> {
         kept
     }
 
-    /// The order the constants are evaluated in: each after everything it
-    /// depends on, ties broken by declaration order.
+    /// Analyzes the constant in `slot` unless that has already happened.
     ///
-    /// Members of a dependency cycle are refused (KSEM317) and appended at the
-    /// end as error entries, so a read of one resolves to `Error` instead of
-    /// cascading into an undefined name.
-    fn constant_evaluation_order(
-        &mut self,
-        callables: &[Callable<'a>],
-        decls: &[(SourceId, &ConstantDecl)],
-    ) -> Vec<usize> {
-        let mentions = declaration_mentions(self.tree, self.interner, callables);
-        let names: Vec<String> = decls
-            .iter()
-            .map(|(_, declaration)| self.interner.resolve(declaration.name).to_owned())
-            .collect();
-        let index_of: HashMap<&str, usize> = names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (name.as_str(), index))
-            .collect();
-        let deps: Vec<BTreeSet<usize>> = decls
-            .iter()
-            .enumerate()
-            .map(|(index, (_, declaration))| {
-                let mut reached = expression_mentions(self.tree, self.interner, declaration.value);
-                close_over_declarations(&mentions, &mut reached);
-                reached
-                    .iter()
-                    .filter_map(|name| index_of.get(name.as_str()).copied())
-                    .filter(|&dep| dep != index || reached.contains(&names[index]))
-                    .collect()
-            })
-            .collect();
-        // Self-mention is a cycle of one; the filter above keeps the edge only
-        // when the initializer genuinely reaches its own name.
-        let mut placed: Vec<bool> = vec![false; decls.len()];
-        let mut order = Vec::with_capacity(decls.len());
-        loop {
-            let next = (0..decls.len())
-                .find(|&index| !placed[index] && deps[index].iter().all(|&dep| placed[dep]));
-            match next {
-                Some(index) => {
-                    placed[index] = true;
-                    order.push(index);
-                }
-                None => break,
+    /// Reading a constant this pass has not reached yet lands here through
+    /// [`Analyzer::constant_type`] and [`Analyzer::constant_read`], which is
+    /// what makes the analysis order the resolution order: whatever a
+    /// visible initializer genuinely reads — directly, or through a field
+    /// default its construction forces — is analyzed first. A slot met again
+    /// while it is still on the stack has no value to start from and is
+    /// refused.
+    pub(crate) fn ensure_constant(&mut self, slot: u32) {
+        match self.constant_progress[slot as usize] {
+            ConstantProgress::Done => return,
+            ConstantProgress::InProgress => {
+                self.report_constant_cycle(slot);
+                return;
             }
+            ConstantProgress::Pending => {}
         }
-        // Whatever is left sits on at least one cycle.
-        let stuck: Vec<usize> = (0..decls.len()).filter(|&index| !placed[index]).collect();
-        if !stuck.is_empty() {
-            self.report_constant_cycle(&names, &deps, &placed, stuck[0]);
-        }
-        for index in &stuck {
-            let (source, declaration) = decls[*index];
-            self.analyze_constant(source, declaration, true);
-        }
-        order
+        self.constant_progress[slot as usize] = ConstantProgress::InProgress;
+        self.constant_stack.push(slot);
+        let (source, declaration) = self.constant_decls[slot as usize];
+        let saved_source = self.source;
+        self.analyze_constant(slot, source, declaration);
+        self.source = saved_source;
+        self.constant_stack.pop();
+        self.constant_progress[slot as usize] = ConstantProgress::Done;
     }
 
-    /// Reports one dependency cycle, naming its members in walk order.
-    fn report_constant_cycle(
-        &mut self,
-        names: &[String],
-        deps: &[BTreeSet<usize>],
-        placed: &[bool],
-        start: usize,
-    ) {
-        // Walk unplaced dependency edges until a node repeats; the repeat and
-        // everything after it is a cycle.
-        let mut path = vec![start];
-        let mut at = start;
-        let cycle = loop {
-            let Some(&next) = deps[at].iter().find(|&&dep| !placed[dep]) else {
-                // Every stuck node keeps at least one unplaced edge, so the
-                // walk cannot dead-end; this arm exists so a logic error here
-                // degrades to naming the path walked rather than panicking.
-                break path.clone();
-            };
-            if let Some(position) = path.iter().position(|&seen| seen == next) {
-                break path[position..].to_vec();
-            }
-            path.push(next);
-            at = next;
+    /// Reports the resolution cycle that reading `slot` mid-analysis closes,
+    /// naming its members in read order.
+    fn report_constant_cycle(&mut self, slot: u32) {
+        let members = match self.constant_stack.iter().position(|&on| on == slot) {
+            Some(position) => &self.constant_stack[position..],
+            None => return,
         };
-        let spelled: Vec<String> = cycle
+        let spelled: Vec<String> = members
             .iter()
-            .chain(cycle.first())
-            .map(|&index| format!("`{}`", names[index]))
+            .chain(members.first())
+            .map(|&member| format!("`{}`", self.program.constants[member as usize].name))
             .collect();
-        // Attributed to the first cycle member's declaration; `self.source` is
-        // set by the caller before each constant is analyzed, so it is set
-        // here explicitly too.
-        let member = cycle[0];
-        let span = self.constant_decl_span(&names[member]);
-        if let Some((source, span)) = span {
-            self.source = source;
-            self.emit(
-                span,
-                "KSEM317",
-                format!(
-                    "module constants form a dependency cycle: {}; no member has a value to \
-                     start from",
-                    spelled.join(" -> ")
-                ),
-            );
-        }
+        let entry = &self.constants[slot as usize];
+        let (source, span) = (entry.source, entry.name_span);
+        self.source = source;
+        self.emit(
+            span,
+            "KSEM317",
+            format!(
+                "module constants form a dependency cycle: {}; no member has a value to \
+                 start from",
+                spelled.join(" -> ")
+            ),
+        );
     }
 
-    /// The declaring file and name span of the constant declaration named
-    /// `name`, from syntax.
-    fn constant_decl_span(&self, name: &str) -> Option<(SourceId, Span)> {
-        for (source, item) in self.tree.items_with_source() {
-            if let Item::Constant(declaration) = item
-                && self.interner.resolve(declaration.name) == name
-            {
-                return Some((source, declaration.name_span));
-            }
-        }
-        None
-    }
-
-    /// Analyzes one constant's initializer and records it: a table entry, a
-    /// row in [`HirProgram::constants`], and a synthesized zero-argument
+    /// Analyzes one constant's initializer and records it: the entry's type,
+    /// the row in [`HirProgram::constants`], and the synthesized zero-argument
     /// function computing the value.
     ///
-    /// `cycle_member` marks a declaration on a refused dependency cycle: its
-    /// initializer is not analyzed — it has no value to compute — and its
-    /// entry carries the declared type (or `Error`), so reads of it do not
-    /// cascade into undefined names.
+    /// A member of a refused resolution cycle still lands here — the cycle was
+    /// reported where the read closed it — and completes with whatever the
+    /// analysis could give it, so reads of it do not cascade into undefined
+    /// names.
     ///
     /// [`HirProgram::constants`]: kira_semantics_model::hir::HirProgram
-    fn analyze_constant(
-        &mut self,
-        source: SourceId,
-        declaration: &ConstantDecl,
-        cycle_member: bool,
-    ) {
+    fn analyze_constant(&mut self, slot: u32, source: SourceId, declaration: &ConstantDecl) {
         self.source = source;
         let name = self.interner.resolve(declaration.name).to_owned();
         let declared = declaration
             .declared_type
             .map(|type_ref| self.resolve_type_ref(type_ref));
         let mut ctx = FnCtx::new(declared.unwrap_or(Type::Void));
-        let (ty, value) = if cycle_member {
-            let ty = declared.unwrap_or(Type::Error);
-            (ty, self.program.exprs.alloc(HirExpr::Error))
-        } else {
-            let value = self.analyze_expr_expecting(&mut ctx, declaration.value, declared);
-            let value_ty = self.program.expr(value).type_of();
-            let ty = match declared {
-                Some(annotation) => {
-                    if !self.admits(value_ty, annotation) {
-                        self.emit(
-                            declaration.name_span,
-                            "KSEM020",
-                            format!(
-                                "binding annotated `{}` cannot hold a value of type `{}`",
-                                self.type_name(annotation),
-                                self.type_name(value_ty)
-                            ),
-                        );
-                    }
-                    annotation
+        let value = self.analyze_expr_expecting(&mut ctx, declaration.value, declared);
+        let value_ty = self.program.expr(value).type_of();
+        let ty = match declared {
+            Some(annotation) => {
+                if !self.admits(value_ty, annotation) {
+                    self.emit(
+                        declaration.name_span,
+                        "KSEM020",
+                        format!(
+                            "binding annotated `{}` cannot hold a value of type `{}`",
+                            self.type_name(annotation),
+                            self.type_name(value_ty)
+                        ),
+                    );
                 }
-                None => value_ty,
-            };
-            (ty, self.coerce_into(value, ty))
+                annotation
+            }
+            None => value_ty,
         };
+        let value = self.coerce_into(value, ty);
         // A value that runs a user `Drop` body has one owner and is never
         // copied; a constant is shared by every reader, and every read copies.
         // The two cannot both hold, so the declaration is refused.
@@ -299,36 +254,32 @@ impl<'a> Analyzer<'a> {
                 "KSEM318",
                 format!(
                     "a module constant cannot hold `{}`: its value is shared by every reader, \
-                     and a value with a `Drop` body has exactly one owner",
+                     and a `Drop` value has exactly one owner",
                     self.type_name(ty)
                 ),
             );
         }
-        let init = self.constant_init_function(&mut ctx, &name, ty, value, declaration.name_span);
-        self.constant_index
-            .insert(name.clone(), self.constants.len() as u32);
-        self.constants.push(ConstantEntry {
-            ty,
-            source,
-            name_span: declaration.name_span,
-        });
-        self.program.constants.push(HirConstant { name, ty, init });
+        let init = self.program.constants[slot as usize].init;
+        self.fill_constant_init(init, &mut ctx, &name, ty, value, declaration.name_span);
+        self.constants[slot as usize].ty = ty;
+        self.program.constants[slot as usize].ty = ty;
     }
 
-    /// Builds and registers the synthesized zero-argument function whose body
-    /// computes one constant's value.
+    /// Fills the reserved synthesized function whose body computes one
+    /// constant's value.
     ///
     /// The value is bound to a hidden local before the return so any deferred
     /// statements the initializer produced run between computing and
     /// returning, exactly as they do around an ordinary statement.
-    fn constant_init_function(
+    fn fill_constant_init(
         &mut self,
+        id: FuncId,
         ctx: &mut FnCtx,
         name: &str,
         ty: Type,
         value: HirExprId,
         name_span: Span,
-    ) -> kira_semantics_model::hir::FuncId {
+    ) {
         let pending = ctx.take_pending_stmts();
         let deferred = ctx.take_deferred_stmts();
         let slot = ctx.declare_hidden(ty, false);
@@ -345,7 +296,7 @@ impl<'a> Analyzer<'a> {
         body.push(bind);
         body.extend(deferred);
         body.push(give);
-        let function = HirFunction {
+        let function = kira_semantics_model::hir::HirFunction {
             // `$` cannot appear in an identifier, so this collides with no
             // user symbol — and not with a construct's `Name$init` either.
             name: format!("{name}$constant"),
@@ -354,20 +305,20 @@ impl<'a> Analyzer<'a> {
             locals: std::mem::take(&mut ctx.locals),
             body,
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span,
         };
-        let id = self.reserve_synth();
         self.fill_synth(id, function);
-        id
     }
 
     /// The type of the module constant named `name`, when one is visible from
     /// the file being analyzed.
-    pub(crate) fn constant_type(&self, name: &str) -> Option<Type> {
+    pub(crate) fn constant_type(&mut self, name: &str) -> Option<Type> {
         let index = *self.constant_index.get(name)?;
+        self.ensure_constant(index);
         let entry = &self.constants[index as usize];
         self.imports
             .sees(self.source, entry.source)
@@ -382,6 +333,7 @@ impl<'a> Analyzer<'a> {
     /// [`crate::imports::ImportTable::sees`]).
     pub(crate) fn constant_read(&mut self, name: &str, span: Span) -> Option<HirExprId> {
         let index = *self.constant_index.get(name)?;
+        self.ensure_constant(index);
         let entry = &self.constants[index as usize];
         if !self.imports.sees(self.source, entry.source) {
             return None;
@@ -392,327 +344,5 @@ impl<'a> Analyzer<'a> {
             constant: index,
             ty,
         }))
-    }
-}
-
-/// The mention set of every declaration whose expressions can hide a constant
-/// read, keyed by the name a mention would spell.
-///
-/// Function bodies and parameter defaults land under the function's bare name;
-/// a type's field, member, and variant-payload defaults land under the type's
-/// name. Overloads and same-named methods union into one set, which only
-/// over-approximates.
-fn declaration_mentions(
-    tree: &SyntaxTree,
-    interner: &Names,
-    callables: &[Callable<'_>],
-) -> HashMap<String, HashSet<String>> {
-    let mut mentions: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut note = |name: String, found: HashSet<String>| {
-        mentions.entry(name).or_default().extend(found);
-    };
-    for callable in callables {
-        let function = callable.function;
-        let name = interner.resolve(function.name).to_owned();
-        let mut found = block_mentions(tree, interner, &function.body);
-        for param in &function.params {
-            if let Some(default) = param.default {
-                found.extend(expression_mentions(tree, interner, default));
-            }
-        }
-        note(name, found);
-    }
-    for (_, item) in tree.items_with_source() {
-        match item {
-            Item::Struct(declaration) => {
-                let mut found = HashSet::new();
-                for field in &declaration.fields {
-                    if let Some(default) = field.default {
-                        found.extend(expression_mentions(tree, interner, default));
-                    }
-                }
-                note(interner.resolve(declaration.name).to_owned(), found);
-            }
-            Item::Class(declaration) => {
-                let mut found = HashSet::new();
-                for field in &declaration.fields {
-                    if let Some(default) = field.default {
-                        found.extend(expression_mentions(tree, interner, default));
-                    }
-                }
-                for field in &declaration.overrides {
-                    found.extend(expression_mentions(tree, interner, field.default));
-                }
-                note(interner.resolve(declaration.name).to_owned(), found);
-            }
-            Item::Enum(declaration) => {
-                let mut found = HashSet::new();
-                for variant in &declaration.variants {
-                    if let Some(default) = variant.default {
-                        found.extend(expression_mentions(tree, interner, default));
-                    }
-                }
-                note(interner.resolve(declaration.name).to_owned(), found);
-            }
-            Item::Construct(declaration) => {
-                let mut found = HashSet::new();
-                for field in &declaration.fields {
-                    if let Some(default) = field.default {
-                        found.extend(expression_mentions(tree, interner, default));
-                    }
-                }
-                note(interner.resolve(declaration.name).to_owned(), found);
-            }
-            // Extend modifiers are not ordinary callables, so their bodies are
-            // walked here; a constant initializer can reach one through a
-            // family value's method call.
-            Item::Extend(declaration) => {
-                for method in &declaration.methods {
-                    note(
-                        interner.resolve(method.name).to_owned(),
-                        block_mentions(tree, interner, &method.body),
-                    );
-                }
-            }
-            Item::Function(_)
-            | Item::TypeAlias(_)
-            | Item::Constant(_)
-            | Item::Import(_)
-            | Item::Trait(_)
-            | Item::Unsupported(_) => {}
-        }
-    }
-    mentions
-}
-
-/// Expands `reached` to its transitive closure over the declaration mention
-/// map: any reached name that has a mention set contributes that set.
-fn close_over_declarations(
-    mentions: &HashMap<String, HashSet<String>>,
-    reached: &mut HashSet<String>,
-) {
-    let mut queue: Vec<String> = reached.iter().cloned().collect();
-    while let Some(name) = queue.pop() {
-        let Some(found) = mentions.get(&name) else {
-            continue;
-        };
-        for mention in found {
-            if reached.insert(mention.clone()) {
-                queue.push(mention.clone());
-            }
-        }
-    }
-}
-
-/// Every name one expression tree mentions, by a conservative syntactic walk.
-fn expression_mentions(tree: &SyntaxTree, interner: &Names, expr: ExprId) -> HashSet<String> {
-    let mut scan = MentionScan {
-        tree,
-        interner,
-        found: HashSet::new(),
-    };
-    scan.expr(expr);
-    scan.found
-}
-
-/// Every name one block mentions, by the same walk.
-fn block_mentions(tree: &SyntaxTree, interner: &Names, block: &Block) -> HashSet<String> {
-    let mut scan = MentionScan {
-        tree,
-        interner,
-        found: HashSet::new(),
-    };
-    scan.block(block);
-    scan.found
-}
-
-/// A syntactic walk collecting every identifier an expression tree mentions:
-/// bare names, callee names, and method names alike.
-///
-/// By name, not by resolution — resolution has not run yet, and the answer
-/// only orders evaluation, so counting a shadowed or unrelated name merely
-/// moves a constant later than it strictly had to be.
-struct MentionScan<'t> {
-    tree: &'t SyntaxTree,
-    interner: &'t Names,
-    found: HashSet<String>,
-}
-
-impl MentionScan<'_> {
-    fn note(&mut self, symbol: kira_core::Symbol) {
-        self.found.insert(self.interner.resolve(symbol).to_owned());
-    }
-
-    fn block(&mut self, block: &Block) {
-        for &stmt in &block.stmts {
-            self.stmt(stmt);
-        }
-    }
-
-    fn stmt(&mut self, id: StmtId) {
-        match self.tree.stmt(id).clone() {
-            Stmt::Let { init, .. } => self.expr(init),
-            Stmt::Assign { target, value, .. } => {
-                self.expr(target);
-                self.expr(value);
-            }
-            Stmt::Return { value, .. } => {
-                if let Some(value) = value {
-                    self.expr(value);
-                }
-            }
-            Stmt::Expr { expr, .. } => self.expr(expr),
-            Stmt::If {
-                cond,
-                then_block,
-                else_block,
-                ..
-            } => {
-                self.expr(cond);
-                self.block(&then_block);
-                if let Some(block) = &else_block {
-                    self.block(block);
-                }
-            }
-            Stmt::While { cond, body, .. } => {
-                self.expr(cond);
-                self.block(&body);
-            }
-            Stmt::For { iterable, body, .. } => {
-                match iterable {
-                    ForIterable::Range { start, end } => {
-                        self.expr(start);
-                        self.expr(end);
-                    }
-                    ForIterable::Each { array } => self.expr(array),
-                }
-                self.block(&body);
-            }
-            Stmt::Match { subject, arms, .. } => {
-                self.expr(subject);
-                for arm in &arms {
-                    self.block(&arm.body);
-                }
-            }
-            Stmt::Attempt { body, handlers, .. } => {
-                self.block(&body);
-                for handler in &handlers {
-                    self.block(&handler.body);
-                }
-            }
-            Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Error { .. } => {}
-        }
-    }
-
-    fn expr(&mut self, id: ExprId) {
-        match self.tree.expr(id).clone() {
-            Expr::Name { symbol, .. } => self.note(symbol),
-            Expr::Closure { body, .. } => self.block(&body),
-            Expr::Unary { operand, .. } => self.expr(operand),
-            Expr::Binary { lhs, rhs, .. } => {
-                self.expr(lhs);
-                self.expr(rhs);
-            }
-            Expr::Conditional {
-                cond,
-                then,
-                otherwise,
-                ..
-            } => {
-                self.expr(cond);
-                self.expr(then);
-                self.expr(otherwise);
-            }
-            Expr::Call {
-                callee,
-                args,
-                children,
-                trailing_closure,
-                ..
-            } => {
-                self.note(callee);
-                for arg in &args {
-                    self.expr(arg.value);
-                }
-                for &child in &children {
-                    self.expr(child);
-                }
-                if let Some(trailing) = trailing_closure {
-                    self.expr(trailing.closure);
-                }
-            }
-            Expr::StructLit { name, fields, .. } => {
-                self.note(name);
-                for field in &fields {
-                    self.expr(field.value);
-                }
-            }
-            Expr::MethodCall {
-                receiver,
-                method,
-                args,
-                children,
-                ..
-            } => {
-                self.note(method);
-                self.expr(receiver);
-                for arg in &args {
-                    self.expr(arg.value);
-                }
-                for &child in &children {
-                    self.expr(child);
-                }
-            }
-            Expr::Field { base, .. } => self.expr(base),
-            Expr::ArrayLit { elements, .. } => {
-                for &element in &elements {
-                    self.expr(element);
-                }
-            }
-            Expr::Index { base, index, .. } => {
-                self.expr(base);
-                self.expr(index);
-            }
-            Expr::DotMember { args, .. } => {
-                for &arg in args.iter().flatten() {
-                    self.expr(arg);
-                }
-            }
-            Expr::Try { value, .. } => self.expr(value),
-            Expr::Ownership { operand, .. } => self.expr(operand),
-            Expr::ContentFor { iterable, body, .. } => {
-                self.expr(iterable);
-                for &item in &body {
-                    self.expr(item);
-                }
-            }
-            Expr::Content {
-                children, closure, ..
-            } => {
-                for &child in &children {
-                    self.expr(child);
-                }
-                if let Some(closure) = closure {
-                    self.expr(closure);
-                }
-            }
-            Expr::ContentIf {
-                cond,
-                then_body,
-                else_body,
-                ..
-            } => {
-                self.expr(cond);
-                for &item in then_body.iter().chain(else_body.iter()) {
-                    self.expr(item);
-                }
-            }
-            Expr::TaskSpawn { body, .. } => self.expr(body),
-            Expr::Int { .. }
-            | Expr::Float { .. }
-            | Expr::Bool { .. }
-            | Expr::Str { .. }
-            | Expr::Error { .. } => {}
-        }
     }
 }

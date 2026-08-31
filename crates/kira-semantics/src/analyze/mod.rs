@@ -13,7 +13,7 @@ use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{ExprId, Function, Item};
+use kira_syntax_model::ast::{ConstantDecl, ExprId, Function, Item};
 
 mod scope;
 mod signatures;
@@ -413,12 +413,22 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) ffi_callback_signatures: HashMap<StructId, kira_runtime_abi::ForeignSignature>,
     /// Keeps each C-layout aggregate in the program table exactly once.
     pub(crate) foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder,
-    /// Every module-scope constant, in evaluation order, in lockstep with
+    /// Every module-scope constant, in declaration order, in lockstep with
     /// [`kira_semantics_model::hir::HirProgram::constants`].
+    ///
+    /// Rows are permuted into evaluation order by the end-of-analysis pass in
+    /// [`crate::constant_order`]; until then the slot is the declaration index.
     pub(crate) constants: Vec<crate::constants::ConstantEntry>,
     /// Each constant's slot by name. Names are unique — a clash was refused —
     /// so one index answers a read.
     pub(crate) constant_index: HashMap<String, u32>,
+    /// Each constant's declaration, for demand-driven initializer analysis.
+    pub(crate) constant_decls: Vec<(SourceId, &'a ConstantDecl)>,
+    /// How far each constant's initializer analysis has gone.
+    pub(crate) constant_progress: Vec<crate::constants::ConstantProgress>,
+    /// The constants whose initializers are being analyzed right now, outermost
+    /// first. A slot met again while on this stack is a resolution cycle.
+    pub(crate) constant_stack: Vec<u32>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Reference→definition links, recorded as names resolve.

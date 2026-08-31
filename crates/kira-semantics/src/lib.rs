@@ -51,6 +51,7 @@ mod cells;
 mod classes;
 mod closures;
 mod coercion;
+mod constant_order;
 mod constants;
 mod constructs;
 mod conversions;

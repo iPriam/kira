@@ -51,3 +51,17 @@ construct TlxConstantReadInsideAClosure() extends Test {
     test { return tlxThroughClosure() }
     expect { let e: Result<Int, TestFailure> = .Ok(465); return e }
 }
+
+construct TlxSharedMethodNameIsNoCycle() extends Test {
+    // `tlxStack` calls `TlxCatalogSource.tlxMeasure`; the same-named method on
+    // `TlxCatalogReader` reads `tlxStack` and never runs during initialization.
+    test { let reader = TlxCatalogReader {}; return tlxStack * 100 + reader.tlxMeasure() }
+    expect { let e: Result<Int, TestFailure> = .Ok(4041); return e }
+}
+
+construct TlxEvaluationFollowsHiddenDefaultReads() extends Test {
+    // `tlxDerived` reaches `tlxBase` only through a field default inside a
+    // called function, and `tlxBase` is declared after it in the file.
+    test { return tlxDerived }
+    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+}
