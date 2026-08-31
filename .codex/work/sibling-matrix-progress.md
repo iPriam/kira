@@ -40,3 +40,12 @@ Earlier steps (graphics harness packaging, KiraUI catalog identity, raw_sokol
 - Sibling matrix run to completion + fix failures.
 - Workspace gate (`kira_dev_validate` full) + `backend_parity` suite
   (semantics changed) + `kira_dev_build` workspace (native runtime changed).
+
+## Completed (session end)
+
+- Sibling matrix: 381 cases (5 test suites + every example, vm/llvm/hybrid), 0 failures.
+- Workspace gate: fmt, clippy -D warnings, full workspace tests green; kik parity
+  count updated 1372 -> 1374 for the two new Tlx constants cases.
+- Debugger: unauthorized-host detection (`kira_debug::debugging_unauthorized`),
+  CLI warning, MCP timeout hint, test skips, docs.
+- Committed to main in five verified commits (ec8cd75..3f35232).
