@@ -20,10 +20,10 @@ Nothing about the version is decided by the command. `llvm-metadata.toml`, compi
 
 | Field | Current pin |
 | --- | --- |
-| `version` | `23.1.0-rc3` |
-| `release_tag` | `llvm-v23.1.0-rc3-kira.1` |
+| `version` | `23.1.0` |
+| `release_tag` | `llvm-v23.1.0-kira.1` |
 | `targets_to_build` | `X86;AArch64;WebAssembly` |
-| Hosts | `x86_64-windows-msvc`, `x86_64-linux-gnu`, `aarch64-macos` |
+| Hosts | `x86_64-windows-msvc`, `aarch64-windows-msvc`, `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` |
 
 The pinned version is also what the backend's `llvm-sys` bindings are built against, and a unit test fails if the two drift apart.
 

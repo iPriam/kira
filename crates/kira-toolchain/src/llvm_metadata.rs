@@ -135,7 +135,13 @@ mod tests {
         // The workflow never invents asset names: each supported host's asset
         // must carry the pinned version and its own bundle key.
         let version = pinned_version().expect("the pin parses");
-        for key in ["x86_64-windows-msvc", "x86_64-linux-gnu", "aarch64-macos"] {
+        for key in [
+            "x86_64-windows-msvc",
+            "aarch64-windows-msvc",
+            "x86_64-linux-gnu",
+            "aarch64-linux-gnu",
+            "aarch64-macos",
+        ] {
             let bundle = bundle_for(key)
                 .expect("the pin parses")
                 .expect("supported host is present in the metadata");
@@ -145,11 +151,6 @@ mod tests {
                 bundle.asset,
             );
         }
-        assert!(
-            bundle_for("aarch64-linux-gnu")
-                .expect("the pin parses")
-                .is_none()
-        );
     }
 
     /// MSVC compatibility runs forward only, so a Windows bundle links on

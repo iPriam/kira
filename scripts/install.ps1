@@ -24,12 +24,13 @@ $repo = if ($env:KIRA_REPO) { $env:KIRA_REPO } else { 'kira-lang-com/kira' }
 $kiraHome = if ($env:KIRA_HOME) { $env:KIRA_HOME } else { Join-Path $HOME '.kira' }
 $binDir = Join-Path $kiraHome 'bin'
 
-# The one host key published for Windows. An arm64 machine has no build yet,
-# and saying so beats installing something that cannot run.
-if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
-    Fail "no Kira build is published for this architecture; build from a checkout with ``cargo run -p kira-knvm -- sinstall``"
+# The host key for this Windows machine.
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+switch ($arch) {
+    'X64' { $key = 'x86_64-windows-msvc' }
+    'Arm64' { $key = 'aarch64-windows-msvc' }
+    default { Fail "no Kira build is published for $arch; build from a checkout with ``cargo run -p kira-knvm -- sinstall``" }
 }
-$key = 'x86_64-windows-msvc'
 
 # Unauthenticated GitHub allows sixty API requests an hour per address, and it
 # is shared: behind one office address this bootstrap fails on traffic that is

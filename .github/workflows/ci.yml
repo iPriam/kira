@@ -15,16 +15,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             host_key: x86_64-linux-gnu
+          - os: ubuntu-24.04-arm
+            host_key: aarch64-linux-gnu
           - os: macos-latest
             host_key: aarch64-macos
-          # The third host the LLVM pin already names. `llvm-metadata.toml` has
-          # carried `[target.x86_64-windows-msvc]` since the pin was written and
-          # the bundle workflow builds it, so the platform was supported
-          # everywhere except the gate that would have proved it.
           - os: windows-latest
             host_key: x86_64-windows-msvc
+          - os: windows-11-arm
+            host_key: aarch64-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

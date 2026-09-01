@@ -7,7 +7,7 @@ Everything downstream of the transport, extract, validate, move, select, is one 
 
 ## The Two Sources
 
-**`GitHubReleaseSource`** is the default. It reads the releases API of `kira-lang-com/kira` and picks the asset named `kira-<version>-<host-key>.tar.gz`, where the host key is the same set `kira-toolchain` already uses for LLVM bundles: `aarch64-macos`, `x86_64-linux-gnu`, `x86_64-windows-msvc`.
+**`GitHubReleaseSource`** is the default. It reads the releases API of `kira-lang-com/kira` and picks the asset named `kira-<version>-<host-key>.tar.gz`, where the host key is the same set `kira-toolchain` already uses for LLVM bundles: `aarch64-macos`, `x86_64-linux-gnu`, `aarch64-linux-gnu`, `x86_64-windows-msvc`, `aarch64-windows-msvc`.
 
 Transport is a single isolated `curl` subprocess rather than an HTTP crate, which keeps the workspace's external dependencies frozen. `curl` ships with macOS, Linux distributions, and modern Windows, and its absence is a typed error rather than a panic.
 

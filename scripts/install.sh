@@ -43,7 +43,16 @@ host_key() {
     arch="$(uname -m)"
     case "$os/$arch" in
         Darwin/arm64) echo "aarch64-macos" ;;
+        Darwin/x86_64) echo "x86_64-macos" ;;
         Linux/x86_64) echo "x86_64-linux-gnu" ;;
+        Linux/aarch64|Linux/arm64) echo "aarch64-linux-gnu" ;;
+        MINGW*/*|MSYS*/*|CYGWIN*/*)
+            case "$arch" in
+                x86_64|amd64) echo "x86_64-windows-msvc" ;;
+                aarch64|arm64) echo "aarch64-windows-msvc" ;;
+                *) fail "no Kira build is published for $os/$arch; build from a checkout with \`cargo run -p kira-knvm -- sinstall\`" ;;
+            esac
+            ;;
         *) fail "no Kira build is published for $os/$arch; build from a checkout with \`cargo run -p kira-knvm -- sinstall\`" ;;
     esac
 }

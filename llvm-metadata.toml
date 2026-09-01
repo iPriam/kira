@@ -20,17 +20,9 @@
 schema_version = 1
 
 [llvm]
-# A release candidate, deliberately. 23.1.0 has no final tag yet, and the
-# generators the build below names are what a cross build needs, so the choice
-# is between the newest series and waiting for it to be blessed. The version
-# string carries `-rc3` rather than reading as `23.1.0`, because it is the
-# install directory name, every asset name, and what a build reports when it says
-# which LLVM it found: a bundle labelled 23.1.0 that is not 23.1.0 is the one
-# thing this file exists to prevent. Moving to the final tag is these three lines
-# plus the asset names, and it republishes the bundles.
-version = "23.1.0-rc3"
-source_tag = "llvmorg-23.1.0-rc3"
-release_tag = "llvm-v23.1.0-rc3-kira.1"
+version = "23.1.0"
+source_tag = "llvmorg-23.1.0"
+release_tag = "llvm-v23.1.0-kira.1"
 
 [build]
 build_type = "Release"
@@ -65,16 +57,28 @@ targets_to_build = "X86;AArch64;WebAssembly"
 runner = "windows-latest"
 platform = "windows"
 archive = "zip"
-asset = "llvm-23.1.0-rc3-x86_64-windows-msvc.zip"
+asset = "llvm-23.1.0-x86_64-windows-msvc.zip"
+
+[target.aarch64-windows-msvc]
+runner = "windows-11-arm"
+platform = "windows"
+archive = "zip"
+asset = "llvm-23.1.0-aarch64-windows-msvc.zip"
 
 [target.x86_64-linux-gnu]
 runner = "ubuntu-24.04"
 platform = "linux"
 archive = "tar.xz"
-asset = "llvm-23.1.0-rc3-x86_64-linux-gnu.tar.xz"
+asset = "llvm-23.1.0-x86_64-linux-gnu.tar.xz"
+
+[target.aarch64-linux-gnu]
+runner = "ubuntu-24.04-arm"
+platform = "linux"
+archive = "tar.xz"
+asset = "llvm-23.1.0-aarch64-linux-gnu.tar.xz"
 
 [target.aarch64-macos]
 runner = "macos-14"
 platform = "macos"
 archive = "tar.xz"
-asset = "llvm-23.1.0-rc3-aarch64-macos.tar.xz"
+asset = "llvm-23.1.0-aarch64-macos.tar.xz"

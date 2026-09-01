@@ -38,12 +38,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             host_key: x86_64-linux-gnu
+          - os: ubuntu-24.04-arm
+            host_key: aarch64-linux-gnu
           - os: macos-latest
             host_key: aarch64-macos
           - os: windows-latest
             host_key: x86_64-windows-msvc
+          - os: windows-11-arm
+            host_key: aarch64-windows-msvc
     runs-on: ${{ matrix.os }}
     defaults:
       run:

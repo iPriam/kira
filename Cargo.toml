@@ -112,11 +112,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 # the managed toolchain ships (`llvm-sys` majors track the LLVM major.minor).
 # A hard dependency of the backend: every workspace build needs a managed LLVM
 # (LLVM_SYS_231_PREFIX names it; CI provisions the bundle before building).
-# The pre-release requirement tracks `llvm-metadata.toml`, whose pin is
-# 23.1.0-rc3: 231.0.0-rc2 is the only published binding for that series, and
-# Cargo will not select a pre-release unless the requirement names one, so this
-# cannot be shortened to "231".
-llvm-sys = "231.0.0-rc2"
+llvm-sys = "231.0.0"
 # LSP-first frontend: salsa incremental queries; lsp-server/lsp-types for
 # the language server (rust-analyzer's stack).
 salsa = "0.28"
