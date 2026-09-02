@@ -984,3 +984,26 @@ function f(a: Any) -> Bool {
             value: (identifier)
             type: (type_identifier))
           right: (boolean_literal))))))
+
+================================================================================
+A runtime type descriptor is read with the type keyword after a dot
+================================================================================
+
+function f() -> String {
+    return value.type.name
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (field_expression
+          receiver: (field_expression
+            receiver: (identifier))
+          field: (identifier))))))

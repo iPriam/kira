@@ -210,6 +210,7 @@ impl Vm<'_> {
                 Value::NativeState(_)
                 | Value::MainThreadTask(_)
                 | Value::NativeSnapshot(_)
+                | Value::Type(_)
                 | Value::Cell(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }

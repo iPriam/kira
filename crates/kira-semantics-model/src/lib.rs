@@ -24,9 +24,10 @@ pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
 /// re-exported so the analyzer names the module from one place.
 pub use ty::distincts;
 pub use ty::{
-    ArrayId, ArrayTable, CellId, CellTable, DistinctDef, DistinctId, DistinctTable, EnumDef,
-    EnumId, EnumTable, ErasedTypeId, FieldDef, FloatSpelling, ForeignPtrId, ForeignPtrTable,
-    Instantiation, IntSpelling, MainThreadTaskResult, NativeStateId, NativeStateTable,
-    NominalIdentity, NominalKind, PackageIdentity, StructDef, StructId, StructOrigin, StructTable,
-    TaskResult, Type, TypeTable, VariantDef,
+    ArrayId, ArrayTable, CellId, CellTable, DescriptorFamily, DescriptorKind, DistinctDef,
+    DistinctId, DistinctTable, EnumDef, EnumId, EnumTable, ErasedTypeId, FieldDef, FloatSpelling,
+    ForeignPtrId, ForeignPtrTable, Instantiation, IntSpelling, MainThreadTaskResult, NativeStateId,
+    NativeStateTable, NominalIdentity, NominalKind, PackageIdentity, StructDef, StructId,
+    StructOrigin, StructTable, TaskResult, Type, TypeDescriptor, TypeDescriptorTable, TypeField,
+    TypeTable, VariantDef,
 };

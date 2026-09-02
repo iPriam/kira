@@ -291,6 +291,7 @@ impl<'a> Codegen<'a> {
                 | Type::NativeState(_)
                 | Type::Task(_)
                 | Type::MainThreadTask(_)
+                | Type::RuntimeType
                 | Type::CBlock => LLVMConstInt(llvm_type, 0, 0),
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
@@ -321,7 +322,7 @@ impl<'a> Codegen<'a> {
     /// Builds a private constant global holding `text`, returning a pointer to
     /// its bytes (the null pointer for the empty string, which never
     /// allocates).
-    fn string_constant(&mut self, text: &str) -> LLVMValueRef {
+    pub(in crate::codegen) fn string_constant(&mut self, text: &str) -> LLVMValueRef {
         let bytes = text.as_bytes();
         // SAFETY: every type and value below is from this live module; `bytes`
         // outlives the constant-array copy LLVM makes.

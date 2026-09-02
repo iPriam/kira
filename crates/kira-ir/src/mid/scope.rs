@@ -351,7 +351,12 @@ impl Scan<'_> {
                 self.expr(*token, path, owners)
             }
             IrExpr::Convert { operand, .. } => self.expr(*operand, path, owners),
-            IrExpr::IntoAny { value, .. } => self.expr(*value, path, owners),
+            IrExpr::IntoAny { value, .. }
+            | IrExpr::TypeConst { value, .. }
+            | IrExpr::TypeOf { value }
+            | IrExpr::TypeField {
+                descriptor: value, ..
+            } => self.expr(*value, path, owners),
             IrExpr::TaskOp { operands, .. } => {
                 for operand in operands {
                     self.expr(*operand, path, owners);

@@ -196,6 +196,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         // An erasure wraps the value it erases, and a call inside that value is
         // reachable exactly as it would be anywhere else.
         IrExpr::IntoAny { value, .. } => walk_expr(program, *value, found),
+        IrExpr::TypeConst { value, .. }
+        | IrExpr::TypeOf { value }
+        | IrExpr::TypeField {
+            descriptor: value, ..
+        } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
         IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),

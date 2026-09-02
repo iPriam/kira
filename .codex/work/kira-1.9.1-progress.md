@@ -164,6 +164,44 @@ carried were pre-existing breakage from earlier slices, each fixed at its cause:
   round, before the slices the fiber still owes (`LIFECYCLE_SLICE` is 4096 steps on both engines).
   VM, LLVM, and hybrid all print `main-thread-lifecycle / 42 / manual-main-thread / 20000`.
 
+### Slice 3 completed: runtime type descriptors (2026-09-02)
+- `value.type` answers with a `Type`, Kira's runtime type descriptor. Equality is exact
+  package-qualified nominal identity. A descriptor exposes `name`, `package`, `kind`, `arguments`,
+  and `conformances`, and nothing else (KSEM363); an expression that names no value has no `.type`
+  (KSEM362).
+- `ErasedTypeId` is now a family word plus a row in a per-program `TypeDescriptorTable`, built
+  during lowering while a `distinct` is still itself. One identity now serves erasure, `is`, `as`,
+  and `.type`, and a `distinct` keeps its own identity through the representation rewrite.
+- The tag an `IntoAny` writes is fixed at lowering rather than derived by each backend from the
+  payload's machine type, which is what makes that survive.
+- The VM reads a new appended module section; native code runs generated readers over the same
+  rows, so no runtime symbol and no ABI version changed. Round-trip, truncation, and
+  section-forcing coverage in `module_tests.rs`.
+- `type` is accepted as a member name after `.` in the parser and the tree-sitter grammar, with
+  corpus coverage. Conformances are recorded once coherence is final and carried through
+  `HirProgram::conformances`.
+- Coverage: `TdxTypeDescriptorTests.kira` (11 constructs, tally 1443), parity
+  `a_runtime_type_descriptor_agrees_on_every_backend`, four semantics tests, docs in the type
+  reference, the structures guide, and the feature-status table.
+
+### Native-state owner counting on the VM (2026-09-02)
+`a_handle_dropped_with_its_frame_releases_one_owner` had been failing since slice 7 landed, and the
+count it caught was real: the VM retained twice for one exported token. A load of a handle already
+goes through `Heap::copy_value`, which counts a reference, so `NativeUserData { shared: true }`
+adding another left the state one owner over. The VM now takes over the reference the popped value
+already carries. `shared` still means what it says on native, where a load is a raw word that took
+no reference.
+
+### Test-suite defects found by the unit sweep (2026-09-02)
+- Autobind tests fed clang C headers the slice-1 desemicolon pass had stripped, and pinned plain
+  `char` to `I8`. C keeps its semicolons, and `char` signedness is the target's: aarch64 binds it
+  as `U8`, x86-64 as `I8`, and the test asks the host.
+- `kira-launcher`'s alias tests executed a file they had just written while a sibling test was
+  between `fork` and `exec`, which is `ETXTBSY`. The run waits that window out instead of reporting
+  it as the launcher refusing to run.
+- `kira-desktop-runner`'s subprocess test hid the child's exit status when it failed; it prints it
+  now.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with

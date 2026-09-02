@@ -66,7 +66,12 @@ impl FunctionLowering<'_, '_> {
                 tag,
                 payload,
             } => self.lower_enum_new(enum_id, tag, payload),
-            IrExpr::IntoAny { value, from } => self.lower_into_any(value, from),
+            IrExpr::IntoAny { value, from, tag } => self.lower_into_any(value, from, tag),
+            IrExpr::TypeConst { value, id } => self.lower_type_const(value, id),
+            IrExpr::TypeOf { value } => self.lower_type_of(value),
+            IrExpr::TypeField {
+                descriptor, field, ..
+            } => self.lower_type_field(descriptor, field),
             IrExpr::EnumTag { value } => self.lower_enum_tag(value),
             IrExpr::TypeTest { value, target } => self.lower_type_test(value, target),
             IrExpr::TypeCast { value, target, ty } => self.lower_type_cast(value, target, ty),

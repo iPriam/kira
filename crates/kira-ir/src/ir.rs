@@ -10,7 +10,7 @@
 use kira_runtime_abi::{
     Execution, ForeignAggregates, ForeignCallback, ForeignImport, NativeStateTypeId,
 };
-use kira_semantics_model::{Type, TypeTable};
+use kira_semantics_model::{Type, TypeDescriptorTable, TypeTable};
 use la_arena::{Arena, Idx};
 
 /// The scalar-conversion machine kinds, reused from the analyzer so the IR does
@@ -33,6 +33,15 @@ pub struct IrProgram {
     /// Every shape the program's types name: the one source of field layout
     /// and of array element types.
     pub types: TypeTable,
+    /// The runtime identity of every type the program erases, tests, casts to,
+    /// or asks for with `value.type`.
+    ///
+    /// Built during lowering, while a `distinct` is still itself: the rewrite
+    /// that turns one into its representation is about the machine form of the
+    /// value, and the identity is what the language says the value is. A
+    /// backend looks rows up and never mints one, so both halves of a hybrid
+    /// program name a type by the same id.
+    pub descriptors: TypeDescriptorTable,
     /// Index of the `@Main` entrypoint within [`IrProgram::functions`], or
     /// `None` for a library.
     ///
@@ -216,6 +225,8 @@ impl IrProgram {
             IrExpr::CStringNew { .. } | IrExpr::CLayoutAddress { .. } => Type::CBlock,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::IntoAny { .. } => Type::Any,
+            IrExpr::TypeConst { .. } | IrExpr::TypeOf { .. } => Type::RuntimeType,
+            IrExpr::TypeField { ty, .. } => *ty,
             IrExpr::MainThreadCall { ty, .. } | IrExpr::MainThreadJoin { ty, .. } => *ty,
             IrExpr::ArrayAppend { .. }
             | IrExpr::NativeStateRetain { .. }
@@ -304,6 +315,8 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::NeStr
         | IrBinOp::EqAny
         | IrBinOp::NeAny
+        | IrBinOp::EqType
+        | IrBinOp::NeType
         | IrBinOp::And
         | IrBinOp::Or => Type::Bool,
     }
@@ -598,6 +611,7 @@ mod tests {
         IrProgram {
             functions: Vec::new(),
             types: TypeTable::default(),
+            descriptors: Default::default(),
             main: None,
             main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),

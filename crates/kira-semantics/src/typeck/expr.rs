@@ -552,6 +552,17 @@ impl Analyzer<'_> {
                 }
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();
+                // `value.type` is the one property every value has, so it is
+                // answered before any type's own members: a declaration cannot
+                // shadow it, which is what makes the descriptor reachable from
+                // a value of any type.
+                if name == "type" {
+                    return self.analyze_type_of(base_hir, base_ty, field_span);
+                }
+                // A descriptor's own members: what a type says about itself.
+                if base_ty == Type::RuntimeType {
+                    return self.analyze_type_property(base_hir, &name, field_span);
+                }
                 // `handle.await` is the one property a task handle has, and the
                 // handle is opaque, so anything else read off one is refused
                 // here rather than falling through to a field lookup that would

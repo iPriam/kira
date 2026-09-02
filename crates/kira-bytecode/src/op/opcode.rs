@@ -269,3 +269,12 @@ pub const STRING_OF_UNSIGNED: u8 = 0x86;
 pub const TYPE_TEST: u8 = 0x87;
 pub const DOWNCAST: u8 = 0x88;
 pub const NATIVE_STATE_RETAIN: u8 = 0x89;
+
+/// The runtime type descriptor a value answers `.type` with: a constant for a
+/// value whose type is known, and a read of the box for an `Any`. Appended
+/// after `NATIVE_STATE_RETAIN`; adding an opcode is not an ABI change.
+pub const CONST_TYPE: u8 = 0x8a;
+pub const TYPE_OF: u8 = 0x8b;
+pub const EQ_TYPE: u8 = 0x8c;
+pub const NE_TYPE: u8 = 0x8d;
+pub const TYPE_FIELD: u8 = 0x8e;

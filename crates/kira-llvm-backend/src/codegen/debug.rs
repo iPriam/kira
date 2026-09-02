@@ -292,6 +292,7 @@ impl DebugBuilder {
             | Type::Void
             | Type::Error
             | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::CString
             | Type::CBlock => return self.unspecified_type("KiraValue"),
         };

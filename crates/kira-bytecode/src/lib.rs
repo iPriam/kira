@@ -49,6 +49,7 @@ mod tests {
                 body,
             }],
             types: Default::default(),
+            descriptors: Default::default(),
             main: Some(0),
             main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
@@ -56,6 +57,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
+            
             exprs,
         }
     }
@@ -258,6 +260,7 @@ mod tests {
                 body: vec![IrStmt::Return { value: None }],
             }],
             types: Default::default(),
+            descriptors: Default::default(),
             main: None,
             main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
@@ -265,6 +268,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
+            
             exprs: la_arena::Arena::new(),
         };
         let button = program

@@ -84,6 +84,7 @@ fn bridge_tag_of(
         // engine that owns the intrinsic; only its raw token crosses.
         Type::CString
         | Type::CBlock
+        | Type::RuntimeType
         | Type::NativeState(_)
         | Type::Task(_)
         | Type::MainThreadTask(_)
@@ -181,6 +182,7 @@ impl Codegen<'_> {
                 Type::MainThreadTask(_) => payload,
                 Type::CString
                 | Type::CBlock
+                | Type::RuntimeType
                 | Type::NativeState(_)
                 | Type::Task(_)
                 | Type::Cell(_) => {

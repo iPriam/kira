@@ -4,7 +4,6 @@ use kira_semantics_model::hir::FieldOrder;
 use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
 use kira_semantics_model::Type;
 use kira_runtime_abi::{Execution, ForeignMember, ForeignPointerWidth, ForeignType};
-use kira_semantics_model::ErasedTypeId;
 
 use crate::op::{Instruction, WritebackTarget};
 
@@ -392,12 +391,30 @@ impl FnCompiler<'_> {
                 self.code.push(Instruction::Downcast(target.as_u64()));
             }
             // `Heap::alloc_erased` for what the box holds.
-            IrExpr::IntoAny { value, from } => {
-                let (value, from) = (*value, *from);
+            IrExpr::IntoAny { value, tag, .. } => {
+                let (value, tag) = (*value, *tag);
                 self.compile_expr(value)?;
-                let type_id =
-                    ErasedTypeId::of(from).ok_or(CompileError::ErasureOfAValuelessType)?;
-                self.code.push(Instruction::Erase(type_id.as_u64()));
+                self.code.push(Instruction::Erase(tag.as_u64()));
+            }
+            // The value is evaluated for its effects and dropped; the answer
+            // was settled when lowering interned its type.
+            IrExpr::TypeConst { value, id } => {
+                let (value, id) = (*value, *id);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::Pop);
+                self.code.push(Instruction::ConstType(id.as_u64()));
+            }
+            IrExpr::TypeOf { value } => {
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::TypeOf);
+            }
+            IrExpr::TypeField {
+                descriptor, field, ..
+            } => {
+                let (descriptor, field) = (*descriptor, *field);
+                self.compile_expr(descriptor)?;
+                self.code.push(Instruction::TypeField(field.as_byte()));
             }
             IrExpr::ArrayAppend { place, value } => {
                 let (place, value) = (place.clone(), *value);

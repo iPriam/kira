@@ -21,7 +21,21 @@ Every integer type is one 64-bit two's-complement value at run time and every fl
 
 Two written widths must match exactly. Bare `Int` and `Float` are wildcards matching any width in their kind, which makes assignability non-transitive: `U8` to `Int` and `Int` to `U32` both hold while `U8` to `U32` does not.
 
-`Any` accepts every value. What it holds is asked with `value is Type` (a `Bool`, by nominal runtime identity: two packages' same-named `Point`s are different answers) and read back with `value as Type`, which traps when the value holds anything else. One generic specialization never reaches another: `Result<Int, E>` does not fill a `Result<Any, E>` position, and neither does `[Result<Int, E>]` fill a `[Result<Any, E>]` one. The conversion is written, by unpacking the value and rebuilding it.
+`Any` accepts every value. What it holds is asked with `value is Type` (a `Bool`, by nominal runtime identity: two packages' same-named `Point`s are different answers) and read back with `value as Type`, which traps when the value holds anything else.
+
+`value.type` answers with a `Type`, the runtime descriptor of what the value is. Two descriptors are equal exactly when they name one type by package-qualified nominal identity. A descriptor exposes five things and no more:
+
+| Member | Answers |
+| --- | --- |
+| `name` | The declared name, as written. |
+| `package` | The declaring package's identity, empty for a builtin and for the program's own declarations. |
+| `kind` | `struct`, `class`, `enum`, `distinct`, `array`, `int`, `float`, `bool`, `string`, `pointer`, `construct family`, `trait existential`, `function type`, or `type`. |
+| `arguments` | `[Type]`, the generic arguments an instantiation was minted with. |
+| `conformances` | `[String]`, the traits the type keeps, sorted. |
+
+Fields, layout, methods, and source spans are compile-time facts and are reached through comptime reflection, not through a runtime descriptor. Asking a descriptor for anything else is `KSEM363`, and asking `.type` of an expression that names no value is `KSEM362`.
+
+Integer spellings share one descriptor, as they share one erased identity: `(3).type == (3 as U8).type`. A `distinct` keeps its own, even though a backend stores its representation. One generic specialization never reaches another: `Result<Int, E>` does not fill a `Result<Any, E>` position, and neither does `[Result<Int, E>]` fill a `[Result<Any, E>]` one. The conversion is written, by unpacking the value and rebuilding it.
 
 There is no subtyping between classes (`KSEM063`), no implicit numeric widening, and no truthiness.
 

@@ -133,6 +133,7 @@ impl Heap {
             Value::Void => return Err("a void value"),
             Value::NativeState(_) => return Err("callback state inside callback state"),
             Value::MainThreadTask(_) => return Err("a main-thread task handle"),
+            Value::Type(_) => return Err("a runtime type descriptor"),
             Value::NativeView { .. } => {
                 return Err("a recovered callback-state view inside callback state");
             }

@@ -317,6 +317,10 @@ impl<'a> Analyzer<'a> {
         // program start — and whether any initializer genuinely depends on
         // its own value.
         self.order_constant_evaluation();
+        // What a runtime descriptor answers for `conformances`, recorded after
+        // every conformance is registered and coherence has run: a program may
+        // ask a type what it keeps, and nothing later can add to the answer.
+        self.record_conformances();
         Analysis {
             program: self.program,
             diagnostics: self.diagnostics,

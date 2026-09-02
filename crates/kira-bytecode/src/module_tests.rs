@@ -12,6 +12,7 @@ fn module_round_trips_through_bytes() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(1),
         strings: vec!["hello".to_owned(), "world".to_owned()],
         functions: vec![
@@ -57,6 +58,7 @@ fn library_module() -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: None,
         strings: Vec::new(),
         functions: vec![FuncProto {
@@ -100,6 +102,7 @@ fn an_entrypoint_index_is_never_the_sentinel() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(0),
         ..library_module()
     }
@@ -275,6 +278,8 @@ fn bytes_after_the_last_section_are_rejected() {
         bytes.extend_from_slice(&[0xff; 8]);
     }
     bytes.extend_from_slice(&[0; 8]);
+    bytes.extend_from_slice(&[0; 8]);
+    // An empty type-descriptor section, the last one a module carries.
     bytes.extend_from_slice(&[0; 8]);
     bytes.extend_from_slice(&[0, 0, 0]);
     assert_eq!(
@@ -491,6 +496,7 @@ fn constant_module() -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: vec![1],
+        types: Vec::new(),
         main: Some(0),
         strings: Vec::new(),
         functions: vec![
@@ -560,4 +566,70 @@ fn a_truncated_constants_section_is_a_typed_error() {
         Module::from_bytes(&bytes[..bytes.len() - 1]).unwrap_err(),
         ModuleDecodeError::Truncated
     );
+}
+
+/// A module carrying the runtime type descriptors its ids index.
+fn descriptor_module() -> Module {
+    let mut module = constant_module();
+    module.types = vec![
+        TypeDescriptorRow {
+            name: "Int".to_owned(),
+            package: String::new(),
+            kind: "int".to_owned(),
+            arguments: Vec::new(),
+            conformances: Vec::new(),
+        },
+        TypeDescriptorRow {
+            name: "Crate".to_owned(),
+            package: "Alpha@1.0.0#/alpha".to_owned(),
+            kind: "enum".to_owned(),
+            arguments: vec![0],
+            conformances: vec!["Greets".to_owned()],
+        },
+    ];
+    module
+}
+
+#[test]
+fn a_type_descriptor_section_round_trips_through_bytes() {
+    let module = descriptor_module();
+    let decoded = Module::from_bytes(&module.to_bytes()).expect("decodes");
+    assert_eq!(decoded, module);
+    assert_eq!(decoded.types[1].name, "Crate");
+    assert_eq!(decoded.types[1].arguments, vec![0]);
+    assert_eq!(decoded.types[1].conformances, vec!["Greets".to_owned()]);
+}
+
+#[test]
+fn a_module_without_descriptors_writes_no_descriptor_section() {
+    let with = descriptor_module().to_bytes();
+    let mut without = descriptor_module();
+    without.types = Vec::new();
+    assert!(with.len() > without.to_bytes().len());
+}
+
+/// A section cut short is a truncation, never a table that silently holds
+/// fewer rows than it said.
+#[test]
+fn a_truncated_descriptor_section_is_rejected() {
+    let bytes = descriptor_module().to_bytes();
+    for cut in 1..12 {
+        let short = &bytes[..bytes.len() - cut];
+        assert!(
+            Module::from_bytes(short).is_err(),
+            "a module cut {cut} bytes short decoded"
+        );
+    }
+}
+
+/// A descriptor section forces the constants section before it to be written,
+/// so a program that asks a type about itself but declares no module constant
+/// still decodes unambiguously.
+#[test]
+fn descriptors_force_the_section_before_them() {
+    let mut module = descriptor_module();
+    module.constants = Vec::new();
+    let decoded = Module::from_bytes(&module.to_bytes()).expect("decodes");
+    assert!(decoded.constants.is_empty());
+    assert_eq!(decoded.types.len(), 2);
 }

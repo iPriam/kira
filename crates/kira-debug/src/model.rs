@@ -248,6 +248,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
+            descriptors: Default::default(),
             exprs: Arena::new(),
         };
         let path =

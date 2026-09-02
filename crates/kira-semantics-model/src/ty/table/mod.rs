@@ -267,6 +267,9 @@ impl TypeTable {
             // A C block is seam-local storage; state that kept one across a
             // rebuild would keep a pointer into a program that no longer
             // exists, so it has no recovery identity either.
+            // A runtime type descriptor names a row of *this* build's
+            // descriptor table, so state that kept one across a rebuild would
+            // name a type the new program never described.
             Type::Void
             | Type::Error
             | Type::CString
@@ -274,6 +277,7 @@ impl TypeTable {
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)
+            | Type::RuntimeType
             | Type::Any => {
                 return None;
             }
@@ -312,6 +316,9 @@ impl TypeTable {
             Type::Bool => mix_native_state_bytes(hash, b"bool"),
             Type::String => mix_native_state_bytes(hash, b"string"),
             Type::RawPtr | Type::ForeignPtr(_) => mix_native_state_bytes(hash, b"raw-ptr"),
+            // Never reached: `native_state_type_id` refuses a descriptor before
+            // the walk starts, because the row it names belongs to one build.
+            Type::RuntimeType => mix_native_state_bytes(hash, b"type"),
             // Name and representation, and no id: a distinct type is a schema
             // an author wrote down, and the row it sits in is not.
             Type::Distinct(id) => {
@@ -428,6 +435,7 @@ impl TypeTable {
             Type::Void => "Void".to_owned(),
             Type::RawPtr => "RawPtr".to_owned(),
             Type::CString => "CString".to_owned(),
+            Type::RuntimeType => "Type".to_owned(),
             // Not surface: a reader meeting this name is looking at seam
             // storage the analyzer minted, not at a type they can spell.
             Type::CBlock => "<C storage>".to_owned(),

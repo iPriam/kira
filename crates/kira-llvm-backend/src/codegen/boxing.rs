@@ -69,12 +69,9 @@ impl Codegen<'_> {
         &mut self,
         value: LLVMValueRef,
         from: Type,
+        identity: ErasedTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let tag = self.const_int(
-            ErasedTypeId::of(from)
-                .ok_or(LlvmError::internal("an erasure of a type with no value"))?
-                .as_i64(),
-        );
+        let tag = self.const_int(identity.as_i64());
         // A struct is wider than one word, and an array's clone and free are
         // type-specific, so both take the runtime's erased aggregate payload —
         // the same one an aggregate enum payload already uses. Everything else fits

@@ -755,3 +755,71 @@ function main() {
         "false\n",
     );
 }
+
+/// `value.type` answers the same identity, name, kind, arguments, and
+/// conformances on every backend.
+///
+/// The two engines answer from different places — the VM reads the descriptor
+/// table its module carries, native code runs a generated reader over the same
+/// rows — so this is exactly the kind of split that has to produce one answer.
+#[test]
+fn a_runtime_type_descriptor_agrees_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+trait Greets {
+    function greet(borrow self) -> String
+}
+
+struct Point {
+    let x: Int
+}
+
+struct Other {
+    let x: Int
+}
+
+extend Point: Greets {
+    function greet(borrow self) -> String { return "hi" }
+}
+
+enum Crate<Held> {
+    Full(Held)
+    Empty
+}
+
+@Main
+function main() {
+    let point = Point(x: 1)
+    let other = Other(x: 1)
+    print(point.type == point.type)
+    print(point.type == other.type)
+    let erased: Any = Point(x: 2)
+    print(erased.type == point.type)
+
+    print(point.type.name)
+    print(point.type.kind)
+    print(point.type.package.count)
+    print(point.type.conformances.count)
+    print(point.type.conformances[0])
+
+    let held: Crate<Int> = .Full(3)
+    print(held.type.name)
+    print(held.type.arguments.count)
+    print(held.type.arguments[0].name)
+
+    let words = ["a"]
+    print(words.type.kind)
+    print(words.type.arguments[0].name)
+
+    let plain: Int = 3
+    let narrow: U8 = 3
+    print(plain.type == narrow.type)
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\nPoint\nstruct\n0\n1\nGreets\nCrate\n1\nInt\narray\nString\ntrue\n"
+    );
+}

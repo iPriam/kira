@@ -61,6 +61,7 @@ impl Heap {
             | Value::NativeView { .. }
             | Value::NativeSnapshot(_)
             | Value::MainThreadTask(_)
+            | Value::Type(_)
             | Value::CBlock(_) => {
                 self.drop_value(value);
                 return None;
@@ -186,6 +187,7 @@ impl Heap {
             Value::CBlock(_) => NativeResult::Aggregate(self.seam_tree(value)?),
             Value::NativeState(_)
             | Value::MainThreadTask(_)
+            | Value::Type(_)
             | Value::Cell(_)
             | Value::NativeView { .. }
             | Value::NativeSnapshot(_) => return None,

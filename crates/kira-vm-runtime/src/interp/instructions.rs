@@ -756,6 +756,27 @@ impl Vm<'_> {
                 let id = self.heap.alloc((value as u64).to_string());
                 self.stack.push(Value::Str(id));
             }
+            Instruction::ConstType(id) => self.stack.push(Value::Type(*id)),
+            Instruction::TypeField(field) => self.type_field(module, *field)?,
+            Instruction::TypeOf => {
+                let value = self.pop()?;
+                let Value::Erased(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an `Any` to read the type of",
+                    });
+                };
+                // The box always carries its identity: `Erase` wrote it, and
+                // nothing since could have removed it.
+                let Some(identity) = self.heap.erased_type_id(id) else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an erased value carrying its type",
+                    });
+                };
+                self.heap.drop_value(value);
+                self.stack.push(Value::Type(identity));
+            }
             // The outer dispatch loop keeps scalar integer arithmetic and
             // comparisons out of this general matcher. These arms remain for
             // callers that enter `step` directly, while the normal interpreter
@@ -773,6 +794,58 @@ impl Vm<'_> {
             Instruction::GeInt => self.ge_int()?,
             arithmetic => self.binary(arithmetic)?,
         }
+        Ok(())
+    }
+
+    /// One property of the runtime type descriptor on top of the stack.
+    ///
+    /// The id carries its family in the high half and its row in the low half;
+    /// the module's table is indexed by the row. A row the table does not hold
+    /// answers empty rather than trapping: the table is the compiler's own
+    /// output, so a gap is a truncated artifact rather than a program's
+    /// mistake, and the loader's own checks are what refuse that.
+    fn type_field(&mut self, module: &Module, field: u8) -> Result<(), VmError> {
+        let Some(field) = kira_bytecode::op::TypeField::from_byte(field) else {
+            return Err(VmError::TypeMismatch {
+                expected: "a runtime type property",
+            });
+        };
+        let Value::Type(id) = self.pop()? else {
+            return Err(VmError::TypeMismatch {
+                expected: "a runtime type descriptor",
+            });
+        };
+        let row = module.types.get(id as u32 as usize);
+        let value = match field {
+            kira_bytecode::op::TypeField::Arguments => {
+                let arguments: Vec<Value> = row
+                    .map(|row| row.arguments.iter().map(|&id| Value::Type(id)).collect())
+                    .unwrap_or_default();
+                Value::Array(self.heap.alloc_array(arguments))
+            }
+            kira_bytecode::op::TypeField::Conformances => {
+                let names: Vec<Value> = row
+                    .map(|row| {
+                        row.conformances
+                            .iter()
+                            .map(|name| Value::Str(self.heap.alloc(name.clone())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Value::Array(self.heap.alloc_array(names))
+            }
+            text => {
+                let text = row
+                    .map(|row| match text {
+                        kira_bytecode::op::TypeField::Name => row.name.clone(),
+                        kira_bytecode::op::TypeField::Package => row.package.clone(),
+                        _ => row.kind.clone(),
+                    })
+                    .unwrap_or_default();
+                Value::Str(self.heap.alloc(text))
+            }
+        };
+        self.stack.push(value);
         Ok(())
     }
 }

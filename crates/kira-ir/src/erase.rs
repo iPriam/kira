@@ -159,7 +159,7 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::Convert { ty, .. }
         | IrExpr::MainThreadCall { ty, .. }
         | IrExpr::MainThreadJoin { ty, .. } => erase(ty),
-        IrExpr::IntoAny { from, .. } => erase(from),
+        IrExpr::IntoAny { from, .. } | IrExpr::TypeField { ty: from, .. } => erase(from),
         // The rest carry no type: a literal is its own, a struct or enum
         // construction names its row, and everything else reads its type off
         // the table or off the node it was built from.
@@ -176,6 +176,11 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::EnumNew { .. }
         | IrExpr::EnumTag { .. }
         | IrExpr::TypeTest { .. }
+        // A descriptor id is an identity, and identity is exactly what this
+        // rewrite must not touch: a `distinct` becomes its representation here
+        // and still answers `.type` with itself.
+        | IrExpr::TypeConst { .. }
+        | IrExpr::TypeOf { .. }
         | IrExpr::ArrayLen { .. }
         | IrExpr::StringLen { .. }
         | IrExpr::StringCharAt { .. }

@@ -165,12 +165,21 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::ConvertUIntToFloat => out.push(o::CONVERT_UINT_TO_FLOAT),
         Instruction::PrintUnsigned => out.push(o::PRINT_UNSIGNED),
         Instruction::StringOfUnsigned => out.push(o::STRING_OF_UNSIGNED),
+        Instruction::TypeOf => out.push(o::TYPE_OF),
+        Instruction::TypeField(field) => {
+            out.push(o::TYPE_FIELD);
+            out.push(*field);
+        }
         Instruction::TypeTest(id) => {
             out.push(o::TYPE_TEST);
             out.extend_from_slice(&id.to_le_bytes());
         }
         Instruction::Downcast(id) => {
             out.push(o::DOWNCAST);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::ConstType(id) => {
+            out.push(o::CONST_TYPE);
             out.extend_from_slice(&id.to_le_bytes());
         }
         Instruction::NewStructOrdered { order, glue } => {
@@ -366,6 +375,8 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&type_id.to_le_bytes());
         }
         Instruction::EqAny => out.push(o::EQ_ANY),
+        Instruction::EqType => out.push(o::EQ_TYPE),
+        Instruction::NeType => out.push(o::NE_TYPE),
         Instruction::NeAny => out.push(o::NE_ANY),
         Instruction::EqStr => out.push(o::EQ_STR),
         Instruction::NeStr => out.push(o::NE_STR),
@@ -535,6 +546,12 @@ impl Cursor<'_> {
             o::STRING_OF_UNSIGNED => Instruction::StringOfUnsigned,
             o::TYPE_TEST => Instruction::TypeTest(u64::from_le_bytes(self.take()?)),
             o::DOWNCAST => Instruction::Downcast(u64::from_le_bytes(self.take()?)),
+            o::CONST_TYPE => Instruction::ConstType(u64::from_le_bytes(self.take()?)),
+            o::TYPE_OF => Instruction::TypeOf,
+            o::TYPE_FIELD => {
+                let [field] = self.take()?;
+                Instruction::TypeField(field)
+            }
             o::NEW_STRUCT_ORDERED => {
                 let count = self.read_slot(legacy)?;
                 let mut order = Vec::new();
@@ -781,6 +798,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::EQ_BOOL => Instruction::EqBool,
         o::NE_BOOL => Instruction::NeBool,
         o::EQ_ANY => Instruction::EqAny,
+        o::EQ_TYPE => Instruction::EqType,
+        o::NE_TYPE => Instruction::NeType,
         o::NE_ANY => Instruction::NeAny,
         o::EQ_STR => Instruction::EqStr,
         o::NE_STR => Instruction::NeStr,

@@ -33,6 +33,7 @@ fn printing_module() -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(0),
         strings: vec![APP_OUTPUT.to_owned()],
         functions: vec![FuncProto {
@@ -197,7 +198,7 @@ fn the_runner_binary_runs_the_app_it_is_served() {
     assert!(
         stdout.contains(APP_OUTPUT),
         "the app's own output must appear on the runner's stdout.\n\
-         stdout: {stdout:?}\nstderr: {stderr:?}"
+         stdout: {stdout:?}\nstderr: {stderr:?}\nstatus: {status:?}"
     );
     assert!(
         status.success(),
@@ -371,6 +372,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(0),
         strings: Vec::new(),
         functions: vec![FuncProto {

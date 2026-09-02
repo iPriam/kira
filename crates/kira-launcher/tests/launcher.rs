@@ -287,6 +287,33 @@ fn write_fixture_language_server(
     server
 }
 
+/// Runs a freshly written executable, waiting out the window in which the
+/// kernel still sees a writer.
+///
+/// A test binary is multithreaded, and one thread writing a file while another
+/// is between `fork` and `exec` leaves the child holding a writable descriptor
+/// for it. Executing the file then fails with `ETXTBSY` — a fact about the two
+/// tests running at once, not about the launcher — so it is waited out rather
+/// than reported as the launcher refusing to run.
+#[cfg(unix)]
+fn run_executable(command: &mut std::process::Command) -> std::process::Output {
+    for _ in 0..100 {
+        match command.output() {
+            Err(error) if error.raw_os_error() == Some(libc_etxtbsy()) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            other => return other.expect("run the launcher"),
+        }
+    }
+    panic!("the freshly written executable stayed busy");
+}
+
+/// `ETXTBSY`, which is 26 on every Linux ABI and on macOS.
+#[cfg(unix)]
+fn libc_etxtbsy() -> i32 {
+    26
+}
+
 /// The launcher, invoked under the language server's name: a copy of the built
 /// binary named `kira-language-server`, which is exactly what `sinstall` and
 /// the tools archive put on PATH.
@@ -310,10 +337,7 @@ fn invoked_as_the_language_server_it_dispatches_to_the_toolchains_server() {
     std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
         .expect("mark alias executable");
 
-    let output = std::process::Command::new(&alias)
-        .env("KIRA_HOME", tree.home())
-        .output()
-        .expect("run launcher under its alias");
+    let output = run_executable(std::process::Command::new(&alias).env("KIRA_HOME", tree.home()));
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -348,10 +372,7 @@ fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
     std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
         .expect("mark alias executable");
 
-    let output = std::process::Command::new(&alias)
-        .env("KIRA_HOME", tree.home())
-        .output()
-        .expect("run launcher under its alias");
+    let output = run_executable(std::process::Command::new(&alias).env("KIRA_HOME", tree.home()));
     assert_eq!(output.status.code(), Some(2));
     assert!(
         stderr_of(&output).contains("kira-language-server"),

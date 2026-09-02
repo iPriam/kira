@@ -43,6 +43,7 @@ mod program;
 mod symbols;
 mod syscall;
 mod target;
+mod type_fields;
 mod types;
 mod values;
 
@@ -202,6 +203,9 @@ pub(crate) struct Codegen<'a> {
     /// The slots a copy or drop site hands its value to the leaf in, one pair
     /// per `(function, type)`. See [`glue`].
     scratch_slots: glue::ScratchSlots,
+    /// The generated reader for each descriptor property, built on first use.
+    /// See [`type_fields`].
+    type_field_readers: HashMap<kira_semantics_model::TypeField, Callable>,
     /// Encode/decode leaves used by generic callback-state array conversion.
     native_state_leaves: HashMap<(Type, StateLeaf), LLVMValueRef>,
     /// Encode/decode helpers for payload-carrying enum callback state.

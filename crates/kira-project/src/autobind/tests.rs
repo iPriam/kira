@@ -124,10 +124,10 @@ fn a_struct_forward_declared_before_it_is_defined_keeps_its_fields() {
     let package = TempPackage::new("forward");
     package.header(
         "demo.h",
-        "struct demo_caps\n\
-         typedef void (*demo_probe)(struct demo_caps *caps)\n\
-         typedef struct demo_caps { int count float scale } demo_caps\n\
-         void demo_release(demo_caps caps)\n",
+        "struct demo_caps;\n\
+         typedef void (*demo_probe)(struct demo_caps *caps);\n\
+         typedef struct demo_caps { int count; float scale; } demo_caps;\n\
+         void demo_release(demo_caps caps);\n",
     );
     let text = bind(&package, &library(&["demo.h"]));
 
@@ -251,11 +251,15 @@ fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
     );
     let text = bind(&package, &library(&["demo.h"]));
 
+    // Plain `char` takes its signedness from the target — signed on x86-64,
+    // unsigned on aarch64 — and the binding reports the target's, so the
+    // element name follows it rather than one platform's.
+    let byte = plain_char_spelling();
     assert!(
-        text.contains("@FFI.Array { element: I8, count: 56 }"),
+        text.contains(&format!("@FFI.Array {{ element: {byte}, count: 56 }}")),
         "{text}"
     );
-    assert!(text.contains("var opaque: I8_array_56"), "{text}");
+    assert!(text.contains(&format!("var opaque: {byte}_array_56")), "{text}");
 }
 
 #[test]
@@ -291,12 +295,28 @@ fn integer_width_is_read_from_the_target_rather_than_the_keyword() {
         "windows" => "I32",
         _ => "Int",
     };
+    let byte = plain_char_spelling();
     assert!(
         text.contains(&format!(
-            "function demo_widths(a: I8, b: I16, c: I32, d: {long_spelling}, e: U64, f: Bool) -> Void"
+            "function demo_widths(a: {byte}, b: I16, c: I32, d: {long_spelling}, e: U64, f: Bool) \
+             -> Void"
         )),
         "{text}"
     );
+}
+
+/// The Kira type a plain C `char` binds to on this host.
+///
+/// `char` is a third type beside `signed char` and `unsigned char`, and which
+/// of the two it matches is the target's choice: x86-64 signs it, aarch64 does
+/// not. The binding reports what the target says, so a test that pinned one
+/// spelling would pass on one machine and fail on the other for a binding that
+/// is right on both.
+fn plain_char_spelling() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" | "arm" => "U8",
+        _ => "I8",
+    }
 }
 
 #[test]

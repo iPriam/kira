@@ -52,6 +52,7 @@ fn invocation_runs_the_target_on_the_caller_loop() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
     };
     let mut host = CapturingHost::new();
     let outcome = execute_with_main_thread(&module, &mut host).expect("main-thread run");
@@ -108,6 +109,7 @@ fn a_main_thread_target_can_reenter_the_same_loop() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
     };
     let mut host = CapturingHost::new();
     execute_with_main_thread(&module, &mut host).expect("main-thread run");
@@ -171,6 +173,7 @@ fn spawn_and_post_keep_the_helper_and_loop_ordered() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
     };
     let mut host = CapturingHost::new();
     execute_with_main_thread(&module, &mut host).expect("main-thread run");
@@ -229,6 +232,7 @@ fn the_helper_and_main_loop_use_different_threads() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
     };
     let mut host = ThreadHost::default();
     execute_with_main_thread(&module, &mut host).expect("main-thread run");
@@ -292,6 +296,7 @@ fn a_lifecycle_runs_on_the_callers_main_thread_beside_the_entrypoint() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
     };
     let caller = thread::current().id();
     let mut host = ThreadHost::default();

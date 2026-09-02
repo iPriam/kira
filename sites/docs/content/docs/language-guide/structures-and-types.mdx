@@ -177,6 +177,24 @@ function widen(outcome: Result<Int, AppError>) -> Result<Any, AppError> {
 
 `Any` is Kira's top type. A value crosses into it and is stored, copied, passed, returned, and released. `value is Type` answers whether the erased value holds that type, by nominal runtime identity, and `value as Type` reads it back and traps when it holds anything else.
 
+## `value.type`
+
+Every value answers what it is:
+
+```kira
+let point = Point(x: 1, y: 2)
+print(point.type.name)              // Point
+print(point.type.kind)              // struct
+print(point.type.conformances[0])   // the first trait it keeps
+
+let held: Crate<Int> = .Full(3)
+print(held.type.arguments[0].name)  // Int
+```
+
+The answer is a `Type`, and two of them are equal exactly when they name one type by package-qualified identity, so two packages' same-named `Point`s are two answers. On an `Any` the descriptor comes from the value; everywhere else it is settled at compile time, and the value is evaluated only for its effects.
+
+A descriptor carries a name, a package, a kind, generic arguments, and conformances. It does not carry fields, layout, methods, or source spans: those are compile-time facts, reached through comptime reflection.
+
 ## Type Aliases
 
 `type Name = Target` binds a name to a written type. It is a **spelling, not a new type**: `Count` and `Int` below are the same type, so a value of one goes anywhere the other does and no backend ever learns the alias existed.

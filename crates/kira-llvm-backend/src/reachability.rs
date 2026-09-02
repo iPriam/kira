@@ -270,6 +270,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         IrExpr::Convert { operand, .. }
         | IrExpr::CellNew { value: operand, .. }
         | IrExpr::IntoAny { value: operand, .. }
+        | IrExpr::TypeConst { value: operand, .. }
+        | IrExpr::TypeOf { value: operand }
+        | IrExpr::TypeField {
+            descriptor: operand, ..
+        }
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }

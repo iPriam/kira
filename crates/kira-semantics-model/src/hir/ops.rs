@@ -157,6 +157,13 @@ pub enum HirBinaryOp {
     EqAny,
     /// Structural inequality of two erased values (`Any`).
     NeAny,
+    /// Identity equality of two runtime type descriptors (`Type`).
+    ///
+    /// One word against another: a type has one descriptor row, so equal ids
+    /// mean one package-qualified nominal identity and unequal ids mean two.
+    EqType,
+    /// Identity inequality of two runtime type descriptors (`Type`).
+    NeType,
     /// Short-circuiting logical AND.
     And,
     /// Short-circuiting logical OR.

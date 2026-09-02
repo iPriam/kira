@@ -148,6 +148,7 @@ impl Codegen<'_> {
             Type::Void
             | Type::Error
             | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::Task(_)
             | Type::MainThreadTask(_)
             | Type::NativeState(_) => {
@@ -241,6 +242,7 @@ impl Codegen<'_> {
             Type::Void
             | Type::Error
             | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::Task(_)
             | Type::MainThreadTask(_)
             | Type::NativeState(_) => {
@@ -328,7 +330,7 @@ impl Codegen<'_> {
         };
         let mut incoming = Vec::new();
         for ty in self.erased_types() {
-            let Some(id) = ErasedTypeId::of(ty) else {
+            let Some(id) = ErasedTypeId::known(&self.program.descriptors, ty) else {
                 continue;
             };
             let block = self.append_any_block(function, "native.any.encode.case");
@@ -384,7 +386,7 @@ impl Codegen<'_> {
         };
         let mut incoming = Vec::new();
         for ty in self.erased_types() {
-            let Some(id) = ErasedTypeId::of(ty) else {
+            let Some(id) = ErasedTypeId::known(&self.program.descriptors, ty) else {
                 continue;
             };
             let block = self.append_any_block(function, "native.any.decode.case");
@@ -423,23 +425,12 @@ impl Codegen<'_> {
 
     /// The concrete types whose erased identities can occur in this program.
     fn erased_types(&self) -> Vec<Type> {
-        let mut types = vec![
-            Type::INT,
-            Type::FLOAT,
-            Type::Bool,
-            Type::String,
-            Type::RawPtr,
-        ];
-        types.extend(self.program.types.structs().ids().map(Type::Struct));
-        types.extend(
-            self.program
-                .types
-                .arrays()
-                .rows()
-                .map(|(id, _)| Type::Array(id)),
-        );
-        types.extend(self.program.types.enums().ids().map(Type::Enum));
-        types
+        self.program
+            .descriptors
+            .interned()
+            .into_iter()
+            .map(|(ty, _)| ty)
+            .collect()
     }
 
     fn append_any_block(&self, function: LLVMValueRef, name: &str) -> LLVMBasicBlockRef {

@@ -8,6 +8,7 @@
 
 pub mod arrays;
 pub mod cells;
+pub mod descriptor;
 pub mod distincts;
 pub mod enums;
 pub mod erased;
@@ -22,6 +23,9 @@ pub mod tasks;
 pub use identity::{NominalIdentity, NominalKind, PackageIdentity};
 pub use arrays::{ArrayId, ArrayTable};
 pub use cells::{CellId, CellTable};
+pub use descriptor::{
+    DescriptorFamily, DescriptorKind, TypeDescriptor, TypeDescriptorTable, TypeField,
+};
 pub use distincts::{DistinctDef, DistinctId, DistinctTable};
 pub use enums::{EnumDef, EnumId, EnumTable, Instantiation, VariantDef};
 pub use erased::ErasedTypeId;
@@ -151,6 +155,19 @@ pub enum Type {
     /// a runtime value: the VM builds a transient C string from the `String` at
     /// the boundary and frees it before the foreign call returns.
     CString,
+    /// A runtime type descriptor, spelled `Type` (`value.type`).
+    ///
+    /// One word: the id of a row in the program's descriptor table. Two of them
+    /// are equal exactly when they name one type by package-qualified nominal
+    /// identity, which is what makes two packages' same-named `Point`s answer
+    /// unequal. It is `Copy` and owns no heap, so it is passed and stored like
+    /// any other scalar.
+    ///
+    /// What it exposes is fixed: a name, a package, a kind, and the arguments
+    /// an instantiation was minted with. Fields, layout, methods, and source
+    /// spans are compile-time reflection's, and a runtime descriptor that
+    /// carried them would make every declaration's private shape public.
+    RuntimeType,
     /// A uniquely owned block of C storage: a NUL-terminated string member, a
     /// C-layout image, or an array flattened to C widths, built for the
     /// foreign seam.
@@ -208,6 +225,10 @@ impl Type {
             // "unknown type".
             "RawPtr" => Type::RawPtr,
             "CString" => Type::CString,
+            // The type of `value.type`. Spelled like any other builtin, so a
+            // program annotates one (`let t: Type = value.type`) rather than
+            // being told the type has no name.
+            "Type" => Type::RuntimeType,
             _ => return None,
         })
     }
@@ -386,12 +407,15 @@ impl Type {
             // bits: the executor owns the task, not the handle.
             // A distinct type copies as the scalar it is: `f(tabId)` needs no
             // `move`, exactly as `f(u32Value)` does not.
+            // A runtime type descriptor is one word naming a table row, so it
+            // copies the way a task handle does.
             Type::RawPtr
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)
+            | Type::RuntimeType
             | Type::Distinct(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
@@ -473,6 +497,7 @@ impl Type {
             // A distinct type is the scalar word it was declared over, and a
             // scalar aliases nothing.
             | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::Struct(_) => false,
         }
     }

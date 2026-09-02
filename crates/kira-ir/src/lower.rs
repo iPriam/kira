@@ -11,7 +11,7 @@
 //! is an *error* was already decided upstream, by
 //! [`kira_semantics::BuildKind`].
 
-use kira_semantics_model::OwnershipMode;
+use kira_semantics_model::{OwnershipMode, Type, TypeDescriptorTable, TypeTable};
 use kira_semantics_model::hir::{
     Builtin, Callee, HirAttempt, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt,
     HirStmtId, TaskTarget,
@@ -32,6 +32,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
     let mut ir = IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
         types: program.types.clone(),
+        descriptors: TypeDescriptorTable::new(),
         main: program.main.map(|main| main.0),
         main_thread_lifecycles: program
             .main_thread_lifecycles
@@ -100,6 +101,9 @@ pub fn lower(program: &HirProgram) -> IrProgram {
             crate::mid::scope_releases(function, &ir.exprs, &ir.types);
         }
     }
+    // Once every body has been lowered, so every type a program can ask about
+    // has its row: what each of them conforms to.
+    ir.descriptors.record_conformances(&program.conformances);
     // Last, once every function and every synthesized task helper exists: the
     // IR a backend consumes carries no `distinct` type, so nothing below here
     // has a distinct path to lay out, box, copy, release, or lower to C.
@@ -160,7 +164,7 @@ fn by_reference_params(function: &kira_semantics_model::hir::HirFunction) -> Vec
 /// slot already taken by reference, which is a pointer for a stronger reason.
 fn by_pointer_params(
     function: &kira_semantics_model::hir::HirFunction,
-    types: &kira_semantics_model::TypeTable,
+    types: &TypeTable,
     by_reference: &[u32],
 ) -> Vec<u32> {
     (0..function.param_count)
@@ -178,7 +182,7 @@ fn by_pointer_params(
 /// Anything with storage behind it — a string, an array, an enum box — and any
 /// struct, whose fields may hold all three and which is copied field by field
 /// either way.
-fn worth_lending(ty: kira_semantics_model::Type, types: &kira_semantics_model::TypeTable) -> bool {
+fn worth_lending(ty: Type, types: &TypeTable) -> bool {
     use kira_semantics_model::Type;
     matches!(ty, Type::Struct(_)) || types.owns_heap(ty)
 }
@@ -328,14 +332,33 @@ impl Lowerer<'_> {
             HirExpr::Copy { value, .. } => return self.lower_expr(value),
             HirExpr::TypeTest { value, target } => IrExpr::TypeTest {
                 value: self.lower_expr(value),
-                target: kira_semantics_model::ErasedTypeId::of(target)
-                    .expect("analysis admits only erasable targets"),
+                target: self.descriptor_of(target),
             },
             HirExpr::TypeCast { value, target } => IrExpr::TypeCast {
                 value: self.lower_expr(value),
-                target: kira_semantics_model::ErasedTypeId::of(target)
-                    .expect("analysis admits only erasable targets"),
+                target: self.descriptor_of(target),
                 ty: target,
+            },
+            // `value.type` on a value whose type is known needs no runtime
+            // question: the answer is the id lowering just interned, and the
+            // operand is still evaluated and released for its effects.
+            HirExpr::TypeField {
+                descriptor,
+                field,
+                ty,
+            } => IrExpr::TypeField {
+                descriptor: self.lower_expr(descriptor),
+                field,
+                ty,
+            },
+            HirExpr::TypeOf { value, of } => match of {
+                Type::Any => IrExpr::TypeOf {
+                    value: self.lower_expr(value),
+                },
+                known => IrExpr::TypeConst {
+                    value: self.lower_expr(value),
+                    id: self.descriptor_of(known),
+                },
             },
             HirExpr::Unary { op, operand, ty } => IrExpr::Unary {
                 op,
@@ -565,6 +588,7 @@ impl Lowerer<'_> {
                 ty,
             },
             HirExpr::IntoAny { value, from } => IrExpr::IntoAny {
+                tag: self.descriptor_of(from),
                 value: self.lower_expr(value),
                 from,
             },
@@ -601,6 +625,17 @@ impl Lowerer<'_> {
         self.ir.exprs.alloc(node)
     }
 
+    /// The runtime identity of `ty`, minting its descriptor row on first
+    /// mention.
+    ///
+    /// Analysis admits only types that name a value here, so a `None` would be
+    /// a lowering that skipped a check rather than a program a user can write.
+    fn descriptor_of(&mut self, ty: Type) -> kira_semantics_model::ErasedTypeId {
+        let types = &self.ir.types;
+        kira_semantics_model::ErasedTypeId::of(&mut self.ir.descriptors, types, ty)
+            .expect("analysis admits only types that name a value")
+    }
+
     /// The IR callee one HIR callee names.
     ///
     /// The two suspend-point builtins are calls to synthesized functions rather
@@ -631,7 +666,7 @@ impl Lowerer<'_> {
         &mut self,
         target: TaskTarget,
         args: &[HirExprId],
-        ty: kira_semantics_model::Type,
+        ty: Type,
     ) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;
@@ -676,7 +711,7 @@ impl Lowerer<'_> {
     }
 
     /// Lowers `handle.await` to a call to the join helper.
-    fn lower_task_join(&mut self, handle: HirExprId, ty: kira_semantics_model::Type) -> IrExprId {
+    fn lower_task_join(&mut self, handle: HirExprId, ty: Type) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;
         let handle = self.lower_expr(handle);
@@ -703,7 +738,7 @@ impl Lowerer<'_> {
         self.ir.exprs.alloc(IrExpr::Call {
             callee: IrCallee::User(self.task_base + helper),
             args: vec![handle],
-            result: kira_semantics_model::Type::Void,
+            result: Type::Void,
             writebacks: Vec::new(),
         })
     }

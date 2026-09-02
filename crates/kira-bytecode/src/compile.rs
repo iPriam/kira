@@ -136,6 +136,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             .iter()
             .map(|constant| u64::from(constant.init))
             .collect(),
+        types: descriptor_rows(program),
     };
     // The compiler checks its own output against the rules every loader checks
     // it against. Without this the rules guard the VM's front door and nothing
@@ -144,6 +145,36 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
     // in that engine's vocabulary. `validate` names the function and the rule.
     module.validate()?;
     Ok(module)
+}
+
+/// The program's type descriptors, as the module carries them.
+///
+/// An id is a family word and a row index, and the module's table is indexed by
+/// the row alone: the family is what the runtime reads to compare a payload,
+/// and the row is what a property reads.
+fn descriptor_rows(program: &IrProgram) -> Vec<crate::module::TypeDescriptorRow> {
+    program
+        .descriptors
+        .rows()
+        .iter()
+        .map(|row| crate::module::TypeDescriptorRow {
+            name: row.name.clone(),
+            package: row.package.clone(),
+            kind: row.kind.label().to_owned(),
+            // Written as whole ids rather than row indexes: `t.arguments`
+            // answers with descriptors, and a descriptor is its family and its
+            // row together.
+            conformances: row.conformances.clone(),
+            arguments: row
+                .arguments
+                .iter()
+                .filter_map(|&argument| {
+                    let family = program.descriptors.get(argument)?.family;
+                    Some(kira_semantics_model::ErasedTypeId::from_parts(family, argument).as_u64())
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn frame_release(
@@ -258,6 +289,8 @@ fn binary_instruction(op: IrBinOp) -> Result<Instruction, CompileError> {
         IrBinOp::NeStr => Instruction::NeStr,
         IrBinOp::EqAny => Instruction::EqAny,
         IrBinOp::NeAny => Instruction::NeAny,
+        IrBinOp::EqType => Instruction::EqType,
+        IrBinOp::NeType => Instruction::NeType,
         IrBinOp::BitAnd => Instruction::BitAnd,
         IrBinOp::BitOr => Instruction::BitOr,
         IrBinOp::BitXor => Instruction::BitXor,

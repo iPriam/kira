@@ -508,6 +508,7 @@ impl Analyzer<'_> {
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::CBlock
+            | Type::RuntimeType
             | Type::Any
             | Type::Task(_)
             | Type::MainThreadTask(_)

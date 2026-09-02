@@ -186,6 +186,12 @@ pub enum Value {
     /// `retains:` parameter transfers them to the heap's retained registry —
     /// so no reference count exists and no storage outlives its owner.
     CBlock(CBlockId),
+    /// A runtime type descriptor: the id of a row in the module's type table.
+    ///
+    /// Inline and `Copy` like the other scalar words. Two are equal exactly
+    /// when they name one type by package-qualified nominal identity, which is
+    /// what `value.type == other.type` asks.
+    Type(u64),
     /// The unit value.
     Void,
 }

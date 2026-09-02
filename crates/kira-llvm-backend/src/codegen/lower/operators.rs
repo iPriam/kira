@@ -214,6 +214,22 @@ impl FunctionLowering<'_, '_> {
                         c"any.cmp".as_ptr(),
                     ));
                 }
+                // Two descriptor ids, compared as the words they are. Neither
+                // owns anything, so nothing is dropped.
+                IrBinOp::EqType => LLVMBuildICmp(
+                    builder,
+                    LLVMIntPredicate::LLVMIntEQ,
+                    left,
+                    right,
+                    c"type.eq".as_ptr(),
+                ),
+                IrBinOp::NeType => LLVMBuildICmp(
+                    builder,
+                    LLVMIntPredicate::LLVMIntNE,
+                    left,
+                    right,
+                    c"type.ne".as_ptr(),
+                ),
                 IrBinOp::BitAnd => LLVMBuildAnd(builder, left, right, c"and".as_ptr()),
                 IrBinOp::BitOr => LLVMBuildOr(builder, left, right, c"or".as_ptr()),
                 IrBinOp::BitXor => LLVMBuildXor(builder, left, right, c"xor".as_ptr()),

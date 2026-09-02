@@ -100,6 +100,19 @@ impl<'a> Analyzer<'a> {
                 );
                 None
             }
+            // A runtime type descriptor is one word too, and it names a row in
+            // this build's descriptor table: it means nothing to C, and a C
+            // library that kept one across a rebuild would name a type the new
+            // program never described.
+            Type::RuntimeType => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "a `Type` cannot cross the C seam: it names a row in this build's type \
+                     table and means nothing outside it",
+                );
+                None
+            }
             // A capture cell is refused for a reason of its own, not the
             // single-word one: it *is* one word, and that is exactly the
             // problem. It is shared mutable storage whose share count this

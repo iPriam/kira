@@ -269,7 +269,11 @@ impl Parser<'_> {
     /// the postfix chain rather than continuing it.
     fn parse_dot_postfix(&mut self, base: ExprId) -> Result<ExprId, ExprId> {
         self.bump(); // `.`
-        if !self.at(TokenKind::Identifier) {
+        // `value.type` reads the runtime type descriptor, and `type` is a
+        // keyword because a declaration starts with one. After a `.` there is
+        // no declaration to start, so the keyword is a member name here and
+        // nowhere else — the same reading every language with `.type` gives it.
+        if !self.at(TokenKind::Identifier) && !self.at(TokenKind::Type) {
             let span = self.current().span;
             self.error(span, "KPAR022", "expected a field name after `.`");
             return Err(self.error_expr(span));

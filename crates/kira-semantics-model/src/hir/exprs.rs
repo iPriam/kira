@@ -6,6 +6,7 @@
 //! variant being added in one place and forgotten in the other.
 
 use super::ops::{Callee, HirBinaryOp, HirUnaryOp};
+pub use crate::ty::descriptor::TypeField;
 use super::{FuncId, HirPlace, HirWriteback, LocalId};
 use crate::ty::{EnumId, StructId, Type};
 use kira_runtime_abi::{
@@ -127,6 +128,30 @@ pub enum HirExpr {
         value: HirExprId,
         /// The type tested for; one that erases into `Any`.
         target: Type,
+    },
+    /// `value.type`: the runtime type descriptor of what `value` holds.
+    ///
+    /// `of` is the operand's static type, and it decides what the read costs.
+    /// For an `Any` it is a real question and the box answers it; for anything
+    /// else the answer is settled here and the value is evaluated only for its
+    /// effects. Carrying `of` rather than a resolved id keeps the descriptor
+    /// table out of the frontend, which mints no ids.
+    TypeOf {
+        /// The value being asked, evaluated once and released.
+        value: HirExprId,
+        /// The operand's static type.
+        of: Type,
+    },
+    /// A property of a runtime type descriptor: `t.name`, `t.package`,
+    /// `t.kind`, or `t.arguments`.
+    TypeField {
+        /// The descriptor being read.
+        descriptor: HirExprId,
+        /// Which property.
+        field: TypeField,
+        /// The property's type: `String`, or `[Type]` for the arguments, whose
+        /// array row only the program's table can name.
+        ty: Type,
     },
     /// `value as Type`: the `target` an erased value holds. A value of any
     /// other type traps; the result is owned by the caller.
@@ -775,6 +800,8 @@ impl HirExpr {
             HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::TypeTest { .. } => Type::Bool,
+            HirExpr::TypeOf { .. } => Type::RuntimeType,
+            HirExpr::TypeField { ty, .. } => *ty,
             HirExpr::TypeCast { target, .. } => *target,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,

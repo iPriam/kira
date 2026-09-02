@@ -27,86 +27,72 @@
 //!
 //! # What counts as one type
 //!
-//! Integer spellings collapse to one id, and float spellings likewise. This
-//! follows the rule `==` already applies to unerased operands, where numerics
-//! unify before they compare (`kira-semantics`' `equality`): `Int` is a
+//! Integer spellings collapse to one descriptor, and float spellings likewise.
+//! This follows the rule `==` already applies to unerased operands, where
+//! numerics unify before they compare (`kira-semantics`' `equality`): `Int` is a
 //! wildcard assignable to and from every sized spelling, so an erased `I32` and
 //! an erased `Int` holding the same bits are the same value by every other
-//! measure the language offers. Structs, arrays, and enums are nominal and keep
-//! their row index, because the language already treats them that way.
+//! measure the language offers. Everything nominal keeps its own descriptor,
+//! because the language already treats it that way — including a `distinct`,
+//! whose representation a backend stores but whose identity is what the
+//! language says the value is.
 
+use super::descriptor::{DescriptorFamily, TypeDescriptorTable};
+use super::table::TypeTable;
 use super::Type;
-
-/// Which family of types an [`ErasedTypeId`] names, in its high word.
-///
-/// Values are a wire contract: the id is written into the erasure box on native
-/// and into the `Erase` instruction's immediate on the VM, so these are
-/// **append-only** — a new family takes the next free number and the existing
-/// ones never move.
-mod kind {
-    /// Every integer spelling.
-    pub(super) const INT: u64 = 0;
-    /// Every float spelling.
-    pub(super) const FLOAT: u64 = 1;
-    /// `Bool`.
-    pub(super) const BOOL: u64 = 2;
-    /// `String`.
-    pub(super) const STRING: u64 = 3;
-    /// `RawPtr`.
-    pub(super) const RAW_PTR: u64 = 4;
-    /// A declared struct, indexed by its `StructId`.
-    pub(super) const STRUCT: u64 = 5;
-    /// An array, indexed by its `ArrayId`.
-    pub(super) const ARRAY: u64 = 6;
-    /// A declared enum, indexed by its `EnumId`.
-    pub(super) const ENUM: u64 = 7;
-}
 
 /// The identity an erased value carries, so two of them can be compared.
 ///
-/// A family in the high 32 bits and a row index in the low 32. Two types are
-/// the same erased type exactly when their ids are equal, which is what makes
-/// this comparable as one integer on both engines and across the C seam.
+/// A family in the high 32 bits and a descriptor row in the low 32. Two types
+/// are the same erased type exactly when their ids are equal, which is what
+/// makes this comparable as one integer on both engines and across the C seam.
+/// The family is carried beside the row because the runtime has one question it
+/// must answer without the table: whether a payload word is a float, which
+/// compares by IEEE rules rather than by bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct ErasedTypeId(u64);
 
 impl ErasedTypeId {
-    /// The id of `ty`, or `None` for a type that never erases.
+    /// The id `ty` erases under, minting its descriptor row on first mention.
     ///
-    /// `Void`, `Error`, `Cell`, `Task`, `MainThreadTask`, `NativeState`, and `Any` itself are the
-    /// types with no id: none of them is assignable to `Any`
-    /// ([`Type::assignable_to`]), so reaching here with one means analysis let
-    /// through something it refuses, and the caller reports that rather than
-    /// inventing a number.
-    pub fn of(ty: Type) -> Option<Self> {
-        let raw = match ty {
-            // Spellings collapse: see the module header.
-            Type::Int(_) => kind::INT << 32,
-            Type::Float(_) => kind::FLOAT << 32,
-            Type::Bool => kind::BOOL << 32,
-            Type::String => kind::STRING << 32,
-            Type::RawPtr | Type::ForeignPtr(_) => kind::RAW_PTR << 32,
-            Type::Struct(id) => (kind::STRUCT << 32) | u64::from(id.index()),
-            Type::Array(id) => (kind::ARRAY << 32) | u64::from(id.index()),
-            Type::Enum(id) => (kind::ENUM << 32) | u64::from(id.index()),
-            // A distinct type never reaches here: `kira-ir` rewrites one to its
-            // representation before a backend sees the program, so what asks
-            // for an erased id is always the scalar underneath. Answering
-            // `None` rather than guessing a kind keeps a lowering that skipped
-            // that step a typed compile error instead of a mistagged box.
-            Type::Void
-            | Type::Distinct(_)
-            | Type::Error
-            | Type::CString
-            | Type::CBlock
-            | Type::Cell(_)
-            | Type::Task(_)
-            | Type::MainThreadTask(_)
-            | Type::NativeState(_)
-            | Type::Any => return None,
-        };
-        Some(Self(raw))
+    /// `None` for a type that names no value — `Void`, the error type, and the
+    /// seam-local storage a program cannot hold — which is exactly the set
+    /// [`Type::assignable_to`] refuses to carry into `Any`. Reaching here with
+    /// one means analysis let through something it refuses, and the caller
+    /// reports that rather than inventing a number.
+    pub fn of(descriptors: &mut TypeDescriptorTable, types: &TypeTable, ty: Type) -> Option<Self> {
+        let family = super::descriptor::family_of(ty)?;
+        let index = descriptors.intern(types, ty)?;
+        Some(Self::from_parts(family, index))
+    }
+
+    /// The id `ty` already erases under, or `None` when nothing interned it.
+    ///
+    /// The lookup half, for a backend reading a table lowering already built:
+    /// minting a row there would give a type an id no other half of the same
+    /// program knows.
+    pub fn known(descriptors: &TypeDescriptorTable, ty: Type) -> Option<Self> {
+        let family = super::descriptor::family_of(ty)?;
+        Some(Self::from_parts(family, descriptors.id_of(ty)?))
+    }
+
+    /// Whether `ty` has a runtime descriptor at all, without minting one.
+    ///
+    /// The frontend's question: it admits or refuses `value.type`, `is`, and
+    /// `as` before any table exists, because ids are lowering's to hand out.
+    pub fn describable(ty: Type) -> Option<DescriptorFamily> {
+        super::descriptor::family_of(ty)
+    }
+
+    /// Builds an id from the family and the descriptor row it names.
+    pub fn from_parts(family: DescriptorFamily, index: u32) -> Self {
+        Self((family.as_word() << 32) | u64::from(index))
+    }
+
+    /// The descriptor row this id names.
+    pub fn descriptor_index(self) -> u32 {
+        self.0 as u32
     }
 
     /// This id as the raw word the backends carry.
@@ -132,34 +118,61 @@ impl ErasedTypeId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::table::TypeTable;
     use crate::ty::{FloatSpelling, IntSpelling};
+
+    /// A table and the ids it mints, for a handful of types.
+    fn ids(types: &TypeTable, wanted: &[Type]) -> Vec<Option<ErasedTypeId>> {
+        let mut descriptors = TypeDescriptorTable::new();
+        wanted
+            .iter()
+            .map(|&ty| ErasedTypeId::of(&mut descriptors, types, ty))
+            .collect()
+    }
 
     #[test]
     fn every_integer_spelling_is_one_erased_type() {
-        let plain = ErasedTypeId::of(Type::Int(IntSpelling::Plain));
-        assert_eq!(plain, ErasedTypeId::of(Type::Int(IntSpelling::I32)));
-        assert_eq!(plain, ErasedTypeId::of(Type::Int(IntSpelling::U8)));
+        let types = TypeTable::new();
+        let minted = ids(
+            &types,
+            &[
+                Type::Int(IntSpelling::Plain),
+                Type::Int(IntSpelling::I32),
+                Type::Int(IntSpelling::U8),
+            ],
+        );
+        assert_eq!(minted[0], minted[1]);
+        assert_eq!(minted[0], minted[2]);
     }
 
     #[test]
     fn every_float_spelling_is_one_erased_type() {
-        let plain = ErasedTypeId::of(Type::Float(FloatSpelling::Plain));
-        assert_eq!(plain, ErasedTypeId::of(Type::Float(FloatSpelling::F32)));
+        let types = TypeTable::new();
+        let minted = ids(
+            &types,
+            &[
+                Type::Float(FloatSpelling::Plain),
+                Type::Float(FloatSpelling::F32),
+            ],
+        );
+        assert_eq!(minted[0], minted[1]);
     }
 
     #[test]
     fn the_scalar_families_are_distinct() {
-        let ids = [
-            ErasedTypeId::of(Type::Int(IntSpelling::Plain)),
-            ErasedTypeId::of(Type::Float(FloatSpelling::Plain)),
-            ErasedTypeId::of(Type::Bool),
-            ErasedTypeId::of(Type::String),
-            ErasedTypeId::of(Type::RawPtr),
-        ];
-        for (index, one) in ids.iter().enumerate() {
+        let types = TypeTable::new();
+        let minted = ids(
+            &types,
+            &[
+                Type::Int(IntSpelling::Plain),
+                Type::Float(FloatSpelling::Plain),
+                Type::Bool,
+                Type::String,
+                Type::RawPtr,
+            ],
+        );
+        for (index, one) in minted.iter().enumerate() {
             assert!(one.is_some());
-            for other in &ids[index + 1..] {
+            for other in &minted[index + 1..] {
                 assert_ne!(one, other);
             }
         }
@@ -172,37 +185,52 @@ mod tests {
         let mut types = TypeTable::new();
         let ints = types.array_of(Type::Int(IntSpelling::Plain));
         let bools = types.array_of(Type::Bool);
-        assert_ne!(ErasedTypeId::of(ints), ErasedTypeId::of(bools));
+        let mut descriptors = TypeDescriptorTable::new();
+        let ints_id = ErasedTypeId::of(&mut descriptors, &types, ints);
+        let bools_id = ErasedTypeId::of(&mut descriptors, &types, bools);
+        assert_ne!(ints_id, bools_id);
         // Interning means the same element type gives the same id back.
         let again = types.array_of(Type::Int(IntSpelling::Plain));
-        assert_eq!(ErasedTypeId::of(ints), ErasedTypeId::of(again));
+        assert_eq!(
+            ints_id,
+            ErasedTypeId::of(&mut descriptors, &types, again)
+        );
+        assert_eq!(ints_id, ErasedTypeId::known(&descriptors, ints));
     }
 
     #[test]
     fn a_type_that_never_erases_has_no_id() {
-        assert_eq!(ErasedTypeId::of(Type::Void), None);
-        assert_eq!(ErasedTypeId::of(Type::Any), None);
-        assert_eq!(ErasedTypeId::of(Type::Error), None);
+        let types = TypeTable::new();
+        let minted = ids(&types, &[Type::Void, Type::Any, Type::Error]);
+        assert_eq!(minted, vec![None, None, None]);
     }
 
-    /// The encoding is a wire contract on both engines; pin the words.
+    /// The encoding is a wire contract on both engines; pin the family words.
     #[test]
     fn the_family_words_are_pinned() {
-        let int = ErasedTypeId::of(Type::Int(IntSpelling::Plain));
-        assert_eq!(int.map(ErasedTypeId::as_u64), Some(0));
-        assert_eq!(
-            ErasedTypeId::of(Type::Bool).map(ErasedTypeId::as_u64),
-            Some(2 << 32)
-        );
-        assert_eq!(
-            ErasedTypeId::of(Type::String).map(ErasedTypeId::as_u64),
-            Some(3 << 32)
-        );
+        let types = TypeTable::new();
+        let mut descriptors = TypeDescriptorTable::new();
+        let int = ErasedTypeId::of(&mut descriptors, &types, Type::Int(IntSpelling::Plain))
+            .expect("`Int` erases");
+        let boolean =
+            ErasedTypeId::of(&mut descriptors, &types, Type::Bool).expect("`Bool` erases");
+        let text =
+            ErasedTypeId::of(&mut descriptors, &types, Type::String).expect("`String` erases");
+        assert_eq!(int.as_u64() >> 32, 0);
+        assert_eq!(boolean.as_u64() >> 32, 2);
+        assert_eq!(text.as_u64() >> 32, 3);
+        // The rows are interned in mention order, so the low half is the table
+        // index rather than anything about the type.
+        assert_eq!(int.descriptor_index(), 0);
+        assert_eq!(boolean.descriptor_index(), 1);
+        assert_eq!(text.descriptor_index(), 2);
     }
 
     #[test]
     fn a_raw_word_round_trips() {
-        let id = ErasedTypeId::of(Type::String).expect("String erases");
+        let types = TypeTable::new();
+        let mut descriptors = TypeDescriptorTable::new();
+        let id = ErasedTypeId::of(&mut descriptors, &types, Type::String).expect("String erases");
         assert_eq!(ErasedTypeId::from_u64(id.as_u64()), id);
     }
 }

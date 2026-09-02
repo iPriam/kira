@@ -200,6 +200,11 @@ impl Analyzer<'_> {
             | HirExpr::Convert { operand, .. }
             | HirExpr::Distinct { value: operand, .. }
             | HirExpr::IntoAny { value: operand, .. }
+            | HirExpr::TypeOf { value: operand, .. }
+            | HirExpr::TypeField {
+                descriptor: operand,
+                ..
+            }
             | HirExpr::TaskJoin {
                 handle: operand, ..
             }

@@ -429,6 +429,7 @@ impl Analyzer<'_> {
             | Type::Error
             | Type::CString
             | Type::CBlock
+            | Type::RuntimeType
             | Type::NativeState(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)

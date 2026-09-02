@@ -522,6 +522,35 @@ impl<'a> Analyzer<'a> {
             .unwrap_or_default()
     }
 
+    /// Records what each type conforms to, for the runtime descriptors.
+    ///
+    /// Names rather than ids, and sorted rather than in declaration order: a
+    /// program reading `t.conformances` is asking a question about the type,
+    /// not about the file that happened to declare the conformance, so two
+    /// builds that differ only in file order answer alike. Duplicates are
+    /// dropped — a family's claim and a declaration's own claim are one fact.
+    pub(crate) fn record_conformances(&mut self) {
+        let mut recorded: Vec<(Type, String)> = self
+            .conformances
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .contract
+                    .trait_name()
+                    .map(|name| (entry.ty, name.to_owned()))
+            })
+            .collect();
+        recorded.sort_by(|(left_ty, left), (right_ty, right)| {
+            self.type_name(*left_ty)
+                .cmp(&self.type_name(*right_ty))
+                .then_with(|| left.cmp(right))
+        });
+        recorded.dedup_by(|(left_ty, left), (right_ty, right)| {
+            left_ty == right_ty && left == right
+        });
+        self.program.conformances = recorded;
+    }
+
     /// Whether `ty` conforms to the trait `name`.
     pub(crate) fn conforms_to(&self, ty: Type, name: &str) -> bool {
         self.conformances

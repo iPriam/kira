@@ -73,6 +73,8 @@ These are the ones that come up most often while learning the language. Each is 
 | `KSEM356` | A `copy` of a value that is not Copyable: native state, a cell, a task handle, an `Any`, or a type reaching a user `Drop`. |
 | `KSEM360` | Warning: `nativeStateFree` is deprecated; it releases one reference of the state. |
 | `KSEM361` | `nativeUserDataRetain` or `nativeUserDataRelease` given something other than a `RawPtr` token. |
+| `KSEM362` | `.type` asked of an expression that names no value, such as a `Void` call. |
+| `KSEM363` | A member read off a `Type` that a runtime descriptor does not expose. |
 | `KSEM357` | A function whose class-typed parameters would need more specializations than one function may have. |
 | `KSEM352` / `KSEM353` / `KSEM354` | A task target that is not `async`; one that borrows a parameter; a direct call of an `async function`. |
 | `KSEM081` | `print` of a struct, array, or enum. |

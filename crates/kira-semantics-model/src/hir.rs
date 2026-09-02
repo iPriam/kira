@@ -56,6 +56,13 @@ pub struct HirProgram {
     pub functions: Vec<HirFunction>,
     /// Every shape the program's types name: its structs and its array types.
     pub types: TypeTable,
+    /// What each type conforms to, sorted, as a runtime descriptor reports it.
+    ///
+    /// Recorded once conformances are final, which is what makes it an answer
+    /// rather than a snapshot: nothing after this point may add a conformance,
+    /// so a program asking a type what it keeps gets the same answer the
+    /// checker used.
+    pub conformances: Vec<(Type, String)>,
     /// The index of the `@Main` entrypoint, when the program has a valid one.
     pub main: Option<FuncId>,
     /// Every `@MainThreadLifecycle` function, in declaration order.

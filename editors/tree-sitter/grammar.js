@@ -1023,11 +1023,18 @@ module.exports = grammar({
         field('value', $._expression),
       ),
 
-    // `xs.count` is a property read and takes the field path.
+    // `xs.count` is a property read and takes the field path. `value.type` is
+    // one too: `type` starts a declaration and is a keyword there, and after a
+    // `.` there is no declaration to start, so it names the runtime type
+    // descriptor and nothing else.
     field_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(field('receiver', $._expression), '.', field('field', $.identifier)),
+        seq(
+          field('receiver', $._expression),
+          '.',
+          field('field', choice($.identifier, 'type')),
+        ),
       ),
 
     index_expression: ($) =>

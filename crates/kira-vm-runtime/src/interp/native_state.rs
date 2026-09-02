@@ -121,14 +121,18 @@ impl Vm<'_> {
                 kind: "a value that is not callback state",
             });
         };
-        // The token owns one reference. A handle a local keeps owning was read
-        // in place, so the token's reference is a new one; a temporary handle
-        // gives the token the reference it held.
-        if shared {
-            self.host
-                .native_state_retain(token)
-                .map_err(VmError::NativeState)?;
-        }
+        // The token owns one reference, and the value just popped is it: a
+        // handle reaches this stack either as a temporary, which owns the
+        // reference it was created with, or as a load, which the heap copied
+        // and counted on the way out of its slot. Either way exactly one
+        // reference arrives here and the token takes it over.
+        //
+        // `shared` therefore changes nothing on this engine, and is not
+        // ignored so much as already answered. It is what native code reads:
+        // there a load is a raw word that took no reference, so the shared
+        // case has to take one. The instruction says where the handle came
+        // from, and each engine answers in its own terms.
+        let _ = shared;
         self.stack.push(Value::RawPtr(token.as_word()));
         Ok(())
     }

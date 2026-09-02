@@ -347,6 +347,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
+            types: Vec::new(),
             functions: vec![
                 FuncProto {
                     name: "main".to_owned(),
@@ -478,6 +479,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: callbacks,
             constants: Vec::new(),
+            types: Vec::new(),
             functions: order
                 .iter()
                 .map(|name| FuncProto {

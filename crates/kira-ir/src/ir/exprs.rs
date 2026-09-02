@@ -465,6 +465,36 @@ pub enum IrExpr {
         value: IrExprId,
         /// The type it had before erasure, which is what says what it owns.
         from: Type,
+        /// The runtime identity the box carries.
+        ///
+        /// Fixed at lowering rather than derived by a backend from `from`,
+        /// because the two answer different questions: `from` is the machine
+        /// form of the payload and is rewritten when a `distinct` becomes its
+        /// representation, while this is what the language says the value *is*
+        /// and must survive that rewrite.
+        tag: kira_semantics_model::ErasedTypeId,
+    },
+    /// `value.type` where the value's type is known: the descriptor of that
+    /// type, after evaluating and releasing the value for its effects.
+    TypeConst {
+        /// The value, evaluated and released.
+        value: IrExprId,
+        /// The identity its type was interned under.
+        id: kira_semantics_model::ErasedTypeId,
+    },
+    /// `value.type` on an `Any`: the identity the erasure box carries.
+    TypeOf {
+        /// The `Any` being asked, consumed by the read.
+        value: IrExprId,
+    },
+    /// A property of a runtime type descriptor.
+    TypeField {
+        /// The descriptor being read.
+        descriptor: IrExprId,
+        /// Which property.
+        field: kira_semantics_model::TypeField,
+        /// The property's type.
+        ty: Type,
     },
     /// A call routed through the host's main-thread event loop.
     MainThreadCall {

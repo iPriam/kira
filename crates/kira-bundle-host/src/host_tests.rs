@@ -36,6 +36,7 @@ fn printing_module() -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(0),
         strings: vec!["from the bundle".to_owned()],
         functions: vec![FuncProto {
@@ -384,6 +385,7 @@ fn an_invalid_module_fails_at_link() {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         main: Some(0),
         strings: Vec::new(),
         functions: vec![FuncProto {

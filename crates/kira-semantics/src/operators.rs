@@ -240,6 +240,11 @@ fn equality(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
         // Point` does not — the concrete type has no runtime tag to consult.
         Type::Any if is_eq => H::EqAny,
         Type::Any => H::NeAny,
+        // Two descriptors are equal exactly when they name one type by
+        // package-qualified nominal identity, which is one word compared
+        // against another: the ids are table rows, and one type has one row.
+        Type::RuntimeType if is_eq => H::EqType,
+        Type::RuntimeType => H::NeType,
         _ => return None,
     };
     Some((hir, Type::Bool))

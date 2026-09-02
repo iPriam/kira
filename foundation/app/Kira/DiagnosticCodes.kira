@@ -231,6 +231,8 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM359" { return .KSEM359 }
     if text == "KSEM360" { return .KSEM360 }
     if text == "KSEM361" { return .KSEM361 }
+    if text == "KSEM362" { return .KSEM362 }
+    if text == "KSEM363" { return .KSEM363 }
     if text == "KSL011" { return .KSL011 }
     if text == "KSL012" { return .KSL012 }
     if text == "KSL013" { return .KSL013 }

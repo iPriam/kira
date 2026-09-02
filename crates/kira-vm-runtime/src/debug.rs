@@ -44,6 +44,8 @@ pub mod value_tag {
     pub const C_BLOCK: u32 = 14;
     /// The slot contains a main-thread task handle.
     pub const MAIN_THREAD_TASK: u32 = 15;
+    /// The slot contains a runtime type descriptor id.
+    pub const RUNTIME_TYPE: u32 = 16;
 }
 
 /// One debugger-stable Kira value.
@@ -474,6 +476,7 @@ fn encode_value(value: Value) -> KiraVmDebugValue {
         Value::NativeSnapshot(id) => (value_tag::NATIVE_SNAPSHOT, id.debug_word()),
         Value::CBlock(id) => (value_tag::C_BLOCK, id.debug_word()),
         Value::MainThreadTask(handle) => (value_tag::MAIN_THREAD_TASK, handle.word()),
+        Value::Type(id) => (value_tag::RUNTIME_TYPE, id),
     };
     KiraVmDebugValue { tag, payload }
 }
@@ -524,6 +527,7 @@ fn format_value(value: KiraVmDebugValue) -> String {
         value_tag::NATIVE_VIEW => format!("native-view 0x{:x}", value.payload),
         value_tag::NATIVE_SNAPSHOT => format!("native-snapshot {}", value.payload),
         value_tag::MAIN_THREAD_TASK => format!("main-thread-task {}", value.payload),
+        value_tag::RUNTIME_TYPE => format!("type {}", value.payload),
         tag => format!("unknown(tag={tag}, payload={})", value.payload),
     }
 }

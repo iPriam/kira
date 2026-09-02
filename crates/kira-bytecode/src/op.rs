@@ -24,6 +24,9 @@ pub use codec::{DecodeError, decode, encode, encode_one};
 pub use kira_runtime_abi::TaskPrim;
 pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
 use kira_runtime_abi::{ForeignType, MainThreadOp};
+/// Which property a [`Instruction::TypeField`] reads, re-exported so an engine
+/// decoding an instruction names it without reaching past the module format.
+pub use kira_semantics_model::TypeField;
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +168,10 @@ pub enum Instruction {
     EqAny,
     /// Pop two erased values; push whether they are structurally unequal.
     NeAny,
+    /// Pop two runtime type descriptors; push whether they name one type.
+    EqType,
+    /// Pop two runtime type descriptors; push whether they name two types.
+    NeType,
     /// Unconditional jump to an absolute instruction index.
     Jump(u64),
     /// Pop a boolean; jump to an absolute index when it is `false`.
@@ -360,6 +367,14 @@ pub enum Instruction {
     /// Pop an erased `Any` whose runtime type identity must be the operand's,
     /// and push its payload as an owned value; any other identity traps.
     Downcast(u64),
+    /// Push the runtime type descriptor the operand names.
+    ConstType(u64),
+    /// Pop an erased `Any` and push the runtime type descriptor its box
+    /// carries; the value is released.
+    TypeOf,
+    /// Pop a runtime type descriptor and push one of its properties: the
+    /// operand selects which, by [`TypeField::as_byte`].
+    TypeField(u8),
     /// Pop a struct, push a copy of field `n`, and drop the struct.
     GetField(u64),
     /// Pop a pointer word and push it advanced by `offset` bytes.

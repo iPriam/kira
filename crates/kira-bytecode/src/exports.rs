@@ -243,6 +243,7 @@ fn export_type(
         | Type::CString
         | Type::CBlock
         | Type::Any
+        | Type::RuntimeType
         | Type::NativeState(_)
         | Type::Task(_)
         | Type::MainThreadTask(_)

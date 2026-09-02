@@ -70,6 +70,7 @@ fn loop_module(iterations: i64) -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![FuncProto {
             name: "benchmark".to_owned(),
             param_count: 0,
@@ -128,6 +129,7 @@ fn call_module(iterations: i64) -> Module {
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
         constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![main, tick],
         main: Some(0),
         strings: Vec::new(),

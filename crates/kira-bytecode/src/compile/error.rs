@@ -23,14 +23,6 @@ pub enum CompileError {
     /// Internal invariant: a short-circuit operator reached opcode selection.
     #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
     ShortCircuitOpcode,
-    /// Internal invariant: a type with no runtime value reached an erasure.
-    ///
-    /// Nothing analysis admits can get here — `Void`, `Cell`, `Task`, and
-    /// `NativeState` are all refused by `Type::assignable_to` before `Any`
-    /// takes them — so this is a compiler bug surfaced typed rather than a
-    /// program the user can write.
-    #[error("bytecode compiler invariant violated: a type with no value was erased into `Any`")]
-    ErasureOfAValuelessType,
     /// Internal invariant: a `break`/`continue` reached codegen with no
     /// enclosing loop, which analysis is supposed to have rejected.
     #[error(

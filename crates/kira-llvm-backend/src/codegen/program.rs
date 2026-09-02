@@ -84,6 +84,7 @@ impl<'a> Codegen<'a> {
             target_data,
             element_leaves: HashMap::new(),
             scratch_slots: glue::ScratchSlots::new(),
+            type_field_readers: HashMap::new(),
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),
             pointer_width,
@@ -390,6 +391,7 @@ impl<'a> Codegen<'a> {
             | Type::CString
             | Type::Task(_)
             | Type::MainThreadTask(_)
+            | Type::RuntimeType
             | Type::CBlock => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self

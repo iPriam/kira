@@ -1,0 +1,146 @@
+import Foundation
+
+// TdxTypeDescriptorTests.kira — `value.type` and what a runtime type
+// descriptor answers: name, kind, package, generic arguments, and the traits
+// the type keeps. Equality is exact nominal identity, so two same-shaped
+// declarations answer unequal.
+// PREFIX: tdx / Tdx  (all top-level names use this prefix).
+
+struct TdxPoint {
+    let x: Int
+    let y: Int
+}
+
+struct TdxOther {
+    let x: Int
+    let y: Int
+}
+
+enum TdxCrate<Held> {
+    Full(Held)
+    Empty
+}
+
+trait TdxGreets {
+    function greet(borrow self) -> String
+}
+
+extend TdxPoint: TdxGreets {
+    function greet(borrow self) -> String { return "hi" }
+}
+
+function tdxErase(value: TdxPoint) -> Any {
+    return value
+}
+
+construct TdxATypeEqualsItself() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        if p.type == p.type { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TdxTwoShapesAreTwoTypes() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        let o = TdxOther(x: 1, y: 2)
+        var score = 0
+        if p.type != o.type { score = score + 1 }
+        if p.type == o.type { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TdxAnErasedValueKeepsItsType() extends Test {
+    test {
+        let p = TdxPoint(x: 3, y: 4)
+        let erased = tdxErase(TdxPoint(x: 5, y: 6))
+        if erased.type == p.type { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TdxADescriptorNamesItsType() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        return p.type.name.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
+}
+
+construct TdxADescriptorReportsItsKind() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        let n = 7
+        let words = ["a"]
+        var score = 0
+        if p.type.kind == "struct" { score = score + 1 }
+        if n.type.kind == "int" { score = score + 10 }
+        if words.type.kind == "array" { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct TdxAProgramsOwnTypeHasNoPackage() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        return p.type.package.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
+}
+
+construct TdxAnInstantiationCarriesItsArguments() extends Test {
+    test {
+        let held: TdxCrate<Int> = .Full(3)
+        var score = held.type.arguments.count
+        if held.type.arguments[0].name == "Int" { score = score + 10 }
+        if held.type.name == "TdxCrate" { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct TdxAnArrayCarriesItsElementType() extends Test {
+    test {
+        let words = ["a", "b"]
+        var score = words.type.arguments.count
+        if words.type.arguments[0].name == "String" { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct TdxTwoInstantiationsAreTwoTypes() extends Test {
+    test {
+        let ints: TdxCrate<Int> = .Full(1)
+        let words: TdxCrate<String> = .Full("a")
+        if ints.type != words.type { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TdxADescriptorListsWhatTheTypeKeeps() extends Test {
+    test {
+        let p = TdxPoint(x: 1, y: 2)
+        var score = p.type.conformances.count
+        if p.type.conformances[0] == "TdxGreets" { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct TdxEverySpellingOfAnIntIsOneType() extends Test {
+    test {
+        let plain: Int = 3
+        let narrow: U8 = 3
+        if plain.type == narrow.type { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}

@@ -41,9 +41,43 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         value: IrExprId,
         from: Type,
+        identity: kira_semantics_model::ErasedTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
         let lowered = self.lower_expr(value)?;
-        self.codegen.erase_value(lowered, from)
+        self.codegen.erase_value(lowered, from, identity)
+    }
+
+    /// `value.type` where the type is known: the value is evaluated and
+    /// released for its effects, and the answer is the id lowering interned.
+    pub(super) fn lower_type_const(
+        &mut self,
+        value: IrExprId,
+        id: kira_semantics_model::ErasedTypeId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let ty = self.type_of(value);
+        let lowered = self.lower_expr(value)?;
+        self.drop_value(lowered, ty)?;
+        Ok(self.codegen.const_int(id.as_i64()))
+    }
+
+    /// A property of a runtime type descriptor, through the generated reader
+    /// for that property.
+    pub(super) fn lower_type_field(
+        &mut self,
+        descriptor: IrExprId,
+        field: kira_semantics_model::TypeField,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let id = self.lower_expr(descriptor)?;
+        let reader = self.codegen.type_field_reader(field)?;
+        Ok(self.call(reader, &mut [id], c"type.field"))
+    }
+
+    /// `value.type` on an `Any`: the identity the box carries.
+    pub(super) fn lower_type_of(&mut self, value: IrExprId) -> Result<LLVMValueRef, LlvmError> {
+        let lowered = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [lowered], c"type.of");
+        self.drop_value(lowered, Type::Any)?;
+        Ok(tag)
     }
 
     /// Reads an enum value's discriminant tag as an `Int`.

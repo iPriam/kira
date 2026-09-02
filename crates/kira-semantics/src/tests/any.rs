@@ -317,3 +317,48 @@ fn is_and_as_need_an_any_and_an_erasable_target() {
         vec!["KSEM359"]
     );
 }
+
+/// `value.type` answers for every inhabited value, and its descriptor has a
+/// closed set of members.
+#[test]
+fn a_value_answers_with_its_runtime_type() {
+    let ok = "struct Point { let x: Int = 1 }\n\
+              @Main function main() {\n\
+                  let p = Point()\n\
+                  print(p.type.name)\n\
+                  print(p.type.kind)\n\
+                  print(p.type.package)\n\
+                  print(p.type.arguments.count)\n\
+                  print(p.type.conformances.count)\n\
+                  let erased: Any = Point()\n\
+                  print(erased.type == p.type)\n\
+                  return\n\
+              }";
+    assert!(diagnostics(ok).is_empty(), "{:?}", codes(ok));
+}
+
+/// A `Void` call names no value, so it has no type to describe.
+#[test]
+fn a_void_expression_has_no_runtime_type() {
+    let text = "function nothing() { return }\n\
+                @Main function main() { let t = nothing().type return }";
+    assert_eq!(codes(text), vec!["KSEM362"]);
+}
+
+/// The descriptor's members are the whole surface: fields, methods, and layout
+/// stay compile-time facts.
+#[test]
+fn a_descriptor_has_no_member_beyond_the_documented_five() {
+    let text = "struct Point { let x: Int = 1 }\n\
+                @Main function main() { print(Point().type.fields) return }";
+    assert_eq!(codes(text), vec!["KSEM363"]);
+}
+
+/// Two descriptors compare, and a descriptor does not compare with anything
+/// else.
+#[test]
+fn descriptors_compare_only_with_descriptors() {
+    let text = "struct Point { let x: Int = 1 }\n\
+                @Main function main() { print(Point().type == 1) return }";
+    assert!(!codes(text).is_empty());
+}

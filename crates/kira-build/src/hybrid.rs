@@ -375,6 +375,7 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         | Type::NativeState(_)
         | Type::Task(_)
         | Type::MainThreadTask(_)
+        | Type::RuntimeType
         | Type::Cell(_) => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),

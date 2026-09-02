@@ -86,7 +86,8 @@ impl MainThreadTaskResult {
             | super::Type::CBlock
             | super::Type::NativeState(_)
             | super::Type::Task(_)
-            | super::Type::MainThreadTask(_) => return None,
+            | super::Type::MainThreadTask(_)
+            | super::Type::RuntimeType => return None,
         })
     }
 
