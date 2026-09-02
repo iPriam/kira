@@ -77,7 +77,26 @@ impl Parser<'_> {
 
     fn parse_binary(&mut self, min_bp: u8) -> ExprId {
         let mut lhs = self.parse_unary();
-        while let Some((op, bp)) = binary_op(self.current_kind()) {
+        loop {
+            // `value is Type` and `value as Type` bind tighter than a
+            // comparison and looser than a shift, and their right side is a
+            // type, not an expression.
+            if matches!(self.current_kind(), TokenKind::Is | TokenKind::As) && TYPE_OPERATOR_BP > min_bp {
+                let is_test = self.at(TokenKind::Is);
+                self.bump(); // `is` / `as`
+                let ty = self.parse_type_ref();
+                let lhs_span = self.tree.expr(lhs).span();
+                let span = Span::from_bounds(lhs_span.start, self.previous_end());
+                lhs = self.tree.add_expr(if is_test {
+                    Expr::TypeTest { value: lhs, ty, span }
+                } else {
+                    Expr::TypeCast { value: lhs, ty, span }
+                });
+                continue;
+            }
+            let Some((op, bp)) = binary_op(self.current_kind()) else {
+                break;
+            };
             if bp <= min_bp {
                 break;
             }
@@ -358,11 +377,15 @@ impl Parser<'_> {
             TokenKind::FloatLiteral => self.parse_float(token.span),
             TokenKind::StringLiteral => {
                 self.bump();
-                let value = decode_string_literal(self.text_of(token.span));
-                self.tree.add_expr(Expr::Str {
-                    value,
-                    span: token.span,
-                })
+                // The lexer already reported an unknown escape (`KLEX003`);
+                // no guessed-at text may stand in for the literal.
+                match decode_string_literal(self.text_of(token.span)) {
+                    Ok(value) => self.tree.add_expr(Expr::Str {
+                        value,
+                        span: token.span,
+                    }),
+                    Err(_) => self.tree.add_expr(Expr::Error { span: token.span }),
+                }
             }
             TokenKind::True => {
                 self.bump();
@@ -473,6 +496,10 @@ impl Parser<'_> {
 
 /// The operator and left binding power for a token that opens a binary
 /// expression, or `None` when it is not a binary operator.
+/// The binding power of `is` and `as`: above the comparisons (`a is T == b`
+/// tests first) and below the shifts (`a << 1 as T` shifts first).
+const TYPE_OPERATOR_BP: u8 = 8;
+
 fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
     let pair = match kind {
         TokenKind::PipePipe => (BinaryOp::Or, 1),
@@ -486,13 +513,13 @@ fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
         TokenKind::LtEq => (BinaryOp::Le, 7),
         TokenKind::Gt => (BinaryOp::Gt, 7),
         TokenKind::GtEq => (BinaryOp::Ge, 7),
-        TokenKind::LtLt => (BinaryOp::Shl, 8),
-        TokenKind::GtGt => (BinaryOp::Shr, 8),
-        TokenKind::Plus => (BinaryOp::Add, 9),
-        TokenKind::Minus => (BinaryOp::Sub, 9),
-        TokenKind::Star => (BinaryOp::Mul, 10),
-        TokenKind::Slash => (BinaryOp::Div, 10),
-        TokenKind::Percent => (BinaryOp::Rem, 10),
+        TokenKind::LtLt => (BinaryOp::Shl, 9),
+        TokenKind::GtGt => (BinaryOp::Shr, 9),
+        TokenKind::Plus => (BinaryOp::Add, 10),
+        TokenKind::Minus => (BinaryOp::Sub, 10),
+        TokenKind::Star => (BinaryOp::Mul, 11),
+        TokenKind::Slash => (BinaryOp::Div, 11),
+        TokenKind::Percent => (BinaryOp::Rem, 11),
         _ => return None,
     };
     Some(pair)

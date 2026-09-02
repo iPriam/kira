@@ -130,9 +130,15 @@ mod tests {
     /// exists: the two used to be the same answer under one name.
     #[test]
     fn a_named_machine_keeps_the_components_it_was_given() {
-        let machine = BuildMachine::new("linux", "aarch64");
+        // An architecture the host is not, whichever the host is.
+        let other = if std::env::consts::ARCH == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        let machine = BuildMachine::new("linux", other);
         assert_eq!(machine.platform(), "linux");
-        assert_eq!(machine.architecture(), "aarch64");
+        assert_eq!(machine.architecture(), other);
         assert_ne!(machine, BuildMachine::host());
     }
 }

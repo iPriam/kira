@@ -171,6 +171,8 @@ impl<'a> Analyzer<'a> {
                 },
             ) {
                 Some(id) => {
+                    let module = self.imports.module_of(source).to_owned();
+                    self.program.types.structs_mut().set_module(id, &module);
                     // A `@FFI.Struct`/`Array`/`Callback` mints a nominal id; the
                     // kind decides zero-fill construction and use-site refusals.
                     if let Some(crate::ffi_types::FfiClassification::Struct(kind)) = classification

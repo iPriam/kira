@@ -1,0 +1,134 @@
+import Foundation
+
+// SpxSpecializationTests.kira — one generic specialization never becomes
+// another, so a program that wants `Crate<Any>` from a `Crate<Int>` unpacks
+// the value and rebuilds it. These prove the rebuild carries payload identity,
+// nests, and leaves the other variants alone.
+// PREFIX: spx / Spx  (all top-level names use this prefix).
+
+enum SpxErr {
+    NotFound
+    Denied
+}
+
+enum SpxCrate<Held> {
+    Full(Held)
+    Empty
+}
+
+enum SpxResult<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
+
+struct SpxRecord {
+    let code: Int
+    let name: String
+}
+
+function spxNarrow(n: Int) -> SpxResult<Any, SpxErr> {
+    let narrow: SpxResult<Int, SpxErr> = .Ok(n)
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
+}
+
+function spxFailing() -> SpxResult<Any, SpxErr> {
+    let narrow: SpxResult<Int, SpxErr> = .Error(.Denied)
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
+}
+
+function spxRecords() -> SpxCrate<Any> {
+    let narrow: SpxCrate<SpxRecord> = .Full(SpxRecord(code: 7, name: "kept"))
+    match narrow {
+        Full(value) -> { return .Full(value) }
+        Empty -> { return .Empty }
+    }
+}
+
+construct SpxARebuiltPayloadKeepsItsValue() extends Test {
+    test {
+        match spxNarrow(41) {
+            Ok(held) -> {
+                if held is Int {
+                    let value = held as Int
+                    return value + 1
+                }
+                return 0
+            }
+            Error(failure) -> { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+construct SpxARebuiltFailureKeepsItsVariant() extends Test {
+    test {
+        match spxFailing() {
+            Ok(held) -> { return 0 }
+            Error(failure) -> {
+                match failure {
+                    NotFound -> { return 1 }
+                    Denied -> { return 2 }
+                }
+            }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
+}
+
+construct SpxARebuiltStructPayloadKeepsItsIdentity() extends Test {
+    test {
+        match spxRecords() {
+            Full(held) -> {
+                if held is SpxRecord {
+                    let record = held as SpxRecord
+                    return record.code + record.name.count
+                }
+                return 0
+            }
+            Empty -> { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct SpxARebuiltPayloadEqualsADirectErasure() extends Test {
+    test {
+        let direct: Any = 41
+        match spxNarrow(41) {
+            Ok(held) -> {
+                if held == direct { return 1 }
+                return 0
+            }
+            Error(failure) -> { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct SpxANestedRebuildCrossesBothLevels() extends Test {
+    test {
+        let inner: SpxResult<Int, SpxErr> = .Ok(5)
+        var carried: SpxCrate<Any> = .Empty
+        match inner {
+            Ok(value) -> { carried = .Full(value) }
+            Error(failure) -> { carried = .Empty }
+        }
+        match carried {
+            Full(held) -> {
+                if held is Int {
+                    let value = held as Int
+                    return value * 3
+                }
+                return 0
+            }
+            Empty -> { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}

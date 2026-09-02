@@ -7,10 +7,13 @@
 //! panics and never bails early — an unrecognized byte becomes a
 //! [`TokenKind::Unknown`] token with a diagnostic and lexing continues.
 //!
-//! Whitespace and `//` line comments are trivia and are skipped rather than
-//! tokenized. Kira separates statements with `;` or a newline, but the parser
-//! recovers statement boundaries structurally, so the lexer does not emit
-//! newline tokens.
+//! Whitespace, `//` line comments, and nesting `/* … */` block comments are
+//! trivia and are skipped rather than tokenized. Newlines are whitespace: Kira
+//! has no statement terminator, the grammar delimits statements structurally,
+//! so the lexer emits no newline token and `;` is an unknown character.
+//!
+//! Source is UTF-8. A leading byte-order mark is accepted and skipped; one
+//! anywhere else is an unknown character like any other stray byte.
 
 use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
@@ -50,6 +53,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn run(mut self) -> LexResult {
+        if self.bytes.starts_with(UTF8_BOM) {
+            self.pos = UTF8_BOM.len();
+        }
         loop {
             self.skip_trivia();
             if self.pos >= self.bytes.len() {
@@ -84,10 +90,38 @@ impl<'a> Lexer<'a> {
                     }
                     self.pos += 1;
                 }
+            } else if byte == b'/' && self.peek_at(1) == Some(b'*') {
+                self.skip_block_comment();
             } else {
                 break;
             }
         }
+    }
+
+    /// Skips a `/* … */` comment, with the cursor on its `/*`.
+    ///
+    /// Block comments nest, so a commented-out region that itself holds one
+    /// closes where it should. A comment the file ends inside is a fatal
+    /// lexer error, reported at the opener.
+    fn skip_block_comment(&mut self) {
+        let start = self.pos;
+        let mut depth = 0usize;
+        while self.pos < self.bytes.len() {
+            if self.peek() == Some(b'/') && self.peek_at(1) == Some(b'*') {
+                depth += 1;
+                self.pos += 2;
+            } else if self.peek() == Some(b'*') && self.peek_at(1) == Some(b'/') {
+                depth -= 1;
+                self.pos += 2;
+                if depth == 0 {
+                    return;
+                }
+            } else {
+                self.pos += 1;
+            }
+        }
+        let span = Span::from_bounds(start as u32, self.pos as u32);
+        self.diagnostics.push(unterminated_comment(self.source, span));
     }
 
     fn lex_one(&mut self) {
@@ -255,7 +289,6 @@ impl<'a> Lexer<'a> {
             b'[' => Some(TokenKind::LBracket),
             b']' => Some(TokenKind::RBracket),
             b',' => Some(TokenKind::Comma),
-            b';' => Some(TokenKind::Semicolon),
             b':' => Some(TokenKind::Colon),
             b'.' => Some(TokenKind::Dot),
             b'@' => Some(TokenKind::At),
@@ -286,19 +319,35 @@ impl<'a> Lexer<'a> {
                 let char_len = utf8_char_len(byte);
                 self.pos = (self.pos + char_len).min(self.bytes.len());
                 let span = Span::from_bounds(start as u32, self.pos as u32);
-                self.diagnostics.push(unknown_byte(self.source, span));
+                let diagnostic = if byte == b';' {
+                    semicolon(self.source, span)
+                } else if self.bytes[start..self.pos] == *UTF8_BOM {
+                    misplaced_bom(self.source, span)
+                } else {
+                    unknown_byte(self.source, span)
+                };
+                self.diagnostics.push(diagnostic);
                 self.tokens.push(Token::new(TokenKind::Unknown, span));
             }
         }
     }
 }
 
+/// An escape the lexer does not define, found while decoding a literal.
+///
+/// The lexer already reported it as `KLEX003`; the decoder's caller uses this
+/// to keep the literal out of the tree rather than to report it again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownEscape;
+
 /// Decodes the contents of a string-literal token span into an owned string,
 /// resolving the escapes the lexer accepts (`\n`, `\t`, `\r`, `\e`, `\"`, `\\`, `\0`)
 /// and the line continuation a backslash before a newline writes.
 ///
-/// `raw` is the full literal text including the surrounding quotes.
-pub fn decode_string_literal(raw: &str) -> String {
+/// `raw` is the full literal text including the surrounding quotes. A literal
+/// holding an escape outside that set decodes to no value at all: the lexer
+/// diagnosed it, and no recovered text may stand in for what was written.
+pub fn decode_string_literal(raw: &str) -> Result<String, UnknownEscape> {
     let inner = raw
         .strip_prefix('"')
         .map(|s| s.strip_suffix('"').unwrap_or(s))
@@ -330,11 +379,10 @@ pub fn decode_string_literal(raw: &str) -> String {
                 }
                 skip_continuation_indent(&mut chars);
             }
-            Some(other) => out.push(other),
-            None => out.push('\\'),
+            Some(_) | None => return Err(UnknownEscape),
         }
     }
-    out
+    Ok(out)
 }
 
 /// Drops the whitespace a continued line is indented by.
@@ -356,6 +404,54 @@ fn utf8_char_len(first: u8) -> usize {
         0xf0..=0xf7 => 4,
         _ => 1,
     }
+}
+
+/// The UTF-8 encoding of U+FEFF, the byte-order mark.
+const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
+
+fn semicolon(source: SourceId, span: Span) -> Diagnostic {
+    let file_span = FileSpan::new(source, span);
+    let mut diagnostic = Diagnostic::single(
+        Severity::Error,
+        "`;` is not Kira syntax",
+        Label::primary(
+            file_span,
+            "a statement ends where its grammar ends; remove the `;`",
+        ),
+    );
+    diagnostic.code = Some(Code::known("KLEX005"));
+    diagnostic.phase = Some("lexer");
+    diagnostic
+}
+
+fn misplaced_bom(source: SourceId, span: Span) -> Diagnostic {
+    let file_span = FileSpan::new(source, span);
+    let mut diagnostic = Diagnostic::single(
+        Severity::Error,
+        "byte-order mark inside the file",
+        Label::primary(
+            file_span,
+            "a UTF-8 byte-order mark is accepted only as the first bytes of a file",
+        ),
+    );
+    diagnostic.code = Some(Code::known("KLEX006"));
+    diagnostic.phase = Some("lexer");
+    diagnostic
+}
+
+fn unterminated_comment(source: SourceId, span: Span) -> Diagnostic {
+    let file_span = FileSpan::new(source, span);
+    let mut diagnostic = Diagnostic::single(
+        Severity::Error,
+        "unterminated block comment",
+        Label::primary(
+            file_span,
+            "this `/*` is never closed; block comments nest, so every `/*` needs its own `*/`",
+        ),
+    );
+    diagnostic.code = Some(Code::known("KLEX004"));
+    diagnostic.phase = Some("lexer");
+    diagnostic
 }
 
 fn unknown_byte(source: SourceId, span: Span) -> Diagnostic {
@@ -541,14 +637,14 @@ mod tests {
     #[test]
     fn a_continuation_contributes_neither_newline_nor_indent() {
         assert_eq!(
-            decode_string_literal("\"first \\\n            second\""),
-            "first second"
+            decode_string_literal("\"first \\\n            second\"").as_deref(),
+            Ok("first second")
         );
         // The space belongs to the text before the backslash, so a
         // continuation written without one joins the halves directly.
         assert_eq!(
-            decode_string_literal("\"un\\\n            split\""),
-            "unsplit"
+            decode_string_literal("\"un\\\n            split\"").as_deref(),
+            Ok("unsplit")
         );
     }
 
@@ -559,8 +655,8 @@ mod tests {
         let result = lex(SourceId::new(0), "\"first \\\r\n   second\"");
         assert!(result.diagnostics.is_empty());
         assert_eq!(
-            decode_string_literal("\"first \\\r\n   second\""),
-            "first second"
+            decode_string_literal("\"first \\\r\n   second\"").as_deref(),
+            Ok("first second")
         );
     }
 
@@ -568,8 +664,8 @@ mod tests {
     #[test]
     fn a_continuation_swallows_a_blank_line() {
         assert_eq!(
-            decode_string_literal("\"first \\\n\n      second\""),
-            "first second"
+            decode_string_literal("\"first \\\n\n      second\"").as_deref(),
+            Ok("first second")
         );
     }
 
@@ -583,9 +679,65 @@ mod tests {
 
     #[test]
     fn decodes_escapes() {
-        assert_eq!(decode_string_literal("\"a\\nb\""), "a\nb");
-        assert_eq!(decode_string_literal("\"\\e[2K\""), "\x1b[2K");
-        assert_eq!(decode_string_literal("\"q\\\"q\""), "q\"q");
-        assert_eq!(decode_string_literal("\"plain\""), "plain");
+        assert_eq!(decode_string_literal("\"a\\nb\"").as_deref(), Ok("a\nb"));
+        assert_eq!(decode_string_literal("\"\\e[2K\"").as_deref(), Ok("\x1b[2K"));
+        assert_eq!(decode_string_literal("\"q\\\"q\"").as_deref(), Ok("q\"q"));
+        assert_eq!(decode_string_literal("\"plain\"").as_deref(), Ok("plain"));
+    }
+
+    fn codes(text: &str) -> Vec<String> {
+        lex(SourceId::new(0), text)
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.code_text().map(str::to_owned))
+            .collect()
+    }
+
+    #[test]
+    fn a_leading_bom_is_skipped() {
+        let text = "\u{feff}function f() {}";
+        let result = lex(SourceId::new(0), text);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.tokens[0].kind, TokenKind::Function);
+        assert_eq!(result.tokens[0].span.start, 3);
+    }
+
+    #[test]
+    fn a_bom_anywhere_else_is_klex006() {
+        assert_eq!(codes("let \u{feff}a = 1"), vec!["KLEX006"]);
+    }
+
+    #[test]
+    fn a_semicolon_is_klex005_and_an_unknown_token() {
+        assert_eq!(codes("let a = 1;"), vec!["KLEX005"]);
+        assert!(kinds("let a = 1;").contains(&TokenKind::Unknown));
+    }
+
+    #[test]
+    fn block_comments_nest() {
+        let text = "let /* outer /* inner */ still outer */ a = 1";
+        assert!(codes(text).is_empty());
+        assert_eq!(
+            kinds(text),
+            vec![
+                TokenKind::Let,
+                TokenKind::Identifier,
+                TokenKind::Equals,
+                TokenKind::IntLiteral,
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unterminated_block_comment_is_klex004() {
+        assert_eq!(codes("let a = 1 /* open /* nested */"), vec!["KLEX004"]);
+    }
+
+    #[test]
+    fn an_unknown_escape_is_fatal_to_the_literal() {
+        assert_eq!(codes("\"es\\qcape\""), vec!["KLEX003"]);
+        assert!(decode_string_literal("\"es\\qcape\"").is_err());
+        assert!(decode_string_literal("\"trailing\\").is_err());
     }
 }

@@ -38,7 +38,7 @@ construct FsbStructReturnByValue() extends Test {
         let s = fsbRootSize()
         return s.width + s.height
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(560); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(560) return e }
 }
 
 construct FsbStructBorrowIntoRuntime() extends Test {
@@ -46,7 +46,7 @@ construct FsbStructBorrowIntoRuntime() extends Test {
         let s = fsbRootSize()
         return fsbArea(s)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(76800); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(76800) return e }
 }
 
 construct FsbScalarRoundTripLoop() extends Test {
@@ -60,7 +60,7 @@ construct FsbScalarRoundTripLoop() extends Test {
         // sum over i in 0..49 of (2i+1)*2 = 2 * 2500 = 5000
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5000) return e }
 }
 
 construct FsbNativeCallbackBridge() extends Test {
@@ -71,5 +71,5 @@ construct FsbNativeCallbackBridge() extends Test {
         }
         return fsbInvoke(move cb, 100)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(660); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(660) return e }
 }

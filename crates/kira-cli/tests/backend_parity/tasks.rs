@@ -19,11 +19,14 @@ const BODIES: &str = r#"
 async function tskSum(a: Int, b: Int) -> Int {
     return a + b
 }
-async function tskFactorial(n: Int) -> Int {
+function tskFactorialOf(n: Int) -> Int {
     if n <= 1 {
         return 1
     }
-    return n * tskFactorial(n - 1)
+    return n * tskFactorialOf(n - 1)
+}
+async function tskFactorial(n: Int) -> Int {
+    return tskFactorialOf(n)
 }
 async function tskNoop(n: Int) {
     let unused = n + 1
@@ -37,9 +40,9 @@ fn program(body: &str) -> String {
 }
 
 #[test]
-fn an_async_function_called_directly_runs_like_a_synchronous_one() {
+fn an_async_function_runs_as_a_task_and_joins_for_its_result() {
     let output = assert_parity(&program(
-        "    print(tskSum(19, 23))\n    print(tskFactorial(5))",
+        "    let sum = Task { tskSum(19, 23) }\n    let product = Task { tskFactorial(5) }\n    print(sum.await)\n    print(product.await)",
     ));
     assert_eq!(output, "42\n120\n");
 }

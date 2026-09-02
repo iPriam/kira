@@ -26,6 +26,8 @@
 /// The runtime representation is 64-bit two's complement for every variant;
 /// this records the written name only. See the module docs for the two things
 /// it decides.
+use kira_runtime_abi::IntWidth;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntSpelling {
     /// Bare `Int`, and the type of every integer literal.
@@ -50,6 +52,48 @@ pub enum IntSpelling {
 }
 
 impl IntSpelling {
+    /// The runtime width this spelling names.
+    #[must_use]
+    pub fn width(self) -> IntWidth {
+        match self {
+            IntSpelling::Plain => IntWidth::Plain,
+            IntSpelling::I8 => IntWidth::I8,
+            IntSpelling::I16 => IntWidth::I16,
+            IntSpelling::I32 => IntWidth::I32,
+            IntSpelling::U8 => IntWidth::U8,
+            IntSpelling::U16 => IntWidth::U16,
+            IntSpelling::U32 => IntWidth::U32,
+            IntSpelling::U64 => IntWidth::U64,
+        }
+    }
+
+    /// The width in bits; see [`IntWidth::bits`].
+    #[must_use]
+    pub fn bits(self) -> u32 {
+        self.width().bits()
+    }
+
+    /// Whether `value` lies in the spelling's range; see [`IntWidth::holds`].
+    #[must_use]
+    pub fn holds(self, value: i128) -> bool {
+        self.width().holds(value)
+    }
+
+    /// Whether every value of this spelling is a value of `to`; see
+    /// [`IntWidth::widens_into`].
+    #[must_use]
+    pub fn widens_into(self, to: IntSpelling) -> bool {
+        self.width().widens_into(to.width())
+    }
+
+    /// The one-byte code an instruction stream carries the spelling as; see
+    /// [`IntWidth::code`].
+    #[must_use]
+    pub fn code(self) -> u8 {
+        self.width().code()
+    }
+
+
     /// Whether this spelling selects unsigned division, remainder, and
     /// ordering.
     ///

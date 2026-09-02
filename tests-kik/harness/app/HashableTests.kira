@@ -20,39 +20,39 @@ struct HxRecord {
 construct HxEqualRecordsHashTheSame() extends Test {
     test {
         let left = HxRecord {
-            id: 7
-            name: "same"
-            enabled: true
+            id: 7,
+            name: "same",
+            enabled: true,
             inner: HxInner { id: 11 }
         }
         let right = HxRecord {
-            id: 7
-            name: "same"
-            enabled: true
+            id: 7,
+            name: "same",
+            enabled: true,
             inner: HxInner { id: 11 }
         }
         return hash_HxRecord(left) == hash_HxRecord(right)
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct HxEveryFieldChangesTheFold() extends Test {
     test {
         let base = HxRecord {
-            id: 7
-            name: "same"
-            enabled: true
+            id: 7,
+            name: "same",
+            enabled: true,
             inner: HxInner { id: 11 }
         }
         let changed = HxRecord {
-            id: 8
-            name: "same"
-            enabled: true
+            id: 8,
+            name: "same",
+            enabled: true,
             inner: HxInner { id: 11 }
         }
         return hash_HxRecord(base) != hash_HxRecord(changed)
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct HxNestedFieldsUseTheirOwnDerive() extends Test {
@@ -61,5 +61,5 @@ construct HxNestedFieldsUseTheirOwnDerive() extends Test {
         let second = HxInner { id: 2 }
         return hash_HxInner(first) != hash_HxInner(second)
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }

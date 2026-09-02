@@ -5,7 +5,7 @@ use super::{parse_text, type_spelling};
 #[test]
 fn parses_native_recover_type_argument_before_value_arguments() {
     let result = parse_text(
-        "function f(raw: RawPtr) { var state = nativeRecover<CounterState>(raw); return }",
+        "function f(raw: RawPtr) { var state = nativeRecover<CounterState>(raw) return }",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let Item::Function(function) = &result.tree.items()[0] else {
@@ -31,7 +31,7 @@ fn parses_native_recover_type_argument_before_value_arguments() {
 
 #[test]
 fn reports_an_empty_native_recover_type_argument_list() {
-    let result = parse_text("function f(raw: RawPtr) { nativeRecover<>(raw); return }");
+    let result = parse_text("function f(raw: RawPtr) { nativeRecover<>(raw) return }");
     assert!(
         result
             .diagnostics
@@ -45,7 +45,7 @@ fn reports_an_empty_native_recover_type_argument_list() {
 
 #[test]
 fn reports_an_unclosed_native_recover_type_argument_list_without_bailing() {
-    let result = parse_text("function f(raw: RawPtr) { nativeRecover<CounterState(raw); return }");
+    let result = parse_text("function f(raw: RawPtr) { nativeRecover<CounterState(raw) return }");
     assert!(
         result
             .diagnostics

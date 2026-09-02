@@ -650,7 +650,7 @@ function main() {
     var f = Frame { n: 1 }
     apply(f)
     print(f.n)
-    nativeStateFree(boxed)
+    nativeUserDataRelease(handle)
     return
 }
 "#,

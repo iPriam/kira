@@ -7,32 +7,32 @@
 // is its elements laid out end to end, which is exactly what an `@FFI.Array`
 // reserves, so the array type fills the pointer and the count travels beside it.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiItem {
     var location: I32
     var offset: U64
 }
 
-@FFI.Pointer { target: FfiItem; ownership: borrowed; }
+@FFI.Pointer { target: FfiItem, ownership: borrowed }
 struct FfiItemPtr {}
 
-@FFI.Array { element: FfiItem; count: 4; }
+@FFI.Array { element: FfiItem, count: 4 }
 struct FfiItemArray4 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiItemList {
     var items: FfiItemPtr
     var count: I32
 }
 
-@FFI.Pointer { target: FfiItemList; ownership: borrowed; }
+@FFI.Pointer { target: FfiItemList, ownership: borrowed }
 struct FfiItemListPtr {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_items_checksum; abi: c; }
-function ffiItemsChecksum(items: FfiItemPtr, count: I32): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_items_checksum, abi: c }
+function ffiItemsChecksum(items: FfiItemPtr, count: I32): I32
 
-@FFI.Extern { library: ffifixture; symbol: ffi_item_list_checksum; abi: c; }
-function ffiItemListChecksum(list: FfiItemListPtr): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_item_list_checksum, abi: c }
+function ffiItemListChecksum(list: FfiItemListPtr): I32
 
 // Several items at a pointer argument.
 @Native
@@ -75,7 +75,7 @@ function checksumThroughDescriptor() -> Int {
                 FfiItem { location: 5, offset: 6 },
                 FfiItem { location: 7, offset: 8 }
             ]
-        }
+        },
         count: 2
     }))
 }

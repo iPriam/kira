@@ -135,7 +135,7 @@ function spxParseValue(entry: String) -> Int {
     var acc = 0
     var i = 0
     while i < digits.count {
-        let d = digits.charAt(i) - 48
+        let d = Int(digits.charAt(i)) - 48
         acc = acc * 10 + d
         i = i + 1
     }

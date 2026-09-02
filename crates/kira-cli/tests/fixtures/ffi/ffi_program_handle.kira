@@ -7,14 +7,14 @@ struct Handle {
     var id: U32
 }
 
-@FFI.Extern { library: ffifixture; symbol: ffi_make_handle; abi: c; }
-function makeHandle(id: U32) -> Handle;
+@FFI.Extern { library: ffifixture, symbol: ffi_make_handle, abi: c }
+function makeHandle(id: U32) -> Handle
 
-@FFI.Extern { library: ffifixture; symbol: ffi_handle_id; abi: c; }
-function handleId(handle: Handle) -> U32;
+@FFI.Extern { library: ffifixture, symbol: ffi_handle_id, abi: c }
+function handleId(handle: Handle) -> U32
 
-@FFI.Extern { library: ffifixture; symbol: ffi_bump_handle; abi: c; }
-function bumpHandle(handle: Handle) -> Handle;
+@FFI.Extern { library: ffifixture, symbol: ffi_bump_handle, abi: c }
+function bumpHandle(handle: Handle) -> Handle
 
 @Main
 function main() {

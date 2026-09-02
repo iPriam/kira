@@ -63,6 +63,8 @@ pub enum TokenKind {
     Import,
     /// `as`
     As,
+    /// `is`
+    Is,
     /// `struct`
     Struct,
     /// `enum`
@@ -93,6 +95,8 @@ pub enum TokenKind {
     Continue,
     /// `type`
     Type,
+    /// `distinct`
+    Distinct,
 
     // Punctuation and operators.
     /// `(`
@@ -109,8 +113,6 @@ pub enum TokenKind {
     RBracket,
     /// `,`
     Comma,
-    /// `;`
-    Semicolon,
     /// `:`
     Colon,
     /// `.`
@@ -188,6 +190,7 @@ impl TokenKind {
             "false" => TokenKind::False,
             "import" => TokenKind::Import,
             "as" => TokenKind::As,
+            "is" => TokenKind::Is,
             "struct" => TokenKind::Struct,
             "enum" => TokenKind::Enum,
             "class" => TokenKind::Class,
@@ -206,6 +209,7 @@ impl TokenKind {
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "type" => TokenKind::Type,
+            "distinct" => TokenKind::Distinct,
             _ => return None,
         })
     }
@@ -228,6 +232,7 @@ impl TokenKind {
             TokenKind::False => "`false`",
             TokenKind::Import => "`import`",
             TokenKind::As => "`as`",
+            TokenKind::Is => "`is`",
             TokenKind::Struct => "`struct`",
             TokenKind::Enum => "`enum`",
             TokenKind::Class => "`class`",
@@ -243,6 +248,7 @@ impl TokenKind {
             TokenKind::Break => "`break`",
             TokenKind::Continue => "`continue`",
             TokenKind::Type => "`type`",
+            TokenKind::Distinct => "`distinct`",
             TokenKind::LParen => "`(`",
             TokenKind::RParen => "`)`",
             TokenKind::LBrace => "`{`",
@@ -250,7 +256,6 @@ impl TokenKind {
             TokenKind::LBracket => "`[`",
             TokenKind::RBracket => "`]`",
             TokenKind::Comma => "`,`",
-            TokenKind::Semicolon => "`;`",
             TokenKind::Colon => "`:`",
             TokenKind::Dot => "`.`",
             TokenKind::DotDot => "`..`",

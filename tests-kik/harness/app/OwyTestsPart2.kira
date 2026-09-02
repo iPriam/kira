@@ -20,8 +20,8 @@ function owyMakeAdder13(base: Int): (Int) -> Int {
 
 function owyMakeLeaf13(id: Int) -> OwyClosureNode13 {
     return OwyClosureNode13 {
-        id: id
-        onPress: owyMakeAdder13(id)
+        id: id,
+        onPress: owyMakeAdder13(id),
         children: []
     }
 }
@@ -31,8 +31,8 @@ function owyMakeBranch13(id: Int) -> OwyClosureNode13 {
     children.append(owyMakeLeaf13(id + 10))
     children.append(owyMakeLeaf13(id + 20))
     return OwyClosureNode13 {
-        id: id
-        onPress: owyMakeAdder13(id)
+        id: id,
+        onPress: owyMakeAdder13(id),
         children: move children
     }
 }
@@ -42,8 +42,8 @@ function owyMakeTree13(seed: Int) -> OwyClosureNode13 {
     children.append(owyMakeBranch13(seed + 100))
     children.append(owyMakeBranch13(seed + 200))
     return OwyClosureNode13 {
-        id: seed
-        onPress: owyMakeAdder13(seed)
+        id: seed,
+        onPress: owyMakeAdder13(seed),
         children: move children
     }
 }
@@ -67,7 +67,7 @@ construct OwyRecursiveClosureTreeParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20670); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20670) return e }
 }
 
 // ---- ownership_string_deep_value_parity ----
@@ -188,7 +188,7 @@ construct OwyStringDeepValueParity() extends Test {
 
         return okCount
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 // ---- ownership_struct_param_move_into_array_parity ----
@@ -228,7 +228,7 @@ construct OwyStructParamMoveIntoArrayParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 // ---- ownership_temporary_move_ok ----
@@ -249,7 +249,7 @@ construct OwyTemporaryMoveOk() extends Test {
     test {
         return owyConsume16(owyMakeMesh16())
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 // ---- ownership_trivial_value_no_move ----
@@ -264,7 +264,7 @@ construct OwyTrivialValueNoMove() extends Test {
         let y = owyAdd17(x, x)
         return y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ---- partial_move_disjoint_fields ----
@@ -291,18 +291,18 @@ function owyConsume18(pair: OwyPair18) -> Int {
 construct OwyPartialMoveDisjointFields() extends Test {
     test {
         let pair = OwyPair18 {
-            a: [1, 2, 3]
+            a: [1, 2, 3],
             b: [10, 20]
         }
         return owyConsume18(move pair)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 // ---- mid_ir_disjoint_struct_field_borrows ----
 
 struct OwyCell19 { var value: Int }
-struct OwyPairCell19 { var left: OwyCell19; var right: OwyCell19 }
+struct OwyPairCell19 { var left: OwyCell19 var right: OwyCell19 }
 
 function owyUpdateBoth19(a: borrow mut OwyCell19, b: borrow mut OwyCell19) {
     a.value = a.value + 10
@@ -316,7 +316,7 @@ construct OwyMidIrDisjointStructFieldBorrows() extends Test {
         owyUpdateBoth19(pair.left, pair.right)
         return pair.left.value * 100 + pair.right.value
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1122); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1122) return e }
 }
 
 // ---- consuming_nested_field_receiver_parity ----
@@ -364,7 +364,7 @@ construct OwyConsumingNestedFieldReceiverParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // ---- consuming_nested_indexed_receiver_parity ----
@@ -419,5 +419,5 @@ construct OwyConsumingNestedIndexedReceiverParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }

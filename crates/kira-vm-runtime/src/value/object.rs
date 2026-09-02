@@ -259,7 +259,9 @@ impl Heap {
         let Ok(fields) = Rc::try_unwrap(fields) else {
             return;
         };
-        for field in fields {
+        // Fields release in reverse declaration order, the language's rule
+        // for every engine.
+        for field in fields.into_iter().rev() {
             self.drop_value(field);
         }
     }
@@ -352,6 +354,7 @@ impl Heap {
     /// Drops a value, freeing whatever heap storage it owns.
     pub fn drop_value(&mut self, value: Value) {
         match value {
+            Value::NativeState(token) => self.native_state_releases.push(token),
             Value::Str(id) => self.free(id),
             Value::Struct(id) => self.free_struct(id),
             Value::Array(id) => self.free_array(id),
@@ -382,6 +385,11 @@ impl Heap {
     /// reader can distinguish from copying them here. See the module header.
     pub fn copy_value(&mut self, value: Value) -> Value {
         match value {
+            // A copy of a handle is one more owner of the same state.
+            Value::NativeState(token) => {
+                self.native_state_retains.push(token);
+                value
+            }
             Value::Str(id) => {
                 let cloned = self.get(id).to_owned();
                 Value::Str(self.alloc(cloned))

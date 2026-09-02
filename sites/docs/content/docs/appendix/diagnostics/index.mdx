@@ -53,6 +53,8 @@ These are the ones that come up most often while learning the language. Each is 
 | Code | Means |
 | --- | --- |
 | `KLEX003` | An unknown escape in a string literal. |
+| `KLEX004` / `KLEX005` / `KLEX006` | An unterminated block comment; a `;`, which is not a token of the language; a byte-order mark anywhere but the start of the file. |
+| `KPAR002` | Two list elements with nothing between them: a comma is required, and newlines do not separate them. |
 | `KPAR043` | `@Export` on a `struct`, pointing at the `class` that would work. |
 | `KPAR047` | Type parameters on a construct lifecycle/requirement member; put them on the enclosing declaration instead. |
 | `KPAR075` | A bare `self` receiver. |
@@ -65,7 +67,14 @@ These are the ones that come up most often while learning the language. Each is 
 | `KSEM052` | A by-value struct cycle. |
 | `KSEM062` | A missing argument for a parameter with no default. |
 | `KSEM063` | A derived class assigned to an ancestor binding. There is no subtyping. |
-| `KSEM071` | Two different written widths in one operation. |
+| `KSEM071` | Two different integer spellings in one operation; convert one side, or write a literal. |
+| `KSEM350` | An integer literal that does not fit the width it is written into. |
+| `KSEM358` / `KSEM359` | `is` or `as` on a value that is not an `Any`; a type no `Any` can hold on the right of `is` or `as`. |
+| `KSEM356` | A `copy` of a value that is not Copyable: native state, a cell, a task handle, an `Any`, or a type reaching a user `Drop`. |
+| `KSEM360` | Warning: `nativeStateFree` is deprecated; it releases one reference of the state. |
+| `KSEM361` | `nativeUserDataRetain` or `nativeUserDataRelease` given something other than a `RawPtr` token. |
+| `KSEM357` | A function whose class-typed parameters would need more specializations than one function may have. |
+| `KSEM352` / `KSEM353` / `KSEM354` | A task target that is not `async`; one that borrows a parameter; a direct call of an `async function`. |
 | `KSEM081` | `print` of a struct, array, or enum. |
 | `KSEM107` | A use after move. |
 | `KSEM113` / `KSEM115` | A named non-trivial value passed to a copying parameter with no spelling, or `move` where the parameter copies. |
@@ -86,6 +95,8 @@ These are the ones that come up most often while learning the language. Each is 
 | `KSEM300`–`KSEM307` | The `Drop` rules. |
 | `KSEM308`–`KSEM312` | Supertraits, `Send`, `Sync`, and the task boundary. |
 | `KSEM330`–`KSEM344` | Main-thread affinity, request shape, value transfer, lifecycle signatures, task joins, and WebAssembly refusal. |
+| `KSEM345`–`KSEM349` | The `distinct` rules: a representation that owns storage, a cyclic chain, and the two crossings. |
+| `KPAR084`–`KPAR087` | A malformed or annotated `distinct` declaration. |
 | `KIR005` | `@Derive(Copy)` on a type that moves. |
 | `KPK025` | A `*_types.kira` file outside `bind-types/`. |
 | `KPK041` | A generated binding adopted as package source because it carries no stamp. |

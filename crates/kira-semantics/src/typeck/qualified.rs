@@ -152,7 +152,7 @@ impl Analyzer<'_> {
             }),
             None => self.analyze_construct_new(ctx, id, &[], &[], root_span),
         };
-        let owner = self.program.types.type_name(Type::Struct(id));
+        let owner = self.member_owner_name(Type::Struct(id));
         let qualified = format!("{owner}.{method}");
         if self.lookup_function(&qualified).is_none() {
             // A declaration also answers its family's uniform `extend`

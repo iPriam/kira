@@ -30,6 +30,17 @@ impl Codegen<'_> {
                 self.call(self.runtime.cblock_free, &mut [handle], c"");
                 Ok(())
             }
+            // One owner fewer; the runtime destroys the state with the last.
+            // A null token names nothing and the runtime reports it without
+            // touching anything, which is what a taken slot holds.
+            Type::NativeState(_) => {
+                // SAFETY: `at` addresses one i64 callback-state token.
+                let handle = unsafe {
+                    LLVMBuildLoad2(self.builder, self.types.i64, at, c"native.state".as_ptr())
+                };
+                self.call(self.runtime.native_state_release, &mut [handle], c"");
+                Ok(())
+            }
             Type::String => {
                 let last = self.runtime.str_free;
                 let handle = self.load_handle(at, "str");
@@ -53,7 +64,9 @@ impl Codegen<'_> {
                 if let Some(glue) = def.drop_glue {
                     self.call_drop_glue(at, glue)?;
                 }
-                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
+                // Fields release in reverse declaration order, the language's
+                // rule for every engine.
+                for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate().rev() {
                     let field = self.field_pointer(struct_type, at, index as u32);
                     if def.owns_c_storage_at(index as u32) {
                         // SAFETY: an owning C-layout slot contains one live or

@@ -24,9 +24,7 @@ use crate::analyze::{Analyzer, FnCtx};
 use crate::constructs::ConstructVariant;
 use crate::constructs::DispatchMethod;
 use crate::place::PlacePurpose;
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,};
 use kira_semantics_model::{EnumId, Execution, OwnershipMode, Type};
 use kira_source::Span;
 
@@ -92,7 +90,10 @@ impl Analyzer<'_> {
         let Some(enum_id) = self.program.types.enums_mut().declare_owned(
             owner,
             kira_semantics_model::EnumDef {
-                name: format!("some {name}"),
+                // Displayed by its declared name; the row is filed under the
+                // declaring package, which is what keeps two packages' same-
+                // named existentials apart.
+                name: format!("some {}", name.rsplit("::").next().unwrap_or(name)),
                 variants: Vec::new(),
             },
         ) else {
@@ -103,6 +104,8 @@ impl Analyzer<'_> {
             );
             return None;
         };
+        let module = self.imports.module_of(declared.source).to_owned();
+        self.program.types.enums_mut().set_module(enum_id, &module);
         self.enum_defaults.push(Vec::new());
         self.trait_existentials.insert(
             name.to_owned(),
@@ -316,7 +319,7 @@ impl Analyzer<'_> {
                 reserved
             }
         };
-        let callable = format!("{}.{method}", self.type_name(Type::Enum(existential_id)));
+        let callable = format!("{}.{method}", self.member_owner_name(Type::Enum(existential_id)));
         let positional = Analyzer::argument_slots(args);
         let mut values = vec![receiver];
         for (index, slot_value) in positional.iter().enumerate() {
@@ -516,6 +519,12 @@ impl Analyzer<'_> {
                 execution: Execution::Inherited,
                 mutates_self,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::dispatcher(
+                    Type::Enum(existential_id),
+                    mutates_self,
+                    &params,
+                    result,
+                ),
             };
         }
         let Some((_, fallback)) = arms.last().copied() else {
@@ -531,6 +540,12 @@ impl Analyzer<'_> {
                 execution: Execution::Inherited,
                 mutates_self,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::dispatcher(
+                    Type::Enum(existential_id),
+                    mutates_self,
+                    &params,
+                    result,
+                ),
             };
         };
         arms.sort_by_key(|(variant, _)| variant.tag);
@@ -553,7 +568,7 @@ impl Analyzer<'_> {
         variant: ConstructVariant,
         method: &str,
     ) -> Option<(FuncId, Type)> {
-        let owner = self.program.types.type_name(variant.ty);
+        let owner = self.member_owner_name(variant.ty);
         self.lookup_function(&format!("{owner}.{method}"))
             .map(|(id, _, result)| (id, result))
     }
@@ -580,6 +595,7 @@ impl Analyzer<'_> {
             execution: Execution::Inherited,
             mutates_self,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], result),
         }
     }
 }

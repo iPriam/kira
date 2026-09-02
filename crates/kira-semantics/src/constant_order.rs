@@ -195,10 +195,11 @@ impl Analyzer<'_> {
             | HirExpr::NativeState { value: operand, .. }
             | HirExpr::NativeUserData { state: operand }
             | HirExpr::NativeRecover { raw: operand, .. }
-            | HirExpr::NativeStateFree { token: operand }
+            | HirExpr::NativeStateRetain { token: operand }
+            | HirExpr::NativeStateRelease { token: operand }
             | HirExpr::Convert { operand, .. }
+            | HirExpr::Distinct { value: operand, .. }
             | HirExpr::IntoAny { value: operand, .. }
-            | HirExpr::Widen { value: operand, .. }
             | HirExpr::TaskJoin {
                 handle: operand, ..
             }
@@ -221,6 +222,9 @@ impl Analyzer<'_> {
                 exprs.push(*then);
                 exprs.push(*otherwise);
             }
+            HirExpr::Copy { value, .. }
+            | HirExpr::TypeTest { value, .. }
+            | HirExpr::TypeCast { value, .. } => exprs.push(*value),
             HirExpr::StructNew { fields, .. } => exprs.extend(fields.iter().copied()),
             HirExpr::ArrayNew { elements, .. } => exprs.extend(elements.iter().copied()),
             HirExpr::Index { base, index, .. } => {

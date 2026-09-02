@@ -11,7 +11,7 @@ function projectedRunway(quarters: Int) -> Int {
 }
 ```
 
-Parameters require explicit types. A result type is written after `->`, or after `:` when the result is itself a function type, because `->` would be ambiguous with the function type's own arrow. A body is a block, except for an `@FFI.Extern` or `@FFI.Syscall` declaration, which ends at `;` and has none.
+Parameters require explicit types. A result type is written after `->`, or after `:` when the result is itself a function type, because `->` would be ambiguous with the function type's own arrow. A body is a block, except for an `@FFI.Extern` or `@FFI.Syscall` declaration, which has none and ends with its signature.
 
 ## Parameter Defaults
 

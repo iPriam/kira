@@ -27,6 +27,13 @@ impl<'a> Analyzer<'a> {
             Type::Float(FloatSpelling::Plain) => Some(ForeignType::F64),
             Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
             Type::Bool => Some(ForeignType::Bool),
+            // A distinct type crosses as the scalar it is. `foreign_seam_of`
+            // already unwraps one before it reaches here; this arm answers the
+            // direct callers so the mapping is total wherever it is asked.
+            Type::Distinct(_) => {
+                let representation = self.program.types.representation(ty);
+                self.foreign_type_of(representation, span, position)
+            }
             Type::Void => match position {
                 Position::Result => Some(ForeignType::Void),
                 Position::Param => {

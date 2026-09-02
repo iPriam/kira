@@ -25,6 +25,22 @@ impl FunctionLowering<'_, '_> {
             return self.load_native_state_local(slot, type_id, ty);
         }
         let pointer = self.local_pointer(slot)?;
+        if matches!(ty, Type::NativeState(_)) {
+            // A native-state handle has one owner. Its ordinary read moves the
+            // token; only `nativeUserData` and the explicit retain primitive
+            // create another owner.
+            // SAFETY: a native-state local is an i64 token slot.
+            let value = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    self.codegen.types.i64,
+                    pointer,
+                    c"native.state.handle".as_ptr(),
+                )
+            };
+            self.clear_live_flag(slot);
+            return Ok(value);
+        }
         let value = self.read_owned(pointer, ty)?;
         // A value that runs a user `Drop` is never copied — binding one moves
         // (`TypeTable::moves_on_bind`), so the checker has already refused a
@@ -37,7 +53,7 @@ impl FunctionLowering<'_, '_> {
         // frame release.
         if self
             .local_type(slot)
-            .is_ok_and(|ty| self.codegen.program.types.runs_user_drop(ty))
+            .is_ok_and(|ty| self.codegen.program.types.takes_on_read(ty))
         {
             self.clear_live_flag(slot);
         }
@@ -62,7 +78,7 @@ impl FunctionLowering<'_, '_> {
         // flag only tracks the move-sensitive user-`Drop` case.
         if self
             .local_type(slot)
-            .is_ok_and(|ty| self.codegen.program.types.runs_user_drop(ty))
+            .is_ok_and(|ty| self.codegen.program.types.takes_on_read(ty))
         {
             self.set_live_flag(slot);
         }
@@ -112,12 +128,17 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         struct_id: kira_semantics_model::StructId,
         fields: &[IrExprId],
+        order: &kira_semantics_model::hir::FieldOrder,
     ) -> Result<LLVMValueRef, LlvmError> {
         let ty = Type::Struct(struct_id);
         let llvm_type = self.codegen.llvm_type(ty)?;
         // SAFETY: `llvm_type` is this struct's type in this live context.
         let mut value = unsafe { LLVMGetUndef(llvm_type) };
-        for (index, &field) in fields.iter().enumerate() {
+        // Initializers run in the order they were written; each lands in its
+        // declared slot.
+        for slot in order.sequence(fields.len()) {
+            let index = slot as usize;
+            let field = fields[index];
             let mut lowered = self.lower_expr(field)?;
             if self.c_storage_slot(ty, index)? && self.type_of(field) != Type::CBlock {
                 lowered = self.call(

@@ -90,7 +90,13 @@ impl ErasedTypeId {
             Type::Struct(id) => (kind::STRUCT << 32) | u64::from(id.index()),
             Type::Array(id) => (kind::ARRAY << 32) | u64::from(id.index()),
             Type::Enum(id) => (kind::ENUM << 32) | u64::from(id.index()),
+            // A distinct type never reaches here: `kira-ir` rewrites one to its
+            // representation before a backend sees the program, so what asks
+            // for an erased id is always the scalar underneath. Answering
+            // `None` rather than guessing a kind keeps a lowering that skipped
+            // that step a typed compile error instead of a mistagged box.
             Type::Void
+            | Type::Distinct(_)
             | Type::Error
             | Type::CString
             | Type::CBlock

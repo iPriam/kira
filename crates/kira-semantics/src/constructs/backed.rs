@@ -29,7 +29,12 @@ impl Analyzer<'_> {
             return;
         };
         let name = self.interner.resolve(declaration.name).to_owned();
-        let family_name = self.interner.resolve(*family).to_owned();
+        let written_family = self.interner.resolve(*family).to_owned();
+        // The family is named as written; it is filed under its declaring
+        // package, so the key is what every table below is asked with.
+        let family_name = self
+            .visible_family_key(&written_family)
+            .unwrap_or(written_family);
         let source = self.source;
 
         let mut fields = Vec::new();
@@ -124,7 +129,10 @@ impl Analyzer<'_> {
         // conformance engine reads it from here rather than from the finished
         // struct.
         let members = seen.clone();
-        let family_surface = self.construct_families.get(&family_name).map(|info| {
+        let family_surface = self
+            .visible_family_key(&family_name)
+            .and_then(|key| self.construct_families.get(&key))
+            .map(|info| {
             // A uniform `extend` modifier has one shared body and is never
             // implemented per variant, so it is not part of the conformance
             // surface a backed declaration must satisfy.

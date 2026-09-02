@@ -190,9 +190,10 @@ fn adjacent(file: &Lexed<'_>, name: usize) -> bool {
 
 /// Whether a statement begins at `index`.
 ///
-/// Kira separates statements with `;` or a newline, so a call that opens a
-/// line, follows a `;`, or opens a block is the whole statement; anything else
-/// is part of a larger expression.
+/// Newlines are whitespace to the parser, which delimits statements
+/// structurally; this token-level approximation treats a call that opens a
+/// line or follows a brace as the whole statement, and anything else as part
+/// of a larger expression.
 fn starts_a_statement(file: &Lexed<'_>, index: usize) -> bool {
     if index == 0 {
         return true;
@@ -202,7 +203,7 @@ fn starts_a_statement(file: &Lexed<'_>, index: usize) -> bool {
     }
     matches!(
         file.kind(index - 1),
-        TokenKind::LBrace | TokenKind::RBrace | TokenKind::Semicolon
+        TokenKind::LBrace | TokenKind::RBrace
     )
 }
 
@@ -220,7 +221,7 @@ fn statement_start(file: &Lexed<'_>, index: usize) -> usize {
         }
         let previous = at - 1;
         match file.kind(previous) {
-            TokenKind::LBrace | TokenKind::RBrace | TokenKind::Semicolon => return at,
+            TokenKind::LBrace | TokenKind::RBrace => return at,
             TokenKind::RParen | TokenKind::RBracket => match file.match_open(previous) {
                 Some(open) => at = open,
                 None => return at,

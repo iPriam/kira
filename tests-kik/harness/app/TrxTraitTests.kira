@@ -201,7 +201,7 @@ construct TrxARequirementIsCalledDirectly() extends Test {
         let leaf = TrxLeaf(n: 6)
         return leaf.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct TrxAEnumConformerEntersTheExistential() extends Test {
@@ -210,7 +210,7 @@ construct TrxAEnumConformerEntersTheExistential() extends Test {
         let erased: TrxScored = color
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 construct TrxAIntConformerEntersTheExistential() extends Test {
@@ -218,7 +218,7 @@ construct TrxAIntConformerEntersTheExistential() extends Test {
         let erased: TrxScored = 1
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
 }
 
 construct TrxAFloatConformerEntersTheExistential() extends Test {
@@ -226,7 +226,7 @@ construct TrxAFloatConformerEntersTheExistential() extends Test {
         let erased: TrxScored = 1.0
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(23) return e }
 }
 
 construct TrxABoolConformerEntersTheExistential() extends Test {
@@ -234,7 +234,7 @@ construct TrxABoolConformerEntersTheExistential() extends Test {
         let erased: TrxScored = true
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct TrxAStringConformerEntersTheExistential() extends Test {
@@ -242,7 +242,7 @@ construct TrxAStringConformerEntersTheExistential() extends Test {
         let erased: TrxScored = "value"
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
 }
 
 construct TrxAArrayConformerEntersTheExistential() extends Test {
@@ -252,7 +252,7 @@ construct TrxAArrayConformerEntersTheExistential() extends Test {
         let erased: TrxScored = move values
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(26) return e }
 }
 
 construct TrxAFixedWidthConformerKeepsItsSpelling() extends Test {
@@ -261,17 +261,17 @@ construct TrxAFixedWidthConformerKeepsItsSpelling() extends Test {
         let erased: TrxScored = value
         return erased.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(27) return e }
 }
 
 construct TrxAAliasConformerUsesTheResolvedIdentity() extends Test {
-    test { let value: U16 = 1; let erased: TrxScored = value; return erased.score() }
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    test { let value: U16 = 1 let erased: TrxScored = value return erased.score() }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 
 construct TrxAGenericEnumInstantiationConforms() extends Test {
-    test { let value: TrxBox<Int> = .Value(1); let erased: TrxScored = value; return erased.score() }
-    expect { let e: Result<Int, TestFailure> = .Ok(29); return e }
+    test { let value: TrxBox<Int> = .Value(1) let erased: TrxScored = value return erased.score() }
+    expect { let e: Result<Any, TestFailure> = .Ok(29) return e }
 }
 
 construct TrxADefaultIsInheritedAndCallsTheRequirement() extends Test {
@@ -279,7 +279,7 @@ construct TrxADefaultIsInheritedAndCallsTheRequirement() extends Test {
         let leaf = TrxLeaf(n: 6)
         return leaf.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct TrxADefaultTheTypeWroteWins() extends Test {
@@ -287,7 +287,7 @@ construct TrxADefaultTheTypeWroteWins() extends Test {
         let triple = TrxTriple(n: 5)
         return triple.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct TrxADefaultReturningTextIsInherited() extends Test {
@@ -295,7 +295,7 @@ construct TrxADefaultReturningTextIsInherited() extends Test {
         let triple = TrxTriple(n: 5)
         return triple.label()
     }
-    expect { let e: Result<String, TestFailure> = .Ok("scored"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("scored") return e }
 }
 
 construct TrxARetroactiveImplementationIsAnOrdinaryMethod() extends Test {
@@ -303,7 +303,7 @@ construct TrxARetroactiveImplementationIsAnOrdinaryMethod() extends Test {
         let late = TrxLate(base: 3)
         return late.score() + late.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(90); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(90) return e }
 }
 
 construct TrxAMarkerTraitAddsNoMembers() extends Test {
@@ -311,7 +311,7 @@ construct TrxAMarkerTraitAddsNoMembers() extends Test {
         let leaf = TrxLeaf(n: 1)
         return leaf.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct TrxAClassKeepsThePromise() extends Test {
@@ -319,7 +319,7 @@ construct TrxAClassKeepsThePromise() extends Test {
         let base = TrxBase()
         return base.score() + base.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct TrxASubclassOverrideWinsThroughTheDefault() extends Test {
@@ -327,7 +327,7 @@ construct TrxASubclassOverrideWinsThroughTheDefault() extends Test {
         let derived = TrxDerived()
         return derived.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(800); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(800) return e }
 }
 
 construct TrxAConstructBackedDeclarationKeepsThePromise() extends Test {
@@ -335,7 +335,7 @@ construct TrxAConstructBackedDeclarationKeepsThePromise() extends Test {
         let square = TrxSquare(edge: 3)
         return square.doubled() + square.sides()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 
 construct TrxACopyableClaimLeavesTheTypeCopying() extends Test {
@@ -344,7 +344,7 @@ construct TrxACopyableClaimLeavesTheTypeCopying() extends Test {
         let b = a
         return a.x + b.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct TrxABorrowedReceiverLeavesTheValueUsable() extends Test {
@@ -352,7 +352,7 @@ construct TrxABorrowedReceiverLeavesTheValueUsable() extends Test {
         let leaf = TrxLeaf(n: 2)
         return trxSum(leaf) + leaf.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct TrxAMutableReceiverWritesBackToTheCaller() extends Test {
@@ -362,7 +362,7 @@ construct TrxAMutableReceiverWritesBackToTheCaller() extends Test {
         counter.bump(by: 2)
         return counter.ticks
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct TrxAMutableTraitExistentialWritesBackToTheCaller() extends Test {
@@ -372,7 +372,7 @@ construct TrxAMutableTraitExistentialWritesBackToTheCaller() extends Test {
         counter.bump(by: 2)
         return counter.value()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // Churn: a heap-owning conforming type built and released in a loop, so a
@@ -395,7 +395,7 @@ construct TrxAnInheritedDefaultOnAHeapOwningTypeChurnsClean() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4000) return e }
 }
 
 // Supertraits: `trait Ord: Eq { … }` states that conforming to `TrxOrdered`
@@ -457,7 +457,7 @@ construct TrxADefaultCallsAcrossToASupertraitMember() extends Test {
         }
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct TrxASupertraitDefaultRanksAcrossBothMembers() extends Test {
@@ -465,7 +465,7 @@ construct TrxASupertraitDefaultRanksAcrossBothMembers() extends Test {
         let mark = TrxMark(n: 4)
         return mark.rank(9) * 100 + mark.rank(4) * 10 + mark.rank(1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct TrxARetroactiveSupertraitConformanceIsEnough() extends Test {
@@ -473,7 +473,7 @@ construct TrxARetroactiveSupertraitConformanceIsEnough() extends Test {
         let mark = TrxLateMark(n: 3)
         return mark.rank(7) * 10 + mark.rank(6)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // `Send` and `Sync` are compiler-known markers derived from a type's members,
@@ -515,7 +515,7 @@ construct TrxAMarkerClaimLeavesAHeapOwningTypeAlone() extends Test {
         let parcel = TrxParcel(label: "ab", weights: [3, 4, 5])
         return parcel.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct TrxATraitRequiringSendIsKeptByTheDerivedFact() extends Test {
@@ -523,7 +523,7 @@ construct TrxATraitRequiringSendIsKeptByTheDerivedFact() extends Test {
         let box = TrxCrate(id: 7)
         return box.ferry()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 // A declaration that never writes the trait in its own head still keeps it,
@@ -568,7 +568,7 @@ construct TrxAFamilyClaimBindsEveryDeclarationBackedByIt() extends Test {
         let hex = TrxHex(edge: 2)
         return hex.doubled() + hex.sides()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct TrxADeclarationMayAlsoWriteTheClaimItsFamilyMade() extends Test {
@@ -576,7 +576,7 @@ construct TrxADeclarationMayAlsoWriteTheClaimItsFamilyMade() extends Test {
         let square = TrxSquare(edge: 2)
         return square.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 construct TrxAFamilyMayAnswerTheTraitForEveryDeclaration() extends Test {
@@ -584,24 +584,24 @@ construct TrxAFamilyMayAnswerTheTraitForEveryDeclaration() extends Test {
         let bar = TrxSidebar(width: 3)
         return bar.shout()
     }
-    expect { let e: Result<String, TestFailure> = .Ok("pane!"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("pane!") return e }
 }
 
 function trxSection() -> Int {
     var checksum = 0
     checksum = checksum + TrxLeaf(n: 6).doubled()
-    checksum = checksum * 31 + TrxTriple(n: 5).doubled()
-    checksum = checksum * 31 + TrxLate(base: 3).doubled()
-    checksum = checksum * 31 + TrxDerived().doubled()
-    checksum = checksum * 31 + TrxSquare(edge: 3).doubled()
-    checksum = checksum * 31 + TrxNamed(name: "abcd").doubled()
-    checksum = checksum * 31 + TrxMark(n: 4).rank(9)
-    checksum = checksum * 31 + TrxMark(n: 4).rank(4)
-    checksum = checksum * 31 + TrxLateMark(n: 3).rank(6)
-    checksum = checksum * 31 + TrxParcel(label: "ab", weights: [3, 4, 5]).total()
-    checksum = checksum * 31 + TrxCrate(id: 7).ferry()
-    checksum = checksum * 31 + TrxHex(edge: 2).doubled()
-    checksum = checksum * 31 + TrxSidebar(width: 3).shout().count
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxTriple(n: 5).doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxLate(base: 3).doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxDerived().doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxSquare(edge: 3).doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxNamed(name: "abcd").doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxMark(n: 4).rank(9))
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxMark(n: 4).rank(4))
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxLateMark(n: 3).rank(6))
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxParcel(label: "ab", weights: [3, 4, 5]).total())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxCrate(id: 7).ferry())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxHex(edge: 2).doubled())
+    checksum = wrappingAdd(wrappingMul(checksum, 31), TrxSidebar(width: 3).shout().count)
     return checksum
 }
 

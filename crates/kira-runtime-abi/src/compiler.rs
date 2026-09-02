@@ -90,6 +90,12 @@ pub fn perform(request: &CheckRequest) -> Result<Vec<CheckDiagnostic>, CompilerE
 pub enum CompilerOp {
     /// Check a package set, answering with its diagnostics.
     CheckPackages = 0,
+    /// Check the package at a path: the frontend and nothing after it.
+    CheckPath = 1,
+    /// Build the package at a path: the frontend, then the backend.
+    BuildPath = 2,
+    /// Build the package at a path and run what was built.
+    RunPath = 3,
 }
 
 impl CompilerOp {
@@ -98,7 +104,12 @@ impl CompilerOp {
     /// The one place the set is written down: decoding indexes this rather than
     /// repeating a match, so a new operation cannot be added to the enum and
     /// forgotten by the decoder.
-    pub const ALL: [CompilerOp; 1] = [CompilerOp::CheckPackages];
+    pub const ALL: [CompilerOp; 4] = [
+        CompilerOp::CheckPackages,
+        CompilerOp::CheckPath,
+        CompilerOp::BuildPath,
+        CompilerOp::RunPath,
+    ];
 
     /// The wire byte this operation travels as.
     pub const fn as_byte(self) -> u8 {
@@ -111,9 +122,17 @@ impl CompilerOp {
     }
 
     /// How many operands this operation pops, in source order.
+    /// Every operation takes exactly one `[String]`: the request, in the layout
+    /// its own type spells. Uniform on purpose — an operation that took a
+    /// second operand would need its own lowering, its own stack discipline,
+    /// and its own native signature, and there is nothing an extra operand
+    /// buys that a field of the request does not.
     pub const fn arity(self) -> usize {
         match self {
-            CompilerOp::CheckPackages => 1,
+            CompilerOp::CheckPackages
+            | CompilerOp::CheckPath
+            | CompilerOp::BuildPath
+            | CompilerOp::RunPath => 1,
         }
     }
 
@@ -121,6 +140,9 @@ impl CompilerOp {
     pub const fn intrinsic_name(self) -> &'static str {
         match self {
             CompilerOp::CheckPackages => "kcCheckPackages",
+            CompilerOp::CheckPath => "kcCheck",
+            CompilerOp::BuildPath => "kcBuild",
+            CompilerOp::RunPath => "kcRun",
         }
     }
 
@@ -131,6 +153,9 @@ impl CompilerOp {
     pub const fn runtime_symbol(self) -> &'static str {
         match self {
             CompilerOp::CheckPackages => "kira_rt_compiler_check_packages",
+            CompilerOp::CheckPath => "kira_rt_compiler_check_path",
+            CompilerOp::BuildPath => "kira_rt_compiler_build_path",
+            CompilerOp::RunPath => "kira_rt_compiler_run_path",
         }
     }
 
@@ -402,6 +427,9 @@ mod tests {
     #[test]
     fn compiler_op_wire_bytes_are_pinned() {
         assert_eq!(CompilerOp::CheckPackages.as_byte(), 0);
+        assert_eq!(CompilerOp::CheckPath.as_byte(), 1);
+        assert_eq!(CompilerOp::BuildPath.as_byte(), 2);
+        assert_eq!(CompilerOp::RunPath.as_byte(), 3);
     }
 
     #[test]
@@ -417,7 +445,7 @@ mod tests {
 
     #[test]
     fn an_unknown_byte_names_no_operation() {
-        assert_eq!(CompilerOp::from_byte(1), None);
+        assert_eq!(CompilerOp::from_byte(4), None);
         assert_eq!(CompilerOp::from_byte(255), None);
         assert_eq!(CompilerOp::from_intrinsic_name("kcNotAnOperation"), None);
     }

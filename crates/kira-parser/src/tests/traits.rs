@@ -44,8 +44,8 @@ fn a_marker_trait_declares_no_members() {
 }
 
 #[test]
-fn a_trailing_semicolon_ends_a_requirement() {
-    let result = parse_text("trait Hashable {\n    function hash(borrow self) -> Int;\n}\n");
+fn a_requirement_ends_with_its_signature() {
+    let result = parse_text("trait Hashable {\n    function hash(borrow self) -> Int\n}\n");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert_eq!(only_trait(&result).members.len(), 1);
 }

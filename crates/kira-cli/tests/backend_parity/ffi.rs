@@ -539,6 +539,38 @@ fn every_backend_agrees_on_a_handle_struct_round_trip() {
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
 
+/// A `distinct` type crosses the seam as the scalar it is, on every backend.
+///
+/// The C function is `unsigned int ffi_id_u32(unsigned int)`, declared twice in
+/// one program: once with `TabId` parameter and result, once with `U32`. Both
+/// declarations bind the same symbol through the same `(u32) -> u32` wire
+/// signature, so the two calls must print the same number — which is the ABI
+/// transparency claim made where it can actually fail, in a real call to a real
+/// C symbol on the native and hybrid engines rather than in an assertion about
+/// a type table.
+#[test]
+fn every_backend_agrees_on_a_distinct_type_crossing_the_seam() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_distinct.kira"));
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "4000000000\n4000000000\ntrue\n",
+            "the {backend} backend disagreed on a distinct type at the C seam\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
 /// A `CString` member and a struct handed to C by address, on every backend.
 ///
 /// The storage question both raise is the same one, and it has one answer: a
@@ -832,8 +864,8 @@ fn every_backend_agrees_on_enums_and_arrays_named_in_a_signature() {
 fn an_array_argument_is_a_copy_out_not_a_shared_buffer() {
     let entry = write_ffi_package(
         r#"
-@FFI.Extern { library: ffifixture; symbol: ffi_fill_floats; abi: c; }
-function ffiFillFloats(values: [F32], count: I32): Void;
+@FFI.Extern { library: ffifixture, symbol: ffi_fill_floats, abi: c }
+function ffiFillFloats(values: [F32], count: I32): Void
 
 @Main
 function main() {

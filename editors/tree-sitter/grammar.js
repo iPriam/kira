@@ -40,11 +40,12 @@ const PREC = {
   bitAnd: 6,
   equality: 7,
   comparison: 8,
-  shift: 9,
-  additive: 10,
-  multiplicative: 11,
-  unary: 12,
-  postfix: 13,
+  typeOperator: 9,
+  shift: 10,
+  additive: 11,
+  multiplicative: 12,
+  unary: 13,
+  postfix: 14,
 };
 
 /**
@@ -71,9 +72,10 @@ function commaSep1Trailing(rule) {
 module.exports = grammar({
   name: 'kira',
 
-  // The lexer skips ASCII whitespace and `//` comments and emits no newline
-  // token, so the language is fully newline-insensitive.
-  extras: ($) => [/\s/, $.comment],
+  // The lexer skips ASCII whitespace and both comment forms and emits no
+  // newline token, so the language is fully newline-insensitive. `;` is not a
+  // token of the language (KLEX005).
+  extras: ($) => [/\s/, $.comment, $.block_comment],
 
   // Keywords are carved out of `identifier`, exactly as the lexer classifies a
   // lexed identifier through `keyword_from_text`.
@@ -87,6 +89,11 @@ module.exports = grammar({
     [$.construction_expression],
     [$._named_fills],
     [$._operand_construction],
+    // `a as T < b`: the `<` after the type may open generic arguments or be a
+    // comparison; the closing `>` settles it.
+    [$._type, $.generic_type],
+    [$._type_path, $.qualified_type_identifier],
+    [$.qualified_type_identifier],
     // A brace after a name may close a construction; a name alone is a read.
     [$._expression, $._construction_target],
     [$._expression, $._callable],
@@ -116,6 +123,7 @@ module.exports = grammar({
         $.family_conformance_declaration,
         $.extend_declaration,
         $.type_alias_declaration,
+        $.distinct_declaration,
         $.package_declaration,
         $.macro_declaration,
         $.comptime_macro_declaration,
@@ -172,9 +180,11 @@ module.exports = grammar({
 
     _attribute_token: (_$) => token(prec(-1, /[^()"]+/)),
 
-    // `{ library: ffimath; symbol: ffi_add; abi: c; retains: desc; }` — the
-    // `@FFI.*` and `@Export` block. A `retains:` field repeats.
-    attribute_block: ($) => seq('{', repeat($.attribute_field), '}'),
+    // `{ library: ffimath, symbol: ffi_add, abi: c, retains: desc }` — the
+    // `@FFI.*` and `@Export` block. Fields are comma-separated with a
+    // trailing comma allowed; a `retains:` field repeats.
+    attribute_block: ($) =>
+      seq('{', commaSepTrailing($.attribute_field), '}'),
 
     // The value grammar follows the key, exactly as the parser dispatches it:
     // `target`/`element`/`result` name a type, `params` a bracketed type list,
@@ -204,7 +214,6 @@ module.exports = grammar({
             ),
           ),
         ),
-        optional(';'),
       ),
 
     attribute_type_list: ($) => seq('[', commaSepTrailing($._type), ']'),
@@ -212,8 +221,8 @@ module.exports = grammar({
     // ----- functions -----------------------------------------------------
 
     // A bodyless function is a trait requirement, an `@Required` construct
-    // member, or an `@FFI.*` declaration — which ends with `;`. Every other
-    // function carries a block.
+    // member, or an `@FFI.*` declaration — its declaration ends with the
+    // signature. Every other function carries a block.
     function_definition: ($) =>
       prec.right(
         seq(
@@ -224,7 +233,7 @@ module.exports = grammar({
           optional(field('type_parameters', $.type_parameters)),
           field('parameters', $.parameters),
           optional(field('return_type', $.return_type)),
-          optional(choice(field('body', $.block), ';')),
+          optional(field('body', $.block)),
         ),
       ),
 
@@ -325,7 +334,7 @@ module.exports = grammar({
         field('body', $.struct_body),
       ),
 
-    struct_body: ($) => seq('{', repeat(choice($._aggregate_member, ';')), '}'),
+    struct_body: ($) => seq('{', repeat($._aggregate_member), '}'),
 
     // `class Name[: Trait, …] [extends Parent, …] { <member>* }`. Traits first,
     // parents second.
@@ -343,7 +352,7 @@ module.exports = grammar({
     class_body: ($) =>
       seq(
         '{',
-        repeat(choice($._aggregate_member, $.override_member, ';')),
+        repeat(choice($._aggregate_member, $.override_member)),
         '}',
       ),
 
@@ -423,7 +432,7 @@ module.exports = grammar({
         repeat(seq('+', alias($.identifier, $.type_identifier))),
       ),
 
-    enum_body: ($) => seq('{', repeat(choice($.enum_variant, ';')), '}'),
+    enum_body: ($) => seq('{', repeat($.enum_variant), '}'),
 
     // `Empty`, `Text(String)`, and `InvalidFormat: String = "…"`.
     enum_variant: ($) =>
@@ -445,6 +454,18 @@ module.exports = grammar({
     type_alias_declaration: ($) =>
       seq('type', field('name', $.identifier), '=', field('target', $._type)),
 
+    // `distinct Name = Representation`. The same shape as an alias and the
+    // opposite meaning: an alias is a second spelling for one type, while this
+    // is a second type over one representation.
+    distinct_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        'distinct',
+        field('name', $.identifier),
+        '=',
+        field('representation', $._type),
+      ),
+
     // ----- traits --------------------------------------------------------
 
     // `trait Name { … }`. A member with no body is a requirement; one with a
@@ -458,7 +479,7 @@ module.exports = grammar({
         field('body', $.trait_body),
       ),
 
-    trait_body: ($) => seq('{', repeat(choice($.function_definition, ';')), '}'),
+    trait_body: ($) => seq('{', repeat($.function_definition), '}'),
 
     // `extend Family { … }` is the fluent modifier block; `extend T: Trait { … }`
     // is the impl block.
@@ -471,7 +492,7 @@ module.exports = grammar({
       ),
 
     extend_body: ($) =>
-      seq('{', repeat(choice($.function_definition, ';')), '}'),
+      seq('{', repeat($.function_definition), '}'),
 
     // ----- constructs ----------------------------------------------------
 
@@ -501,7 +522,7 @@ module.exports = grammar({
       ),
 
     construct_body: ($) =>
-      seq('{', repeat(choice($._construct_member, ';')), '}'),
+      seq('{', repeat($._construct_member), '}'),
 
     _construct_member: ($) =>
       choice(
@@ -546,11 +567,11 @@ module.exports = grammar({
     // `requires { function f(…) -> T … }` — the section spelling of
     // `@Required function`.
     requires_section: ($) =>
-      seq('requires', '{', repeat(choice($.function_definition, ';')), '}'),
+      seq('requires', '{', repeat($.function_definition), '}'),
 
     // `lifecycle { onAppear() { … } }` — the points a runtime drives.
     lifecycle_section: ($) =>
-      seq('lifecycle', '{', repeat(choice($.lifecycle_hook, ';')), '}'),
+      seq('lifecycle', '{', repeat($.lifecycle_hook), '}'),
 
     lifecycle_hook: ($) =>
       seq(
@@ -597,7 +618,7 @@ module.exports = grammar({
       ),
 
     comptime_macro_body: ($) =>
-      seq('{', repeat(choice($.macro_section, $.expand_function, ';')), '}'),
+      seq('{', repeat(choice($.macro_section, $.expand_function)), '}'),
 
     // `kind { derive }`, `appliesTo { struct, enum }`, `replace { true }`. The
     // separator is a comma or nothing at all.
@@ -670,8 +691,8 @@ module.exports = grammar({
 
     // ----- statements ----------------------------------------------------
 
-    // A block eats arbitrary runs of semicolons, so `;` is never part of a
-    // statement node and `{ ;;; }` is legal.
+    // Statements are delimited structurally: nothing separates one from the
+    // next, and newlines are whitespace.
     //
     // The precedence is what makes a `{` where a body is expected open a block
     // rather than the content of a construction the condition would then have
@@ -679,7 +700,7 @@ module.exports = grammar({
     block: ($) =>
       prec.dynamic(
         1,
-        prec(1, seq('{', repeat(choice($._statement, ';')), '}')),
+        prec(1, seq('{', repeat($._statement), '}')),
       ),
 
     _statement: ($) =>
@@ -781,7 +802,7 @@ module.exports = grammar({
       seq(
         field('pattern', $.variant_pattern),
         '->',
-        field('body', choice($.block, seq($._statement, optional(';')))),
+        field('body', choice($.block, $._statement)),
       ),
 
     variant_pattern: ($) =>
@@ -813,6 +834,8 @@ module.exports = grammar({
       choice(
         $.conditional_expression,
         $.binary_expression,
+        $.type_test_expression,
+        $.type_cast_expression,
         $.unary_expression,
         $.ownership_expression,
         $.try_expression,
@@ -857,6 +880,21 @@ module.exports = grammar({
           ':',
           field('alternative', $._expression),
         ),
+      ),
+
+    // `value is Type` and `value as Type`: a type on the right, binding
+    // tighter than a comparison and looser than a shift, as the parser's
+    // `TYPE_OPERATOR_BP` does.
+    type_test_expression: ($) =>
+      prec.left(
+        PREC.typeOperator,
+        seq(field('value', $._expression), 'is', field('type', $._type)),
+      ),
+
+    type_cast_expression: ($) =>
+      prec.left(
+        PREC.typeOperator,
+        seq(field('value', $._expression), 'as', field('type', $._type)),
       ),
 
     // The ladder is C's, rung for rung: the bitwise operators bind looser than
@@ -1077,7 +1115,7 @@ module.exports = grammar({
       ),
 
     content_block: ($) =>
-      seq('{', repeat(choice($._brace_item, ',', ';')), '}'),
+      seq('{', repeat(choice($._brace_item, ',')), '}'),
 
     _brace_item: ($) => choice($.field_initializer, $.content_for, $._statement),
 
@@ -1112,14 +1150,14 @@ module.exports = grammar({
         '{',
         optional(field('parameters', $.closure_parameters)),
         'in',
-        repeat(choice($._statement, ';')),
+        repeat($._statement),
         '}',
       ),
 
     closure_parameters: ($) => commaSep1Trailing($.identifier),
 
     array_literal: ($) =>
-      seq('[', repeat(seq($._expression, optional(','))), ']'),
+      seq('[', commaSepTrailing($._expression), ']'),
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
@@ -1150,11 +1188,17 @@ module.exports = grammar({
 
     _string_content: (_$) => token.immediate(prec(1, /[^"\\\n]+/)),
 
-    // Backslash + ANY single character: only `\n \t \r \0 \" \\` decode
-    // specially, and every other escape decodes to the character itself.
-    escape_sequence: (_$) => token.immediate(/\\[\s\S]/),
+    // Exactly the escapes the lexer decodes: `\n \t \r \e \0 \" \\` and a
+    // backslash before a newline (line continuation). Anything else is
+    // KLEX003, so it stays out of the literal here and must ERROR.
+    escape_sequence: (_$) => token.immediate(/\\(?:[ntre0"\\]|\r?\n)/),
 
-    // Line comments only. `/* x */` lexes as Slash, Star, … and must ERROR.
     comment: (_$) => token(seq('//', /[^\n]*/)),
+
+    // `/* … */`, nesting: a `/*` inside opens another comment that its own
+    // `*/` closes. The lexer keeps a depth counter (KLEX004 when the file
+    // ends inside one); the grammar recurses instead.
+    block_comment: ($) =>
+      seq('/*', repeat(choice(/[^*/]+/, $.block_comment, '/', '*')), '*/'),
   },
 });

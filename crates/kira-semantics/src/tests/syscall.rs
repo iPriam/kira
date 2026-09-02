@@ -54,8 +54,8 @@ fn message(text: &str, machine: BuildMachine) -> String {
 
 /// A `write` declaration plus a `@Main` that calls it — the shape every accepted
 /// case below is a variation on.
-const WRITE: &str = "@FFI.Syscall { name: write; }\n\
-     function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;\n\
+const WRITE: &str = "@FFI.Syscall { name: write }\n\
+     function sysWrite(fd: Int, buffer: CString, count: U64) -> Int\n\
      @Main function main() { let n = sysWrite(1, \"hi\", U64(2)) return }";
 
 /// The same declaration with nothing calling it, for the target refusals.
@@ -63,8 +63,8 @@ const WRITE: &str = "@FFI.Syscall { name: write; }\n\
 /// A refused declaration is never recorded, so a call to one is also an undefined
 /// function — a true second diagnostic, and one that would hide whether the
 /// target rule reported once or twice.
-const WRITE_UNCALLED: &str = "@FFI.Syscall { name: write; }\n\
-     function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;\n\
+const WRITE_UNCALLED: &str = "@FFI.Syscall { name: write }\n\
+     function sysWrite(fd: Int, buffer: CString, count: U64) -> Int\n\
      @Main function main() { return }";
 
 #[test]
@@ -102,11 +102,11 @@ fn an_accepted_syscall_is_recorded_as_entering_the_kernel() {
 /// range: none at all, and the full six.
 #[test]
 fn a_call_with_no_arguments_and_one_with_six_are_both_accepted() {
-    let text = "@FFI.Syscall { name: sync; }\n\
-         function sysSync();\n\
-         @FFI.Syscall { name: mount; }\n\
+    let text = "@FFI.Syscall { name: sync }\n\
+         function sysSync()\n\
+         @FFI.Syscall { name: mount }\n\
          function sysMount(source: CString, target: CString, kind: CString, flags: U64, \
-         data: RawPtr, extra: Int) -> Int;\n\
+         data: RawPtr, extra: Int) -> Int\n\
          @Main function main() { sysSync() return }";
     assert!(codes(text, linux_aarch64()).is_empty(), "{text}");
 }
@@ -116,8 +116,8 @@ fn a_call_with_no_arguments_and_one_with_six_are_both_accepted() {
 /// number that means something else in the kernel's table.
 #[test]
 fn a_syscall_name_the_compiler_has_no_number_for_is_refused() {
-    let text = "@FFI.Syscall { name: openat; }\n\
-         function sysOpenat(dirfd: Int, path: CString, flags: Int) -> Int;\n\
+    let text = "@FFI.Syscall { name: openat }\n\
+         function sysOpenat(dirfd: Int, path: CString, flags: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM279"]);
     let reported = message(text, linux_aarch64());
@@ -136,8 +136,8 @@ fn a_syscall_name_the_compiler_has_no_number_for_is_refused() {
 /// makes a declaration something a reader can look up.
 #[test]
 fn the_kira_spelling_of_a_kernel_name_is_not_accepted_for_it() {
-    let text = "@FFI.Syscall { name: exitGroup; }\n\
-         function sysExit(status: Int);\n\
+    let text = "@FFI.Syscall { name: exitGroup }\n\
+         function sysExit(status: Int)\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM279"]);
 }
@@ -192,8 +192,8 @@ fn the_other_supported_architecture_is_accepted_too() {
 
 #[test]
 fn a_seventh_argument_has_no_register_to_go_in_and_is_refused() {
-    let text = "@FFI.Syscall { name: mount; }\n\
-         function sysMount(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int) -> Int;\n\
+    let text = "@FFI.Syscall { name: mount }\n\
+         function sysMount(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM282"]);
     let reported = message(text, linux_aarch64());
@@ -204,19 +204,19 @@ fn a_seventh_argument_has_no_register_to_go_in_and_is_refused() {
 /// has no single word — so neither is spilled somewhere the kernel will not look.
 #[test]
 fn a_type_that_is_not_a_machine_word_is_refused() {
-    let float = "@FFI.Syscall { name: write; }\n\
-         function sysWrite(fd: Float) -> Int;\n\
+    let float = "@FFI.Syscall { name: write }\n\
+         function sysWrite(fd: Float) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(float, linux_aarch64()), vec!["KSEM283"]);
 
-    let boolean = "@FFI.Syscall { name: write; }\n\
-         function sysWrite(fd: Bool) -> Int;\n\
+    let boolean = "@FFI.Syscall { name: write }\n\
+         function sysWrite(fd: Bool) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(boolean, linux_aarch64()), vec!["KSEM283"]);
 
     let aggregate = "struct Pair { var a: Int\n var b: Int }\n\
-         @FFI.Syscall { name: write; }\n\
-         function sysWrite(pair: Pair) -> Int;\n\
+         @FFI.Syscall { name: write }\n\
+         function sysWrite(pair: Pair) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(aggregate, linux_aarch64()), vec!["KSEM283"]);
 }
@@ -225,8 +225,8 @@ fn a_type_that_is_not_a_machine_word_is_refused() {
 /// not what a register holds; the message names the two things that are.
 #[test]
 fn a_string_argument_is_refused_and_names_what_to_write_instead() {
-    let text = "@FFI.Syscall { name: write; }\n\
-         function sysWrite(fd: Int, buffer: String, count: U64) -> Int;\n\
+    let text = "@FFI.Syscall { name: write }\n\
+         function sysWrite(fd: Int, buffer: String, count: U64) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM283"]);
     let reported = message(text, linux_aarch64());
@@ -238,8 +238,8 @@ fn a_string_argument_is_refused_and_names_what_to_write_instead() {
 /// nothing in that word says it addresses text.
 #[test]
 fn a_cstring_result_is_refused_although_a_cstring_argument_is_not() {
-    let text = "@FFI.Syscall { name: read; }\n\
-         function sysRead(fd: Int, buffer: RawPtr, count: U64) -> CString;\n\
+    let text = "@FFI.Syscall { name: read }\n\
+         function sysRead(fd: Int, buffer: RawPtr, count: U64) -> CString\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM283"]);
 }
@@ -248,8 +248,8 @@ fn a_cstring_result_is_refused_although_a_cstring_argument_is_not() {
 /// value nothing can produce.
 #[test]
 fn a_result_on_a_call_that_never_returns_is_refused() {
-    let text = "@FFI.Syscall { name: exit_group; }\n\
-         function sysExit(status: Int) -> Int;\n\
+    let text = "@FFI.Syscall { name: exit_group }\n\
+         function sysExit(status: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM284"]);
     let reported = message(text, linux_aarch64());
@@ -258,8 +258,8 @@ fn a_result_on_a_call_that_never_returns_is_refused() {
 
 #[test]
 fn the_same_call_declared_without_a_result_is_accepted() {
-    let text = "@FFI.Syscall { name: exit_group; }\n\
-         function sysExit(status: Int);\n\
+    let text = "@FFI.Syscall { name: exit_group }\n\
+         function sysExit(status: Int)\n\
          @Main function main() { sysExit(0) return }";
     assert!(codes(text, linux_aarch64()).is_empty(), "{text}");
 }
@@ -269,8 +269,8 @@ fn the_same_call_declared_without_a_result_is_accepted() {
 /// through libc, and it does not.
 #[test]
 fn a_field_a_system_call_has_no_use_for_is_refused_rather_than_ignored() {
-    let text = "@FFI.Syscall { name: write; library: libc; }\n\
-         function sysWrite(fd: Int) -> Int;\n\
+    let text = "@FFI.Syscall { name: write, library: libc }\n\
+         function sysWrite(fd: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM178"]);
     let reported = message(text, linux_aarch64());
@@ -280,15 +280,15 @@ fn a_field_a_system_call_has_no_use_for_is_refused_rather_than_ignored() {
 #[test]
 fn a_missing_name_field_is_refused() {
     let text = "@FFI.Syscall { }\n\
-         function sysWrite(fd: Int) -> Int;\n\
+         function sysWrite(fd: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM180"]);
 }
 
 #[test]
 fn a_name_field_written_twice_is_refused() {
-    let text = "@FFI.Syscall { name: write; name: read; }\n\
-         function sysWrite(fd: Int) -> Int;\n\
+    let text = "@FFI.Syscall { name: write, name: read }\n\
+         function sysWrite(fd: Int) -> Int\n\
          @Main function main() { return }";
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM179"]);
 }
@@ -298,8 +298,8 @@ fn a_name_field_written_twice_is_refused() {
 /// wrote.
 #[test]
 fn a_syscall_that_is_also_an_entrypoint_or_an_engine_choice_is_refused_by_its_own_name() {
-    let main = "@FFI.Syscall { name: sync; }\n\
-         @Main function sysSync();\n";
+    let main = "@FFI.Syscall { name: sync }\n\
+         @Main function sysSync()\n";
     let reported = machine_diagnostics(main, linux_aarch64());
     assert!(
         reported.iter().any(|d| d.code_text() == Some("KSEM177")
@@ -307,8 +307,8 @@ fn a_syscall_that_is_also_an_entrypoint_or_an_engine_choice_is_refused_by_its_ow
         "{reported:?}"
     );
 
-    let native = "@FFI.Syscall { name: sync; }\n\
-         @Native function sysSync();\n\
+    let native = "@FFI.Syscall { name: sync }\n\
+         @Native function sysSync()\n\
          @Main function main() { return }";
     assert_eq!(codes(native, linux_aarch64()), vec!["KSEM177"]);
     assert!(
@@ -322,8 +322,8 @@ fn a_syscall_that_is_also_an_entrypoint_or_an_engine_choice_is_refused_by_its_ow
 #[test]
 fn a_syscall_name_cannot_repeat_a_function_name() {
     let text = "function sysSync() { return }\n\
-         @FFI.Syscall { name: sync; }\n\
-         function sysSync();\n\
+         @FFI.Syscall { name: sync }\n\
+         function sysSync()\n\
          @Main function main() { return }";
     let reported = machine_diagnostics(text, linux_aarch64());
     assert!(
@@ -339,8 +339,8 @@ fn a_syscall_name_cannot_repeat_a_function_name() {
 /// function rather than a call against a contract nothing checked.
 #[test]
 fn a_refused_declaration_leaves_no_callable_behind() {
-    let text = "@FFI.Syscall { name: openat; }\n\
-         function sysOpenat(path: CString) -> Int;\n\
+    let text = "@FFI.Syscall { name: openat }\n\
+         function sysOpenat(path: CString) -> Int\n\
          @Main function main() { let n = sysOpenat(\"/x\") return }";
     let reported = codes(text, linux_aarch64());
     assert!(reported.contains(&"KSEM279".to_owned()), "{reported:?}");
@@ -351,10 +351,10 @@ fn a_refused_declaration_leaves_no_callable_behind() {
 /// call namespace and a signature check, and neither borrows the other's rules.
 #[test]
 fn an_extern_and_a_syscall_coexist_in_one_program() {
-    let text = "@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }\n\
-         function add(a: I32, b: I32) -> I32;\n\
-         @FFI.Syscall { name: write; }\n\
-         function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;\n\
+    let text = "@FFI.Extern { library: ffimath, symbol: ffi_add, abi: c }\n\
+         function add(a: I32, b: I32) -> I32\n\
+         @FFI.Syscall { name: write }\n\
+         function sysWrite(fd: Int, buffer: CString, count: U64) -> Int\n\
          @Main function main() { let n = sysWrite(1, \"hi\", U64(2)) let s = add(1, 2) return }";
     assert!(codes(text, linux_aarch64()).is_empty(), "{text}");
 }

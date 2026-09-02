@@ -628,7 +628,47 @@ function f() {
       (return_statement))))
 
 ================================================================================
-An array literal's separators are optional
+An array literal's elements are comma-separated, trailing comma allowed
+================================================================================
+
+function f() {
+    let xs = [1, 2, 3]
+    let ys = [3, 5, 7,]
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (return_statement))))
+
+================================================================================
+An array literal without commas is an error
+:error
+================================================================================
+
+function f() {
+    let ys = [3 5 7]
+    return
+}
+
+--------------------------------------------------------------------------------
 ================================================================================
 
 function f() {
@@ -911,3 +951,36 @@ function f() -> Int {
         value: (field_expression
           receiver: (identifier)
           field: (identifier))))))
+
+================================================================================
+`is` and `as` take a type and bind tighter than a comparison
+================================================================================
+
+function f(a: Any) -> Bool {
+    let n = a as Int
+    return a is Int == true
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (type_cast_expression
+          value: (identifier)
+          type: (type_identifier)))
+      (return_statement
+        value: (binary_expression
+          left: (type_test_expression
+            value: (identifier)
+            type: (type_identifier))
+          right: (boolean_literal))))))

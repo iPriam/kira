@@ -14,9 +14,7 @@ use std::process::Command;
 use kira_ir::IrProgram;
 use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{
-    Builtin, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction, HirProgram, HirStmt,
-};
+use kira_semantics_model::hir::{CallableSignature, Builtin, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction, HirProgram, HirStmt,};
 use kira_source::Span;
 
 use kira_native_lib_definition::{
@@ -73,6 +71,8 @@ fn foreign(symbol: &str, params: &[ForeignType], result: ForeignType) -> HirFore
         param_wrappers: params.iter().map(|_| None).collect(),
         result_pointee: None,
         result_wrapper: None,
+        param_distincts: params.iter().map(|_| None).collect(),
+        result_distinct: None,
         name_span: Span::new(0, 0),
     }
 }
@@ -103,6 +103,7 @@ fn fixture_program() -> IrProgram {
         execution: kira_runtime_abi::Execution::Inherited,
         mutates_self: false,
         name_span: Span::new(0, 4),
+        signature: CallableSignature::synthesized(&[], Type::Void),
     });
     program.main = Some(kira_semantics_model::hir::FuncId(0));
     kira_ir::lower(&program)

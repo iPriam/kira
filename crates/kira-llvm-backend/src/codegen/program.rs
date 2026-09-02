@@ -84,7 +84,6 @@ impl<'a> Codegen<'a> {
             target_data,
             element_leaves: HashMap::new(),
             scratch_slots: glue::ScratchSlots::new(),
-            widen_leaves: HashMap::new(),
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),
             pointer_width,
@@ -353,7 +352,7 @@ impl<'a> Codegen<'a> {
         ) || function
             .locals
             .get(slot as usize)
-            .is_some_and(|&ty| self.program.types.runs_user_drop(ty))
+            .is_some_and(|&ty| self.program.types.takes_on_read(ty))
     }
 
     pub(super) fn llvm_type(&self, ty: Type) -> Result<LLVMTypeRef, LlvmError> {
@@ -401,6 +400,17 @@ impl<'a> Codegen<'a> {
             // error type here means a broken frontend contract, not user input.
             Type::Error => {
                 return Err(LlvmError::internal("a program that failed to type-check"));
+            }
+            // A `distinct` type is the same broken contract in a different
+            // place: `kira-ir` rewrites every one to the scalar it is before a
+            // backend sees the program, so its representation *is* what reaches
+            // here. Refusing rather than looking the representation up keeps
+            // the layout guarantee one fact in one pass instead of two that
+            // could drift.
+            Type::Distinct(_) => {
+                return Err(LlvmError::internal(
+                    "a distinct type that lowering did not erase",
+                ));
             }
         })
     }

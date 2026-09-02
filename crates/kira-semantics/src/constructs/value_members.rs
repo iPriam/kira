@@ -10,9 +10,7 @@
 //! Split out of that module on the file-size ladder; the two share the same
 //! shape (reserve on first use, fill once at the end) and nothing else.
 
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,};
 use kira_semantics_model::{EnumId, Type};
 use kira_source::Span;
 
@@ -175,6 +173,7 @@ impl Analyzer<'_> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], result),
         }
     }
 
@@ -208,7 +207,7 @@ impl Analyzer<'_> {
         // A computed member wins over a stored field of the same name: it is
         // the member the declaration wrote, and the two never coexist (a
         // duplicate member is `KSEM202`).
-        let owner = self.program.types.type_name(concrete_ty);
+        let owner = self.member_owner_name(concrete_ty);
         let value = match self.lookup_function(&format!("{owner}.{member}")) {
             // Typed with what the member actually presents, which a child family
             // may have made more specific than this family promised; the arm

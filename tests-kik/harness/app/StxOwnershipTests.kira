@@ -116,14 +116,14 @@ function stxoBuildBag(n: Int) -> StxoBag {
 
 construct StxoMoveVec() extends Test {
     // consume {1,2,3} → 6
-    test { let v = StxoVec { x: 1, y: 2, z: 3 }; return stxoConsumeVec(move v) }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    test { let v = StxoVec { x: 1, y: 2, z: 3 } return stxoConsumeVec(move v) }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StxoMoveVecVar() extends Test {
     // consume from var binding
-    test { var v = StxoVec { x: 10, y: 20, z: 30 }; return stxoConsumeVec(move v) }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    test { var v = StxoVec { x: 10, y: 20, z: 30 } return stxoConsumeVec(move v) }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct StxoMoveBox() extends Test {
@@ -136,7 +136,7 @@ construct StxoMoveBox() extends Test {
         }
         return stxoConsumeBox(move b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StxoMoveBoxLarge() extends Test {
@@ -149,19 +149,19 @@ construct StxoMoveBoxLarge() extends Test {
         }
         return stxoConsumeBox(move b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(115); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(115) return e }
 }
 
 construct StxoMoveBag0() extends Test {
     // stxoBuildBag(0): label=0, items=[], consume→0
-    test { let b = stxoBuildBag(0); return stxoConsumeBag(move b) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    test { let b = stxoBuildBag(0) return stxoConsumeBag(move b) }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct StxoMoveBag5() extends Test {
     // stxoBuildBag(5): label=5, items=[1..5], consume=5+15=20
-    test { let b = stxoBuildBag(5); return stxoConsumeBag(move b) }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    test { let b = stxoBuildBag(5) return stxoConsumeBag(move b) }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct StxoMoveArr3() extends Test {
@@ -173,7 +173,7 @@ construct StxoMoveArr3() extends Test {
         xs.append(30)
         return stxoConsumeArr(move xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct StxoMovePipeAdd() extends Test {
@@ -183,7 +183,7 @@ construct StxoMovePipeAdd() extends Test {
         let w = stxoPipeAdd(move v, 5)
         return stxoConsumeVec(move w)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 construct StxoMovePipeMul() extends Test {
@@ -193,7 +193,7 @@ construct StxoMovePipeMul() extends Test {
         let w = stxoPipeMul(move v, 10)
         return stxoConsumeVec(move w)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(90); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(90) return e }
 }
 
 construct StxoMoveVecLoop() extends Test {
@@ -208,7 +208,7 @@ construct StxoMoveVecLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(135); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(135) return e }
 }
 
 construct StxoMoveBagLoop() extends Test {
@@ -223,7 +223,7 @@ construct StxoMoveBagLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 construct StxoMoveArrLoop() extends Test {
@@ -239,7 +239,7 @@ construct StxoMoveArrLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 construct StxoMoveBoxLoop() extends Test {
@@ -258,7 +258,7 @@ construct StxoMoveBoxLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 construct StxoMovePipeline() extends Test {
@@ -269,7 +269,7 @@ construct StxoMovePipeline() extends Test {
         let x = stxoPipeMul(move w, 2)
         return stxoConsumeVec(move x)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(78); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(78) return e }
 }
 
 construct StxoMoveWrapUnwrap() extends Test {
@@ -279,13 +279,13 @@ construct StxoMoveWrapUnwrap() extends Test {
         let c = stxoWrap(move v, 10)
         return stxoUnwrap(move c)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
 }
 
 construct StxoMoveBag10() extends Test {
     // stxoBuildBag(10): label=10, items=[1..10], consume=10+55=65
-    test { let b = stxoBuildBag(10); return stxoConsumeBag(move b) }
-    expect { let e: Result<Int, TestFailure> = .Ok(65); return e }
+    test { let b = stxoBuildBag(10) return stxoConsumeBag(move b) }
+    expect { let e: Result<Any, TestFailure> = .Ok(65) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,8 +294,8 @@ construct StxoMoveBag10() extends Test {
 
 construct StxoBorrowSum() extends Test {
     // borrow v, get sum=18
-    test { let v = StxoVec { x: 5, y: 6, z: 7 }; return stxoVecSum(v) }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    test { let v = StxoVec { x: 5, y: 6, z: 7 } return stxoVecSum(v) }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 construct StxoBorrowOrigX() extends Test {
@@ -305,7 +305,7 @@ construct StxoBorrowOrigX() extends Test {
         let s = stxoVecSum(v)
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StxoBorrowTwice() extends Test {
@@ -316,7 +316,7 @@ construct StxoBorrowTwice() extends Test {
         let s2 = stxoVecSum(v)
         return s1 + s2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct StxoBorrowInLoop() extends Test {
@@ -331,7 +331,7 @@ construct StxoBorrowInLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct StxoBorrowThenField() extends Test {
@@ -341,7 +341,7 @@ construct StxoBorrowThenField() extends Test {
         let s = stxoVecSum(v)
         return s + v.z
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(90); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(90) return e }
 }
 
 construct StxoBorrowThenModify() extends Test {
@@ -352,7 +352,7 @@ construct StxoBorrowThenModify() extends Test {
         v.x = 10
         return v.x + s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 construct StxoBorrowBoxField() extends Test {
@@ -365,7 +365,7 @@ construct StxoBorrowBoxField() extends Test {
         }
         return b.min.x + b.max.z + b.id
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct StxoBorrowBeforeAfterMut() extends Test {
@@ -377,7 +377,7 @@ construct StxoBorrowBeforeAfterMut() extends Test {
         let s2 = stxoVecSum(v)
         return s2 - s1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxoBorrowLoopSum() extends Test {
@@ -394,7 +394,7 @@ construct StxoBorrowLoopSum() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(165); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(165) return e }
 }
 
 construct StxoBorrowConsistency() extends Test {
@@ -403,7 +403,7 @@ construct StxoBorrowConsistency() extends Test {
         let v = StxoVec { x: 7, y: 8, z: 9 }
         return stxoVecSum(v) == v.x + v.y + v.z
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct StxoBorrowSumField() extends Test {
@@ -413,7 +413,7 @@ construct StxoBorrowSumField() extends Test {
         let s = stxoVecSum(v)
         return s + v.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct StxoBorrowBagItems() extends Test {
@@ -422,7 +422,7 @@ construct StxoBorrowBagItems() extends Test {
         var b = stxoBuildBag(5)
         return b.items[0] + b.items[4]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +436,7 @@ construct StxoBumpOnce() extends Test {
         stxoBumpVec(v)
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StxoBumpSum() extends Test {
@@ -446,7 +446,7 @@ construct StxoBumpSum() extends Test {
         stxoBumpVec(v)
         return v.x + v.y + v.z
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct StxoBumpLoop10() extends Test {
@@ -460,7 +460,7 @@ construct StxoBumpLoop10() extends Test {
         }
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StxoDoubleOnce() extends Test {
@@ -470,7 +470,7 @@ construct StxoDoubleOnce() extends Test {
         stxoDoubleVec(v)
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StxoDoubleLoop5() extends Test {
@@ -484,7 +484,7 @@ construct StxoDoubleLoop5() extends Test {
         }
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(32) return e }
 }
 
 construct StxoScaleK() extends Test {
@@ -494,7 +494,7 @@ construct StxoScaleK() extends Test {
         stxoScaleVec(v, 7)
         return v.x + v.y + v.z
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(84); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(84) return e }
 }
 
 construct StxoBumpThenDouble() extends Test {
@@ -506,7 +506,7 @@ construct StxoBumpThenDouble() extends Test {
         stxoDoubleVec(v)
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct StxoBumpThenBorrow() extends Test {
@@ -516,7 +516,7 @@ construct StxoBumpThenBorrow() extends Test {
         stxoBumpVec(v)
         return stxoVecSum(v)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 construct StxoScaleLoop3() extends Test {
@@ -530,7 +530,7 @@ construct StxoScaleLoop3() extends Test {
         }
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct StxoBumpSum20() extends Test {
@@ -544,7 +544,7 @@ construct StxoBumpSum20() extends Test {
         }
         return v.x + v.y + v.z
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct StxoScaleThenBump() extends Test {
@@ -555,7 +555,7 @@ construct StxoScaleThenBump() extends Test {
         stxoBumpVec(v)
         return v.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 construct StxoBumpZ20() extends Test {
@@ -569,6 +569,6 @@ construct StxoBumpZ20() extends Test {
         }
         return v.z
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 

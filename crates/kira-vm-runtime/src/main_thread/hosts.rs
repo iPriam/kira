@@ -214,11 +214,18 @@ macro_rules! impl_forwarding_host {
                 lock_host(&self.shared).native_state_append(token, ty, path, value)
             }
 
-            fn native_state_free(
+            fn native_state_retain(
                 &mut self,
                 token: NativeStateToken,
             ) -> Result<(), NativeStateError> {
-                lock_host(&self.shared).native_state_free(token)
+                lock_host(&self.shared).native_state_retain(token)
+            }
+
+            fn native_state_release(
+                &mut self,
+                token: NativeStateToken,
+            ) -> Result<(), NativeStateError> {
+                lock_host(&self.shared).native_state_release(token)
             }
 
             fn file_system(

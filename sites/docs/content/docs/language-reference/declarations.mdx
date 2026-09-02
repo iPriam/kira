@@ -1,12 +1,12 @@
 ---
 title: Declarations
-description: "Every top-level declaration form: import, function, let, struct, class, enum, trait, construct, extend, type, and the three macro forms."
+description: "Every top-level declaration form: import, function, let, struct, class, enum, trait, construct, extend, type, distinct, and the three macro forms."
 ---
 
 ## Top-Level Forms
 
 ```text
-import  function  let  struct  class  enum  trait  construct  extend  type
+import  function  let  struct  class  enum  trait  construct  extend  type  distinct
 macro   comptime macro    comptime function
 ```
 
@@ -29,7 +29,7 @@ function name(param: T): (Int) -> Int { … }         // a function-typed result
 function method(borrow self) -> R { … }
 function method(borrow mut self, by: Int) { … }
 function identity<Value>(value: Value) -> Value { … }
-@FFI.Extern { … } function foreign(a: I32) -> I32;  // bodyless
+@FFI.Extern { … } function foreign(a: I32) -> I32 // bodyless
 ```
 
 Parameters require explicit types. A parameter mode is `borrow`, `borrow mut`, `copy`, or nothing. A result type follows `->`, or `:` when it is itself a function type. A bare `self` receiver is `KPAR075`; a receiver on a non-method is `KSEM299`.
@@ -169,6 +169,19 @@ type Buffer = [Count]
 ```
 
 A spelling, not a new type. A cyclic chain is `KSEM157`; claiming a taken name is `KSEM130`.
+
+## `distinct`
+
+```kira
+distinct TabId = U32
+distinct BookmarkId = U32
+```
+
+A new type over one scalar word, and the opposite of `type`. `TabId(value)` builds one and `id.raw` reads the representation back; nothing else crosses, in either direction, and `BookmarkId` is a third type rather than the same one.
+
+The representation is an integer width, a float width, `Bool`, `RawPtr`, or another distinct type; anything else is `KSEM345`. A cyclic chain is `KSEM346`; claiming a taken name is `KSEM130`. The declaration takes no annotation (`KPAR087`), and `@Derive(Copy)` on one is `KPAR086` — a scalar word is copyable already.
+
+See [Distinct Types](/docs/language-reference/types#distinct-types) for the layout guarantee, the operator surface, the C seam, and which derives apply.
 
 ## Macros
 

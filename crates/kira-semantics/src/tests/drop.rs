@@ -267,7 +267,6 @@ fn native_recover_cannot_name_a_type_that_runs_a_body() {
          @Main function main() {{\n\
          \x20   var state = nativeState(Counter {{ n: 0 }})\n\
          \x20   var view = nativeRecover<D>(nativeUserData(state))\n\
-         \x20   nativeStateFree(state)\n\
          \x20   return\n}}\n"
     ));
     assert_eq!(codes, vec!["KSEM304"]);
@@ -278,11 +277,11 @@ fn native_recover_cannot_name_a_type_that_runs_a_body() {
 #[test]
 fn a_retained_foreign_argument_may_not_run_a_body() {
     let codes = codes(
-        "@FFI.Struct { layout: c; }\n\
+        "@FFI.Struct { layout: c }\n\
          struct Handle: Drop {\n    var id: I32\n\
          \n    function drop(borrow mut self) { return }\n}\n\
-         @FFI.Extern { library: fixture; symbol: keep; abi: c; retains: value; }\n\
-         function keep(value: Handle): Void;\n\
+         @FFI.Extern { library: fixture, symbol: keep, abi: c, retains: value }\n\
+         function keep(value: Handle): Void\n\
          @Main function main() { let h = Handle { id: 1 } keep(move h) return }\n",
     );
     assert_eq!(codes, vec!["KSEM305"]);

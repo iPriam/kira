@@ -1,3 +1,5 @@
+import Foundation
+
 // Strings in depth: literals and `.count`, `String` struct fields (flat and
 // nested), passing strings by `move` and by `borrow` in and out of functions,
 // returning strings from functions and struct methods, strings stored in arrays

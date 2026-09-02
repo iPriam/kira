@@ -1,3 +1,5 @@
+import Foundation
+
 // Classes / inheritance, in depth.
 //
 // Exercises: single inheritance, multiple inheritance, multi-level (3-deep)

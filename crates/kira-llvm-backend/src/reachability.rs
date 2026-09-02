@@ -187,9 +187,10 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
                 walk_expr(program, *payload, facts);
             }
         }
-        IrExpr::EnumTag { value } | IrExpr::EnumPayload { value, .. } => {
-            walk_expr(program, *value, facts)
-        }
+        IrExpr::EnumTag { value }
+        | IrExpr::EnumPayload { value, .. }
+        | IrExpr::TypeTest { value, .. }
+        | IrExpr::TypeCast { value, .. } => walk_expr(program, *value, facts),
         IrExpr::Field { base, .. }
         | IrExpr::ForeignField { base, .. }
         | IrExpr::ForeignMemberAddress { base, .. } => walk_expr(program, *base, facts),
@@ -269,11 +270,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         IrExpr::Convert { operand, .. }
         | IrExpr::CellNew { value: operand, .. }
         | IrExpr::IntoAny { value: operand, .. }
-        | IrExpr::Widen { value: operand, .. }
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }
-        | IrExpr::NativeStateFree { token: operand } => walk_expr(program, *operand, facts),
+        | IrExpr::NativeStateRetain { token: operand }
+        | IrExpr::NativeStateRelease { token: operand } => walk_expr(program, *operand, facts),
         IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Int(_)
         | IrExpr::Float(_)

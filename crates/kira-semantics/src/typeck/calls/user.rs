@@ -10,6 +10,7 @@ use crate::place::PlacePurpose;
 use crate::typeck::overloads::OverloadFailure;
 
 use super::CallTarget;
+use super::math::wrapping_operator;
 
 impl Analyzer<'_> {
     /// Type-checks a call whose arguments are still syntax.
@@ -263,7 +264,7 @@ impl Analyzer<'_> {
             }
             suffix.push_str(&format!(
                 "${index}${}",
-                self.program.types.type_name(Type::Struct(id))
+                self.member_owner_name(Type::Struct(id))
             ));
         }
         let specialized = format!("{name}{suffix}");
@@ -306,6 +307,9 @@ impl Analyzer<'_> {
             if let Some(op) = kira_runtime_abi::MathOp::from_name(name) {
                 return self.analyze_math_call(op, args, span);
             }
+            if let Some(op) = super::math::wrapping_operator(name) {
+                return self.analyze_wrapping_call(name, op, args, span);
+            }
             if name == "scalarText" {
                 return self.analyze_scalar_text_call(args, span);
             }
@@ -343,6 +347,9 @@ impl Analyzer<'_> {
             // nothing matched.
             Err(OverloadFailure::None) => candidates[0],
         };
+        if self.refuse_direct_async_call(id, span) {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let (params, ret) = {
             let (params, ret) = self.signature_of(id);
             (params.to_vec(), ret)

@@ -442,14 +442,14 @@ construct Circle() extends Shape {
     assert!(declaration.methods[0].required);
 }
 
-/// A trailing `;` ends a requirement the way it ends a bodyless extern, and the
-/// member after it still parses.
+/// A requirement ends with its signature, and the member after it still
+/// parses.
 #[test]
-fn a_required_function_may_end_with_a_semicolon() {
+fn a_required_function_ends_with_its_signature() {
     let result = parse_text(
         r#"
 construct Shape {
-    @Required function render() -> String;
+    @Required function render() -> String
     @Required let sides: Int
 }
 "#,

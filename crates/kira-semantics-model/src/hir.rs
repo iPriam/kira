@@ -164,6 +164,18 @@ pub struct HirForeign {
     /// The result's wrapper struct, `Some(id)` when the result is a
     /// single-scalar-field struct rebuilt from the seam scalar at the call.
     pub result_wrapper: Option<StructId>,
+    /// Per-parameter `distinct` type, one entry per signature parameter.
+    ///
+    /// `Some(ty)` marks a parameter written as a `distinct` type. The wire
+    /// position in [`Self::signature`] is the representation, so C sees the
+    /// scalar and nothing else; this is what the *call* checks its argument
+    /// against, which is how a `TabId` parameter keeps taking a `TabId` and
+    /// refusing the `U32` it lowers to. Kira-side only: it never reaches the
+    /// wire signature, and `kira-ir` erases it from the program entirely.
+    pub param_distincts: Box<[Option<Type>]>,
+    /// The result's `distinct` type, `Some(ty)` when the result was written as
+    /// one. The call yields that type rather than the scalar it crossed as.
+    pub result_distinct: Option<Type>,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
 }
@@ -254,6 +266,11 @@ pub struct HirFunction {
     pub mutates_self: bool,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
+    /// The complete callable contract, carried past analysis so a backend, a
+    /// task table, a foreign adapter, or a hot-reload check reads the same
+    /// receiver, ownership, label, default, `async`, and affinity facts the
+    /// type checker did.
+    pub signature: CallableSignature,
 }
 
 /// One local slot: a parameter or a `let`/`var` binding.
@@ -435,8 +452,10 @@ pub struct HirWriteback {
     pub place: HirPlace,
 }
 
+mod callable;
 mod exprs;
 mod ops;
 
-pub use exprs::{ConvertKind, HirExpr, HirExprId, TaskTarget};
+pub use callable::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity};
+pub use exprs::{ConvertKind, FieldOrder, HirExpr, HirExprId, TaskTarget};
 pub use ops::{Builtin, Callee, HirBinaryOp, HirUnaryOp};

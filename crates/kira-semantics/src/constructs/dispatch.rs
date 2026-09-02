@@ -1,8 +1,6 @@
 //! Expected-type upcasts and synthesized dispatch for construct-family values.
 
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirWriteback,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirWriteback,};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
@@ -66,7 +64,28 @@ pub(crate) struct DispatchMethod<'family> {
 impl Analyzer<'_> {
     /// The synthesized enum for a construct family name.
     pub(crate) fn construct_family_type(&self, name: &str) -> Option<EnumId> {
-        self.construct_families.get(name).map(|info| info.enum_id)
+        let key = self.visible_family_key(name)?;
+        self.construct_families.get(&key).map(|info| info.enum_id)
+    }
+
+    /// The key under which `name`, written in the current file, finds a
+    /// construct family: the file's own package first, then the program's
+    /// own declarations, then the packages the file imports. A family is
+    /// filed under its declaring package, so two packages may each declare a
+    /// `Shape`.
+    pub(crate) fn visible_family_key(&self, name: &str) -> Option<String> {
+        let home = self.template_key(self.source, name);
+        if self.construct_families.contains_key(&home) {
+            return Some(home);
+        }
+        if self.construct_families.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .map(|package| format!("{package}::{name}"))
+            .find(|key| self.construct_families.contains_key(key))
     }
 
     /// Whether `id` is a synthesized construct-family enum.
@@ -197,7 +216,7 @@ impl Analyzer<'_> {
         let Some(dispatcher) = callee else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let callable = format!("{}.{}", self.type_name(Type::Enum(family_id)), method);
+        let callable = format!("{}.{}", self.member_owner_name(Type::Enum(family_id)), method);
         // A method call binds by position, label or no label.
         let positional = Analyzer::argument_slots(args);
         let mut values = vec![receiver];
@@ -464,10 +483,7 @@ impl Analyzer<'_> {
                 continue;
             }
             self.source = source;
-            let owner = self
-                .program
-                .types
-                .type_name(Type::Struct(variant_struct_id));
+            let owner = self.member_owner_name(Type::Struct(variant_struct_id));
             let qualified = format!("{owner}.{method}");
             let Some((id, actual_params, actual_result)) = self.lookup_function(&qualified) else {
                 self.emit(
@@ -626,6 +642,7 @@ impl Analyzer<'_> {
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::synthesized(&[], result),
             };
         }
 
@@ -649,6 +666,7 @@ impl Analyzer<'_> {
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::synthesized(&[], result),
             };
         };
         arms.sort_by_key(|(variant, _)| variant.tag);
@@ -675,6 +693,7 @@ impl Analyzer<'_> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], Type::Void),
         }
     }
 }

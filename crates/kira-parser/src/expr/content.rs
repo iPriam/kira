@@ -93,7 +93,7 @@ impl Parser<'_> {
         self.with_struct_literals(|parser| {
             while !parser.at(TokenKind::RBrace) && !parser.at_eof() {
                 let before = parser.pos;
-                while parser.eat(TokenKind::Semicolon) {}
+                parser.skip_unknown();
                 if parser.at(TokenKind::RBrace) || parser.at_eof() {
                     break;
                 }
@@ -192,7 +192,7 @@ impl Parser<'_> {
         self.with_struct_literals(|parser| {
             while !parser.at(TokenKind::RBrace) && !parser.at_eof() {
                 let before = parser.pos;
-                while parser.eat(TokenKind::Semicolon) {}
+                parser.skip_unknown();
                 if parser.at(TokenKind::RBrace) || parser.at_eof() {
                     break;
                 }

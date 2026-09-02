@@ -20,44 +20,60 @@ function main() {
     assert_eq!(output, "3\n3\n-1\n2\n-7\n");
 }
 
-/// The case LLVM would get wrong on its own: `sdiv i64 MIN, -1` is poison, but
-/// the VM's `wrapping_div` defines it as `MIN`. The backend branches around it,
-/// and this proves the branch is really there.
+/// `MIN % -1` is 0 on every backend; `sdiv i64 MIN, -1` would be poison, and
+/// the one division whose answer does not fit is a trap, not a wrap.
 #[test]
-fn integer_overflow_in_division_wraps_like_the_vm() {
-    let output = assert_parity(
+fn integer_overflow_in_division_traps_after_the_remainder_answers() {
+    assert_trap_parity(
         r#"
 @Main
 function main() {
-    var min = -9223372036854775807
-    min = min - 1
-    print(min / -1)
+    let min = wrappingSub(-9223372036854775807, 1)
     print(min % -1)
+    print(min / -1)
     return
 }
 "#,
+        "0\n",
     );
-    assert_eq!(output, "-9223372036854775808\n0\n");
 }
 
-/// Signed arithmetic wraps rather than trapping or being poison, matching the
-/// VM's `wrapping_*` operators.
+/// Ordinary arithmetic traps on overflow rather than wrapping: the output
+/// before the overflow is kept, and the run fails the same way on every
+/// backend.
 #[test]
-fn signed_arithmetic_wraps_on_overflow() {
-    let output = assert_parity(
+fn signed_addition_traps_on_overflow() {
+    assert_trap_parity(
         r#"
 @Main
 function main() {
     var max = 9223372036854775807
+    print(max - 1)
     print(max + 1)
-    var min = -9223372036854775807
-    min = min - 1
-    print(min - 1)
+    return
+}
+"#,
+        "9223372036854775806\n",
+    );
+}
+
+/// The wrapping builtins are how a fold spells the wrap ordinary arithmetic
+/// refuses.
+#[test]
+fn the_wrapping_builtins_wrap_at_sixty_four_bits() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let max = 9223372036854775807
+    print(wrappingAdd(max, 1))
+    print(wrappingMul(max, 2))
+    print(wrappingSub(0 - max, 2))
     return
 }
 "#,
     );
-    assert_eq!(output, "-9223372036854775808\n9223372036854775807\n");
+    assert_eq!(output, "-9223372036854775808\n-2\n9223372036854775807\n");
 }
 
 /// Division by zero is a trap in Kira, not UB: every backend must refuse it the
@@ -250,12 +266,19 @@ function main() {
 }
 "#,
     );
+    // `tan(1.0)` is the one value the host's libm rounds differently across
+    // architectures, so its expectation is the host's own answer: what the
+    // test pins is that both engines print the same digits, not which libm
+    // the machine ships.
+    let tan = 1.0f64.tan();
     assert_eq!(
         output,
-        "1.4142135623730951\n0.8414709848078965\n0.5403023058681398\n\
-         1.557407724654902\n-2\n-1\n1.5\n2.718281828459045\n0\n3\n2\n8\n\
-         -2\n-1\n1.5707963267948966\n0\n0.7853981633974483\n0\n1\n0\n\
-         8\n0.7853981633974483\n2\n3\n5\n-2\n3\n"
+        format!(
+            "1.4142135623730951\n0.8414709848078965\n0.5403023058681398\n\
+             {tan}\n-2\n-1\n1.5\n2.718281828459045\n0\n3\n2\n8\n\
+             -2\n-1\n1.5707963267948966\n0\n0.7853981633974483\n0\n1\n0\n\
+             8\n0.7853981633974483\n2\n3\n5\n-2\n3\n"
+        )
     );
 }
 

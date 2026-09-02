@@ -1,6 +1,6 @@
 ---
 title: Types
-description: Builtin scalars, String, arrays, function types, Any, named types, generic enums, trait existentials, family types, aliases, and the FFI type forms.
+description: Builtin scalars, String, arrays, function types, Any, named types, generic enums, trait existentials, family types, aliases, distinct types, and the FFI type forms.
 ---
 
 ## Builtin Types
@@ -21,7 +21,7 @@ Every integer type is one 64-bit two's-complement value at run time and every fl
 
 Two written widths must match exactly. Bare `Int` and `Float` are wildcards matching any width in their kind, which makes assignability non-transitive: `U8` to `Int` and `Int` to `U32` both hold while `U8` to `U32` does not.
 
-`Any` accepts every type. A generic instantiation reaches another instantiation of the same template when each type argument stays as it was or becomes `Any`. A position that merely contains one does not widen: `[Result<Int, E>]` is not `[Result<Any, E>]`.
+`Any` accepts every value. What it holds is asked with `value is Type` (a `Bool`, by nominal runtime identity: two packages' same-named `Point`s are different answers) and read back with `value as Type`, which traps when the value holds anything else. One generic specialization never reaches another: `Result<Int, E>` does not fill a `Result<Any, E>` position, and neither does `[Result<Int, E>]` fill a `[Result<Any, E>]` one. The conversion is written, by unpacking the value and rebuilding it.
 
 There is no subtyping between classes (`KSEM063`), no implicit numeric widening, and no truthiness.
 
@@ -44,6 +44,10 @@ A function type is `Send` and `Sync` for neither: its values are closures, and a
 ## Named Types
 
 `struct`, `class`, and `enum` each declare a type by name. A `class` is a struct that inherits and flattens; its static type is always its dynamic type. A parameterized aggregate or enum declares one nominal row for each concrete argument list.
+
+### Nominal identity
+
+A declared type is identified by where it was declared, not by how it is spelled: the resolved package (its name, version, and dependency instance), the module inside that package, the declaration's name, and, for an instantiated generic, the identity of every argument. Two packages may each declare a `Point`, and the two are different types everywhere identity is asked: a `Point` from one never fills a parameter typed with the other's, `Box<Point>` instantiated over each is a separate row, and an `Any` holding one never compares equal to an `Any` holding the other. Aliases are transparent, so `type Byte = U8` names `U8` itself; a `distinct` stays its own type even when its representation is the same scalar. The same identity is what native-state fingerprints, generated symbols, and serialized type names are built from, so nothing downstream falls back to a bare name.
 
 Enums, structs, classes, traits, and functions may take type parameters.
 `Result<Int, AppError>` and `Box<Int>` name concrete rows; a bare generic enum
@@ -70,6 +74,30 @@ A construct family's bare name is not a type (`KSEM207`). `Any Family` and `some
 ## Type Aliases
 
 `type Name = Target` is a spelling, not a new type. Analysis resolves it away, so no backend learns the alias existed. A cyclic chain is `KSEM157`, and claiming a name that already means something is `KSEM130`.
+
+## Distinct Types
+
+`distinct Name = Representation` is a new type over one scalar word. It is the opposite of an alias: a value crosses in only through `Name(value)` and out only through `.raw`.
+
+```kira
+distinct TabId = U32
+distinct BookmarkId = U32
+
+let id = TabId(U32(1))
+let word: U32 = id.raw
+```
+
+`TabId` is assignable to `TabId` and to nothing else. Its representation does not reach it, it does not reach its representation, and a second declaration over the same representation is a third type. Assigning across any of those is the ordinary mismatch, `KSEM020` in a binding and `KSEM063` at a call.
+
+The representation is an integer width, a float width, `Bool`, `RawPtr`, or another distinct type; anything else is `KSEM345`. A chain flattens to the scalar at its end, so `.raw` reads that scalar in one step whatever the chain's length. A cyclic chain is `KSEM346`, and claiming a name that already means something is `KSEM130`.
+
+The type is **transparent**: it has the size, the alignment, and the ABI of its representation, with no wrapper value and no allocation. Lowering rewrites every distinct type to its representation before any backend sees a program, so the two crossings compile to no instruction at all.
+
+Its whole operator surface is `==` and `!=` between two values of the same distinct type. Arithmetic, ordering, and `print` are refused (`KSEM071`): an id is named, not counted. Reading anything but `raw` off one is `KSEM349`, and constructing one from the wrong type is `KSEM348`.
+
+At an `@FFI.Extern` signature a distinct type crosses as its representation, so the C prototype is the scalar's. The Kira side stays nominal: a parameter written `TabId` takes a `TabId` and refuses the `U32` underneath it (`KSEM183`).
+
+Foundation's `@Derive(Equatable)`, `Clone`, `Hashable`, `Serializable`, `Deserializable`, and `Ordered` all apply. Each delegates to the representation, so the wire form of a distinct type over `U32` is the number itself rather than a struct envelope. `@Derive(Tagged)` does not apply: it answers which number a *variant* is, and a distinct type has none. `@Derive(Copy)` is refused (`KPAR086`): the type is one scalar word, so it is copyable already.
 
 ## FFI Type Forms
 

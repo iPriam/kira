@@ -174,8 +174,8 @@ fn parses_a_struct_with_let_and_var_members() {
 }
 
 #[test]
-fn semicolons_separate_members_on_one_line() {
-    let result = parse_text("struct Pair { var w: Int = 0; var h: Int = 0 }");
+fn members_on_one_line_are_delimited_structurally() {
+    let result = parse_text("struct Pair { var w: Int = 0 var h: Int = 0 }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let declaration = only_struct(&result);
     assert_eq!(declaration.fields.len(), 2);

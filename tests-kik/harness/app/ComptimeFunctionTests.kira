@@ -35,20 +35,20 @@ comptime function ctfDescribe(value: Int) -> String {
 
 construct CtfFunctionComputesAValue() extends Test {
     test { return ctfDouble(21) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct CtfFunctionRunsAWhileLoop() extends Test {
     test { return ctfTriangular(10) }
-    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(55) return e }
 }
 
 construct CtfFunctionCallsAnotherFunction() extends Test {
     test { return ctfComposed(5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 construct CtfFunctionRunsBranches() extends Test {
     test { return ctfDescribe(0) }
-    expect { let e: Result<String, TestFailure> = .Ok("zero"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("zero") return e }
 }

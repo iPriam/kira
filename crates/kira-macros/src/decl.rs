@@ -32,6 +32,8 @@ pub(crate) enum DeclarationKind {
     Form,
     /// `function name(…) { … }`
     Function,
+    /// `distinct Name = Representation`
+    Distinct,
     /// Anything else at file scope.
     Other,
 }
@@ -46,6 +48,7 @@ impl DeclarationKind {
             DeclarationKind::Construct => "construct",
             DeclarationKind::Form => "form",
             DeclarationKind::Function => "function",
+            DeclarationKind::Distinct => "distinct",
             DeclarationKind::Other => "declaration",
         }
     }
@@ -64,6 +67,7 @@ impl DeclarationKind {
             DeclarationKind::Construct => "Construct",
             DeclarationKind::Form => "Form",
             DeclarationKind::Function => "Function",
+            DeclarationKind::Distinct => "Distinct",
             DeclarationKind::Other => "Declaration",
         }
     }
@@ -220,6 +224,7 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
             _ => (DeclarationKind::Construct, head + 1),
         },
         TokenKind::Function => (DeclarationKind::Function, head + 1),
+        TokenKind::Distinct => (DeclarationKind::Distinct, head + 1),
         _ => (DeclarationKind::Other, head),
     };
     let name = if file.is_ident(name_index) {
@@ -234,22 +239,32 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         _ => String::new(),
     };
 
-    // Where the declaration ends: at its `{ … }` body, or at the `;` a bodyless
-    // one is written with.
+    // A `distinct` declaration has neither a body nor a terminator: it ends at
+    // the last token of the representation it names. The generic scan below
+    // looks for a `{` or a `;` and would run to the end of the file, taking
+    // every declaration under it with it, so this form is located on its own.
+    if kind == DeclarationKind::Distinct {
+        return scan_distinct(file, head, name_index, name, annotations);
+    }
+
+    // Where the declaration ends: at its `{ … }` body, or — for a bodyless
+    // `@FFI.Extern` / `@FFI.Syscall` function, which is nothing but a
+    // signature — at the token that starts the next declaration, the closing
+    // `}` of an enclosing body, or the end of the file.
     //
-    // A `@FFI.Extern` and a `@FFI.Syscall` have no body at all. Scanning past
-    // their `;` looking for one ran to the end of the file and abandoned the
-    // whole scan — and the caller walking declarations stops at the first `None`,
-    // so *every* declaration below such a line silently stopped existing. A
-    // `Test` written under an extern in one file was collected by nothing,
-    // reported by no one, and counted in no tally.
+    // A bodyless declaration that ends the file must still be returned: the
+    // caller walking declarations stops at the first `None`, so bailing here
+    // would make every such declaration silently stop existing.
     let mut index = head;
     let mut body = None;
     let mut end = None;
     while index < file.len() {
         match file.kind(index) {
-            TokenKind::Eof => return None,
-            TokenKind::Semicolon => {
+            TokenKind::Eof | TokenKind::RBrace => {
+                end = Some(index);
+                break;
+            }
+            kind if index > head && starts_declaration(kind) => {
                 end = Some(index);
                 break;
             }
@@ -264,8 +279,9 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
     }
     let (last, next) = match (body, end) {
         (Some((_, close)), _) => (close, close + 1),
-        (None, Some(semicolon)) => (semicolon, semicolon + 1),
-        // Neither a body nor a terminator before the file ran out.
+        // A bodyless declaration with nothing after its head is malformed.
+        (None, Some(after)) if after == head + 1 => return None,
+        (None, Some(after)) => (after - 1, after),
         (None, None) => return None,
     };
     let span = file.span_of(head, last);
@@ -340,6 +356,83 @@ pub(crate) fn parse(text: &str) -> Option<Declaration> {
         field.source = None;
     }
     Some(declaration)
+}
+
+/// Scans `distinct Name = Representation`, which ends at its representation.
+///
+/// The one readable member a distinct type has is reported as a field called
+/// `raw` whose written type is the representation, because that is exactly what
+/// `id.raw` reads. A derive that walks `target.fields` therefore folds, compares,
+/// and serializes a distinct type through the same one loop it uses for a
+/// struct, and the only thing it needs its own branch for is *construction*,
+/// which is `Name(value)` rather than a brace literal.
+/// Whether `kind` can only be the first token of a declaration, so that
+/// reaching it while scanning a bodyless one means the latter has ended.
+fn starts_declaration(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::At
+            | TokenKind::Struct
+            | TokenKind::Class
+            | TokenKind::Enum
+            | TokenKind::Construct
+            | TokenKind::Function
+            | TokenKind::Distinct
+            | TokenKind::Trait
+            | TokenKind::Import
+            | TokenKind::Type
+    )
+}
+
+fn scan_distinct(
+    file: &Lexed<'_>,
+    head: usize,
+    name_index: usize,
+    name: String,
+    annotations: Vec<Annotation>,
+) -> Option<(Declaration, usize)> {
+    if file.kind(name_index + 1) != TokenKind::Equals {
+        return None;
+    }
+    let representation = name_index + 2;
+    if !file.is_ident(representation) {
+        return None;
+    }
+    // A qualified representation — `Foundation.Byte` — is one type written in
+    // three tokens, so the scan keeps taking `. name` pairs.
+    let mut last = representation;
+    while file.kind(last + 1) == TokenKind::Dot && file.is_ident(last + 2) {
+        last += 2;
+    }
+    let representation_span = file.span_of(representation, last);
+    let span = file.span_of(head, last);
+    let raw = Field {
+        name: "raw".to_owned(),
+        type_text: file.slice(representation_span).to_owned(),
+        initializer: String::new(),
+        syntax: file.slice(representation_span).to_owned(),
+        span: representation_span,
+        source: Some(file.source),
+        annotations: Vec::new(),
+    };
+    Some((
+        Declaration {
+            kind: DeclarationKind::Distinct,
+            name,
+            family: String::new(),
+            fields: vec![raw],
+            members: Vec::new(),
+            hooks: Vec::new(),
+            syntax: file.slice(span).to_owned(),
+            span,
+            source: Some(file.source),
+            path: file.path.clone(),
+            line: file.line_of(span.start),
+            file_lines: file.line_count(),
+            annotations,
+        },
+        last + 1,
+    ))
 }
 
 /// Consumes a run of `@Name` / `@Derive(A, B)` annotations.
@@ -803,10 +896,10 @@ mod tests {
     /// diagnostic, because nothing had gone wrong as far as anything could tell.
     #[test]
     fn a_bodyless_foreign_declaration_does_not_swallow_the_file_below_it() {
-        let text = "@FFI.Syscall { name: write; }
-             function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
-             @FFI.Extern { library: l; symbol: s; abi: c; }
-             function add(a: I32) -> I32;
+        let text = "@FFI.Syscall { name: write }
+             function sysWrite(fd: Int, buffer: CString, count: U64) -> Int
+             @FFI.Extern { library: l, symbol: s, abi: c }
+             function add(a: I32) -> I32
              struct Point {
     var x: Int
 }

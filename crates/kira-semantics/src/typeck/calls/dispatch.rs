@@ -258,7 +258,7 @@ impl Analyzer<'_> {
         // closure in a field is tried before a method of that name is looked
         // up. A method wins if both exist, because a method is what the
         // receiver's type declares and a field only what it stores.
-        let qualified = format!("{}.{name}", self.type_name(receiver_ty));
+        let qualified = format!("{}.{name}", self.member_owner_name(receiver_ty));
         if self.lookup_function(&qualified).is_none() {
             let values = Self::argument_values(args);
             if let Some(call) = self.analyze_field_closure_call(

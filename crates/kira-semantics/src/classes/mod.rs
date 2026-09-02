@@ -168,6 +168,8 @@ impl<'a> Analyzer<'a> {
             );
             match id {
                 Some(id) => {
+                    let module = self.imports.module_of(*source).to_owned();
+                    self.program.types.structs_mut().set_module(id, &module);
                     self.struct_sources.insert(id, *source);
                     // Kept in step with the table, which classes and structs
                     // share: `struct_defaults` is indexed by the ids it mints,
@@ -597,10 +599,12 @@ impl<'a> Analyzer<'a> {
         key: &str,
     ) -> Option<(&'a kira_syntax_model::ast::Function, SourceId)> {
         let owner_name = self.program.types.type_name(Type::Struct(owner));
+        // A template key is package-qualified; the declaration's name is
+        // what follows the qualifier.
         let declaration_name = self
             .generic_instance_templates
             .get(&owner)
-            .map_or(owner_name.as_str(), String::as_str);
+            .map_or(owner_name.as_str(), |key| key.rsplit("::").next().unwrap_or(key));
         let owner_package = self.program.types.structs().owner_of(owner);
         self.tree.items_with_source().find_map(|(source, item)| {
             if self.imports.package_of(source) != owner_package {

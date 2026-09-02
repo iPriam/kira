@@ -8,7 +8,7 @@
 //! literal does, so nothing downstream of analysis learns the constructor was
 //! written as a call.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::hir::{FieldOrder, HirExpr, HirExprId};
 use kira_semantics_model::{StructId, Type};
 use kira_syntax_model::ast::CallArg;
 
@@ -156,6 +156,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
+            order: FieldOrder::Declared,
         })
     }
 }

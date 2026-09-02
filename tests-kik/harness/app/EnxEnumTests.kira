@@ -244,22 +244,22 @@ function enxIsLeaf(n: borrow EnxNode) -> Int {
 
 construct EnxDirWeightNorth() extends Test {
     test { return enxDirWeight(.North) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct EnxDirWeightSouth() extends Test {
     test { return enxDirWeight(.South) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct EnxDirWeightEast() extends Test {
     test { return enxDirWeight(.East) }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct EnxDirWeightWest() extends Test {
     test { return enxDirWeight(.West) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 // Sum weights for i=0..59: 15 each of N,S,E,W -> 15*(1+2+3+4)=150
@@ -274,7 +274,7 @@ construct EnxDirFold60() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(150); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(150) return e }
 }
 
 // Specific array: N,E,S,W,N -> weights 1+3+2+4+1=11
@@ -287,7 +287,7 @@ construct EnxDirSpecificArray() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 // enxDirFor(0)=North, weight=1
@@ -296,7 +296,7 @@ construct EnxDirSwitchIndex0() extends Test {
         let d = enxDirFor(0)
         return enxDirWeight(d)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // enxDirFor(7): 7%4=3=West, weight=4
@@ -305,7 +305,7 @@ construct EnxDirSwitchIndex7() extends Test {
         let d = enxDirFor(7)
         return enxDirWeight(d)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 // Count Wests in i=0..11: i%4=3 at i=3,7,11 -> 3
@@ -327,7 +327,7 @@ construct EnxDirCountWest() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // sum i * enxDirWeight(enxDirFor(i)) for i=0..7:
@@ -344,7 +344,7 @@ construct EnxDirWeightedFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(80); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(80) return e }
 }
 
 // Count North+South (weight<=2) in i=0..11: N at 0,4,8 + S at 1,5,9 = 6
@@ -361,7 +361,7 @@ construct EnxDirCountNorthSouth() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // Two complete cycles of N,S,E,W (8 items): 2*(1+2+3+4)=20
@@ -375,7 +375,7 @@ construct EnxDirFold8() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 // Inline match in test block (var out pattern): East matches -> 3
@@ -391,7 +391,7 @@ construct EnxDirInlineMatchEast() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,17 +400,17 @@ construct EnxDirInlineMatchEast() extends Test {
 
 construct EnxPriorityScoreLow() extends Test {
     test { return enxPriorityScore(.Low) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct EnxPriorityScoreMedium() extends Test {
     test { return enxPriorityScore(.Medium) }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct EnxPriorityScoreHigh() extends Test {
     test { return enxPriorityScore(.High) }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // 30 iters, 10 each of L,M,H: 10*(1+5+10)=160
@@ -425,7 +425,7 @@ construct EnxPriorityFold30() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(160); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(160) return e }
 }
 
 // Count High in i=0..8: i%3=2 at i=2,5,8 -> 3
@@ -446,7 +446,7 @@ construct EnxPriorityCountHigh() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // sum i * enxPriorityScore(enxPriorityFor(i)) for i=0..8:
@@ -463,7 +463,7 @@ construct EnxPriorityWeightedFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(219); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(219) return e }
 }
 
 // Array of priorities, fold scores: [L,M,H,L,M] = 1+5+10+1+5=22
@@ -476,7 +476,7 @@ construct EnxPriorityArrayFold() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -485,22 +485,22 @@ construct EnxPriorityArrayFold() extends Test {
 
 construct EnxSeasonCodeSpring() extends Test {
     test { return enxSeasonCode(.Spring) }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct EnxSeasonCodeSummer() extends Test {
     test { return enxSeasonCode(.Summer) }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct EnxSeasonCodeAutumn() extends Test {
     test { return enxSeasonCode(.Autumn) }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct EnxSeasonCodeWinter() extends Test {
     test { return enxSeasonCode(.Winter) }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 // 40 iters, 10 each: 10*(10+20+30+40)=1000
@@ -515,7 +515,7 @@ construct EnxSeasonFold40() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1000) return e }
 }
 
 // Literal array: [Spr,Sum,Aut,Win,Spr] = 10+20+30+40+10=110
@@ -528,7 +528,7 @@ construct EnxSeasonSpecificArray() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(110); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(110) return e }
 }
 
 // Count warm seasons (code <= 20, i.e. Spring+Summer) in i=0..11: 3+3=6
@@ -545,7 +545,7 @@ construct EnxSeasonCountWarm() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,19 +555,19 @@ construct EnxSeasonCountWarm() extends Test {
 // Num(42) -> 42
 construct EnxTokenNumDirect() extends Test {
     test { return enxTokenVal(.Num(42)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // Paren(7) -> 7*2=14
 construct EnxTokenParenDirect() extends Test {
     test { return enxTokenVal(.Paren(7)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 // Op(3) -> 3*3=9
 construct EnxTokenOpDirect() extends Test {
     test { return enxTokenVal(.Op(3)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // Fold for i=0..29:
@@ -586,7 +586,7 @@ construct EnxTokenFold30() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(890); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(890) return e }
 }
 
 // Literal array: [Num(7),Paren(3),Op(2),Num(1),Paren(5)] -> 7+6+6+1+10=30
@@ -599,7 +599,7 @@ construct EnxTokenLiteralArrayFold() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 // Indexed access via borrow helper: tokens[j] passed to enxTokenVal(borrow EnxToken)
@@ -618,7 +618,7 @@ construct EnxTokenIndexedAccessFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 
 // sum (i+1)*enxTokenVal(enxTokenFor(i)) for i=0..5:
@@ -640,7 +640,7 @@ construct EnxTokenWeightedFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(164); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(164) return e }
 }
 
 // Inline match in test block (var out pattern)
@@ -656,7 +656,7 @@ construct EnxTokenInlineMatchNum() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // Inline match in test block: Op(4) -> 12
@@ -671,7 +671,7 @@ construct EnxTokenInlineMatchOp() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // Sum only Num values in i=0..8 (ignore Paren/Op):
@@ -693,6 +693,6 @@ construct EnxTokenSumNumsOnly() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 

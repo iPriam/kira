@@ -1,0 +1,155 @@
+import Foundation
+
+// NwxNumericWidthTests.kira — what a written integer width means at run time:
+// arithmetic is exact within the width, values convert between spellings
+// unchanged while they fit, shifts are measured against the width, and the
+// wrapping builtins wrap at it. (Overflow traps end the process, so they are
+// proven by the backend-parity fixtures rather than here.)
+// PREFIX: nwx / Nwx  (all top-level names use this prefix).
+
+function nwxNarrow(x: Int) -> U8 {
+    return x
+}
+
+function nwxWide(x: U8) -> Int {
+    return x
+}
+
+construct NwxNarrowSumStaysExact() extends Test {
+    test {
+        let a: U8 = 200
+        let b: U8 = 55
+        return nwxWide(a + b)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(255) return e }
+}
+
+construct NwxSignedNarrowArithmetic() extends Test {
+    test {
+        let c: I8 = -100
+        let d: I8 = c - 27
+        let wide: Int = d
+        return wide
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(-127) return e }
+}
+
+construct NwxUnsignedSixtyFourReadsWhole() extends Test {
+    test {
+        let d: U64 = 0xffffffffffffffff
+        let half: U64 = d / 2
+        let sign: Int = half
+        return sign
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(9223372036854775807) return e }
+}
+
+construct NwxUnsignedOrderingIsUnsigned() extends Test {
+    test {
+        let d: U64 = 0xffffffffffffffff
+        let one: U64 = 1
+        return d > one ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct NwxConversionKeepsAFittingValue() extends Test {
+    test {
+        let wide: Int = 200
+        let byte: U8 = wide
+        return nwxWide(byte) + nwxWide(nwxNarrow(55))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(255) return e }
+}
+
+construct NwxWideningKeepsTheSign() extends Test {
+    test {
+        let small: I8 = -5
+        let bigger: I32 = I32(small)
+        let widest: Int = bigger
+        return widest
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(-5) return e }
+}
+
+construct NwxUnsignedThirtyTwoIntoInt() extends Test {
+    test {
+        let unsigned: U32 = 4294967295
+        let back: Int = unsigned
+        return back
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4294967295) return e }
+}
+
+construct NwxWrappingAddWrapsAtTheWidth() extends Test {
+    test {
+        let byte: U8 = 255
+        let signed: I8 = 127
+        let wrapped: Int = wrappingAdd(signed, 1)
+        return nwxWide(wrappingAdd(byte, 1)) * 1000 + wrapped
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(-128) return e }
+}
+
+construct NwxWrappingMulWrapsAtTheWidth() extends Test {
+    test {
+        let half: U16 = 65535
+        let doubled: U16 = wrappingMul(half, 2)
+        let wide: Int = doubled
+        return wide
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(65534) return e }
+}
+
+construct NwxWrappingAtSixtyFourBits() extends Test {
+    test {
+        let max = 9223372036854775807
+        return wrappingAdd(max, 1) + 2 + wrappingMul(max, 2) + 1
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(-9223372036854775807) return e }
+}
+
+construct NwxLeftShiftDropsBitsPastTheWidth() extends Test {
+    test {
+        let byte: U8 = 129
+        let shifted: U8 = byte << 1
+        return nwxWide(shifted) * 1000 + nwxWide(byte >> 1)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2064) return e }
+}
+
+construct NwxRightShiftFollowsSignedness() extends Test {
+    test {
+        let signed: I8 = -128
+        let arithmetic: I8 = signed >> 7
+        let wide: U64 = 0xffffffffffffffff
+        let logical: U64 = wide >> 63
+        let a: Int = arithmetic
+        let l: Int = logical
+        return a * 10 + l
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(-9) return e }
+}
+
+construct NwxFloatToIntTruncatesTowardZero() extends Test {
+    test { return Int(2.9) * 10 + Int(-2.9) }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
+}
+
+construct NwxUnsignedToFloatReadsUnsigned() extends Test {
+    test {
+        let big: U64 = 0xffffffffffffffff
+        return Float(big) > 18000000000000000000.0 ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct NwxLiteralAdaptsToEitherSide() extends Test {
+    test {
+        let byte: U8 = 3
+        let left: U8 = 250 + byte
+        let right: U8 = byte + 2
+        return nwxWide(left) * 1000 + nwxWide(right)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(253005) return e }
+}

@@ -14,6 +14,7 @@
 //! subtree salsa-free and wasm-portable.
 
 mod borrow_alias;
+mod erase;
 pub mod ir;
 pub mod lower;
 pub mod mid;
@@ -27,6 +28,7 @@ pub use lower::lower;
 
 #[cfg(test)]
 mod tests {
+    use kira_semantics_model::hir::CallableSignature;
     use super::*;
     use kira_semantics_model::Type;
     use kira_semantics_model::hir::{
@@ -58,6 +60,7 @@ mod tests {
             execution: kira_runtime_abi::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 4),
+            signature: CallableSignature::synthesized(&[], Type::Void),
         });
         program.main = Some(FuncId(0));
         program
@@ -116,6 +119,8 @@ mod tests {
             param_wrappers: Box::from([None, None]),
             result_pointee: None,
             result_wrapper: None,
+            param_distincts: Box::from([None, None]),
+            result_distinct: None,
             name_span: Span::new(0, 3),
         });
         let a = program.exprs.alloc(HirExpr::Int(20));

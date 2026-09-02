@@ -316,13 +316,16 @@ fn native_state_opcodes_are_appended_and_round_trip() {
     assert_eq!(opcode::NATIVE_STATE, 0x49);
     assert_eq!(opcode::NATIVE_USER_DATA, 0x4a);
     assert_eq!(opcode::NATIVE_RECOVER, 0x4b);
-    assert_eq!(opcode::NATIVE_STATE_FREE, 0x4c);
+    assert_eq!(opcode::NATIVE_STATE_RELEASE, 0x4c);
+    assert_eq!(opcode::NATIVE_STATE_RETAIN, 0x89);
 
     let code = vec![
         Instruction::NativeState(u64::MAX),
-        Instruction::NativeUserData,
+        Instruction::NativeUserData { shared: true },
+        Instruction::NativeUserData { shared: false },
         Instruction::NativeRecover(0x0102_0304_0506_0708),
-        Instruction::NativeStateFree,
+        Instruction::NativeStateRetain,
+        Instruction::NativeStateRelease,
     ];
     let bytes = encode(&code);
     assert_eq!(decode(&bytes).unwrap(), code);
@@ -618,6 +621,51 @@ fn legacy_codec_decodes_old_widths_and_round_trips_in_the_current_format() {
         ]
     );
     assert_eq!(decode(&encode(&decoded)).unwrap(), decoded);
+}
+
+/// A reordered construction carries its permutation and, when the type has
+/// one, its `Drop` glue; both halves survive the trip.
+#[test]
+fn round_trips_an_ordered_struct_construction() {
+    let stream = vec![
+        Instruction::NewStructOrdered {
+            order: vec![2, 0, 1],
+            glue: None,
+        },
+        Instruction::NewStructOrdered {
+            order: vec![1, 0],
+            glue: Some(0x1234_5678),
+        },
+    ];
+    let bytes = encode(&stream);
+    assert_eq!(bytes[0], opcode::NEW_STRUCT_ORDERED);
+    assert_eq!(decode(&bytes).unwrap(), stream);
+}
+
+/// The checked arithmetic and width-check opcodes round-trip, operands
+/// included.
+#[test]
+fn round_trips_the_checked_arithmetic_and_width_opcodes() {
+    let stream = vec![
+        Instruction::AddIntChecked,
+        Instruction::SubIntChecked,
+        Instruction::MulIntChecked,
+        Instruction::NegIntChecked,
+        Instruction::DivIntChecked,
+        Instruction::AddUIntChecked,
+        Instruction::SubUIntChecked,
+        Instruction::MulUIntChecked,
+        Instruction::CheckInt(4),
+        Instruction::WrapInt(1),
+        Instruction::CheckShift(32),
+        Instruction::ConvertInt { from: 7, to: 0 },
+        Instruction::ConvertUIntToFloat,
+        Instruction::PrintUnsigned,
+        Instruction::StringOfUnsigned,
+        Instruction::TypeTest(0x1234_5678_9abc),
+        Instruction::Downcast(0x0002_0000_0007),
+    ];
+    assert_eq!(decode(&encode(&stream)).unwrap(), stream);
 }
 
 #[test]

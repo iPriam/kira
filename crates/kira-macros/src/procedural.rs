@@ -113,6 +113,7 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
             | TokenKind::Class
             | TokenKind::Enum
             | TokenKind::Construct
+            | TokenKind::Distinct
             | TokenKind::Function => {}
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 match file.match_close(index) {

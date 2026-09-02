@@ -433,6 +433,19 @@ fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Res
     compile_with_frontend(path, target, &mut frontend)
 }
 
+/// Compiles `path` for `device` and hands its program back for a caller that
+/// wants the diagnostics as values rather than rendered to a terminal.
+///
+/// The toolchain capability reaches this: a Kira program driving `kcCheck`,
+/// `kcBuild`, or `kcRun` reads the diagnostics back as `KiraDiagnostic`s, and
+/// the verbs on the command line render the same program's diagnostics to
+/// stderr. Both start here, so a package checks the same way whether a person
+/// or a program asked.
+pub(crate) fn compiled_for(path: &str, device: Option<&Device>) -> Result<Compiled, i32> {
+    let target = compile_target(path, device);
+    compile(path, &target)
+}
+
 fn compile_with_frontend(
     path: &str,
     target: &kira_native_lib_definition::TargetTriple,

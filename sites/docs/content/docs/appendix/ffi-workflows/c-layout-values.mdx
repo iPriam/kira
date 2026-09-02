@@ -8,14 +8,14 @@ description: Structs by value and by address, why Kira never classifies the ABI,
 A `@FFI.Struct { layout: c }` crosses the seam **by value**, as a parameter or a result, when every field is a fixed-width scalar, `Bool`, `RawPtr`, or another such struct, to any depth.
 
 ```kira
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Rect {
     var x: Float
     var y: Float
 }
 
-@FFI.Extern { library: graphics; symbol: rect_scale; abi: c; }
-function rectScale(r: Rect, k: Float) -> Rect;
+@FFI.Extern { library: graphics, symbol: rect_scale, abi: c }
+function rectScale(r: Rect, k: Float) -> Rect
 ```
 
 The annotation is required. An ordinary Kira struct is refused even when its fields would all map, because the annotation is what says this type mirrors a C declaration field for field. Without it, adding a Kira field would silently change what the C function receives.
@@ -37,7 +37,7 @@ A parameter written as an `@FFI.Pointer` to a C-layout struct also accepts that 
 The same position accepts an **`@FFI.Array` of that struct**, which is the same image with an extent: a C array is its elements laid out end to end, so one row describes both and the address of the row is the address of element zero.
 
 ```kira
-@FFI.Array { element: WGPUVertexAttribute; count: 4; }
+@FFI.Array { element: WGPUVertexAttribute, count: 4 }
 struct WGPUVertexAttributeArray4 {}
 
 WGPUVertexBufferLayout {
@@ -83,13 +83,13 @@ leaves the chain, the resolve target, and the rest at `NULL` without naming them
 A pointer whose `target` is a C-layout struct keeps that target, so the members behind it are read directly.
 
 ```kira
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct sapp_event {
     let kind: U8 = 0
     let mouse_x: F32 = 0.0
 }
 
-@FFI.Pointer { target: sapp_event; ownership: borrowed; }
+@FFI.Pointer { target: sapp_event, ownership: borrowed }
 struct sapp_event_ptr {}
 
 function onEvent(event: sapp_event_ptr) {
@@ -117,10 +117,10 @@ A pointer whose target is not a declared C-layout struct stays an opaque handle 
 A C struct that reserves storage inline, `int cells[4]`, is spelled with an `@FFI.Array` typedef, and the struct names that type as a field.
 
 ```kira
-@FFI.Array { element: I32; count: 4; }
+@FFI.Array { element: I32, count: 4 }
 struct Cells4 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Grid {
     var cells: Cells4
     var weight: Float
@@ -138,13 +138,13 @@ An `@FFI.Array` type crosses as a **member**, and as the storage a pointer to it
 A Kira array fills a **pointer word**, an extern's `RawPtr` parameter or a C-layout struct's `RawPtr` member, as long as its elements are seam scalars. The seam writes the elements out at C's widths and the pointer is the address of what it wrote.
 
 ```kira
-@FFI.Extern { library: ffimath; symbol: sum_floats; abi: c; }
-function sumFloats(values: RawPtr, count: I32) -> F32;
+@FFI.Extern { library: ffimath, symbol: sum_floats, abi: c }
+function sumFloats(values: RawPtr, count: I32) -> F32
 
 let values: [F32] = [1.5, 2.25, 3.0]
 sumFloats(values, I32(values.count))            // pointer and a count
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Range {
     var ptr: RawPtr
     var size: U64

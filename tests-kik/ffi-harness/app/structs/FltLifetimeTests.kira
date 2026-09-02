@@ -1,6 +1,6 @@
 import Foundation
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FltFrameDesc {
     let tag: Int
     let label: CString
@@ -28,12 +28,12 @@ function fltReadFrame(desc: borrow FltFrameDesc) -> Int {
 
 construct FltCStorageLoop() extends Test {
     test { return fltBuildAndDropFrames(500) }
-    expect { let e: Result<Int, TestFailure> = .Ok(500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(500) return e }
 }
 
 construct FltCStorageNativeReturn() extends Test {
-    test { let desc = fltMakeFrame(73); return desc.tag }
-    expect { let e: Result<Int, TestFailure> = .Ok(73); return e }
+    test { let desc = fltMakeFrame(73) return desc.tag }
+    expect { let e: Result<Any, TestFailure> = .Ok(73) return e }
 }
 
 construct FltCStorageNativeArgument() extends Test {
@@ -41,5 +41,5 @@ construct FltCStorageNativeArgument() extends Test {
         let desc = FltFrameDesc { tag: 91, label: "runtime" }
         return fltReadFrame(desc)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(91); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(91) return e }
 }

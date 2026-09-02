@@ -1,12 +1,14 @@
 //! Expression and call lowering.
 
-use kira_ir::{ConvertKind, IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
+use kira_semantics_model::hir::FieldOrder;
+use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
+use kira_semantics_model::Type;
 use kira_runtime_abi::{Execution, ForeignMember, ForeignPointerWidth, ForeignType};
 use kira_semantics_model::ErasedTypeId;
 
 use crate::op::{Instruction, WritebackTarget};
 
-use super::{CompileError, FnCompiler, binary_instruction, unary_instruction};
+use super::{CompileError, FnCompiler, unary_instruction};
 
 impl FnCompiler<'_> {
     pub(super) fn compile_expr(&mut self, id: IrExprId) -> Result<(), CompileError> {
@@ -44,38 +46,55 @@ impl FnCompiler<'_> {
                 let slot = self.local_slot(*slot)?;
                 self.code.push(Instruction::CellGet(slot));
             }
-            IrExpr::Unary { op, operand } => {
-                let operand = *operand;
-                let op = *op;
+            IrExpr::Unary { op, operand, ty } => {
+                let (op, operand, ty) = (*op, *operand, *ty);
                 self.compile_expr(operand)?;
                 self.code.push(unary_instruction(op));
+                self.check_width(ty);
             }
-            IrExpr::Binary { op, lhs, rhs } => self.compile_binary(*op, *lhs, *rhs)?,
+            IrExpr::Binary { op, lhs, rhs, ty } => self.compile_binary(*op, *lhs, *rhs, *ty)?,
             IrExpr::Select {
                 cond,
                 then,
                 otherwise,
                 ..
             } => self.compile_select(*cond, *then, *otherwise)?,
-            IrExpr::StructNew { struct_id, fields } => {
+            IrExpr::StructNew {
+                struct_id,
+                fields,
+                order,
+            } => {
                 let struct_id = *struct_id;
                 let fields = fields.clone();
                 let count = fields.len() as u64;
+                // The type is known here and nowhere later: the heap object the
+                // VM builds carries no type, so a user `Drop` body has to be
+                // recorded on it at construction or it can never be found.
+                let glue = self
+                    .program
+                    .types
+                    .structs()
+                    .get(struct_id)
+                    .and_then(|def| def.drop_glue);
+                if let FieldOrder::Written(order) = order {
+                    // The initializers run as written; the instruction puts
+                    // each popped value into its declared field.
+                    let order = order.clone();
+                    for &slot in &order {
+                        self.compile_expr(fields[slot as usize])?;
+                    }
+                    self.code.push(Instruction::NewStructOrdered {
+                        order: order.into_iter().map(u64::from).collect(),
+                        glue,
+                    });
+                    return Ok(());
+                }
                 // Fields are pushed in declaration order, so the struct the VM
                 // builds has them in layout order with no reordering.
                 for field in fields {
                     self.compile_expr(field)?;
                 }
-                // The type is known here and nowhere later: the heap object the
-                // VM builds carries no type, so a user `Drop` body has to be
-                // recorded on it at construction or it can never be found.
-                match self
-                    .program
-                    .types
-                    .structs()
-                    .get(struct_id)
-                    .and_then(|def| def.drop_glue)
-                {
+                match glue {
                     Some(glue) => self.code.push(Instruction::NewStructDropping {
                         fields: count,
                         glue,
@@ -262,8 +281,14 @@ impl FnCompiler<'_> {
             }
             IrExpr::StringOf { value } => {
                 let value = *value;
+                let unsigned = self.program.expr_type(self.function, value)
+                    == Type::Int(kira_semantics_model::IntSpelling::U64);
                 self.compile_expr(value)?;
-                self.code.push(Instruction::StringOf);
+                self.code.push(if unsigned {
+                    Instruction::StringOfUnsigned
+                } else {
+                    Instruction::StringOf
+                });
             }
             IrExpr::CStringNew { text } => {
                 let text = *text;
@@ -303,8 +328,21 @@ impl FnCompiler<'_> {
             }
             IrExpr::NativeUserData { state } => {
                 let state = *state;
-                self.compile_expr(state)?;
-                self.code.push(Instruction::NativeUserData);
+                // `LoadLocal` copies a handle and records its retain. The token
+                // takes that copied reference; a temporary hands over the
+                // reference it already owns. Neither path needs another retain
+                // in `NativeUserData`.
+                match self.program.expr(state) {
+                    IrExpr::Local(slot) if self.local_is_taken(*slot) => {
+                        let slot = self.local_slot(*slot)?;
+                        self.code.push(Instruction::LoadLocal(slot));
+                    }
+                    _ => {
+                        self.compile_expr(state)?;
+                    }
+                }
+                self.code
+                    .push(Instruction::NativeUserData { shared: false });
             }
             IrExpr::NativeRecover { raw, type_id, .. } => {
                 let (raw, type_id) = (*raw, *type_id);
@@ -312,36 +350,21 @@ impl FnCompiler<'_> {
                 self.code
                     .push(Instruction::NativeRecover(type_id.as_word()));
             }
-            IrExpr::NativeStateFree { token } => {
+            IrExpr::NativeStateRetain { token } => {
                 let token = *token;
                 self.compile_expr(token)?;
-                self.code.push(Instruction::NativeStateFree);
+                self.code.push(Instruction::NativeStateRetain);
             }
-            IrExpr::Convert { operand, kind, .. } => {
-                let (operand, kind) = (*operand, *kind);
+            IrExpr::NativeStateRelease { token } => {
+                let token = *token;
+                self.compile_expr(token)?;
+                self.code.push(Instruction::NativeStateRelease);
+            }
+            IrExpr::Convert { operand, kind, ty } => {
+                let (operand, kind, ty) = (*operand, *kind, *ty);
+                let from = self.program.expr_type(self.function, operand);
                 self.compile_expr(operand)?;
-                // An integer-width or float-width conversion is an identity copy
-                // over one runtime representation, so it emits nothing; only the
-                // two cross-representation conversions have an instruction.
-                match kind {
-                    ConvertKind::IntToInt | ConvertKind::FloatToFloat => {}
-                    ConvertKind::IntToRawPtr => {
-                        self.code.push(Instruction::ConvertIntToRawPtr);
-                    }
-                    ConvertKind::RawPtrToInt => {
-                        self.code.push(Instruction::ConvertRawPtrToInt);
-                    }
-                    ConvertKind::IntToFloat => self.code.push(Instruction::ConvertIntToFloat),
-                    ConvertKind::FloatToInt => self.code.push(Instruction::ConvertFloatToInt),
-                    ConvertKind::FloatToBits => self.code.push(Instruction::ConvertFloatToBits),
-                    ConvertKind::BitsToFloat => self.code.push(Instruction::ConvertBitsToFloat),
-                    ConvertKind::Bits32ToFloat => {
-                        self.code.push(Instruction::ConvertBits32ToFloat);
-                    }
-                    ConvertKind::FloatToBits32 => {
-                        self.code.push(Instruction::ConvertFloatToBits32);
-                    }
-                }
+                self.compile_convert(kind, from, ty);
             }
             // Erasure boxes on this side too, carrying the type that crossed
             // in. It did not always: a `Value` is a tagged union, so the erased
@@ -358,6 +381,16 @@ impl FnCompiler<'_> {
             // is what needed the type.
             //
             // See `kira_semantics_model::ErasedTypeId` for the encoding, and
+            IrExpr::TypeTest { value, target } => {
+                let (value, target) = (*value, *target);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::TypeTest(target.as_u64()));
+            }
+            IrExpr::TypeCast { value, target, .. } => {
+                let (value, target) = (*value, *target);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::Downcast(target.as_u64()));
+            }
             // `Heap::alloc_erased` for what the box holds.
             IrExpr::IntoAny { value, from } => {
                 let (value, from) = (*value, *from);
@@ -365,26 +398,6 @@ impl FnCompiler<'_> {
                 let type_id =
                     ErasedTypeId::of(from).ok_or(CompileError::ErasureOfAValuelessType)?;
                 self.code.push(Instruction::Erase(type_id.as_u64()));
-            }
-            // Widening one generic instantiation into another used to cost the
-            // VM nothing: the payload a `Result<Int, E>` carried was already a
-            // tagged `Value`, so it *was* the payload a `Result<Any, E>`
-            // carries, and no instruction was emitted.
-            //
-            // Erasure boxing ended that. An `Any` payload is now an erasure box
-            // carrying the type that crossed in, so the two rows hold different
-            // objects and the rebuild is real work — the same conclusion the
-            // LLVM backend already reached from the other direction, where an
-            // `Int` payload sits inline and an `Any` payload is a pointer.
-            //
-            // A pair whose rows share a runtime form still costs nothing, which
-            // is what `helper_for` answering `None` means.
-            IrExpr::Widen { value, from, to } => {
-                let (value, from, to) = (*value, *from, *to);
-                self.compile_expr(value)?;
-                if let Some(index) = self.widens.helper_for(self.program, from, to)? {
-                    self.code.push(Instruction::Call(index));
-                }
             }
             IrExpr::ArrayAppend { place, value } => {
                 let (place, value) = (place.clone(), *value);
@@ -437,6 +450,13 @@ impl FnCompiler<'_> {
                     let writebacks = writebacks.clone();
                     return self.compile_writeback_call(callee, &args, &writebacks);
                 }
+                // A `U64` prints as the unsigned value it is; the word alone
+                // cannot say so, so the instruction does.
+                let prints_unsigned = callee == IrCallee::Print
+                    && args.first().is_some_and(|&arg| {
+                        self.program.expr_type(self.function, arg)
+                            == Type::Int(kira_semantics_model::IntSpelling::U64)
+                    });
                 for (position, arg) in args.into_iter().enumerate() {
                     match self.argument_is_borrowed(callee, position) {
                         true => self.compile_borrowed_expr(arg)?,
@@ -444,6 +464,9 @@ impl FnCompiler<'_> {
                     }
                 }
                 match callee {
+                    IrCallee::Print if prints_unsigned => {
+                        self.code.push(Instruction::PrintUnsigned);
+                    }
                     IrCallee::Print => self.code.push(Instruction::Print),
                     // Which engine owns the callee is known here, at compile
                     // time, so the boundary costs a different opcode rather
@@ -562,7 +585,7 @@ impl FnCompiler<'_> {
             .function
             .locals
             .get(slot as usize)
-            .is_some_and(|&ty| self.program.types.runs_user_drop(ty));
+            .is_some_and(|&ty| self.program.types.takes_on_read(ty));
         if !runs_drop {
             return self.compile_expr(arg);
         }
@@ -585,6 +608,7 @@ impl FnCompiler<'_> {
         op: IrBinOp,
         lhs: IrExprId,
         rhs: IrExprId,
+        ty: Type,
     ) -> Result<(), CompileError> {
         match op {
             IrBinOp::And => self.compile_and(lhs, rhs),
@@ -592,8 +616,7 @@ impl FnCompiler<'_> {
             other => {
                 self.compile_expr(lhs)?;
                 self.compile_expr(rhs)?;
-                self.code.push(binary_instruction(other)?);
-                Ok(())
+                self.compile_int_operator(other, ty)
             }
         }
     }

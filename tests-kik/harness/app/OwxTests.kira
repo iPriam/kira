@@ -101,8 +101,8 @@ struct OwxTreeNode {
 
 function owxMakeLeaf(id: Int) -> OwxTreeNode {
     return OwxTreeNode {
-        id: id
-        onPress: owxMakeAdder(id)
+        id: id,
+        onPress: owxMakeAdder(id),
         children: []
     }
 }
@@ -112,8 +112,8 @@ function owxMakeBranch(id: Int) -> OwxTreeNode {
     children.append(owxMakeLeaf(id + 10))
     children.append(owxMakeLeaf(id + 20))
     return OwxTreeNode {
-        id: id
-        onPress: owxMakeAdder(id)
+        id: id,
+        onPress: owxMakeAdder(id),
         children: move children
     }
 }
@@ -123,8 +123,8 @@ function owxMakeTree(seed: Int) -> OwxTreeNode {
     children.append(owxMakeBranch(seed + 100))
     children.append(owxMakeBranch(seed + 200))
     return OwxTreeNode {
-        id: seed
-        onPress: owxMakeAdder(seed)
+        id: seed,
+        onPress: owxMakeAdder(seed),
         children: move children
     }
 }
@@ -247,7 +247,7 @@ construct OwxArrayFieldReadbackParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 // From ownership_array_struct_elements_parity: an empty typed-element array
@@ -267,7 +267,7 @@ construct OwxArrayStructElementsParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(48); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(48) return e }
 }
 
 // From ownership_borrow_mut_struct_field_parity: `borrow mut` struct params
@@ -283,7 +283,7 @@ construct OwxBorrowMutStructFieldParity() extends Test {
 
         return box.n * 100 + pair.a * 10 + pair.b
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1873); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1873) return e }
 }
 
 // From ownership_borrow_param_parity: a plain `borrow` param can be read
@@ -295,7 +295,7 @@ construct OwxBorrowParamParity() extends Test {
         let b = owxInspect(mesh)
         return a + b
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // From ownership_closure_array_elements_parity: closures stored in an array
@@ -322,7 +322,7 @@ construct OwxClosureArrayElementsParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(501500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(501500) return e }
 }
 
 // From ownership_closure_block_churn_parity: every closure block is freed
@@ -338,7 +338,7 @@ construct OwxClosureBlockChurnParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4501500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4501500) return e }
 }
 
 // From ownership_closure_body_recursive_tree_parity: recursive closure-rich
@@ -351,7 +351,7 @@ construct OwxClosureBodyRecursiveTreeParity() extends Test {
         }
         return owxRunBuilder(move builder)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(332700); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(332700) return e }
 }
 
 // From ownership_closure_branch_local_parity: a var closure local reassigned
@@ -372,7 +372,7 @@ construct OwxClosureBranchLocalParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2500) return e }
 }
 
 // From ownership_closure_capture_copy_parity: a by-value capture must be
@@ -383,7 +383,7 @@ construct OwxClosureCaptureCopyParity() extends Test {
         let printer = owxMakeValue(5)
         return printer()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // From ownership_closure_field_reassign_parity: overwriting a closure field
@@ -404,7 +404,7 @@ construct OwxClosureFieldReassignParity() extends Test {
         total = total + g(1)
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2003000) return e }
 }
 
 // From ownership_closure_mixed_aggregate_churn_parity: strings and closures
@@ -431,7 +431,7 @@ construct OwxClosureMixedAggregateChurnParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(22950); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(22950) return e }
 }
 
 // From ownership_closure_multi_capture_churn_parity: closures with several
@@ -448,7 +448,7 @@ construct OwxClosureMultiCaptureChurnParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(19992000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(19992000) return e }
 }
 
 // From ownership_closure_nested_capture_parity: a closure captured inside
@@ -467,7 +467,7 @@ construct OwxClosureNestedCaptureParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1127250); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1127250) return e }
 }
 
 // From ownership_closure_owned_param_parity: an owned/move closure param is
@@ -483,7 +483,7 @@ construct OwxClosureOwnedParamParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2005000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2005000) return e }
 }
 
 // From ownership_closure_returned_parity: returning a borrowed closure
@@ -500,7 +500,7 @@ construct OwxClosureReturnedParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2003000) return e }
 }
 
 // From ownership_closure_struct_array_parity: structs with closure fields
@@ -522,7 +522,7 @@ construct OwxClosureStructArrayParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42000) return e }
 }
 
 // From ownership_closure_struct_copy_parity: struct copies deep-clone
@@ -541,7 +541,7 @@ construct OwxClosureStructCopyParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2003000) return e }
 }
 
 // From ownership_closure_struct_field_parity: a closure stored in a struct
@@ -558,5 +558,5 @@ construct OwxClosureStructFieldParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4000000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4000000) return e }
 }

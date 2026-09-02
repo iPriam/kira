@@ -12,13 +12,13 @@ Kira calls prebuilt C functions with no `@Native` and no glue: a package lists i
 An `@FFI.Extern` declaration names the native library, the C symbol, and the C ABI, and its function has an exact-width signature and no body.
 
 ```kira
-@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
-function add(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffimath, symbol: ffi_add, abi: c }
+function add(a: I32, b: I32) -> I32
 
 @Main function main() { print(add(20, 22)) return }
 ```
 
-The three fields are required exactly once, and `abi` must be `c`. Repeatable `retains: <parameter>;` fields mark parameters whose C callee keeps pointers after the call. A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
+The three fields are required exactly once, and `abi` must be `c`. Repeatable `retains: <parameter>` fields mark parameters whose C callee keeps pointers after the call. A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
 
 ## The Supported Type Surface
 
@@ -30,7 +30,7 @@ Parameters and results may be `Void`, `Int` and the narrower integers `I8`/`I16`
 
 `CString` is C text, and how long its storage lives depends on where it is written.
 
-As a **parameter**, a call passes a Kira `String` (the one implicit coercion), and the bytes are copied into transient NUL-terminated storage for the duration of the call. The caller keeps its `String`, and an interior NUL byte is a typed trap rather than a truncated string. `CString` is illegal in an ordinary Kira local or function parameter.
+As a **parameter**, a call passes a Kira `String` (the one implicit coercion), and the bytes are copied into transient NUL-terminated storage for the duration of the call. The caller keeps its `String`, and an interior NUL byte is a typed trap rather than a truncated string. As a **result** or a callback argument, the C bytes are validated: a `String` holds UTF-8 and nothing else, so a C string that is not valid UTF-8 is a foreign-contract trap on every engine, never a lossy rendering. `CString` is illegal in an ordinary Kira local or function parameter.
 
 As a **result**, the seam copies the returned `const char*` into an owned Kira `String` while the pointer is valid, so no C storage crosses the result boundary.
 
@@ -48,12 +48,12 @@ Use `retains:` only when C keeps pointers after return.
 
 ```kira
 @FFI.Extern {
-    library: sokol;
-    symbol: sapp_run;
-    abi: c;
-    retains: desc;
+    library: sokol,
+    symbol: sapp_run,
+    abi: c,
+    retains: desc
 }
-function sappRun(desc: SappDescPtr): Void;
+function sappRun(desc: SappDescPtr) -> Void
 
 let desc = SappDesc { windowTitle = "Kira" }
 sappRun(move desc)
@@ -73,15 +73,43 @@ Every backend reaches C through one generated **adapter** per import: a uniform 
 
 ## Opaque Callback State
 
-For a native API that carries a `void*` userdata token, three intrinsics move Kira-owned state across it without exposing a layout.
+For a native API that carries a `void*` userdata token, these intrinsics move Kira-owned state across it without exposing a layout.
 
 | Written | What it does |
 | --- | --- |
-| `nativeState(value)` | Boxes a Kira value into stable callback-state storage. |
-| `nativeUserData(state)` | Exports the opaque `RawPtr` token native code carries around. |
-| `nativeRecover(token)` | Turns the token back into typed mutable Kira access. |
+| `nativeState(value)` | Boxes a Kira value into callback-state storage and returns the owning handle. |
+| `nativeUserData(state)` | Exports an opaque `RawPtr` token that owns one reference to the state. |
+| `nativeRecover<T>(token)` | Turns a token back into typed mutable access to the stored state. |
+| `nativeUserDataRetain(token)` | Adds one owner, for native code that keeps the token past the call that received it. |
+| `nativeUserDataRelease(token)` | Removes one owner. The last release destroys the state and its contents exactly once. |
 
-Repeated `nativeUserData` calls on one handle return the same token, and recovery gives access to the stored state rather than a copy. This is not `@FFI.Struct { layout: c; }`: that is a real memory-layout contract, while this is opaque transport whose layout native code is never meant to know.
+Callback state is reference-counted. Creating it establishes one owner, the handle: moving the handle transfers that owner, and the handle gives its reference up when it goes out of scope, like any other owned value. Every `nativeUserData` call is one more owner, so every exported token is paired with one `nativeUserDataRelease`, and every `nativeUserDataRetain` with one more. Tokens are never reused: recovering or releasing through a token whose state lost its last owner traps rather than reading freed storage. Tokens belong to the runtime session that created them.
+
+```kira
+struct Counter { var hits: Int = 0 }
+
+function exportCounter() -> RawPtr {
+    let state = nativeState(Counter {})
+    // The handle dies here; the token keeps the state alive on its own.
+    return nativeUserData(state)
+}
+
+@Main function main() {
+    let token = exportCounter()
+    var view = nativeRecover<Counter>(token)
+    view.hits = view.hits + 1
+    nativeUserDataRelease(token)
+    return
+}
+```
+
+`nativeStateFree(handle)` is deprecated and reported by `KSEM360`. It is one release through the handle, not an unconditional free, and it consumes the handle.
+
+Recovery gives access to the stored state rather than a copy. This is not `@FFI.Struct { layout: c }`: that is a real memory-layout contract, while this is opaque transport whose layout native code is never meant to know.
+
+### What Foreign Code May Keep
+
+Foreign code may retain Kira data only through an owned callback-state token, an owning callback handle whose captures live in callback state, or a `retains:` parameter's C storage with its paired release. It may not keep a borrowed Kira value, a stack place, a temporary string, an array element address, a writeback pointer, or a closure environment pointer past the call: none of those is owned by the callee, and a declaration that lets the callee keep something says so with `retains:`, which in turn requires the caller to `move` the argument.
 
 ## Deferred Shapes
 

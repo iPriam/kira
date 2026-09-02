@@ -9,7 +9,7 @@
 //! being called, and does the argument list fit its signature — and all but two
 //! of them end up in the same argument checker.
 
-use kira_semantics_model::Type;
+use kira_semantics_model::{IntSpelling, Type};
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_syntax_model::ast::{BinaryOp, Expr, ExprId};
 
@@ -25,7 +25,8 @@ mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
-mod overloads;
+mod casts;
+pub(crate) mod overloads;
 mod print;
 mod qualified;
 mod struct_ops;
@@ -145,6 +146,33 @@ impl Analyzer<'_> {
             return self.enum_equality(op == BinaryOp::Eq, lhs_hir, rhs_hir);
         }
 
+        // Two values of one distinct type compare as the scalar word they are.
+        // Equality is the whole operator surface a distinct type has: an id is
+        // *the same id* or it is not, while adding two of them, ordering them,
+        // or comparing one to its representation are the mistakes the type
+        // exists to refuse. `resolve_binary` picks the machine comparison from
+        // the representation, so no backend learns distinct types can be
+        // compared.
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && matches!(lt, Type::Distinct(_))
+            && lt == rt
+            && let Some((hir_op, ty)) = {
+                let representation = self.program.types.representation(lt);
+                resolve_binary(op, representation, representation)
+            }
+        {
+            return self.program.exprs.alloc(HirExpr::Binary {
+                op: hir_op,
+                lhs: lhs_hir,
+                rhs: rhs_hir,
+                ty,
+            });
+        }
+
+        if let Some(refused) = self.refuse_mixed_spellings(op, lhs_hir, rhs_hir, lt, rt, span) {
+            return refused;
+        }
+
         match resolve_binary(op, lt, rt) {
             Some((hir_op, ty)) => self.program.exprs.alloc(HirExpr::Binary {
                 op: hir_op,
@@ -168,6 +196,68 @@ impl Analyzer<'_> {
                     self.program.exprs.alloc(HirExpr::Error)
                 }),
         }
+    }
+
+    /// Refuses two integer operands of different spellings unless one is a
+    /// bare literal the other's spelling can hold.
+    ///
+    /// A written width is the value's whole contract, so `Int` and `U8`
+    /// operands do not mix by themselves: the program says which width the
+    /// operation has, with a conversion such as `U8(x)`. A literal is the
+    /// exception, because it has no width of its own until it is used, and
+    /// it adapts to the other side when it fits. A shift count is the other
+    /// exception: it is a count, not a value of the shifted kind.
+    fn refuse_mixed_spellings(
+        &mut self,
+        op: BinaryOp,
+        lhs: HirExprId,
+        rhs: HirExprId,
+        lt: Type,
+        rt: Type,
+        span: kira_source::Span,
+    ) -> Option<HirExprId> {
+        let (Type::Int(left), Type::Int(right)) = (lt, rt) else {
+            return None;
+        };
+        if left == right || matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+            return None;
+        }
+        let adapts = |literal: HirExprId, to: IntSpelling| match *self.program.expr(literal) {
+            // A hexadecimal literal is a bit pattern, the one way a literal
+            // can be negative: as a `U64` it names the unsigned value.
+            HirExpr::Int(value) if to == IntSpelling::U64 && value < 0 => {
+                to.holds(i128::from(value as u64))
+            }
+            HirExpr::Int(value) => to.holds(i128::from(value)),
+            // `-101` is a negated literal, and adapts as the literal it is.
+            HirExpr::Unary {
+                op: kira_semantics_model::hir::HirUnaryOp::NegInt,
+                operand,
+                ..
+            } => match *self.program.expr(operand) {
+                HirExpr::Int(value) => to.holds(-i128::from(value)),
+                _ => false,
+            },
+            _ => false,
+        };
+        if (left == IntSpelling::Plain && adapts(lhs, right))
+            || (right == IntSpelling::Plain && adapts(rhs, left))
+        {
+            return None;
+        }
+        self.emit(
+            span,
+            "KSEM071",
+            format!(
+                "operator `{}` mixes `{}` and `{}`; convert one side to the other's spelling, \
+                 such as `{}(…)`",
+                op.spelling(),
+                self.type_name(lt),
+                self.type_name(rt),
+                right.name()
+            ),
+        );
+        Some(self.program.exprs.alloc(HirExpr::Error))
     }
 
     /// Resolves a bare name against the receiver's fields, for a method body

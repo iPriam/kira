@@ -26,6 +26,7 @@ pub mod erased;
 pub mod execution;
 pub mod file_system;
 pub mod foreign;
+pub mod int_width;
 pub mod main_thread;
 pub mod math_op;
 pub mod native_state;
@@ -33,6 +34,7 @@ pub mod ownership;
 pub mod string_op;
 pub mod syscall;
 pub mod tasks;
+pub mod toolchain;
 
 pub use aggregate::{
     ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates,
@@ -40,10 +42,16 @@ pub use aggregate::{
     scalar_layout,
 };
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
+pub use int_width::IntWidth;
 pub use compiler::{
     CheckDiagnostic, CheckFile, CheckPackage, CheckRequest, CheckSeverity, CheckWireError,
     CompilerError, CompilerOp, DIAGNOSTIC_FIELDS, PackageChecker,
 };
+pub use toolchain::{
+    TOOL_DIAGNOSTIC_FIELDS, ToolAnswer, ToolBackend, ToolDiagnostic, ToolRequest, ToolVariable,
+    ToolVerb, ToolWireError, Toolchain, ToolchainError,
+};
+
 pub use enum_payload::EnumPayloadKind;
 pub use env::EnvOp;
 pub use erased::ErasedKind;
@@ -103,7 +111,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 13;
+pub const RUNTIME_ABI_VERSION: u32 = 14;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -135,7 +143,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_13";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_14";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -202,6 +210,8 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_native_state_recover",
     "kira_rt_native_state_replace",
     "kira_rt_native_state_free",
+    "kira_rt_native_state_retain",
+    "kira_rt_native_state_release",
     "kira_rt_native_value_set_cblock_child",
     "kira_rt_native_value_cblock_child_offset",
     "kira_rt_native_value_cblock_child_width",
@@ -574,8 +584,14 @@ pub trait HostCapabilities {
         self.native_state_replace(token, ty, root)
     }
 
-    /// Releases callback state exactly once.
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    /// Adds one owner to live callback state.
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        let _ = token;
+        Err(NativeStateError::NoStateHost)
+    }
+
+    /// Removes one owner from live callback state, destroying it with the last.
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         let _ = token;
         Err(NativeStateError::NoStateHost)
     }
@@ -612,6 +628,25 @@ pub trait HostCapabilities {
     /// request that could not be read.
     fn compiler(&mut self, request: &CheckRequest) -> Result<Vec<CheckDiagnostic>, CompilerError> {
         compiler::perform(request)
+    }
+
+    /// Checks, builds, or runs a package that is already on a disk.
+    ///
+    /// A separate slot from [`Self::compiler`] rather than another operation of
+    /// it, because a host can honestly have one and not the other: a browser
+    /// tab embeds the frontend and can answer a question about source it was
+    /// handed, and has no directory to build and no process to start. Each
+    /// refuses on its own.
+    ///
+    /// A package that does not compile is not an error here either — its
+    /// problems are the answer, and so is the exit code of a program that ran
+    /// and failed. The error is for a host with no toolchain at all.
+    fn toolchain(
+        &mut self,
+        verb: ToolVerb,
+        request: &ToolRequest,
+    ) -> Result<ToolAnswer, ToolchainError> {
+        toolchain::perform(verb, request)
     }
 }
 

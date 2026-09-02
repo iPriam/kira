@@ -190,10 +190,10 @@ impl<'a> Lexed<'a> {
     /// Whether a line break separates the token at `index` from the one before
     /// it.
     ///
-    /// Kira separates statements with `;` **or** a newline. The parser recovers
-    /// statement boundaries structurally and so never needs to ask, but macro
-    /// expansion does: whether `name!(…)` sits in statement or expression
-    /// position is exactly the question of whether a statement started at it.
+    /// Newlines are whitespace: the parser delimits statements structurally
+    /// and never needs to ask. Macro expansion works on tokens before any
+    /// parse, and uses the line break as its approximation of whether a
+    /// statement started at `index`.
     pub(crate) fn newline_before(&self, index: usize) -> bool {
         if index == 0 {
             return true;

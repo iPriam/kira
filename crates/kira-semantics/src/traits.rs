@@ -42,6 +42,8 @@ use kira_semantics_model::Type;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, TypeParamDecl, TypeRefId};
 
+use crate::analyze::Analyzer;
+
 /// The compiler-known trait asserting that a type copies rather than moves.
 pub(crate) const COPYABLE: &str = "Copyable";
 
@@ -179,3 +181,25 @@ pub(crate) struct Conformance {
 
 /// Every trait a program declares, keyed by name.
 pub(crate) type TraitTable<'a> = BTreeMap<String, TraitInfo<'a>>;
+
+impl<'a> Analyzer<'a> {
+    /// The key under which `name`, written in the current file, finds a
+    /// declared trait: the file's own package first, then the program's own
+    /// declarations, then the packages the file imports. A trait is filed
+    /// under its declaring package (`Pkg::Name`), so two packages may each
+    /// declare a `Named`.
+    pub(crate) fn visible_trait_key(&self, name: &str) -> Option<String> {
+        let home = self.template_key(self.source, name);
+        if self.traits.contains_key(&home) {
+            return Some(home);
+        }
+        if self.traits.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .map(|package| format!("{package}::{name}"))
+            .find(|key| self.traits.contains_key(key))
+    }
+}

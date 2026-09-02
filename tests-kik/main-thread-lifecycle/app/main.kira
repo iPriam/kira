@@ -31,7 +31,6 @@ function uiLifecycle() {
 function main() {
     uiLifecycle()
     counterLifecycle()
-    MainThread.invoke { oneOffMainThreadWork() }
     return
 }
 
@@ -39,11 +38,21 @@ function main() {
 // many times. The printed total is the proof its locals survived every
 // suspension: a lifecycle restarted from scratch each turn could never reach
 // this count.
+//
+// The posted work is queued from inside the loop rather than from the
+// application thread, which is what makes the printed order a scheduler
+// property instead of a race: posted work joins the main thread's one sequence
+// order, so it runs at the next round — before the slices this fiber still
+// owes — and "manual-main-thread" always precedes the total. Posting from the
+// application thread would only order the two when that thread happened to win.
 @MainThreadLifecycle
 function counterLifecycle() {
     var total = 0
     var index = 0
     while index < 20000 {
+        if index == 10000 {
+            MainThread.post { oneOffMainThreadWork() }
+        }
         total = total + 1
         index = index + 1
     }

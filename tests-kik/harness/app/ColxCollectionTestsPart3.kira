@@ -19,7 +19,7 @@ construct ColxGridSum5() extends Test {
         let grid = ColxGrid { cells: move cells }
         return grid.sum()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct ColxGridCellCount7() extends Test {
@@ -33,7 +33,7 @@ construct ColxGridCellCount7() extends Test {
         let grid = ColxGrid { cells: move cells }
         return grid.cellCount()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct ColxGridLarge100() extends Test {
@@ -48,7 +48,7 @@ construct ColxGridLarge100() extends Test {
         return grid.sum()
     }
     // 0+1+...+99 = 4950
-    expect { let e: Result<Int, TestFailure> = .Ok(4950); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4950) return e }
 }
 
 construct ColxGridMultiRowSum() extends Test {
@@ -70,7 +70,7 @@ construct ColxGridMultiRowSum() extends Test {
         return total
     }
     // r=0: 0+1+2+3=6, r=1: 4+5+6+7=22, r=2: 8+9+10+11=38 -> 66
-    expect { let e: Result<Int, TestFailure> = .Ok(66); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(66) return e }
 }
 
 construct ColxGridEmptySum() extends Test {
@@ -79,7 +79,7 @@ construct ColxGridEmptySum() extends Test {
         let grid = ColxGrid { cells: move cells }
         return grid.sum()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ColxGridEmptyCount() extends Test {
@@ -88,7 +88,7 @@ construct ColxGridEmptyCount() extends Test {
         let grid = ColxGrid { cells: move cells }
         return grid.cellCount()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ColxGridRangeSum() extends Test {
@@ -98,7 +98,7 @@ construct ColxGridRangeSum() extends Test {
         return grid.sum()
     }
     // 0+1+...+9 = 45
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 construct ColxGridSquaresSum() extends Test {
@@ -108,7 +108,7 @@ construct ColxGridSquaresSum() extends Test {
         return grid.sum()
     }
     // 0+1+4+9+16+25+36+49 = 140
-    expect { let e: Result<Int, TestFailure> = .Ok(140); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(140) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ construct ColxChurnRange100() extends Test {
         return total
     }
     // 10 per round * 100 = 1000
-    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1000) return e }
 }
 
 construct ColxChurnSquares50() extends Test {
@@ -142,7 +142,7 @@ construct ColxChurnSquares50() extends Test {
         return total
     }
     // 285 per round * 50 = 14250
-    expect { let e: Result<Int, TestFailure> = .Ok(14250); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14250) return e }
 }
 
 construct ColxChurnFib30() extends Test {
@@ -157,7 +157,7 @@ construct ColxChurnFib30() extends Test {
         return total
     }
     // 33 per round * 30 = 990
-    expect { let e: Result<Int, TestFailure> = .Ok(990); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(990) return e }
 }
 
 construct ColxChurnReverse20() extends Test {
@@ -173,7 +173,7 @@ construct ColxChurnReverse20() extends Test {
         return total
     }
     // rev[0]=7 per round, 7*20=140
-    expect { let e: Result<Int, TestFailure> = .Ok(140); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(140) return e }
 }
 
 construct ColxChurnStructs40() extends Test {
@@ -199,7 +199,7 @@ construct ColxChurnStructs40() extends Test {
         return total
     }
     // sum x = 10 per round * 40 = 400
-    expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(400) return e }
 }
 
 construct ColxChurnGrids25() extends Test {
@@ -218,7 +218,7 @@ construct ColxChurnGrids25() extends Test {
         return total
     }
     // r-th round sum=3r+3; total=sum(3r+3 for r=0..24)=3*(0+...+24)+3*25=3*300+75=975
-    expect { let e: Result<Int, TestFailure> = .Ok(975); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(975) return e }
 }
 
 construct ColxChurnLarge200() extends Test {
@@ -233,7 +233,7 @@ construct ColxChurnLarge200() extends Test {
         return total
     }
     // sum(i^2 for i=0..19)=19*20*39/6=2470; 2470*200=494000
-    expect { let e: Result<Int, TestFailure> = .Ok(494000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(494000) return e }
 }
 
 construct ColxChurnMixed30() extends Test {
@@ -250,7 +250,7 @@ construct ColxChurnMixed30() extends Test {
         return total
     }
     // range(5)=10, squares(5)=30, fib(5)=[0,1,1,2,3]=7; 47*30=1410
-    expect { let e: Result<Int, TestFailure> = .Ok(1410); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1410) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ construct ColxTrapDivByZero() extends Test {
         let x = 10 / 0
         return x
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapModByZero() extends Test {
@@ -270,7 +270,7 @@ construct ColxTrapModByZero() extends Test {
         let x = 10 % 0
         return x
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapDivByZeroVar() extends Test {
@@ -280,7 +280,7 @@ construct ColxTrapDivByZeroVar() extends Test {
         let result = 100 / xs[0]
         return result
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapModByZeroVar() extends Test {
@@ -290,7 +290,7 @@ construct ColxTrapModByZeroVar() extends Test {
         let result = 100 % xs[0]
         return result
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapIndexAtCount() extends Test {
@@ -299,7 +299,7 @@ construct ColxTrapIndexAtCount() extends Test {
         let _ = xs[xs.count]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapLoopOOB() extends Test {
@@ -316,7 +316,7 @@ construct ColxTrapLoopOOB() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapWriteOOB() extends Test {
@@ -327,7 +327,7 @@ construct ColxTrapWriteOOB() extends Test {
         xs[2] = 99
         return xs[2]
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapFibOOBDirect() extends Test {
@@ -336,7 +336,7 @@ construct ColxTrapFibOOBDirect() extends Test {
         let _ = xs[5]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -407,5 +407,5 @@ construct ColxNestedArrayFree() extends Test {
         return total
     }
     // per iteration: 2*214 + 3 + 2 + 2 = 435; 200 * 435 = 87000
-    expect { let e: Result<Int, TestFailure> = .Ok(87000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(87000) return e }
 }

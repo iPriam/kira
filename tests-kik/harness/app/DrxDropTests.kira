@@ -85,7 +85,7 @@ construct DrxAScopedValueIsStillOrdinaryToUse() extends Test {
     test {
         return drxScoped(21)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct DrxABorrowLeavesTheValueUsable() extends Test {
@@ -93,7 +93,7 @@ construct DrxABorrowLeavesTheValueUsable() extends Test {
         let held = DrxTrace(tag: 3)
         return drxRead(held) + held.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(33) return e }
 }
 
 construct DrxAMovedValueReachesTheCalleeWhole() extends Test {
@@ -101,7 +101,7 @@ construct DrxAMovedValueReachesTheCalleeWhole() extends Test {
         let held = DrxTrace(tag: 8)
         return drxConsume(move held)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct DrxARetroactiveDropIsAnOrdinaryConformance() extends Test {
@@ -109,7 +109,7 @@ construct DrxARetroactiveDropIsAnOrdinaryConformance() extends Test {
         let held = DrxLate(tag: 4)
         return held.tag * 5
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct DrxAContainerReleasesEveryDropItHolds() extends Test {
@@ -117,7 +117,7 @@ construct DrxAContainerReleasesEveryDropItHolds() extends Test {
         let pair = DrxPair(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
         return pair.first.tag + pair.second.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // Churn: a heap-owning `Drop` type built and released 500 times, so a body that
@@ -127,7 +127,7 @@ construct DrxChurningADropTypeLeaksNothing() extends Test {
     test {
         return drxChurn(500)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(124750); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(124750) return e }
 }
 
 // A `Drop` type with methods. A method that only reads borrows its receiver; a
@@ -186,7 +186,7 @@ construct DrxAMemberReadLeavesTheValueWithItsOwner() extends Test {
         let pair = DrxPair(first: DrxTrace(tag: 1), second: DrxTrace(tag: 2))
         return pair.first.tag * 100 + drxRead(pair.first) + pair.second.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(112) return e }
 }
 
 construct DrxOverwritingABindingKeepsOneValue() extends Test {
@@ -195,7 +195,7 @@ construct DrxOverwritingABindingKeepsOneValue() extends Test {
         held = DrxTrace(tag: 2)
         return held.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct DrxWritingAMemberKeepsOneValue() extends Test {
@@ -204,7 +204,7 @@ construct DrxWritingAMemberKeepsOneValue() extends Test {
         slots.first = DrxTrace(tag: 3)
         return slots.first.tag + slots.second.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct DrxWritingAnElementKeepsOneValue() extends Test {
@@ -213,7 +213,7 @@ construct DrxWritingAnElementKeepsOneValue() extends Test {
         elements[0] = DrxTrace(tag: 3)
         return elements[0].tag + elements[1].tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // Counting and indexing an array of `Drop` values reads through it: neither
@@ -223,7 +223,7 @@ construct DrxAnArrayOfDropValuesReadsWithoutTaking() extends Test {
         let bag = DrxBag(items: [DrxTrace(tag: 3), DrxTrace(tag: 4)])
         return bag.items.count * 100 + drxBagTotal(bag)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(207); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(207) return e }
 }
 
 // A mutating method, direct and through a `borrow mut` parameter: the receiver
@@ -235,7 +235,7 @@ construct DrxAMutatingMethodKeepsOneValue() extends Test {
         drxTick(counter)
         return counter.value()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // Reading a member of an array element copies no element: the read walks to the
@@ -245,7 +245,7 @@ construct DrxAnElementMemberReadCopiesNothing() extends Test {
         let cells: [DrxCell] = [DrxCell(held: DrxCounter(tag: 8)), DrxCell(held: DrxCounter(tag: 9))]
         return cells[1].held.tag - cells[0].held.value()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // The order, printed. Every line here is one body running, and the sequence is

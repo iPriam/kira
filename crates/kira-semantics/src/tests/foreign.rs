@@ -32,8 +32,8 @@ fn has_foreign_call(program: &HirProgram) -> bool {
     })
 }
 
-const ADD: &str = "@FFI.Extern { library: ffimath; symbol: kira_ffi_add; abi: c; }\n\
-     function add(a: I32, b: I32) -> I32;\n\
+const ADD: &str = "@FFI.Extern { library: ffimath, symbol: kira_ffi_add, abi: c }\n\
+     function add(a: I32, b: I32) -> I32\n\
      @Main function main() { print(add(20, 22)) return }";
 
 #[test]
@@ -59,13 +59,13 @@ fn the_add_example_type_checks_and_records_one_foreign_row() {
 fn a_string_argument_reaches_a_cstring_parameter() {
     // The one explicit coercion: a Kira `String` is accepted where a `CString`
     // parameter is expected, and the caller keeps its `String` (no `move`).
-    let text = "@FFI.Extern { library: l; symbol: greet; abi: c; }\n\
-                function greet(name: CString) -> I32;\n\
+    let text = "@FFI.Extern { library: l, symbol: greet, abi: c }\n\
+                function greet(name: CString) -> I32\n\
                 @Main function main() { let s = \"hi\" print(greet(s)) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     // A string literal reaches it too.
-    let literal = "@FFI.Extern { library: l; symbol: greet; abi: c; }\n\
-                   function greet(name: CString) -> I32;\n\
+    let literal = "@FFI.Extern { library: l, symbol: greet, abi: c }\n\
+                   function greet(name: CString) -> I32\n\
                    @Main function main() { print(greet(\"hi\")) return }";
     assert!(
         diagnostics(literal).is_empty(),
@@ -76,10 +76,10 @@ fn a_string_argument_reaches_a_cstring_parameter() {
 
 #[test]
 fn a_raw_ptr_round_trips_between_two_foreign_calls() {
-    let text = "@FFI.Extern { library: l; symbol: make; abi: c; }\n\
-                function makePtr() -> RawPtr;\n\
-                @FFI.Extern { library: l; symbol: consume; abi: c; }\n\
-                function usePtr(p: RawPtr);\n\
+    let text = "@FFI.Extern { library: l, symbol: make, abi: c }\n\
+                function makePtr() -> RawPtr\n\
+                @FFI.Extern { library: l, symbol: consume, abi: c }\n\
+                function usePtr(p: RawPtr)\n\
                 @Main function main() { let p = makePtr() usePtr(p) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     assert_eq!(program(text).foreign.len(), 2);
@@ -89,7 +89,7 @@ fn a_raw_ptr_round_trips_between_two_foreign_calls() {
 
 #[test]
 fn a_bodyless_ordinary_function_is_a_parse_error() {
-    let text = "@Main function main() { return }\nfunction f() -> I32;";
+    let text = "@Main function main() { return }\nfunction f() -> I32";
     assert!(
         codes(text).iter().any(|code| code == "KPAR055"),
         "{:?}",
@@ -100,7 +100,7 @@ fn a_bodyless_ordinary_function_is_a_parse_error() {
 #[test]
 fn an_extern_with_a_body_is_a_parse_error() {
     let text = "@Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> I32 { return 1 }";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f() -> I32 { return 1 }";
     assert!(
         codes(text).iter().any(|code| code == "KPAR054"),
         "{:?}",
@@ -113,19 +113,19 @@ fn an_extern_with_a_body_is_a_parse_error() {
 fn extern_add(block: &str) -> String {
     format!(
         "@Main function main() {{ return }}\n\
-         @FFI.Extern {{ {block} }} function ffiAdd(a: I32, b: I32) -> I32;"
+         @FFI.Extern {{ {block} }} function ffiAdd(a: I32, b: I32) -> I32"
     )
 }
 
 #[test]
 fn a_missing_required_field_is_refused() {
-    assert_eq!(codes(&extern_add("library: l; abi: c;")), vec!["KSEM180"]);
+    assert_eq!(codes(&extern_add("library: l, abi: c")), vec!["KSEM180"]);
 }
 
 #[test]
 fn a_duplicate_field_is_refused() {
     assert_eq!(
-        codes(&extern_add("library: l; library: m; symbol: s; abi: c;")),
+        codes(&extern_add("library: l, library: m, symbol: s, abi: c")),
         vec!["KSEM179"]
     );
 }
@@ -133,7 +133,7 @@ fn a_duplicate_field_is_refused() {
 #[test]
 fn an_unknown_field_is_refused() {
     assert_eq!(
-        codes(&extern_add("library: l; symbol: s; abi: c; bogus: x;")),
+        codes(&extern_add("library: l, symbol: s, abi: c, bogus: x")),
         vec!["KSEM178"]
     );
 }
@@ -141,7 +141,7 @@ fn an_unknown_field_is_refused() {
 #[test]
 fn a_non_c_abi_is_refused() {
     assert_eq!(
-        codes(&extern_add("library: l; symbol: s; abi: rust;")),
+        codes(&extern_add("library: l, symbol: s, abi: rust")),
         vec!["KSEM181"]
     );
 }
@@ -151,8 +151,8 @@ fn a_non_c_abi_is_refused() {
 fn extern_with_marker(marker: &str) -> String {
     format!(
         "@Main function main() {{ return }}\n\
-         @FFI.Extern {{ library: l; symbol: s; abi: c; }} {marker} \
-         function ffiAdd(a: I32) -> I32;"
+         @FFI.Extern {{ library: l, symbol: s, abi: c }} {marker} \
+         function ffiAdd(a: I32) -> I32"
     )
 }
 
@@ -172,7 +172,7 @@ fn ffi_extern_conflicts_with_each_execution_and_entry_annotation() {
 fn extern_param(ty: &str) -> String {
     format!(
         "@Main function main() {{ return }}\n\
-         @FFI.Extern {{ library: l; symbol: s; abi: c; }} function f(a: {ty}) -> I32;"
+         @FFI.Extern {{ library: l, symbol: s, abi: c }} function f(a: {ty}) -> I32"
     )
 }
 
@@ -210,7 +210,7 @@ fn a_generic_type_in_the_signature_is_judged_by_what_it_resolves_to() {
 fn a_multi_field_struct_parameter_is_refused() {
     let text = "struct Pt { let x: I32\nlet y: I32 }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(p: Pt) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(p: Pt) -> I32";
     assert_eq!(codes(text), vec!["KSEM182"]);
 }
 
@@ -221,7 +221,7 @@ fn a_single_scalar_field_struct_crosses_as_its_field() {
     // the struct to rebuild on both sides.
     let text = "struct Handle { var id: U32 }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Handle) -> Handle;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(h: Handle) -> Handle";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
     let row = &program.foreign[0];
@@ -239,10 +239,10 @@ fn a_single_scalar_field_struct_crosses_as_its_field() {
 
 #[test]
 fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Rect { var x: Float\n var y: Float\n var w: Float\n var h: Float }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(r: Rect) -> Rect;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(r: Rect) -> Rect";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
     let row = &program.foreign[0];
@@ -268,12 +268,12 @@ fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
 
 #[test]
 fn a_nested_c_layout_struct_is_one_table_row_below_its_container() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Origin { var x: Float\n var y: Float }\n\
-                @FFI.Struct { layout: c; }\n\
+                @FFI.Struct { layout: c }\n\
                 struct Frame { var origin: Origin\n var w: Float\n var h: Float }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(fr: Frame) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(fr: Frame) -> I32";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
     let outer = program.foreign[0].signature.parameters()[0]
@@ -291,23 +291,23 @@ fn a_nested_c_layout_struct_is_one_table_row_below_its_container() {
 
 #[test]
 fn naming_one_aggregate_twice_adds_one_table_row() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct P { var x: Float\n var y: Float }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: a; abi: c; } function f(p: P) -> P;\n\
-                @FFI.Extern { library: l; symbol: b; abi: c; } function g(p: P) -> I32;";
+                @FFI.Extern { library: l, symbol: a, abi: c } function f(p: P) -> P\n\
+                @FFI.Extern { library: l, symbol: b, abi: c } function g(p: P) -> I32";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     assert_eq!(program(text).foreign_aggregates.len(), 1);
 }
 
 #[test]
 fn an_ffi_array_member_crosses_as_one_inline_array_row() {
-    let text = "@FFI.Array { element: I32; count: 4; }\n\
+    let text = "@FFI.Array { element: I32, count: 4 }\n\
                 struct Cells {}\n\
-                @FFI.Struct { layout: c; }\n\
+                @FFI.Struct { layout: c }\n\
                 struct Grid { var cells: Cells\n var weight: Float }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(g: Grid) -> Grid;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(g: Grid) -> Grid";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
     let outer = program.foreign[0].signature.parameters()[0]
@@ -335,7 +335,7 @@ fn an_ffi_array_member_crosses_as_one_inline_array_row() {
 
 #[test]
 fn an_ffi_array_holds_its_elements_in_a_named_field() {
-    let text = "@FFI.Array { element: I32; count: 3; }\n\
+    let text = "@FFI.Array { element: I32, count: 3 }\n\
                 struct Cells {}\n\
                 @Main function main() { let c = Cells { elements: [1, 2] }\n \
                 print(c.elements[1]) return }";
@@ -349,16 +349,16 @@ fn an_ffi_array_fills_a_pointer_to_its_element_type() {
     // array typedef's own image is what the pointer addresses. The pointer
     // member is written as an `@FFI.Pointer`, not a bare `RawPtr`, because that
     // is what a generated binding writes.
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Item { var location: I32\n var offset: U64 }\n\
-                @FFI.Pointer { target: Item; ownership: borrowed; }\n\
+                @FFI.Pointer { target: Item, ownership: borrowed }\n\
                 struct ItemPtr {}\n\
-                @FFI.Array { element: Item; count: 4; }\n\
+                @FFI.Array { element: Item, count: 4 }\n\
                 struct Items4 {}\n\
-                @FFI.Struct { layout: c; }\n\
+                @FFI.Struct { layout: c }\n\
                 struct List { var items: ItemPtr\n var count: I32 }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } \
-                function f(items: ItemPtr, count: I32) -> I32;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c } \
+                function f(items: ItemPtr, count: I32) -> I32\n\
                 @Main function main() {\n\
                 let one = Item { location: 1, offset: 2 }\n\
                 print(f(Items4 { elements: [one] }, 1))\n\
@@ -374,13 +374,13 @@ fn an_ffi_array_of_the_wrong_element_does_not_fill_a_pointer() {
     // The extent is not what makes the fill legal — the element type is. An
     // array of something else laid out at that pointer would hand C bytes it
     // reads as the type it declared.
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Item { var location: I32 }\n\
-                @FFI.Pointer { target: Item; ownership: borrowed; }\n\
+                @FFI.Pointer { target: Item, ownership: borrowed }\n\
                 struct ItemPtr {}\n\
-                @FFI.Array { element: I32; count: 4; }\n\
+                @FFI.Array { element: I32, count: 4 }\n\
                 struct Cells {}\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(items: ItemPtr) -> I32;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(items: ItemPtr) -> I32\n\
                 @Main function main() { print(f(Cells { elements: [1] })) return }";
     assert_eq!(codes(text), vec!["KSEM183"]);
 }
@@ -389,20 +389,20 @@ fn an_ffi_array_of_the_wrong_element_does_not_fill_a_pointer() {
 fn an_ffi_array_on_its_own_at_the_seam_is_refused_because_c_decays_it() {
     // C turns an array parameter into a pointer, which is a different type with
     // different ownership, so the seam refuses it rather than choosing one.
-    let text = "@FFI.Array { element: I32; count: 4; }\n\
+    let text = "@FFI.Array { element: I32, count: 4 }\n\
                 struct Cells {}\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(c: Cells) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(c: Cells) -> I32";
     assert_eq!(codes(text), vec!["KSEM187"]);
 }
 
 #[test]
 fn an_ffi_array_without_an_element_or_a_positive_count_is_refused() {
-    let missing = "@FFI.Array { element: I32; }\n\
+    let missing = "@FFI.Array { element: I32 }\n\
                    struct Cells {}\n\
                    @Main function main() { return }";
     assert_eq!(codes(missing), vec!["KSEM243"]);
-    let empty = "@FFI.Array { element: I32; count: 0; }\n\
+    let empty = "@FFI.Array { element: I32, count: 0 }\n\
                  struct Cells {}\n\
                  @Main function main() { return }";
     assert_eq!(codes(empty), vec!["KSEM243"]);
@@ -410,7 +410,7 @@ fn an_ffi_array_without_an_element_or_a_positive_count_is_refused() {
 
 #[test]
 fn indexing_an_ffi_array_type_points_at_its_elements_field() {
-    let text = "@FFI.Array { element: I32; count: 3; }\n\
+    let text = "@FFI.Array { element: I32, count: 3 }\n\
                 struct Cells {}\n\
                 @Main function main() { let c = Cells { elements: [1] }\n \
                 print(c[0]) return }";
@@ -419,11 +419,11 @@ fn indexing_an_ffi_array_type_points_at_its_elements_field() {
 
 #[test]
 fn a_kira_function_named_where_a_callback_is_expected_records_one_entry() {
-    let text = "@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }\n\
+    let text = "@FFI.Callback { abi: c, params: [I32, I32], result: I32 }\n\
                 struct Adder {}\n\
                 function combine(a: I32, b: I32) -> I32 { return a + b }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function callAdder(add: Adder, a: I32, b: I32) -> I32;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function callAdder(add: Adder, a: I32, b: I32) -> I32\n\
                 @Main function main() { print(callAdder(combine, 1, 2)) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
@@ -440,13 +440,13 @@ fn a_kira_function_named_where_a_callback_is_expected_records_one_entry() {
 
 #[test]
 fn naming_the_same_function_twice_records_one_callback_entry() {
-    let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+    let text = "@FFI.Callback { abi: c, params: [I32], result: Void }\n\
                 struct Sink {}\n\
                 function take(x: I32) -> Void { return }\n\
-                @FFI.Extern { library: l; symbol: a; abi: c; }\n\
-                function first(s: Sink) -> Void;\n\
-                @FFI.Extern { library: l; symbol: b; abi: c; }\n\
-                function second(s: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: a, abi: c }\n\
+                function first(s: Sink) -> Void\n\
+                @FFI.Extern { library: l, symbol: b, abi: c }\n\
+                function second(s: Sink) -> Void\n\
                 @Main function main() { first(take)\n second(take) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     assert_eq!(program(text).foreign_callbacks.len(), 1);
@@ -454,28 +454,28 @@ fn naming_the_same_function_twice_records_one_callback_entry() {
 
 #[test]
 fn a_function_whose_signature_does_not_fit_the_callback_is_refused() {
-    let wrong_result = "@FFI.Callback { abi: c; params: [I32]; result: I32; }\n\
+    let wrong_result = "@FFI.Callback { abi: c, params: [I32], result: I32 }\n\
                         struct Adder {}\n\
                         function takes(x: I32) -> Void { return }\n\
-                        @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                        function use_it(a: Adder) -> Void;\n\
+                        @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                        function use_it(a: Adder) -> Void\n\
                         @Main function main() { use_it(takes) return }";
     assert_eq!(codes(wrong_result), vec!["KSEM246"]);
 
-    let wrong_arity = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+    let wrong_arity = "@FFI.Callback { abi: c, params: [I32], result: Void }\n\
                        struct Sink {}\n\
                        function takes(x: I32, y: I32) -> Void { return }\n\
-                       @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                       function use_it(a: Sink) -> Void;\n\
+                       @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                       function use_it(a: Sink) -> Void\n\
                        @Main function main() { use_it(takes) return }";
     assert_eq!(codes(wrong_arity), vec!["KSEM246"]);
 
     // A bare `Int` has no C width, so it is not a callback parameter either.
-    let bare_int = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+    let bare_int = "@FFI.Callback { abi: c, params: [I32], result: Void }\n\
                     struct Sink {}\n\
                     function takes(x: Int) -> Void { return }\n\
-                    @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                    function use_it(a: Sink) -> Void;\n\
+                    @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                    function use_it(a: Sink) -> Void\n\
                     @Main function main() { use_it(takes) return }";
     assert_eq!(codes(bare_int), vec!["KSEM246"]);
 }
@@ -484,7 +484,7 @@ fn a_function_whose_signature_does_not_fit_the_callback_is_refused() {
 fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_filled() {
     // Declaring it is clean: a generated binding declares every callback its
     // headers name, and most are never filled.
-    let declared = "@FFI.Callback { abi: c; params: [[I32]]; result: Void; }\n\
+    let declared = "@FFI.Callback { abi: c, params: [[I32]], result: Void }\n\
                     struct Sink {}\n\
                     @Main function main() { return }";
     assert!(
@@ -494,11 +494,11 @@ fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_fill
     );
 
     // Handing a Kira function to one is where it cannot work, and is reported.
-    let filled = "@FFI.Callback { abi: c; params: [[I32]]; result: Void; }\n\
+    let filled = "@FFI.Callback { abi: c, params: [[I32]], result: Void }\n\
                   struct Sink {}\n\
                   function takes(x: [I32]) -> Void { return }\n\
-                  @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                  function use_it(a: Sink) -> Void;\n\
+                  @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                  function use_it(a: Sink) -> Void\n\
                   @Main function main() { use_it(takes) return }";
     assert_eq!(codes(filled), vec!["KSEM245"]);
 }
@@ -512,15 +512,15 @@ fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_fill
 /// device at all.
 #[test]
 fn a_struct_callback_parameter_is_an_aggregate_the_function_takes_by_pointer() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct View { let length: U64 }\n\
-                @FFI.Pointer { target: View; ownership: borrowed; }\n\
+                @FFI.Pointer { target: View, ownership: borrowed }\n\
                 struct ViewPtr {}\n\
-                @FFI.Callback { abi: c; params: [I32, View]; result: Void; }\n\
+                @FFI.Callback { abi: c, params: [I32, View], result: Void }\n\
                 struct Sink {}\n\
                 function takes(tag: I32, view: ViewPtr) -> Void { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function use_it(a: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function use_it(a: Sink) -> Void\n\
                 @Main function main() { use_it(takes) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let program = program(text);
@@ -537,29 +537,29 @@ fn a_struct_callback_parameter_is_an_aggregate_the_function_takes_by_pointer() {
 /// diagnostic — a copy would be a second image of storage C already owns.
 #[test]
 fn a_struct_callback_parameter_taken_by_value_in_kira_is_refused() {
-    let by_value = "@FFI.Struct { layout: c; }\n\
+    let by_value = "@FFI.Struct { layout: c }\n\
                     struct View { let length: U64 }\n\
-                    @FFI.Callback { abi: c; params: [View]; result: Void; }\n\
+                    @FFI.Callback { abi: c, params: [View], result: Void }\n\
                     struct Sink {}\n\
                     function takes(view: View) -> Void { return }\n\
-                    @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                    function use_it(a: Sink) -> Void;\n\
+                    @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                    function use_it(a: Sink) -> Void\n\
                     @Main function main() { use_it(takes) return }";
     assert_eq!(codes(by_value), vec!["KSEM246"]);
 
     // And a pointer to a *different* C-layout struct is a mistake the seam can
     // see, rather than a pointer word it waves through.
-    let wrong_target = "@FFI.Struct { layout: c; }\n\
+    let wrong_target = "@FFI.Struct { layout: c }\n\
                         struct View { let length: U64 }\n\
-                        @FFI.Struct { layout: c; }\n\
+                        @FFI.Struct { layout: c }\n\
                         struct Other { let n: I32 }\n\
-                        @FFI.Pointer { target: Other; ownership: borrowed; }\n\
+                        @FFI.Pointer { target: Other, ownership: borrowed }\n\
                         struct OtherPtr {}\n\
-                        @FFI.Callback { abi: c; params: [View]; result: Void; }\n\
+                        @FFI.Callback { abi: c, params: [View], result: Void }\n\
                         struct Sink {}\n\
                         function takes(view: OtherPtr) -> Void { return }\n\
-                        @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                        function use_it(a: Sink) -> Void;\n\
+                        @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                        function use_it(a: Sink) -> Void\n\
                         @Main function main() { use_it(takes) return }";
     assert_eq!(codes(wrong_target), vec!["KSEM246"]);
 }
@@ -572,13 +572,13 @@ fn a_struct_callback_parameter_taken_by_value_in_kira_is_refused() {
 /// built out of a Kira value, which nothing on this seam carries back.
 #[test]
 fn a_struct_callback_result_is_refused_where_it_is_filled() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct View { let length: U64 }\n\
-                @FFI.Callback { abi: c; params: []; result: View; }\n\
+                @FFI.Callback { abi: c, params: [], result: View }\n\
                 struct Sink {}\n\
                 function gives() -> View { return View {} }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function use_it(a: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function use_it(a: Sink) -> Void\n\
                 @Main function main() { use_it(gives) return }";
     assert_eq!(codes(text), vec!["KSEM245"]);
 }
@@ -587,11 +587,11 @@ fn a_struct_callback_result_is_refused_where_it_is_filled() {
 /// position: it carries the `const char*` C hands over, copied by the thunk.
 #[test]
 fn a_string_callback_parameter_carries_a_c_string() {
-    let text = "@FFI.Callback { abi: c; params: [CString]; result: Void; }\n\
+    let text = "@FFI.Callback { abi: c, params: [CString], result: Void }\n\
                 struct Sink {}\n\
                 function takes(x: String) -> Void { print(x) return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function use_it(a: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function use_it(a: Sink) -> Void\n\
                 @Main function main() { use_it(takes) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -600,11 +600,11 @@ fn a_string_callback_parameter_carries_a_c_string() {
 /// to free, and a Kira `String` belongs to Kira.
 #[test]
 fn a_string_callback_result_is_refused() {
-    let text = "@FFI.Callback { abi: c; params: []; result: CString; }\n\
+    let text = "@FFI.Callback { abi: c, params: [], result: CString }\n\
                 struct Sink {}\n\
                 function gives() -> String { return \"x\" }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function use_it(a: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function use_it(a: Sink) -> Void\n\
                 @Main function main() { use_it(gives) return }";
     assert_eq!(codes(text), vec!["KSEM245"]);
 }
@@ -613,11 +613,11 @@ fn a_string_callback_result_is_refused() {
 fn a_local_wins_over_a_function_of_the_same_name_in_a_callback_slot() {
     // A callback the program got from C, held in a variable named like a
     // function, is read as the variable.
-    let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+    let text = "@FFI.Callback { abi: c, params: [I32], result: Void }\n\
                 struct Sink {}\n\
                 function handler(x: I32) -> Void { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function use_it(a: Sink) -> Void;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function use_it(a: Sink) -> Void\n\
                 @Main function main() { let handler = Sink {}\n use_it(handler) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     assert!(
@@ -628,10 +628,10 @@ fn a_local_wins_over_a_function_of_the_same_name_in_a_callback_slot() {
 
 #[test]
 fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Bad { var x: Float\n var label: String }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Bad) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(b: Bad) -> I32";
     assert_eq!(codes(text), vec!["KSEM182"]);
     let message = &diagnostics(text)[0].message;
     assert!(message.contains("label"), "names the field: {message}");
@@ -641,10 +641,10 @@ fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
 fn a_c_layout_struct_may_hold_the_bare_scalars() {
     // `Int` maps to int64_t and `Float` maps to double, so both have defined
     // C widths for layout.
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
                 struct Fine { var a: Float\n var n: Int }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Fine) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(b: Fine) -> I32";
     assert_eq!(codes(text), Vec::<String>::new());
 }
 
@@ -655,7 +655,7 @@ fn a_multi_field_struct_without_the_annotation_is_still_refused() {
     // the C function receives, so the plain struct keeps its refusal.
     let text = "struct Loose { var x: Float\n var y: Float }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(p: Loose) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(p: Loose) -> I32";
     assert_eq!(codes(text), vec!["KSEM182"]);
     assert!(program(text).foreign_aggregates.is_empty());
 }
@@ -667,7 +667,7 @@ fn a_struct_whose_one_field_is_a_bare_int_is_a_handle() {
     // rather than falling to the aggregate refusal.
     let text = "struct Handle { var n: Int }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Handle) -> I32;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f(h: Handle) -> I32";
     assert_eq!(codes(text), Vec::<String>::new());
 }
 
@@ -677,7 +677,7 @@ fn a_cstring_result_is_accepted_and_is_a_string_in_kira() {
     // so the Kira side of the call is an ordinary owned `String` — which is what
     // makes the result assignable to one and printable.
     let text = "@Main function main() { let s: String = f() print(s) return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> CString;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f() -> CString";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
@@ -686,7 +686,7 @@ fn a_string_result_is_still_refused_at_the_seam() {
     // `String` is Kira's spelling, not C's: naming it at the seam says nothing
     // about the C type, which is why `CString` is the one that crosses.
     let text = "@Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> String;";
+                @FFI.Extern { library: l, symbol: s, abi: c } function f() -> String";
     assert_eq!(codes(text), vec!["KSEM182"]);
 }
 
@@ -724,8 +724,8 @@ fn a_cstring_ordinary_parameter_is_refused() {
 fn a_raw_ptr_is_allowed_as_an_ordinary_local() {
     // `RawPtr` is a normal scalar — no seam restriction — so a foreign result
     // bound to a local is clean.
-    let text = "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function makePtr() -> RawPtr;\n\
+    let text = "@FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function makePtr() -> RawPtr\n\
                 @Main function main() { let p = makePtr() print(1) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -734,16 +734,16 @@ fn a_raw_ptr_is_allowed_as_an_ordinary_local() {
 
 #[test]
 fn a_string_passed_to_a_non_cstring_parameter_is_a_type_error() {
-    let text = "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
-                function takes(n: I32) -> I32;\n\
+    let text = "@FFI.Extern { library: l, symbol: s, abi: c }\n\
+                function takes(n: I32) -> I32\n\
                 @Main function main() { print(takes(\"hi\")) return }";
     assert_eq!(codes(text), vec!["KSEM183"]);
 }
 
 #[test]
 fn a_non_string_passed_to_a_cstring_parameter_is_a_type_error() {
-    let text = "@FFI.Extern { library: l; symbol: greet; abi: c; }\n\
-                function greet(name: CString) -> I32;\n\
+    let text = "@FFI.Extern { library: l, symbol: greet, abi: c }\n\
+                function greet(name: CString) -> I32\n\
                 @Main function main() { print(greet(42)) return }";
     assert_eq!(codes(text), vec!["KSEM183"]);
 }
@@ -753,7 +753,7 @@ fn a_non_string_passed_to_a_cstring_parameter_is_a_type_error() {
 #[test]
 fn a_foreign_name_may_not_collide_with_a_user_function() {
     let text = "function dup() -> I32 { return 1 }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function dup() -> I32;\n\
+                @FFI.Extern { library: l, symbol: s, abi: c } function dup() -> I32\n\
                 @Main function main() { print(dup()) return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM184"),
@@ -764,8 +764,8 @@ fn a_foreign_name_may_not_collide_with_a_user_function() {
 
 #[test]
 fn two_foreign_functions_may_not_share_a_name() {
-    let text = "@FFI.Extern { library: l; symbol: s; abi: c; } function dup() -> I32;\n\
-                @FFI.Extern { library: l; symbol: t; abi: c; } function dup() -> I32;\n\
+    let text = "@FFI.Extern { library: l, symbol: s, abi: c } function dup() -> I32\n\
+                @FFI.Extern { library: l, symbol: t, abi: c } function dup() -> I32\n\
                 @Main function main() { return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM185"),
@@ -780,8 +780,8 @@ fn a_payload_less_enum_is_a_foreign_parameter() {
     let source = r#"
 enum Usage { Vertex Index Uniform }
 
-@FFI.Extern { library: fixture; symbol: stride; abi: c; }
-function stride(usage: Usage): I32;
+@FFI.Extern { library: fixture, symbol: stride, abi: c }
+function stride(usage: Usage): I32
 
 function ask() -> Int {
     return stride(Usage.Index)
@@ -801,8 +801,8 @@ fn an_enum_with_a_payload_is_refused() {
     let source = r#"
 enum Reading { None Value(Int) }
 
-@FFI.Extern { library: fixture; symbol: take; abi: c; }
-function take(reading: Reading): I32;
+@FFI.Extern { library: fixture, symbol: take, abi: c }
+function take(reading: Reading): I32
 "#;
     assert!(
         library_codes(source).iter().any(|code| code == "KSEM182"),
@@ -815,8 +815,8 @@ function take(reading: Reading): I32;
 #[test]
 fn an_array_is_a_foreign_parameter() {
     let source = r#"
-@FFI.Extern { library: fixture; symbol: sum; abi: c; }
-function sum(values: [F32], count: I32): F32;
+@FFI.Extern { library: fixture, symbol: sum, abi: c }
+function sum(values: [F32], count: I32): F32
 
 function ask(values: borrow [F32]) -> Float {
     return sum(values, values.count)
@@ -834,8 +834,8 @@ function ask(values: borrow [F32]) -> Float {
 #[test]
 fn an_array_result_is_refused_for_having_no_length() {
     let source = r#"
-@FFI.Extern { library: fixture; symbol: give; abi: c; }
-function give(): [F32];
+@FFI.Extern { library: fixture, symbol: give, abi: c }
+function give(): [F32]
 "#;
     let codes = library_codes(source);
     assert!(codes.iter().any(|code| code == "KSEM182"), "{codes:?}");
@@ -845,8 +845,8 @@ function give(): [F32];
 #[test]
 fn an_array_of_a_non_seam_element_is_refused() {
     let source = r#"
-@FFI.Extern { library: fixture; symbol: take; abi: c; }
-function take(values: [String]): I32;
+@FFI.Extern { library: fixture, symbol: take, abi: c }
+function take(values: [String]): I32
 "#;
     assert!(
         library_codes(source).iter().any(|code| code == "KSEM182"),
@@ -864,8 +864,8 @@ fn a_generic_instantiation_is_refused_by_what_it_resolves_to() {
     let source = r#"
 enum Wrapped<T> { Ok(T) Bad }
 
-@FFI.Extern { library: fixture; symbol: take; abi: c; }
-function take(w: Wrapped<I32>): I32;
+@FFI.Extern { library: fixture, symbol: take, abi: c }
+function take(w: Wrapped<I32>): I32
 "#;
     let diagnostics = library_diagnostics(source);
     let said = diagnostics
@@ -880,8 +880,8 @@ function take(w: Wrapped<I32>): I32;
 #[test]
 fn a_retained_cstring_consumes_an_owned_block() {
     let source = r#"
-@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: text; }
-function keep(text: CString): Void;
+@FFI.Extern { library: fixture, symbol: keep, abi: c, retains: text }
+function keep(text: CString): Void
 
 @Main
 function main() {
@@ -912,8 +912,8 @@ function main() {
 #[test]
 fn a_retained_named_argument_requires_move() {
     let source = r#"
-@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: text; }
-function keep(text: CString): Void;
+@FFI.Extern { library: fixture, symbol: keep, abi: c, retains: text }
+function keep(text: CString): Void
 
 @Main
 function main() {
@@ -928,20 +928,20 @@ function main() {
 #[test]
 fn retains_names_real_parameters_once() {
     let unknown = r#"
-@FFI.Extern { library: fixture; symbol: keep; abi: c; retains: missing; }
-function keep(text: CString): Void;
+@FFI.Extern { library: fixture, symbol: keep, abi: c, retains: missing }
+function keep(text: CString): Void
 "#;
     assert_eq!(library_codes(unknown), vec!["KSEM285"]);
 
     let duplicate = r#"
 @FFI.Extern {
-    library: fixture;
-    symbol: keep;
-    abi: c;
-    retains: text;
-    retains: text;
+    library: fixture,
+    symbol: keep,
+    abi: c,
+    retains: text,
+    retains: text
 }
-function keep(text: CString): Void;
+function keep(text: CString): Void
 "#;
     assert_eq!(library_codes(duplicate), vec!["KSEM286"]);
 }
@@ -949,7 +949,7 @@ function keep(text: CString): Void;
 #[test]
 fn a_c_layout_value_moves_when_bound() {
     let source = r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Desc { var label: CString }
 
 @Main

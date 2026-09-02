@@ -177,7 +177,7 @@ construct CfxIfElseSimple() extends Test {
             out = 1 } else { out = 2 }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxIfElseFalse() extends Test {
@@ -188,7 +188,7 @@ construct CfxIfElseFalse() extends Test {
             out = 1 } else { out = 2 }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct CfxIfElseIfChain() extends Test {
@@ -208,7 +208,7 @@ construct CfxIfElseIfChain() extends Test {
         }
         return grade
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct CfxIfElseIfChainTop() extends Test {
@@ -228,7 +228,7 @@ construct CfxIfElseIfChainTop() extends Test {
         }
         return grade
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct CfxIfElseIfChainBottom() extends Test {
@@ -248,7 +248,7 @@ construct CfxIfElseIfChainBottom() extends Test {
         }
         return grade
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxDeeplyNestedIf() extends Test {
@@ -277,7 +277,7 @@ construct CfxDeeplyNestedIf() extends Test {
         return out
     }
     // a=3,b=7,c=2: a<b T; b>c T; a!=c T; a+c=5 < b=7 T => 999
-    expect { let e: Result<Int, TestFailure> = .Ok(999); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(999) return e }
 }
 
 construct CfxIfCountEvenOdd() extends Test {
@@ -293,7 +293,7 @@ construct CfxIfCountEvenOdd() extends Test {
         return evens * 100 + odds
     }
     // 0..19: 10 evens, 10 odds
-    expect { let e: Result<Int, TestFailure> = .Ok(1010); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1010) return e }
 }
 
 construct CfxIfNestedAccumulate() extends Test {
@@ -311,7 +311,7 @@ construct CfxIfNestedAccumulate() extends Test {
         // i in 4,5,6 => 15
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct CfxIfBoolExprComplex() extends Test {
@@ -330,7 +330,7 @@ construct CfxIfBoolExprComplex() extends Test {
         // total = 15
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct CfxIfElseTernaryMix() extends Test {
@@ -351,7 +351,7 @@ construct CfxIfElseTernaryMix() extends Test {
         // sum = 0-1+6-3+12-5+18-7+24-9 = 35
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(35) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +368,7 @@ construct CfxWhileCountdown() extends Test {
         }
         return steps
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct CfxWhileAccumulate() extends Test {
@@ -381,7 +381,7 @@ construct CfxWhileAccumulate() extends Test {
         }
         return sum
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5050) return e }
 }
 
 construct CfxWhileMultiply() extends Test {
@@ -395,7 +395,7 @@ construct CfxWhileMultiply() extends Test {
         return prod
     }
     // 10! = 3628800
-    expect { let e: Result<Int, TestFailure> = .Ok(3628800); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3628800) return e }
 }
 
 construct CfxWhileEarlyReturn() extends Test {
@@ -410,7 +410,7 @@ construct CfxWhileEarlyReturn() extends Test {
         return 0 - 1
     }
     // i=23: 23*23=529 > 500 => return 23
-    expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(23) return e }
 }
 
 construct CfxWhileNestedSum() extends Test {
@@ -428,7 +428,7 @@ construct CfxWhileNestedSum() extends Test {
         // (1+2+3+4+5)^2 = 15^2 = 225
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(225); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(225) return e }
 }
 
 construct CfxWhileNestedSkip() extends Test {
@@ -448,7 +448,7 @@ construct CfxWhileNestedSkip() extends Test {
         // 8*8 - 8 = 56
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(56); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(56) return e }
 }
 
 construct CfxWhileNestedMatrix() extends Test {
@@ -466,7 +466,7 @@ construct CfxWhileNestedMatrix() extends Test {
         // sum 0..15 = 120
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct CfxWhileTripleNested() extends Test {
@@ -488,7 +488,7 @@ construct CfxWhileTripleNested() extends Test {
         // each of a,b,c contributes sum over 3*3=9 times: 9*(0+1+2)=27 each, total=81
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(81); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(81) return e }
 }
 
 construct CfxWhileCountDivisibleBy7() extends Test {
@@ -503,7 +503,7 @@ construct CfxWhileCountDivisibleBy7() extends Test {
         return count
     }
     // floor(100/7) = 14
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct CfxWhileSumSquares() extends Test {
@@ -517,7 +517,7 @@ construct CfxWhileSumSquares() extends Test {
         // 1+4+9+16+25+36+49+64+81+100 = 385
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(385); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(385) return e }
 }
 
 construct CfxWhileCollatz() extends Test {
@@ -535,7 +535,7 @@ construct CfxWhileCollatz() extends Test {
         return steps
     }
     // Collatz(27) = 111 steps
-    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
 }
 
 construct CfxWhileCountUp() extends Test {
@@ -549,6 +549,6 @@ construct CfxWhileCountUp() extends Test {
         // n goes: 3,6,...,48,51 => 17 steps
         return steps
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(17) return e }
 }
 

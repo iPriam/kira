@@ -16,7 +16,9 @@ comptime macro Name {
 }                                           // wrapper:   (Declaration, Declaration) -> Syntax
 ```
 
-`kind` is required and fixed to one of the four words; it determines both the call syntax and the signature of `expand`. `appliesTo` lists the declaration kinds the macro is legal on and is required for everything but `function`; `form` admits construct-backed declarations. `expand` is the one member every `comptime macro` must define, and its body is ordinary Kira run at compile time.
+`kind` is required and fixed to one of the four words; it determines both the call syntax and the signature of `expand`. `appliesTo` lists the declaration kinds the macro is legal on and is required for everything but `function`; the words are `struct`, `class`, `enum`, `construct`, `form`, `function`, and `distinct`, where `form` admits construct-backed declarations. `expand` is the one member every `comptime macro` must define, and its body is ordinary Kira run at compile time.
+
+A `distinct` declaration reflects with one field, named `raw`, whose type is the representation — which is exactly what `id.raw` reads — so a macro that walks `target.fields` handles one without a branch. `target.kind` is `.Distinct` for a macro that needs to know, and the usual reason to ask is construction: a distinct type is built by calling it, `TabId(value)`, not with a brace literal.
 
 ## Field Triggers and Replace Mode
 

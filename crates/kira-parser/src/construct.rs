@@ -149,7 +149,7 @@ impl Parser<'_> {
         self.expect(TokenKind::LBrace);
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -199,7 +199,7 @@ impl Parser<'_> {
                     self.recover_to_next_construct_member();
                 }
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -431,12 +431,12 @@ impl Parser<'_> {
         }
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
             self.parse_construct_member(body, backing_family);
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }

@@ -25,6 +25,11 @@ impl<H> NativeStateHost<H> {
     }
 
     /// Mutably borrows the wrapped host.
+    /// The callback-state store this host keeps.
+    pub fn store(&self) -> &NativeStateStore {
+        &self.store
+    }
+
     pub fn inner_mut(&mut self) -> &mut H {
         &mut self.inner
     }
@@ -147,8 +152,12 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         Ok(())
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.store.free(token)
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.store.retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.store.release(token).map(|_| ())
     }
 
     fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {

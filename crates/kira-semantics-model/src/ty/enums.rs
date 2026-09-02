@@ -73,7 +73,9 @@ pub struct VariantDef {
 /// row: it lives only in the analyzer, and the name is what a use site writes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instantiation {
-    /// The generic enum's name, as declared — `Result`, not `Result<Int, E>`.
+    /// The generic enum's package-qualified name — `Pkg::Result`, or `Result`
+    /// for the program's own template; never `Result<Int, E>`. Qualified so
+    /// two packages' same-named templates never read as one.
     pub template: String,
     /// The type arguments substituted in, in declaration order.
     pub arguments: Vec<Type>,
@@ -101,6 +103,9 @@ pub struct EnumTable {
     index: std::collections::HashMap<String, EnumId>,
     // Index-aligned with `defs`, and written by the same one place.
     owners: Vec<Option<String>>,
+    // Index-aligned with `defs`: the module inside its package each row was
+    // declared in, or empty for a row minted by the compiler.
+    modules: Vec<String>,
     // Only the rows a generic template minted appear here, so a hand-written
     // enum is distinguishable from an instantiation by absence.
     instantiations: std::collections::HashMap<EnumId, Instantiation>,
@@ -125,6 +130,21 @@ impl EnumTable {
         self.declare_owned(None, def)
     }
 
+    /// Rewrites every variant payload's type through `visit`.
+    ///
+    /// Variant names, order, and discriminants are untouched, so the wire form
+    /// is exactly what it was: this exists so a payload written at a distinct
+    /// type carries the representation once the frontend is done with it.
+    pub fn visit_payload_types_mut(&mut self, visit: &dyn Fn(&mut Type)) {
+        for def in &mut self.defs {
+            for variant in &mut def.variants {
+                if let Some(payload) = &mut variant.payload {
+                    visit(payload);
+                }
+            }
+        }
+    }
+
     /// Adds an enum `owner` declares, returning its id, or `None` when that
     /// owner already declares the name.
     ///
@@ -140,7 +160,22 @@ impl EnumTable {
         self.index.insert(key, id);
         self.defs.push(def);
         self.owners.push(owner.map(str::to_owned));
+        self.modules.push(String::new());
         Some(id)
+    }
+
+    /// Records the module `id` was declared in.
+    pub fn set_module(&mut self, id: EnumId, module: &str) {
+        if let Some(slot) = self.modules.get_mut(id.0 as usize) {
+            *slot = module.to_owned();
+        }
+    }
+
+    /// The module `id` was declared in, or empty for a compiler-minted row.
+    pub fn module_of(&self, id: EnumId) -> &str {
+        self.modules
+            .get(id.0 as usize)
+            .map_or("", String::as_str)
     }
 
     /// The enum `name` declares in the program's own files.

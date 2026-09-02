@@ -71,7 +71,7 @@ impl<'a> Analyzer<'a> {
                     );
                     continue;
                 }
-                if !self.construct_families.contains_key(&name) {
+                let Some(name) = self.visible_family_key(&name) else {
                     self.emit(
                         parent.span,
                         "KSEM200",
@@ -80,7 +80,7 @@ impl<'a> Analyzer<'a> {
                         ),
                     );
                     continue;
-                }
+                };
                 if !seen.insert(name.clone()) {
                     self.emit(
                         parent.span,

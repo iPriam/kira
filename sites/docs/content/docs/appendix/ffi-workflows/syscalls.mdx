@@ -6,11 +6,11 @@ description: "`@FFI.Syscall`: one instruction, no library, why the compiler owns
 `@FFI.Extern`'s sibling, and the one member of the family that names no library.
 
 ```kira
-@FFI.Syscall { name: write; }
-function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function sysWrite(fd: Int, buffer: CString, count: U64) -> Int
 
-@FFI.Syscall { name: exit_group; }
-function sysExit(status: Int);
+@FFI.Syscall { name: exit_group }
+function sysExit(status: Int)
 ```
 
 It lowers to one instruction, `svc #0` on AArch64 and `syscall` on x86-64, with the call number and the arguments in the registers the kernel reads them out of. Nothing is bound, nothing is looked up, and no libc is involved.

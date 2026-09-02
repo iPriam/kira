@@ -4,53 +4,53 @@
 // in the way. `ffi_program_wasm_string.kira` is the string half of the same
 // proof.
 
-@FFI.Extern { library: ffifixture; symbol: ffi_add_i32; abi: c; }
-function addI32(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_add_i32, abi: c }
+function addI32(a: I32, b: I32) -> I32
 
-@FFI.Extern { library: ffifixture; symbol: ffi_neg_i8; abi: c; }
-function negI8(x: I8) -> I8;
+@FFI.Extern { library: ffifixture, symbol: ffi_neg_i8, abi: c }
+function negI8(x: I8) -> I8
 
-@FFI.Extern { library: ffifixture; symbol: ffi_id_u8; abi: c; }
-function idU8(x: U8) -> U8;
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u8, abi: c }
+function idU8(x: U8) -> U8
 
-@FFI.Extern { library: ffifixture; symbol: ffi_neg_i16; abi: c; }
-function negI16(x: I16) -> I16;
+@FFI.Extern { library: ffifixture, symbol: ffi_neg_i16, abi: c }
+function negI16(x: I16) -> I16
 
-@FFI.Extern { library: ffifixture; symbol: ffi_id_u16; abi: c; }
-function idU16(x: U16) -> U16;
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u16, abi: c }
+function idU16(x: U16) -> U16
 
-@FFI.Extern { library: ffifixture; symbol: ffi_id_u32; abi: c; }
-function idU32(x: U32) -> U32;
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u32, abi: c }
+function idU32(x: U32) -> U32
 
-@FFI.Extern { library: ffifixture; symbol: ffi_add_i64; abi: c; }
-function addI64(a: Int, b: Int) -> Int;
+@FFI.Extern { library: ffifixture, symbol: ffi_add_i64, abi: c }
+function addI64(a: Int, b: Int) -> Int
 
-@FFI.Extern { library: ffifixture; symbol: ffi_id_u64; abi: c; }
-function idU64(x: U64) -> U64;
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u64, abi: c }
+function idU64(x: U64) -> U64
 
-@FFI.Extern { library: ffifixture; symbol: ffi_not; abi: c; }
-function notBool(b: Bool) -> Bool;
+@FFI.Extern { library: ffifixture, symbol: ffi_not, abi: c }
+function notBool(b: Bool) -> Bool
 
-@FFI.Extern { library: ffifixture; symbol: ffi_add_f32; abi: c; }
-function addF32(a: F32, b: F32) -> F32;
+@FFI.Extern { library: ffifixture, symbol: ffi_add_f32, abi: c }
+function addF32(a: F32, b: F32) -> F32
 
-@FFI.Extern { library: ffifixture; symbol: ffi_add_f64; abi: c; }
-function addF64(a: Float, b: Float) -> Float;
+@FFI.Extern { library: ffifixture, symbol: ffi_add_f64, abi: c }
+function addF64(a: Float, b: Float) -> Float
 
-@FFI.Extern { library: ffifixture; symbol: ffi_make_ptr; abi: c; }
-function makePtr() -> RawPtr;
+@FFI.Extern { library: ffifixture, symbol: ffi_make_ptr, abi: c }
+function makePtr() -> RawPtr
 
-@FFI.Extern { library: ffifixture; symbol: ffi_null_ptr; abi: c; }
-function nullPtr() -> RawPtr;
+@FFI.Extern { library: ffifixture, symbol: ffi_null_ptr, abi: c }
+function nullPtr() -> RawPtr
 
-@FFI.Extern { library: ffifixture; symbol: ffi_ptr_word; abi: c; }
-function ptrWord(p: RawPtr) -> Int;
+@FFI.Extern { library: ffifixture, symbol: ffi_ptr_word, abi: c }
+function ptrWord(p: RawPtr) -> Int
 
-@FFI.Extern { library: ffifixture; symbol: ffi_store; abi: c; }
-function storeCell(v: I32);
+@FFI.Extern { library: ffifixture, symbol: ffi_store, abi: c }
+function storeCell(v: I32)
 
-@FFI.Extern { library: ffifixture; symbol: ffi_load; abi: c; }
-function loadCell() -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_load, abi: c }
+function loadCell() -> I32
 
 @Main function main() {
     print(addI32(20, 22))

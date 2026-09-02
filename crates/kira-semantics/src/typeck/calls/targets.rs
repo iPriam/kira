@@ -1,3 +1,4 @@
+use super::math::wrapping_operator;
 use super::*;
 
 use crate::typeck::overloads::OverloadFailure;
@@ -122,7 +123,7 @@ impl Analyzer<'_> {
             }
             suffix.push_str(&format!(
                 "${index}${}",
-                self.program.types.type_name(Type::Struct(id))
+                self.member_owner_name(Type::Struct(id))
             ));
         }
         let specialized = format!("{name}{suffix}");
@@ -164,6 +165,9 @@ impl Analyzer<'_> {
         if candidates.is_empty() {
             if let Some(op) = kira_runtime_abi::MathOp::from_name(name) {
                 return self.analyze_math_call(op, args, span);
+            }
+            if let Some(op) = wrapping_operator(name) {
+                return self.analyze_wrapping_call(name, op, args, span);
             }
             if name == "scalarText" {
                 return self.analyze_scalar_text_call(args, span);

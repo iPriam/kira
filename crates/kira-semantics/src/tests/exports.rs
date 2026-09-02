@@ -142,7 +142,7 @@ fn an_export_in_an_application_is_refused_by_name() {
 
 #[test]
 fn an_export_takes_no_block() {
-    let text = "@Export { symbol: uif_add; }\nfunction add(a: Int) -> Int { return a }";
+    let text = "@Export { symbol: uif_add }\nfunction add(a: Int) -> Int { return a }";
     assert_eq!(
         library_codes(text),
         vec!["KSEM166"],
@@ -297,7 +297,7 @@ fn a_refused_class_marker_does_not_make_the_class_crossable() {
     // Reporting the marker and then honoring it would make the refusal a
     // no-op, so the class stays un-exported and the function using it is
     // refused too.
-    let text = "@Export { symbol: btn; }\nclass Button { var title: String = \"\" }\n\
+    let text = "@Export { symbol: btn }\nclass Button { var title: String = \"\" }\n\
                 @Export\nfunction widthOf(b: Button) -> Int { return 0 }";
     let reported = library_codes(text);
     assert!(

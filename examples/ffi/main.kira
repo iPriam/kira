@@ -9,21 +9,21 @@
 //     kira run --backend llvm main.kira
 //     kira run --backend hybrid main.kira
 
-@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
-function add(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffimath, symbol: ffi_add, abi: c }
+function add(a: I32, b: I32) -> I32
 
 // A Kira `String` reaches a `CString` parameter by a transient NUL-terminated
 // copy; the caller keeps its `String`.
-@FFI.Extern { library: ffimath; symbol: ffi_name_len; abi: c; }
-function nameLen(name: CString) -> U64;
+@FFI.Extern { library: ffimath, symbol: ffi_name_len, abi: c }
+function nameLen(name: CString) -> U64
 
 // `RawPtr` is an opaque target-width word Kira may store and pass back, never
 // dereference or free.
-@FFI.Extern { library: ffimath; symbol: ffi_origin; abi: c; }
-function origin() -> RawPtr;
+@FFI.Extern { library: ffimath, symbol: ffi_origin, abi: c }
+function origin() -> RawPtr
 
-@FFI.Extern { library: ffimath; symbol: ffi_ptr_word; abi: c; }
-function ptrWord(p: RawPtr) -> Int;
+@FFI.Extern { library: ffimath, symbol: ffi_ptr_word, abi: c }
+function ptrWord(p: RawPtr) -> Int
 
 @Main function main() {
     print(add(20, 22))

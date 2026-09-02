@@ -46,10 +46,17 @@ impl NativeLibrary {
         self.check_state_status(status, token.as_word())
     }
 
-    /// Releases callback state in the loaded native half exactly once.
-    pub fn native_state_free(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    /// Adds one owner to callback state in the loaded native half.
+    pub fn native_state_retain(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
         // SAFETY: this function pointer accepts any token word and validates it.
-        let status = unsafe { (self.state_free)(token.as_word()) };
+        let status = unsafe { (self.state_retain)(token.as_word()) };
+        self.check_state_status(status, token.as_word())
+    }
+
+    /// Removes one owner from callback state in the loaded native half.
+    pub fn native_state_release(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        // SAFETY: this function pointer accepts any token word and validates it.
+        let status = unsafe { (self.state_release)(token.as_word()) };
         self.check_state_status(status, token.as_word())
     }
 

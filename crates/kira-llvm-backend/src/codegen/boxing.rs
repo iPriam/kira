@@ -9,9 +9,9 @@
 //! about what a payload word means.
 //!
 //! These sit on [`Codegen`] rather than on one function's lowering because a box
-//! is built in three places that are not all inside a body: an expression
-//! ([`super::lower::FunctionLowering`]), and the generated widen leaf
-//! ([`super::widening`]), which has no Kira function in scope at all.
+//! is built from generated glue as well as from an expression
+//! ([`super::lower::FunctionLowering`]), and glue has no Kira function in
+//! scope at all.
 
 use kira_runtime_abi::EnumPayloadKind;
 use kira_semantics_model::{ErasedTypeId, Type};

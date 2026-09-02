@@ -329,6 +329,36 @@ type Matrix = [[Count]]
         (type_identifier)))))
 
 ================================================================================
+Distinct type over a fixed-width scalar
+================================================================================
+
+distinct TabId = U32
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier)))
+
+================================================================================
+Two distinct types over one representation
+================================================================================
+
+distinct TabId = U32
+distinct BookmarkId = U32
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier))
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier)))
+
+================================================================================
 Package declaration
 ================================================================================
 

@@ -152,6 +152,25 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
             box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            trap_overflow: declare(c"kira_rt_trap_overflow", types.void, &mut [types.i32]),
+            print_uint: declare(c"kira_rt_print_uint", types.void, &mut [types.i64]),
+            str_of_uint: declare(c"kira_rt_str_of_uint", types.ptr, &mut [types.i64]),
+            trap_shift: declare(
+                c"kira_rt_trap_shift",
+                types.void,
+                &mut [types.i64, types.i32],
+            ),
+            trap_narrow: declare(
+                c"kira_rt_trap_narrow",
+                types.void,
+                &mut [types.i64, types.i32, types.i32],
+            ),
+            trap_float_to_int: declare(c"kira_rt_trap_float_to_int", types.void, &mut [types.f64]),
+            trap_cast: declare(
+                c"kira_rt_trap_cast",
+                types.void,
+                &mut [types.i64, types.i64],
+            ),
             task_op: declare(
                 c"kira_rt_task_op",
                 types.i64,
@@ -412,7 +431,16 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                 types.i32,
                 &mut [types.i64, types.i64, types.ptr],
             ),
-            native_state_free: declare(c"kira_rt_native_state_free", types.i32, &mut [types.i64]),
+            native_state_retain: declare(
+                c"kira_rt_native_state_retain",
+                types.i32,
+                &mut [types.i64],
+            ),
+            native_state_release: declare(
+                c"kira_rt_native_state_release",
+                types.i32,
+                &mut [types.i64],
+            ),
             native_state_box_new: declare(
                 c"kira_rt_native_state_box_new",
                 types.i32,

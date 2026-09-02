@@ -100,6 +100,11 @@ impl Parser<'_> {
                     self.items.push(Item::TypeAlias(declaration));
                 }
             }
+            TokenKind::Distinct => {
+                if let Some(declaration) = self.parse_distinct() {
+                    self.items.push(Item::Distinct(declaration));
+                }
+            }
             // `let Name = value` at module scope: one value computed once for
             // the program. There is no `var` here, so `var` still falls through
             // to the stray-token arm below.
@@ -147,6 +152,8 @@ impl Parser<'_> {
                 }
             }
             TokenKind::Identifier => self.parse_unsupported_item(),
+            // Already refused by the lexer (`KLEX001`, `KLEX005`).
+            TokenKind::Unknown => self.skip_unknown(),
             _ => {
                 // Stray token at top level: skip it with a diagnostic.
                 let span = self.current().span;
@@ -259,6 +266,41 @@ impl Parser<'_> {
                 declaration.derives_copy = annotations.derives_copy;
                 declaration.span = Span::from_bounds(start.start, self.previous_end());
                 self.items.push(Item::Struct(declaration));
+            }
+        } else if self.at(TokenKind::Distinct) {
+            // A `distinct` declaration reaches an annotation only when the one
+            // the compiler owns — `@Derive(Copy)` — was written on it, because
+            // every other derive is consumed by macro expansion before this
+            // parse. `Copy` says nothing here: the representation is a scalar,
+            // so the type is copyable by construction and the claim can neither
+            // add nor withhold anything. It is refused by name rather than
+            // accepted as decoration.
+            if let Some(span) = annotations.derives_copy {
+                self.error(
+                    span,
+                    "KPAR086",
+                    "a `distinct` type is already copyable — its representation is a scalar \
+                     word — so `@Derive(Copy)` claims nothing; drop it",
+                );
+            }
+            if annotations.is_main
+                || annotations.is_main_thread_lifecycle
+                || annotations.is_main_thread
+                || annotations.execution != Execution::Inherited
+                || annotations.export.is_some()
+                || annotations.foreign.is_some()
+                || annotations.ffi_type.is_some()
+            {
+                self.error(
+                    start,
+                    "KPAR087",
+                    "a `distinct` declaration takes no annotation: it names a type, runs no \
+                     body, and crosses the C seam as the representation it is",
+                );
+            }
+            if let Some(mut declaration) = self.parse_distinct() {
+                declaration.span = Span::from_bounds(start.start, self.previous_end());
+                self.items.push(Item::Distinct(declaration));
             }
         } else if self.at(TokenKind::Enum) {
             // An enum reaches an annotation for exactly one reason —
@@ -483,12 +525,12 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses the body of a function, or the `;` of a bodyless foreign
-    /// declaration.
+    /// Parses the body of a function.
     ///
-    /// A foreign function has no body: it ends with `;`, so a `{` there is a
-    /// mistake, and the stored body is an empty block spanned at the `;`. An
-    /// ordinary function requires a body, so a `;` there is the mistake.
+    /// A foreign function has no body: its declaration ends with the
+    /// signature, so a `{` there is a mistake, and the stored body is an
+    /// empty block spanned at the signature's end. An ordinary function
+    /// requires a body, so anything but `{` there is the mistake.
     fn parse_function_body(&mut self, foreign: Option<ForeignKind>) -> Block {
         if let Some(kind) = foreign {
             if self.at(TokenKind::LBrace) {
@@ -496,31 +538,29 @@ impl Parser<'_> {
                     self.current().span,
                     "KPAR054",
                     format!(
-                        "an `{}` function has no body; end its declaration with `;`",
+                        "an `{}` function has no body; its declaration ends with the signature",
                         kind.annotation()
                     ),
                 );
                 return self.parse_block();
             }
-            let semi = self.current().span;
-            self.expect(TokenKind::Semicolon);
+            let end = self.previous_end();
             return Block {
                 stmts: Vec::new(),
-                span: semi,
+                span: Span::from_bounds(end, end),
             };
         }
-        if self.at(TokenKind::Semicolon) {
-            let semi = self.current().span;
+        if !self.at(TokenKind::LBrace) {
+            let here = self.current().span;
             self.error(
-                semi,
+                here,
                 "KPAR055",
                 "expected a function body; only an `@FFI.Extern` or `@FFI.Syscall` function is \
                  bodyless",
             );
-            self.bump();
             return Block {
                 stmts: Vec::new(),
-                span: semi,
+                span: Span::from_bounds(here.start, here.start),
             };
         }
         self.parse_block()
@@ -612,14 +652,14 @@ impl Parser<'_> {
         let mut stmts = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
             if let Some(stmt) = self.parse_stmt() {
                 stmts.push(stmt);
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }

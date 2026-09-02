@@ -23,6 +23,7 @@ pub mod dynamic_library;
 pub mod enums;
 pub mod env;
 pub mod file_system;
+pub mod traps;
 pub mod foreign;
 pub mod hybrid;
 pub mod live;

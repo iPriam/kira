@@ -64,7 +64,7 @@ construct StrxClNamedAdd() extends Test {
         return f(10, 32)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClNamedMul() extends Test {
@@ -73,7 +73,7 @@ construct StrxClNamedMul() extends Test {
         return f(6, 7)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClNamedSub() extends Test {
@@ -82,7 +82,7 @@ construct StrxClNamedSub() extends Test {
         return f(50, 8)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClNamedToApply() extends Test {
@@ -91,7 +91,7 @@ construct StrxClNamedToApply() extends Test {
         return strxCApply(move inc, 41)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ construct StrxClInlineAdd() extends Test {
         return f(32)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClInlineMul() extends Test {
@@ -113,7 +113,7 @@ construct StrxClInlineMul() extends Test {
         return f(14)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClInlineNeg() extends Test {
@@ -122,7 +122,7 @@ construct StrxClInlineNeg() extends Test {
         return f(42)
     }
     // 0 - 42
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 42) return e }
 }
 
 construct StrxClInlineId() extends Test {
@@ -130,7 +130,7 @@ construct StrxClInlineId() extends Test {
         let f: (Int) -> Int = { x in return x }
         return f(99)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(99); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(99) return e }
 }
 
 construct StrxClInlineSq() extends Test {
@@ -139,7 +139,7 @@ construct StrxClInlineSq() extends Test {
         return f(7)
     }
     // 49
-    expect { let e: Result<Int, TestFailure> = .Ok(49); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(49) return e }
 }
 
 construct StrxClInlineHalf() extends Test {
@@ -148,7 +148,7 @@ construct StrxClInlineHalf() extends Test {
         return f(100)
     }
     // 50
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 construct StrxClInlineMod() extends Test {
@@ -157,7 +157,7 @@ construct StrxClInlineMod() extends Test {
         return f(23)
     }
     // 23 % 7 = 2
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct StrxClInlineExpr() extends Test {
@@ -166,7 +166,7 @@ construct StrxClInlineExpr() extends Test {
         return f(5)
     }
     // (5+3)*2-1 = 15
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct StrxClInlineExpr2() extends Test {
@@ -175,7 +175,7 @@ construct StrxClInlineExpr2() extends Test {
         return g(4)
     }
     // 16+4+1 = 21
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 construct StrxClInlineTernary() extends Test {
@@ -184,7 +184,7 @@ construct StrxClInlineTernary() extends Test {
         return f(7)
     }
     // 100
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct StrxClInlineTernaryFalse() extends Test {
@@ -193,7 +193,7 @@ construct StrxClInlineTernaryFalse() extends Test {
         return f(3)
     }
     // 0
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ construct StrxClApplyTwiceInc() extends Test {
         return strxCApplyTwice(move inc, 10)
     }
     // 10+1+1 = 12
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct StrxClApplyTwiceSq() extends Test {
@@ -215,7 +215,7 @@ construct StrxClApplyTwiceSq() extends Test {
         return strxCApplyTwice(move sq, 3)
     }
     // sq(sq(3)) = sq(9) = 81
-    expect { let e: Result<Int, TestFailure> = .Ok(81); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(81) return e }
 }
 
 construct StrxClApplyTwiceDbl() extends Test {
@@ -224,7 +224,7 @@ construct StrxClApplyTwiceDbl() extends Test {
         return strxCApplyTwice(move dbl, 5)
     }
     // 5*2*2 = 20
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct StrxClApplyN5() extends Test {
@@ -233,7 +233,7 @@ construct StrxClApplyN5() extends Test {
         return strxCApplyN(move dbl, 1, 5)
     }
     // 2^5 = 32
-    expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(32) return e }
 }
 
 construct StrxClApplyN0() extends Test {
@@ -242,7 +242,7 @@ construct StrxClApplyN0() extends Test {
         return strxCApplyN(move inc, 5, 0)
     }
     // 0 applications -> 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxClApplyNInc10() extends Test {
@@ -251,7 +251,7 @@ construct StrxClApplyNInc10() extends Test {
         return strxCApplyN(move inc, 100, 50)
     }
     // 100 + 50 = 150
-    expect { let e: Result<Int, TestFailure> = .Ok(150); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(150) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ construct StrxClReduceSquares() extends Test {
         return strxCReduce(xs, move sq)
     }
     // 1+4+9+16+25 = 55
-    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(55) return e }
 }
 
 construct StrxClReduceDouble() extends Test {
@@ -275,7 +275,7 @@ construct StrxClReduceDouble() extends Test {
         return strxCReduce(xs, move dbl)
     }
     // 2+4+6+8+10+12 = 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClReduceIds() extends Test {
@@ -285,7 +285,7 @@ construct StrxClReduceIds() extends Test {
         return strxCReduce(xs, move id)
     }
     // 28
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 
 construct StrxClReduceAdd1() extends Test {
@@ -295,7 +295,7 @@ construct StrxClReduceAdd1() extends Test {
         return strxCReduce(xs, move add1)
     }
     // 11+21+31+41 = 104
-    expect { let e: Result<Int, TestFailure> = .Ok(104); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(104) return e }
 }
 
 construct StrxClReduceWithBonus() extends Test {
@@ -306,7 +306,7 @@ construct StrxClReduceWithBonus() extends Test {
         return strxCReduce(xs, move f)
     }
     // 51+52+53+54+55 = 265
-    expect { let e: Result<Int, TestFailure> = .Ok(265); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(265) return e }
 }
 
 construct StrxClReduceHalf() extends Test {
@@ -316,7 +316,7 @@ construct StrxClReduceHalf() extends Test {
         return strxCReduce(xs, move half)
     }
     // 2+5+7+10 = 24
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ construct StrxClFoldAdd() extends Test {
         return strxCFold(xs, move add, 0)
     }
     // 60
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct StrxClFoldMul() extends Test {
@@ -340,7 +340,7 @@ construct StrxClFoldMul() extends Test {
         return strxCFold(xs, move mul, 1)
     }
     // 120
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct StrxClFoldSub() extends Test {
@@ -350,7 +350,7 @@ construct StrxClFoldSub() extends Test {
         return strxCFold(xs, move sub, 20)
     }
     // 20-1-2-3-4 = 10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StrxClFoldAddInit() extends Test {
@@ -360,7 +360,7 @@ construct StrxClFoldAddInit() extends Test {
         return strxCFold(xs, move add, 100)
     }
     // 100+1+2+3+4+5 = 115
-    expect { let e: Result<Int, TestFailure> = .Ok(115); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(115) return e }
 }
 
 construct StrxClFoldSmall() extends Test {
@@ -370,7 +370,7 @@ construct StrxClFoldSmall() extends Test {
         return strxCFold(xs, move add, 0)
     }
     // 23
-    expect { let e: Result<Int, TestFailure> = .Ok(23); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(23) return e }
 }
 
 construct StrxClFoldMulSmall() extends Test {
@@ -380,7 +380,7 @@ construct StrxClFoldMulSmall() extends Test {
         return strxCFold(xs, move mul, 1)
     }
     // 24
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +394,7 @@ construct StrxClCapImm1() extends Test {
         return f(42)
     }
     // 142
-    expect { let e: Result<Int, TestFailure> = .Ok(142); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(142) return e }
 }
 
 construct StrxClCapImm2() extends Test {
@@ -404,7 +404,7 @@ construct StrxClCapImm2() extends Test {
         return f(6)
     }
     // 42
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct StrxClCapImmLoop() extends Test {
@@ -420,7 +420,7 @@ construct StrxClCapImmLoop() extends Test {
         return acc
     }
     // sum(i+1000 for i in 0..9) = 45 + 10000 = 10045
-    expect { let e: Result<Int, TestFailure> = .Ok(10045); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10045) return e }
 }
 
 construct StrxClCapImmPow2() extends Test {
@@ -431,7 +431,7 @@ construct StrxClCapImmPow2() extends Test {
         return strxCReduce(xs, move f)
     }
     // 2+4+6+8+10 = 30
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct StrxClCapImmSub() extends Test {
@@ -441,7 +441,7 @@ construct StrxClCapImmSub() extends Test {
         return f(12)
     }
     // 7
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct StrxClCapImmMul3() extends Test {
@@ -457,7 +457,7 @@ construct StrxClCapImmMul3() extends Test {
         return acc
     }
     // 3*(1+2+3+4+5+6) = 63
-    expect { let e: Result<Int, TestFailure> = .Ok(63); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(63) return e }
 }
 
 construct StrxClCapImmTop() extends Test {
@@ -473,7 +473,7 @@ construct StrxClCapImmTop() extends Test {
         return acc
     }
     // (100+99+98+97+96) = 490
-    expect { let e: Result<Int, TestFailure> = .Ok(490); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(490) return e }
 }
 
 construct StrxClCapImmDiv() extends Test {
@@ -489,6 +489,6 @@ construct StrxClCapImmDiv() extends Test {
         return acc
     }
     // i*4/4 = i; sum(0..7) = 28
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 

@@ -197,8 +197,8 @@ impl<'a> Analyzer<'a> {
                 Item::Struct(decl) if !decl.type_params.is_empty() => {
                     let name = self.interner.resolve(decl.name).to_owned();
                     self.validate_type_params(&name, &decl.type_params);
-                    if self.generic_aggregates.contains_key(&name)
-                        || self.generic_enums.contains_key(&name)
+                    if self.generic_aggregate_named(&name).is_some()
+                        || self.generic_enum_named(&name).is_some()
                     {
                         self.emit(
                             decl.name_span,
@@ -206,15 +206,16 @@ impl<'a> Analyzer<'a> {
                             format!("generic declaration `{name}` is already defined"),
                         );
                     } else {
+                        let key = self.template_key(source, &name);
                         self.generic_aggregates
-                            .insert(name, GenericAggregate::Struct { decl, source });
+                            .insert(key, GenericAggregate::Struct { decl, source });
                     }
                 }
                 Item::Class(decl) if !decl.type_params.is_empty() => {
                     let name = self.interner.resolve(decl.name).to_owned();
                     self.validate_type_params(&name, &decl.type_params);
-                    if self.generic_aggregates.contains_key(&name)
-                        || self.generic_enums.contains_key(&name)
+                    if self.generic_aggregate_named(&name).is_some()
+                        || self.generic_enum_named(&name).is_some()
                     {
                         self.emit(
                             decl.name_span,
@@ -222,14 +223,16 @@ impl<'a> Analyzer<'a> {
                             format!("generic declaration `{name}` is already defined"),
                         );
                     } else {
+                        let key = self.template_key(source, &name);
                         self.generic_aggregates
-                            .insert(name, GenericAggregate::Class { decl, source });
+                            .insert(key, GenericAggregate::Class { decl, source });
                     }
                 }
                 Item::Function(function) if !function.type_params.is_empty() => {
                     let name = self.interner.resolve(function.name).to_owned();
                     self.validate_type_params(&name, &function.type_params);
-                    match self.generic_functions.entry(name.clone()) {
+                    let key = self.template_key(source, &name);
+                    match self.generic_functions.entry(key) {
                         Entry::Occupied(_) => {
                             self.emit(
                                 function.name_span,
@@ -278,7 +281,7 @@ impl<'a> Analyzer<'a> {
             }
             for bound in &param.bounds {
                 let bound_name = self.interner.resolve(bound.name).to_owned();
-                if !is_builtin_trait(&bound_name) && !self.traits.contains_key(&bound_name) {
+                if !is_builtin_trait(&bound_name) && self.visible_trait_key(&bound_name).is_none() {
                     self.emit(
                         bound.span,
                         "KSEM289",
@@ -291,12 +294,64 @@ impl<'a> Analyzer<'a> {
 
     /// Whether a name is a generic struct or class template.
     pub(crate) fn is_generic_aggregate(&self, name: &str) -> bool {
-        self.generic_aggregates.contains_key(name)
+        self.generic_aggregate_named(name).is_some()
     }
 
     /// Whether a name is a generic free-function template.
     pub(crate) fn is_generic_function(&self, name: &str) -> bool {
-        self.generic_functions.contains_key(name)
+        self.generic_function_named(name).is_some()
+    }
+
+    /// The key a template declared in `source` is filed under: its name
+    /// qualified by the declaring package, so two packages may each declare a
+    /// `Box<T>`.
+    pub(crate) fn template_key(&self, source: SourceId, name: &str) -> String {
+        match self.imports.package_of(source) {
+            Some(package) => format!("{package}::{name}"),
+            None => name.to_owned(),
+        }
+    }
+
+    /// The key under which `name`, written in the current file, finds a
+    /// template in `table`: the file's own package first, then the program's
+    /// own declarations, then the packages the file imports.
+    fn visible_template_key<T>(&self, table: &HashMap<String, T>, name: &str) -> Option<String> {
+        let home = self.template_key(self.source, name);
+        if table.contains_key(&home) {
+            return Some(home);
+        }
+        if table.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .map(|package| format!("{package}::{name}"))
+            .find(|key| table.contains_key(key))
+    }
+
+    /// The generic enum template `name` names from the current file.
+    pub(crate) fn generic_enum_named(&self, name: &str) -> Option<GenericEnum<'a>> {
+        let key = self.visible_template_key(&self.generic_enums, name)?;
+        self.generic_enums.get(&key).copied()
+    }
+
+    /// The generic struct or class template `name` names from the current file.
+    pub(crate) fn generic_aggregate_named(&self, name: &str) -> Option<GenericAggregate<'a>> {
+        let key = self.visible_template_key(&self.generic_aggregates, name)?;
+        self.generic_aggregates.get(&key).copied()
+    }
+
+    /// The generic aggregate template filed under `key`, a key an
+    /// instantiation recorded.
+    pub(crate) fn generic_aggregate_by_key(&self, key: &str) -> Option<GenericAggregate<'a>> {
+        self.generic_aggregates.get(key).copied()
+    }
+
+    /// The generic free-function template `name` names from the current file.
+    pub(crate) fn generic_function_named(&self, name: &str) -> Option<GenericFunction<'a>> {
+        let key = self.visible_template_key(&self.generic_functions, name)?;
+        self.generic_functions.get(&key).copied()
     }
 
     /// Whether `name` denotes a generic trait template. Trait templates live
@@ -339,7 +394,8 @@ impl<'a> Analyzer<'a> {
             }
             return Some(base.to_owned());
         }
-        let template = self.traits.get(base).cloned()?;
+        let key = self.visible_trait_key(base)?;
+        let template = self.traits.get(&key).cloned()?;
         if template.type_params.is_empty() {
             if !arguments.is_empty() {
                 self.emit(
@@ -349,7 +405,7 @@ impl<'a> Analyzer<'a> {
                 );
                 return None;
             }
-            return Some(base.to_owned());
+            return Some(key);
         }
         let args: Vec<Type> = arguments
             .iter()
@@ -373,6 +429,7 @@ impl<'a> Analyzer<'a> {
         if has_error {
             return None;
         }
+        let base = key.as_str();
         let key = self.mangle(base, &args);
         if !self.traits.contains_key(&key) {
             self.instantiate_trait(base, &key, &template, &args, span);
@@ -456,7 +513,7 @@ impl<'a> Analyzer<'a> {
         let known = Type::from_name(text).is_some()
             || self.visible_enum(text).is_some()
             || self.visible_struct(text).is_some()
-            || self.aliases.contains_key(text);
+            || self.visible_alias_key(text).is_some();
         if known {
             self.emit(
                 span,
@@ -482,7 +539,18 @@ impl<'a> Analyzer<'a> {
         span: Span,
     ) -> Type {
         let mangled = self.mangle(text, args);
-        if let Some(id) = self.program.types.enums().lookup(&mangled) {
+        // Filed under the template's package, as an aggregate instantiation
+        // is: two packages' same-named templates mint different rows.
+        let owner = self
+            .imports
+            .package_of(template.source)
+            .map(str::to_owned);
+        if let Some(id) = self
+            .program
+            .types
+            .enums()
+            .lookup_owned(owner.as_deref(), &mangled)
+        {
             return Type::Enum(id);
         }
         if self.instantiation_depth >= MAX_INSTANTIATION_DEPTH {
@@ -546,31 +614,45 @@ impl<'a> Analyzer<'a> {
         self.payload_blame = outer_blame;
         self.type_bindings = outer_bindings;
 
-        match self.program.types.enums_mut().declare(def) {
+        match self
+            .program
+            .types
+            .enums_mut()
+            .declare_owned(owner.as_deref(), def)
+        {
             // Pushed only on success, which keeps `enum_defaults` indexed by
             // the same ids the table mints.
             Some(id) => {
                 self.enum_defaults.push(defaults);
+                let module = self.imports.module_of(template.source).to_owned();
+                self.program.types.enums_mut().set_module(id, &module);
+                let identity = self.template_identity(text, template.source);
                 // Remembering what minted this row is what lets a later
-                // `Result.Ok(1)` recognize its own instantiation, and what lets
-                // `Result<Int, E>` widen into `Result<Any, E>`; the mangled name
-                // spells the arguments, so neither can be read back off it
+                // `Result.Ok(1)` recognize its own instantiation; the mangled
+                // name spells the arguments, so neither can be read back off it
                 // without parsing what was printed. It is recorded in the enum
-                // table rather than beside the analyzer because the widening
-                // rule is asked of the program's types long after analysis is
-                // over — see [`kira_semantics_model::TypeTable::admits`].
+                // table rather than beside the analyzer because identity is
+                // asked of the program's types long after analysis is over.
                 self.program.types.enums_mut().record_instantiation(
                     id,
                     Instantiation {
-                        template: text.to_owned(),
+                        template: identity,
                         arguments: args.to_vec(),
                     },
                 );
                 Type::Enum(id)
             }
-            // Unreachable in practice — the memo above already returned for a
-            // name the table holds — but a wrong answer is worse than an error.
             None => Type::Error,
+        }
+    }
+
+    /// The package-qualified name of the generic template `text` declared in
+    /// `source`: what an instantiation records, so two packages' same-named
+    /// templates never read as one.
+    pub(crate) fn template_identity(&self, text: &str, source: SourceId) -> String {
+        match self.imports.package_of(source) {
+            Some(owner) => format!("{owner}::{text}"),
+            None => text.to_owned(),
         }
     }
 

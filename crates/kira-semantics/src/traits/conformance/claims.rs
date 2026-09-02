@@ -76,8 +76,8 @@ impl<'a> Analyzer<'a> {
                         continue;
                     };
                     let name = self.interner.resolve(declaration.name).to_owned();
-                    if self.construct_families.contains_key(&name) {
-                        family_claims.push((source, name, vec![claimed.clone()]));
+                    if let Some(key) = self.visible_family_key(&name) {
+                        family_claims.push((source, key, vec![claimed.clone()]));
                         continue;
                     }
                     match self.conforming_type_named(&name, source, declaration.target) {
@@ -231,7 +231,7 @@ impl<'a> Analyzer<'a> {
         for entry in claimed {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && !self.traits.contains_key(&written_name) {
+                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
                     self.emit(
                         entry.span,
                         "KSEM289",
@@ -354,7 +354,7 @@ impl<'a> Analyzer<'a> {
         for entry in claimed {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && !self.traits.contains_key(&written_name) {
+                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
                     self.emit(
                         entry.span,
                         "KSEM289",

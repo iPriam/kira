@@ -279,21 +279,21 @@ construct FarSumBorrowLiteral() extends Test {
         let xs: [Int] = [1, 2, 3, 4, 5]
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct FarSumBorrowDirect() extends Test {
     test {
         return farSumBorrow([10, 20, 30])
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct FarSumOwnedLiteral() extends Test {
     test {
         return farSumOwned([7, 8, 9])
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct FarNthIntFirst() extends Test {
@@ -301,7 +301,7 @@ construct FarNthIntFirst() extends Test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct FarNthIntMid() extends Test {
@@ -309,7 +309,7 @@ construct FarNthIntMid() extends Test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 construct FarNthIntLast() extends Test {
@@ -317,14 +317,14 @@ construct FarNthIntLast() extends Test {
         let xs: [Int] = [100, 200, 300]
         return farNthInt(xs, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(300) return e }
 }
 
 construct FarProductLiteral() extends Test {
     test {
         return farProduct([2, 3, 4, 5])
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct FarCountLiteral() extends Test {
@@ -332,7 +332,7 @@ construct FarCountLiteral() extends Test {
         let xs: [Int] = [10, 20, 30, 40, 50]
         return farCount(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct FarScaleAndSumLiteral() extends Test {
@@ -340,7 +340,7 @@ construct FarScaleAndSumLiteral() extends Test {
         let xs: [Int] = [1, 2, 3, 4]
         return farScaleAndSum(xs, 10)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct FarDotProductLiteral() extends Test {
@@ -349,7 +349,7 @@ construct FarDotProductLiteral() extends Test {
         let b: [Int] = [4, 5, 6]
         return farDotProduct(a, b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(32) return e }
 }
 
 construct FarSumSquaresLiteral() extends Test {
@@ -357,7 +357,7 @@ construct FarSumSquaresLiteral() extends Test {
         let xs: [Int] = [3, 4, 5]
         return farSumSquares(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ construct FarAppendThenSum() extends Test {
         farAppendInt(xs, 4)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct FarAppendMultiThenSum() extends Test {
@@ -381,7 +381,7 @@ construct FarAppendMultiThenSum() extends Test {
         farAppendInt(xs, 30)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct FarSetIntThenSum() extends Test {
@@ -390,7 +390,7 @@ construct FarSetIntThenSum() extends Test {
         farSetInt(xs, 1, 99)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(139); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(139) return e }
 }
 
 construct FarDoubleAllThenSum() extends Test {
@@ -399,7 +399,7 @@ construct FarDoubleAllThenSum() extends Test {
         farDoubleAll(xs)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FarDoubleAllThenProduct() extends Test {
@@ -408,7 +408,7 @@ construct FarDoubleAllThenProduct() extends Test {
         farDoubleAll(xs)
         return farProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(48); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(48) return e }
 }
 
 construct FarNativeIndexAfterAppend() extends Test {
@@ -418,7 +418,7 @@ construct FarNativeIndexAfterAppend() extends Test {
         farAppendInt(xs, 5)
         return farNthInt(xs, 4) + farCount(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +430,7 @@ construct FarRuntimeBuildNativeSum5() extends Test {
         let xs = farBuildRange(5)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct FarRuntimeBuildNativeSum10() extends Test {
@@ -438,7 +438,7 @@ construct FarRuntimeBuildNativeSum10() extends Test {
         let xs = farBuildRange(10)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(55) return e }
 }
 
 construct FarRuntimeBuildNativeProduct() extends Test {
@@ -446,7 +446,7 @@ construct FarRuntimeBuildNativeProduct() extends Test {
         let xs = farBuildRange(4)
         return farProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct FarRuntimeBuildNativeCount() extends Test {
@@ -454,7 +454,7 @@ construct FarRuntimeBuildNativeCount() extends Test {
         let xs = farBuildRange(7)
         return farCount(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct FarRuntimeEvenBuildNativeSum() extends Test {
@@ -462,7 +462,7 @@ construct FarRuntimeEvenBuildNativeSum() extends Test {
         let xs = farBuildEven(5)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FarRuntimeBuildNthInt() extends Test {
@@ -470,7 +470,7 @@ construct FarRuntimeBuildNthInt() extends Test {
         let xs = farBuildRange(5)
         return farNthInt(xs, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct FarRuntimeBuildAppendNativeSum() extends Test {
@@ -479,7 +479,7 @@ construct FarRuntimeBuildAppendNativeSum() extends Test {
         farAppendInt(xs, 100)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(106); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(106) return e }
 }
 
 construct FarBuildThenDoubleSum() extends Test {
@@ -488,7 +488,7 @@ construct FarBuildThenDoubleSum() extends Test {
         farDoubleAll(xs)
         return farSumBorrow(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FarSumSquaresBuilt() extends Test {
@@ -496,7 +496,7 @@ construct FarSumSquaresBuilt() extends Test {
         let xs = farBuildRange(5)
         return farSumSquares(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(55) return e }
 }
 
 construct FarDotProductBuilt() extends Test {
@@ -505,7 +505,7 @@ construct FarDotProductBuilt() extends Test {
         let b = farBuildEven(3)
         return farDotProduct(a, b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +517,7 @@ construct FarSumPointsLiteral() extends Test {
         let pts: [FarPoint] = [FarPoint { x: 1, y: 2 }, FarPoint { x: 3, y: 4 }]
         return farSumPoints(pts)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct FarSumPointsBuilt() extends Test {
@@ -526,7 +526,7 @@ construct FarSumPointsBuilt() extends Test {
         return farSumPoints(pts)
     }
     // farBuildPoints(4): {0,1},{3,4},{6,7},{9,10} — sums: 1+7+13+19 = 40
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 construct FarNthPointXLiteral() extends Test {
@@ -534,7 +534,7 @@ construct FarNthPointXLiteral() extends Test {
         let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
         return farNthPointX(pts, 1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct FarNthPointYLiteral() extends Test {
@@ -542,7 +542,7 @@ construct FarNthPointYLiteral() extends Test {
         let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
         return farNthPointY(pts, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FarMutatePointSync() extends Test {
@@ -551,7 +551,7 @@ construct FarMutatePointSync() extends Test {
         farMutatePoint(pts, 0, 99, 88)
         return pts[0].x + pts[0].y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(187); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(187) return e }
 }
 
 construct FarAppendPointSync() extends Test {
@@ -561,7 +561,7 @@ construct FarAppendPointSync() extends Test {
         return farSumPoints(pts)
     }
     // {1,2} + {10,20} = 1+2+10+20 = 33
-    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(33) return e }
 }
 
 construct FarAppendPointCount() extends Test {
@@ -571,7 +571,7 @@ construct FarAppendPointCount() extends Test {
         farAppendPoint(pts, 7, 8)
         return pts.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct FarSumPointsWeightedLiteral() extends Test {
@@ -580,7 +580,7 @@ construct FarSumPointsWeightedLiteral() extends Test {
         return farSumPointsWeighted(pts)
     }
     // 2*3+3*5 + 4*3+5*5 = 6+15+12+25 = 58
-    expect { let e: Result<Int, TestFailure> = .Ok(58); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(58) return e }
 }
 
 construct FarPointBuildMutateSum() extends Test {
@@ -590,7 +590,7 @@ construct FarPointBuildMutateSum() extends Test {
         return farSumPoints(pts)
     }
     // initially {0,1},{3,4},{6,7}; after mutate[0]={100,200}: 100+200+3+4+6+7=320
-    expect { let e: Result<Int, TestFailure> = .Ok(320); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(320) return e }
 }
 
 construct FarBuildPointsNativeNth() extends Test {
@@ -599,7 +599,7 @@ construct FarBuildPointsNativeNth() extends Test {
         return farNthPointX(pts, 3) + farNthPointY(pts, 3)
     }
     // farBuildPoints i=3: x=9, y=10 => 19
-    expect { let e: Result<Int, TestFailure> = .Ok(19); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(19) return e }
 }
 
 // ---------------------------------------------------------------------------

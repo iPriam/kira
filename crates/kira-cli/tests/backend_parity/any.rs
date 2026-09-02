@@ -14,7 +14,7 @@
 //! returned, and released on all three engines with the same output and the
 //! same exit status.
 //!
-use crate::assert_parity_with_heap_balance;
+use crate::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
 
 /// A scalar of each kind crosses in.
 ///
@@ -42,12 +42,12 @@ function main() {
 fn a_foreign_pointer_crosses_into_any() {
     let output = assert_parity_with_heap_balance(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Byte {
     let value: U8
 }
 
-@FFI.Pointer { target: Byte; ownership: borrowed; }
+@FFI.Pointer { target: Byte, ownership: borrowed }
 struct BytePtr {}
 
 @Main
@@ -463,16 +463,15 @@ function main() {
     assert_eq!(output, "false\nfalse\nfalse\n");
 }
 
-/// A widened payload compares equal to a directly erased one.
+/// A payload erased by a rebuild compares equal to a directly erased one.
 ///
 /// `Result<Int, E>` -> `Result<Any, E>` is the path a test runner's `expect`
-/// takes, and it is the one erasure boxing broke: the widened payload has to
-/// become the same erasure box a direct crossing produces, or the two compare
-/// unequal while holding the same value. The VM rebuilds through a synthesized
-/// helper and the LLVM backend through a generated leaf, which is exactly the
-/// kind of difference this suite exists to hold to one behavior.
+/// takes, and it is written rather than implied: the program unpacks one
+/// specialization and builds the other, erasing the payload where it writes
+/// it. The rebuilt payload has to be the same erasure box a direct crossing
+/// produces, or the two compare unequal while holding the same value.
 #[test]
-fn a_widened_payload_equals_a_directly_erased_one() {
+fn a_rebuilt_payload_equals_a_directly_erased_one() {
     let output = assert_parity_with_heap_balance(
         r#"
 enum AppError { NotFound }
@@ -483,12 +482,18 @@ struct Point { var x: Int = 0
 
 function wrapInt() -> Result<Any, AppError> {
     let narrow: Result<Int, AppError> = .Ok(10)
-    return narrow
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
 }
 
 function wrapPoint() -> Result<Any, AppError> {
     let narrow: Result<Point, AppError> = .Ok(Point(x: 1, y: 2))
-    return narrow
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
 }
 
 @Main
@@ -545,9 +550,12 @@ function erase(value: Envelope) -> Any {
     return move value
 }
 
-function widened() -> Carrier<Any> {
+function rebuilt() -> Carrier<Any> {
     let narrow: Carrier<Record> = .Some(Record { code: 7, name: "kept" })
-    return narrow
+    match narrow {
+        Some(value) -> { return .Some(value) }
+        None -> { return .None }
+    }
 }
 
 function project(value: Carrier<Any>) -> Bool {
@@ -589,7 +597,7 @@ function main() {
     print(keep(move first) == same)
     print(nested == nestedSame)
     print(erase(Envelope.Record(Record { code: 7, name: "kept" })) == erased)
-    print(project(widened()))
+    print(project(rebuilt()))
     print(projectEnvelope(Envelope.Record(Record { code: 7, name: "kept" })))
     return
 }
@@ -629,12 +637,15 @@ function erase(value: Batch) -> Any {
     return move value
 }
 
-function widened() -> Carrier<Any> {
+function rebuilt() -> Carrier<Any> {
     let narrow: Carrier<[[Point]]> = .Some([
         [Point { x: 1, label: "a" }],
         [Point { x: 2, label: "b" }]
     ])
-    return narrow
+    match narrow {
+        Some(value) -> { return .Some(value) }
+        None -> { return .None }
+    }
 }
 
 function project(value: Carrier<Any>) -> Bool {
@@ -686,7 +697,7 @@ function main() {
     print(first == changed)
     print(nested == nestedSame)
     print(erase(Batch.Rows([[1, 2], [3]])) == rows)
-    print(project(widened()))
+    print(project(rebuilt()))
     print(projectBatch(Batch.Points([
         Point { x: 1, label: "a" },
         Point { x: 2, label: "b" }
@@ -696,4 +707,51 @@ function main() {
 "#,
     );
     assert_eq!(output, "true\nfalse\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+/// `is` answers by runtime identity and `as` hands the held value back, on
+/// every backend.
+#[test]
+fn is_and_as_read_an_erased_value_back() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = Point(x: 41)
+    let number: Any = 8
+    print(boxed is Point)
+    print(boxed is Int)
+    print(number is Int)
+    print((boxed as Point).x + (number as Int))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\nfalse\ntrue\n49\n");
+}
+
+/// A cast to a type the `Any` does not hold traps, after the output before it.
+#[test]
+fn a_cast_to_the_wrong_type_traps() {
+    assert_trap_parity(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = 8
+    print(boxed is Point)
+    let point = boxed as Point
+    print(point.x)
+    return
+}
+"#,
+        "false\n",
+    );
 }

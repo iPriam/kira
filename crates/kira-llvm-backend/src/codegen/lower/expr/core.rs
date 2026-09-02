@@ -38,11 +38,11 @@ impl FunctionLowering<'_, '_> {
             IrExpr::ConstantGet { constant, ty } => self.lower_constant_get(constant, ty),
             IrExpr::CellNew { value, ty } => self.lower_cell_new(value, ty),
             IrExpr::CellGet { slot, ty } => self.lower_cell_get(slot, ty),
-            IrExpr::Unary { op, operand } => {
+            IrExpr::Unary { op, operand, ty } => {
                 let value = self.lower_expr(operand)?;
-                Ok(self.lower_unary(op, value))
+                self.lower_unary_typed(op, value, ty)
             }
-            IrExpr::Binary { op, lhs, rhs } => self.lower_binary(op, lhs, rhs),
+            IrExpr::Binary { op, lhs, rhs, ty } => self.lower_binary(op, lhs, rhs, ty),
             IrExpr::Select {
                 cond,
                 then,
@@ -56,15 +56,20 @@ impl FunctionLowering<'_, '_> {
                 result,
                 ..
             } => self.lower_call(callee, &args, &writebacks, result),
-            IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
+            IrExpr::StructNew {
+                struct_id,
+                fields,
+                order,
+            } => self.lower_struct_new(struct_id, &fields, &order),
             IrExpr::EnumNew {
                 enum_id,
                 tag,
                 payload,
             } => self.lower_enum_new(enum_id, tag, payload),
             IrExpr::IntoAny { value, from } => self.lower_into_any(value, from),
-            IrExpr::Widen { value, from, to } => self.lower_widen(value, from, to),
             IrExpr::EnumTag { value } => self.lower_enum_tag(value),
+            IrExpr::TypeTest { value, target } => self.lower_type_test(value, target),
+            IrExpr::TypeCast { value, target, ty } => self.lower_type_cast(value, target, ty),
             IrExpr::EnumPayload { value, ty } => self.lower_enum_payload(value, ty),
             IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
             IrExpr::MathOperation { op, operands } => self.lower_math_operation(op, &operands),
@@ -130,14 +135,16 @@ impl FunctionLowering<'_, '_> {
             IrExpr::NativeState { value, type_id, .. } => {
                 self.lower_native_state_new(value, type_id)
             }
-            IrExpr::NativeUserData { state } => self.lower_expr(state),
+            IrExpr::NativeUserData { state } => self.lower_native_user_data(state),
             IrExpr::NativeRecover { raw, type_id, ty } => {
                 self.lower_native_recover_value(raw, type_id, ty)
             }
-            IrExpr::NativeStateFree { token } => self.lower_native_state_free(token),
-            IrExpr::Convert { operand, kind, .. } => {
+            IrExpr::NativeStateRetain { token } => self.lower_native_state_retain(token),
+            IrExpr::NativeStateRelease { token } => self.lower_native_state_release(token),
+            IrExpr::Convert { operand, kind, ty } => {
+                let from = self.type_of(operand);
                 let value = self.lower_expr(operand)?;
-                Ok(self.lower_convert(kind, value))
+                self.lower_convert_typed(kind, value, from, ty)
             }
         }
     }

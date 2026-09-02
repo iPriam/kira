@@ -230,7 +230,13 @@ fn export_type(
         // runtime counts holds on; the analyzer already refused it (`KSEM186`),
         // and inventing a wire spelling for one would be inventing a way for a
         // consumer to hold a share nobody releases.
-        Type::Array(_)
+        // A `distinct` type joins them for a third reason: `kira-ir` rewrote
+        // every one to its representation before this compiler ran, so an
+        // export carrying one means that pass was skipped. Saying so is worth
+        // more than guessing the scalar underneath, which is exactly the
+        // "compiler and analyzer disagree" case this function refuses loudly.
+        Type::Distinct(_)
+        | Type::Array(_)
         | Type::Enum(_)
         | Type::RawPtr
         | Type::ForeignPtr(_)

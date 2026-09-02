@@ -221,6 +221,7 @@ impl Scan<'_> {
             }
             Expr::Try { value, .. } => self.expr(*value),
             Expr::Ownership { operand, .. } => self.expr(*operand),
+            Expr::TypeTest { value, .. } | Expr::TypeCast { value, .. } => self.expr(*value),
             Expr::ContentFor { iterable, body, .. } => {
                 let (iterable, body) = (*iterable, body.clone());
                 self.expr(iterable);

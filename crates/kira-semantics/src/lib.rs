@@ -58,6 +58,7 @@ mod conversions;
 mod copyable;
 mod decl;
 mod definitions;
+mod distincts;
 mod enums;
 mod exports;
 mod ffi_types;
@@ -85,6 +86,7 @@ pub use build_machine::{BuildMachine, host_architecture, host_platform};
 pub use definitions::DefinitionLink;
 pub use exports::exported_name;
 pub use imports::{FileImports, ImportTable};
+pub use kira_semantics_model::PackageIdentity;
 /// The precompiled shaders a [`SourceProgram`] carries.
 ///
 /// Re-exported rather than restated: it is a field type of this crate's one

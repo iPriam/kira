@@ -164,8 +164,8 @@ fn the_seam_accepts_a_cstring_result_and_still_refuses_a_string() {
     let good = dir.join("good.kira");
     std::fs::write(
         &good,
-        "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function greeting() -> CString;\n\
+        "@FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function greeting() -> CString\n\
          @Main function main() { print(greeting()) return }\n",
     )
     .expect("program");
@@ -180,8 +180,8 @@ fn the_seam_accepts_a_cstring_result_and_still_refuses_a_string() {
     let bad = dir.join("bad.kira");
     std::fs::write(
         &bad,
-        "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function bad() -> String;\n\
+        "@FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function bad() -> String\n\
          @Main function main() { return }\n",
     )
     .expect("program");
@@ -234,8 +234,8 @@ fn a_call_into_an_absent_library_names_it_without_trailing_garbage() {
     let entry = dir.join("app/main.kira");
     std::fs::write(
         &entry,
-        "@FFI.Extern { library: absentlib; symbol: absent_answer; abi: c; }\n\
-         function absentAnswer() -> Int;\n\
+        "@FFI.Extern { library: absentlib, symbol: absent_answer, abi: c }\n\
+         function absentAnswer() -> Int\n\
          @Main\n\
          function main() {\n\
          print(\"dragon.kmesh\")\n\

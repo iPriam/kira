@@ -1,3 +1,5 @@
+import Foundation
+
 // Main-thread event-loop coverage. The target annotations are compiler-owned;
 // the harness exercises invoke, spawn/await, and fire-and-forget post on every
 // executable backend.
@@ -32,7 +34,7 @@ construct MtxMainThreadInvoke() extends Test {
     test {
         return MainThread.invoke { mainThreadIncrement(40) }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(41); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(41) return e }
 }
 
 construct MtxMainThreadSpawn() extends Test {
@@ -40,7 +42,7 @@ construct MtxMainThreadSpawn() extends Test {
         let handle = MainThread.spawn { mainThreadIncrement(41) }
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct MtxMainThreadPost() extends Test {
@@ -48,7 +50,7 @@ construct MtxMainThreadPost() extends Test {
         MainThread.post { mainThreadPost(1) }
         return 42
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 function mainThreadSection() -> Int {

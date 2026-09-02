@@ -47,7 +47,7 @@ bitwise fold would disagree with `Equatable`.
 
 ```kira
 @Derive(Hashable)
-struct Point { var x: Int; var y: Int }
+struct Point { var x: Int var y: Int }
 
 let key = hash_Point(Point { x = 3, y = 4 })
 ```
@@ -118,7 +118,7 @@ Deserialization is the exact inverse. It validates the leading `TypeName{`, then
 
 ```kira
 @Derive(Equatable, Serializable, Deserializable)
-struct Point { var x: Int; var y: Int }
+struct Point { var x: Int var y: Int }
 
 let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
 let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
@@ -144,6 +144,27 @@ The variant is **named, never numbered**: an ordinal would tie the format to dec
 A `String` value is **not escaped**: a `String` field or payload whose text contains `"`, `;`, or `}` is out of contract. No error is raised, but the wire string is then ambiguous and will not round-trip.
 
 `Deserializable` **refuses a `Float`** field or payload. There is no lossless `Float` parsing primitive, so refusing beats shipping a parser that silently loses the low bits.
+
+## Distinct Types
+
+A [`distinct` type](/docs/language-reference/types#distinct-types) derives too, and every derive delegates to the representation it was declared over rather than wrapping it.
+
+```kira
+@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+distinct Port = U32
+
+serialize_Port(Port(U32(8080)))       // "8080", not "Port{raw=8080}"
+deserialize_Port("8080")              // Port(U32(8080))
+lt_Port(Port(U32(41)), Port(U32(42))) // true
+```
+
+A distinct type has exactly one readable member, `raw`, and the derives see it as a field of that name — so the field classification above applies to it unchanged. What each derive adds for one is its *construction*: a distinct type is built by calling it, so `clone_Port` returns `Port(v.raw)` rather than a brace literal.
+
+`Serializable` writes the representation and nothing around it. A struct envelope would put a Kira-side nominal fact on a wire with no place to keep it, and would make every reader parse a shape carrying no information.
+
+Three representations are refused where they have no answer, each by name: `Float` and `F32` for `Hashable` and `Deserializable` (equal floats can carry different bits, and there is no lossless parser), and `RawPtr` for `Hashable`, `Ordered`, `Serializable`, and `Deserializable` (an opaque foreign word is an address, and it means nothing in another run).
+
+`Tagged` does not apply: it answers which number a *variant* is, and a distinct type has no variants. `@Derive(Copy)` is refused at the parser (`KPAR086`) — one scalar word is copyable already, so the assertion can neither add nor withhold anything.
 
 ## `@Derive(Copy)`
 

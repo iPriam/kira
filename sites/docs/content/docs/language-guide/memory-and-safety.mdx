@@ -33,7 +33,7 @@ One predicate decides it: **trivially copyable** covers `Void`, `Int`, `Float`, 
 
 A struct nonetheless **copies when bound**: `var w = v` deep-copies and `v` stays live. Needing a spelling and moving on bind are different questions, and a struct answers them differently. An **array** and an **enum** are the types that answer the second one yes: their bindings alias where a struct copies, so binding one moves it.
 
-`copy` copies scalars by their bits, strings and structs by their owned storage, and arrays through copy-on-write. It lowers on every engine; what it requires is the *spelling*, so the ownership checker can tell an intended copy from an intended move. Passing a named non-trivial value to a copying parameter with neither word written is `KSEM113`, and writing `move` where the parameter copies is `KSEM115`.
+`copy` copies scalars by their bits, strings and structs by their owned storage, and arrays through copy-on-write. It lowers on every engine, and it is its own operation all the way through the compiler: never a read, never a move. What it requires is proof that a second holder is sound. A scalar, a string, an array of copyable elements, and a struct or enum built from those are Copyable; native state, a cell, a task handle, an `Any`, C storage, and anything that runs or holds a user `Drop` body are not, and `copy` of one is `KSEM356`, as is a parameter written `copy` of such a type. Passing a named non-trivial value to a copying parameter with neither word written is `KSEM113`, and writing `move` where the parameter copies is `KSEM115`.
 
 ## What Each Mode Costs a Backend
 

@@ -5,9 +5,7 @@
 //! erased enum with the updated payload. The enclosing selector then writes
 //! that enum back through its own receiver place.
 
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback, LocalId,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback, LocalId,};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 
@@ -92,6 +90,7 @@ impl Analyzer<'_> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], result),
         }
     }
 
@@ -101,7 +100,7 @@ impl Analyzer<'_> {
         variant: ConstructVariant,
         method: &str,
     ) -> Option<(FuncId, Type)> {
-        let owner = self.program.types.type_name(variant.ty);
+        let owner = self.member_owner_name(variant.ty);
         self.lookup_function(&format!("{owner}.{method}"))
             .map(|(id, _, result)| (id, result))
     }

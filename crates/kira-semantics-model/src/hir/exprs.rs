@@ -16,6 +16,45 @@ use la_arena::Idx;
 /// Handle to a HIR expression.
 pub type HirExprId = Idx<HirExpr>;
 
+/// The order a struct construction evaluates its field initializers in.
+///
+/// Storage is always declaration order; evaluation follows the source. A
+/// literal that writes its fields in declaration order — and every
+/// construction the compiler synthesizes — is `Declared`. A literal that
+/// writes them in another order is `Written`, and its side effects run in
+/// that order, as the language rules require.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldOrder {
+    /// Evaluate `fields[0]`, `fields[1]`, … in that sequence.
+    Declared,
+    /// Evaluate the fields at these declaration indices, in this sequence.
+    ///
+    /// A permutation of `0..fields.len()`.
+    Written(Vec<u32>),
+}
+
+impl FieldOrder {
+    /// The written sequence `written` (declaration indices in source order),
+    /// collapsed to `Declared` when it already is the declaration order.
+    #[must_use]
+    pub fn from_written(written: Vec<u32>) -> Self {
+        if written.iter().enumerate().all(|(at, &slot)| at as u32 == slot) {
+            Self::Declared
+        } else {
+            Self::Written(written)
+        }
+    }
+
+    /// The declaration indices in evaluation order, for `count` fields.
+    #[must_use]
+    pub fn sequence(&self, count: usize) -> Vec<u32> {
+        match self {
+            Self::Declared => (0..count as u32).collect(),
+            Self::Written(order) => order.clone(),
+        }
+    }
+}
+
 /// An expression, carrying its resolved type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
@@ -72,6 +111,31 @@ pub enum HirExpr {
         /// The result type.
         ty: Type,
     },
+    /// An explicit `copy value`: a second, independent holder of a Copyable
+    /// value. Its own node, not a read or a move, so the intent survives
+    /// analysis: a read may be the last use, a move consumes, a copy neither.
+    Copy {
+        /// The value being copied.
+        value: HirExprId,
+        /// The value's type, already proven Copyable.
+        ty: Type,
+    },
+    /// `value is Type`: whether an erased value holds `target`, by nominal
+    /// runtime identity. The value is evaluated once and released.
+    TypeTest {
+        /// The `Any` being asked.
+        value: HirExprId,
+        /// The type tested for; one that erases into `Any`.
+        target: Type,
+    },
+    /// `value as Type`: the `target` an erased value holds. A value of any
+    /// other type traps; the result is owned by the caller.
+    TypeCast {
+        /// The `Any` being unboxed.
+        value: HirExprId,
+        /// The type cast to; one that erases into `Any`.
+        target: Type,
+    },
     /// A binary operation.
     Binary {
         /// The operator (already resolved to a typed variant).
@@ -125,12 +189,15 @@ pub enum HirExpr {
     ///
     /// Every field is present and in declaration order: the analyzer fills an
     /// omitted field with its declared default, so nothing downstream has to
-    /// know defaults exist.
+    /// know defaults exist. `order` says in which sequence the initializers
+    /// run, which is the order the literal wrote them.
     StructNew {
         /// The struct being built.
         struct_id: StructId,
         /// One initializer per field, in declaration order.
         fields: Vec<HirExprId>,
+        /// The sequence the initializers are evaluated in.
+        order: FieldOrder,
     },
     /// Boxing a value into a fresh capture cell (`HirStmt::Let` of a boxed
     /// `var`).
@@ -513,8 +580,14 @@ pub enum HirExpr {
         /// The Kira value type exposed by the mutable view.
         ty: Type,
     },
-    /// Releases a callback-state handle or userdata token exactly once.
-    NativeStateFree {
+    /// Adds one owner to the callback state a handle or userdata token names.
+    NativeStateRetain {
+        /// The state handle or raw token.
+        token: HirExprId,
+    },
+    /// Removes one owner from the callback state a handle or userdata token
+    /// names. The last owner's release destroys the state.
+    NativeStateRelease {
         /// The state handle or raw token.
         token: HirExprId,
     },
@@ -536,6 +609,25 @@ pub enum HirExpr {
         /// The target type, carrying its width spelling.
         ty: Type,
     },
+    /// A `distinct` crossing: the same value, at the other type.
+    ///
+    /// Both directions are this one node, because both are the same non-event
+    /// at run time. `TabId(word)` carries the distinct type in `ty` and
+    /// `id.raw` carries the representation, and neither changes a bit of the
+    /// value — a distinct type *is* its representation once the type checker
+    /// has had its say. `kira-ir` lowers this to the operand alone, so the IR,
+    /// the bytecode, and every backend see the crossing as the nothing it is.
+    ///
+    /// It exists so the type checker has somewhere to put the type. Returning
+    /// the operand unchanged would leave the expression reporting the type it
+    /// crossed *from*, which is the one fact the crossing changes.
+    Distinct {
+        /// The value crossing.
+        value: HirExprId,
+        /// The type it crosses to: the distinct type on the way in, its
+        /// representation on the way out.
+        ty: Type,
+    },
     /// A value crossing into the top type: `value`, with its type erased.
     ///
     /// Analysis inserts this wherever a concrete value lands in an `Any`
@@ -552,27 +644,6 @@ pub enum HirExpr {
         value: HirExprId,
         /// The type it had before erasure.
         from: Type,
-    },
-    /// One generic instantiation carried into another whose type arguments are
-    /// `Any`: `Result<Int, E>` where `Result<Any, E>` is written.
-    ///
-    /// A sibling of [`HirExpr::IntoAny`] rather than a case of it. That node
-    /// wraps a value whose type stops being known; this one hands back a value
-    /// whose type is still known exactly — a different enum row, with the same
-    /// tag and a payload that crossed into `Any`. On the VM the two rows have
-    /// one runtime form and this costs nothing; on a statically typed backend
-    /// the payload's machine form differs, so this is a rebuild. Both types are
-    /// carried because both name a row the rebuild reads its variants from.
-    ///
-    /// See [`crate::TypeTable::widens_to`] for which pairs are
-    /// admitted, and why a payload behind an array is not among them.
-    Widen {
-        /// The value being widened.
-        value: HirExprId,
-        /// The instantiation it had.
-        from: Type,
-        /// The instantiation the position declared.
-        to: Type,
     },
     /// `Task { work(a, b) }` — spawn a deferred task and yield its handle.
     ///
@@ -703,6 +774,8 @@ impl HirExpr {
             HirExpr::Int(_) => Type::INT,
             HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
+            HirExpr::TypeTest { .. } => Type::Bool,
+            HirExpr::TypeCast { target, .. } => *target,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
             // Every one of them takes a `Float` and answers one.
@@ -716,6 +789,7 @@ impl HirExpr {
             | HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
+            | HirExpr::Copy { ty, .. }
             | HirExpr::Select { ty, .. }
             | HirExpr::Call { ty, .. }
             | HirExpr::Field { ty, .. }
@@ -727,6 +801,7 @@ impl HirExpr {
             | HirExpr::NativeState { ty, .. }
             | HirExpr::NativeRecover { ty, .. }
             | HirExpr::Convert { ty, .. }
+            | HirExpr::Distinct { ty, .. }
             | HirExpr::FileSystem { ty, .. }
             | HirExpr::Compiler { ty, .. }
             | HirExpr::Env { ty, .. }
@@ -745,15 +820,16 @@ impl HirExpr {
             // None has a type that can vary, so none carries one.
             HirExpr::ArrayLen { .. }
             | HirExpr::StringLen { .. }
-            | HirExpr::StringCharAt { .. }
             | HirExpr::StringIndexOf { .. }
             | HirExpr::EnumTag { .. } => Type::INT,
+            // A byte read out of a string is a byte.
+            HirExpr::StringCharAt { .. } => Type::Int(crate::IntSpelling::U8),
             HirExpr::StringSubstring { .. } | HirExpr::StringOf { .. } => Type::String,
             HirExpr::NativeUserData { .. } => Type::RawPtr,
             HirExpr::IntoAny { .. } => Type::Any,
-            HirExpr::Widen { to, .. } => *to,
             HirExpr::ArrayAppend { .. }
-            | HirExpr::NativeStateFree { .. }
+            | HirExpr::NativeStateRetain { .. }
+            | HirExpr::NativeStateRelease { .. }
             | HirExpr::TaskDetach { .. }
             | HirExpr::TaskCancel { .. } => Type::Void,
             HirExpr::Error => Type::Error,

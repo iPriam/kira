@@ -143,7 +143,7 @@ fn a_trait_requiring_send_refuses_a_type_that_does_not_carry_it() {
 #[test]
 fn a_task_body_taking_a_value_that_cannot_move_is_refused() {
     let items = diagnostics(
-        "function tally(cb: () -> Void) -> Int { cb() return 1 }\n\
+        "async function tally(cb: () -> Void) -> Int { cb() return 1 }\n\
          @Main function main() {\n    var total = 0\n\
          \n    let bump: () -> Void = { in total = total + 1 }\n\
          \n    let handle = Task { tally(bump) }\n    print(handle.await)\n    return\n}\n",
@@ -162,7 +162,7 @@ fn a_task_body_taking_a_value_that_cannot_move_is_refused() {
 #[test]
 fn a_task_body_taking_a_sendable_non_scalar_is_refused_by_the_slot_rule() {
     let items = diagnostics(
-        "function count(text: String) -> Int { return text.count }\n\
+        "async function count(text: String) -> Int { return text.count }\n\
          @Main function main() {\n    let handle = Task { count(\"ab\") }\n\
          \n    print(handle.await)\n    return\n}\n",
     );
@@ -178,7 +178,7 @@ fn a_task_body_taking_a_sendable_non_scalar_is_refused_by_the_slot_rule() {
 #[test]
 fn a_scalar_task_body_passes_both_rules() {
     let items = diagnostics(
-        "function twice(n: Int) -> Int { return n * 2 }\n\
+        "async function twice(n: Int) -> Int { return n * 2 }\n\
          @Main function main() {\n    let handle = Task { twice(21) }\n\
          \n    print(handle.await)\n    return\n}\n",
     );

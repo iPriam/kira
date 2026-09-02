@@ -13,6 +13,6 @@ function main() {
     state.clicks = state.clicks + 2
     var after = nativeRecover<BrowserState>(handle)
     print(after.clicks)
-    nativeStateFree(boxed)
+    nativeUserDataRelease(handle)
     return
 }

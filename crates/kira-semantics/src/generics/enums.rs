@@ -44,7 +44,7 @@ impl<'a> Analyzer<'a> {
                 let bound_name = self.interner.resolve(bound.name).to_owned();
                 // A compiler-known trait is known here without a declaration,
                 // so it names a bound the same way it names a conformance.
-                if is_builtin_trait(&bound_name) || self.traits.contains_key(&bound_name) {
+                if is_builtin_trait(&bound_name) || self.visible_trait_key(&bound_name).is_some() {
                     continue;
                 }
                 self.emit(
@@ -57,7 +57,7 @@ impl<'a> Analyzer<'a> {
                 );
             }
         }
-        if self.generic_enums.contains_key(&name)
+        if self.generic_enum_named(&name).is_some()
             || self.visible_enum(&name).is_some()
             || self.visible_struct(&name).is_some()
         {
@@ -68,8 +68,9 @@ impl<'a> Analyzer<'a> {
             );
             return true;
         }
+        let key = self.template_key(source, &name);
         self.generic_enums.insert(
-            name,
+            key,
             GenericEnum {
                 decl: declaration,
                 source,
@@ -81,7 +82,7 @@ impl<'a> Analyzer<'a> {
     /// Whether `name` is a registered generic enum, so a bare use of it can say
     /// what is missing rather than "unknown type".
     pub(crate) fn is_generic_enum(&self, name: &str) -> bool {
-        self.generic_enums.contains_key(name)
+        self.generic_enum_named(name).is_some()
     }
 
     /// The instantiation of the template `name` that `expected` already asks
@@ -93,6 +94,13 @@ impl<'a> Analyzer<'a> {
     /// with what the position already said. It agrees when the expected enum is
     /// an instantiation of exactly this template — `Result<Int, Bool>` for
     /// `Result`, and not for `Outcome`.
+    ///
+    /// The comparison is between identities, not spellings: a row records the
+    /// package-qualified identity of the template that minted it, so the name
+    /// written here is resolved to the template it names from this file and
+    /// that template's identity is what agrees or does not. Comparing the bare
+    /// spelling would refuse `Result.Ok(1)` for every template a package
+    /// declared, since no imported template's identity is ever its bare name.
     pub(crate) fn generic_instantiation_expected(
         &self,
         name: &str,
@@ -101,7 +109,9 @@ impl<'a> Analyzer<'a> {
         let Some(Type::Enum(id)) = expected else {
             return None;
         };
-        (self.program.types.enums().template_of(id) == Some(name)).then_some(id)
+        let template = self.generic_enum_named(name)?;
+        let identity = self.template_identity(name, template.source);
+        (self.program.types.enums().template_of(id) == Some(identity.as_str())).then_some(id)
     }
 
     /// Resolves the type parameter `name` stands for in the substitution

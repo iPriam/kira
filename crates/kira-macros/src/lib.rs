@@ -112,7 +112,9 @@ pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<(SourceId, String)> {
             if !written.starts_with('"') || !written.ends_with('"') || written.len() < 2 {
                 continue;
             }
-            let path = kira_lexer::decode_string_literal(written);
+            let Ok(path) = kira_lexer::decode_string_literal(written) else {
+                continue;
+            };
             if path.ends_with(".ksl") && !found.iter().any(|(_, known)| *known == path) {
                 found.push((source, path));
             }

@@ -7,7 +7,7 @@ construct AlxByteAliasAssignsIntegerLiteral() extends Test {
         let value: Byte = 7
         return value
     }
-    expect { let e: Result<Byte, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct AlxAliasBufferSum() extends Test {
@@ -18,7 +18,7 @@ construct AlxAliasBufferSum() extends Test {
         payload.append(6)
         return aliasBufferSum(payload)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct AlxAliasPacketCarriesAliasField() extends Test {
@@ -26,7 +26,7 @@ construct AlxAliasPacketCarriesAliasField() extends Test {
         let packet = aliasBuildPacket(3, 3)
         return aliasBufferSum(packet.payload)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct AlxNestedAliasMatrix() extends Test {
@@ -42,5 +42,5 @@ construct AlxNestedAliasMatrix() extends Test {
         matrix.append(move right)
         return aliasMatrixScore(matrix)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }

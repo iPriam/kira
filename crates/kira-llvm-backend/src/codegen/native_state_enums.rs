@@ -362,6 +362,7 @@ impl Codegen<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kira_semantics_model::hir::CallableSignature;
     use kira_runtime_abi::Execution;
     use kira_semantics_model::hir::{HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
     use kira_semantics_model::{EnumDef, OwnershipMode, StructDef, Type, VariantDef};
@@ -425,6 +426,7 @@ mod tests {
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(0, 11),
+            signature: CallableSignature::synthesized(&[], ty),
         });
 
         let ir = kira_ir::lower(&program);

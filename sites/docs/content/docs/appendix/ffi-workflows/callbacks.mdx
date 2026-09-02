@@ -6,17 +6,17 @@ description: "`@FFI.Callback` types, a Kira function as a C callback, the genera
 A `@FFI.Callback` declares a C function-pointer type. Its value can be a C function pointer or a named top-level Kira function, and it crosses both as a struct member and on its own.
 
 ```kira
-@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
+@FFI.Callback { abi: c, params: [I32, I32], result: I32 }
 struct Adder {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Hooks {
     var add: Adder
     var scale: I32
 }
 
-@FFI.Extern { library: demo; symbol: run_hooks; abi: c; }
-function runHooks(h: Hooks, a: I32, b: I32) -> I32;
+@FFI.Extern { library: demo, symbol: run_hooks, abi: c }
+function runHooks(h: Hooks, a: I32, b: I32) -> I32
 ```
 
 A pointer C hands out can be stored and passed back. A named top-level Kira function fills one: `Hooks { add = combine, scale = 2 }`. C then calls into Kira through the generated entry.
@@ -51,16 +51,16 @@ The closure bridge currently covers scalar `let` captures. It does not make a cl
 A C callback may receive a C-layout struct by value. Kira receives it **as a pointer to the struct**, the way a `const sapp_event*` argument does.
 
 ```kira
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiView {
     let data: CString
     let length: U64
 }
 
-@FFI.Pointer { target: FfiView; ownership: borrowed; }
+@FFI.Pointer { target: FfiView, ownership: borrowed }
 struct FfiViewPtr {}
 
-@FFI.Callback { abi: c; params: [I32, FfiView]; result: Int; }
+@FFI.Callback { abi: c, params: [I32, FfiView], result: Int }
 struct Viewer {}
 
 function onView(tag: I32, view: FfiViewPtr) -> Int { return view.length }
@@ -70,4 +70,4 @@ Kira never classifies the by-value parameter, exactly as it never classifies a b
 
 ## Opaque State
 
-For an API that carries a `void*` userdata token, `nativeState`, `nativeUserData`, and `nativeRecover` move Kira-owned state across it without exposing a layout. See [Interop and FFI](/docs/language-guide/interop-and-ffi#opaque-callback-state).
+For an API that carries a `void*` userdata token, `nativeState`, `nativeUserData`, and `nativeRecover` move Kira-owned state across it without exposing a layout, and `nativeUserDataRetain` and `nativeUserDataRelease` count its owners. See [Interop and FFI](/docs/language-guide/interop-and-ffi#opaque-callback-state).

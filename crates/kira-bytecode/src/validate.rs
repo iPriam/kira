@@ -341,6 +341,23 @@ impl Module {
                             && function_at(&self.functions, u64::from(*glue))
                                 .is_some_and(|callee| callee.local_count > 0)
                     }
+                    // The same bound, plus the permutation must be one: every
+                    // declared index exactly once, or a value would land in
+                    // no field or in two.
+                    Instruction::NewStructOrdered { order, glue } => {
+                        let mut seen = vec![false; order.len()];
+                        let permutation = order.iter().all(|&slot| {
+                            usize::try_from(slot).ok().is_some_and(|slot| {
+                                slot < seen.len() && !std::mem::replace(&mut seen[slot], true)
+                            })
+                        });
+                        permutation
+                            && glue.is_none_or(|glue| {
+                                non_native_function(&self.functions, u64::from(glue))
+                                    && function_at(&self.functions, u64::from(glue))
+                                        .is_some_and(|callee| callee.local_count > 0)
+                            })
+                    }
                     // Like `Call`, a `CallMut` must land on a bytecode body:
                     // the writeback happens when that body returns, which a
                     // native callee never does here. Its `slot` roots the

@@ -1,0 +1,62 @@
+import Foundation
+
+// Kira Test coverage for `distinct Name = Representation`.
+//
+// The folds live in Distincts.kira; these pin their values, so a backend that
+// erased the type differently — or generated a different derive — comes back
+// with a different number rather than with a passing test.
+
+construct DnxDistinctPositionsFold() extends Test {
+    test {
+        return distinctsSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(9329) return e }
+}
+
+construct DnxDerivesFold() extends Test {
+    test {
+        return distinctDerivesSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(10101) return e }
+}
+
+construct DnxSerdeRoundTrip() extends Test {
+    test {
+        return distinctSerdeSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(114) return e }
+}
+
+construct DnxOptionOverADistinctType() extends Test {
+    test {
+        return distinctOptionSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(59) return e }
+}
+
+// A value of a distinct type reaches a parameter of that type and reads back as
+// the representation, which is the whole of the surface.
+construct DnxRawReadsTheRepresentation() extends Test {
+    test {
+        return distinctTabIndex(DistinctTabId(U32(12)))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
+}
+
+// Two declarations over one `U32` are two types, and a value of one equals a
+// value of the same one and nothing else.
+construct DnxSiblingIdsAreSeparateTypes() extends Test {
+    test {
+        let tab = DistinctTabId(U32(5))
+        let bookmark = DistinctBookmarkId(U32(5))
+        var score = 0
+        if tab == DistinctTabId(U32(5)) {
+            score = score + 1
+        }
+        if bookmark == DistinctBookmarkId(U32(5)) {
+            score = score + 10
+        }
+        return score + distinctTabIndex(tab) + distinctBookmarkIndex(bookmark)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
+}

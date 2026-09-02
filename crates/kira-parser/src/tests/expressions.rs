@@ -59,12 +59,12 @@ fn a_hex_literal_is_a_bit_pattern_and_a_decimal_one_is_a_number() {
 
 #[test]
 fn a_hex_literal_is_an_ordinary_argument_inside_a_struct_literal() {
-    // The shape the corpus writes: a newline-separated literal whose field value
-    // is a call taking several hex arguments.
+    // The shape the corpus writes: a multi-line literal whose field value is a
+    // call taking several hex arguments.
     let result = parse_text(
         "function f() { let e = Entry {
-         iid: guid(0x1bc6ea02, 0xef36, 0x464f)
-         tag: 3
+         iid: guid(0x1bc6ea02, 0xef36, 0x464f),
+         tag: 3,
          } }",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -201,9 +201,16 @@ fn an_enum_payload_accepts_an_argument_label() {
 }
 
 #[test]
-fn struct_literal_fields_need_no_separator() {
-    // Newlines are insignificant, so a comma cannot be required.
-    let result = parse_text("function f() { let p = Point {\n    x = 1\n    y = 2\n} }");
+fn struct_literal_fields_are_comma_separated() {
+    // Newlines are whitespace, so two fields with nothing between them are
+    // refused at the second one.
+    let unseparated = parse_text("function f() { let p = Point {\n    x = 1\n    y = 2\n} }");
+    assert!(
+        unseparated.diagnostics.iter().any(|d| d.has_code("KPAR002")),
+        "{:?}",
+        unseparated.diagnostics
+    );
+    let result = parse_text("function f() { let p = Point {\n    x = 1,\n    y = 2,\n} }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
         panic!("expected let");
@@ -283,4 +290,22 @@ fn parses_assignment_to_a_local_and_to_a_field_path() {
             kira_syntax_model::ast::Stmt::Assign { .. }
         ));
     }
+}
+
+/// `is` and `as` take a type on the right and bind tighter than a comparison,
+/// looser than a shift.
+#[test]
+fn is_and_as_parse_with_a_type_on_the_right() {
+    let result = parse_text("function f() { let a: Any = 1 let b = a is Int == true let c = a as Int return }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let mut tests = 0;
+    let mut casts = 0;
+    for (_, expr) in result.tree.exprs() {
+        match expr {
+            kira_syntax_model::ast::Expr::TypeTest { .. } => tests += 1,
+            kira_syntax_model::ast::Expr::TypeCast { .. } => casts += 1,
+            _ => {}
+        }
+    }
+    assert_eq!((tests, casts), (1, 1));
 }

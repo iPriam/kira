@@ -8,18 +8,18 @@ import Foundation
 
 construct StrxLiteralNewlineEscape() extends Test {
     test { return "a\nb".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StrxLiteralTabAndQuote() extends Test {
     test { return "\t\"".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // One character, not the two that were written.
 construct StrxLiteralBackslashIsOneCharacter() extends Test {
     test { return "\\".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // --- line continuation -----------------------------------------------------
@@ -34,7 +34,7 @@ construct StrxLiteralContinuationJoinsTheLines() extends Test {
         return split
     }
     expect {
-        let e: Result<String, TestFailure> = .Ok("the compositor offers no wl_compositor or no xdg_wm_base, and a window needs both")
+        let e: Result<Any, TestFailure> = .Ok("the compositor offers no wl_compositor or no xdg_wm_base, and a window needs both")
         return e
     }
 }
@@ -48,7 +48,7 @@ construct StrxLiteralContinuationJoinsWithNoSpace() extends Test {
                       split"
         return joined
     }
-    expect { let e: Result<String, TestFailure> = .Ok("unsplit"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("unsplit") return e }
 }
 
 // Three lines is two continuations, and a continued literal is still one
@@ -60,7 +60,7 @@ construct StrxLiteralContinuationSpansThreeLines() extends Test {
                     three"
         return long.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 // A continuation inside a literal that also carries ordinary escapes: the two
@@ -71,5 +71,5 @@ construct StrxLiteralContinuationBesideAnEscape() extends Test {
                      c"
         return mixed.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }

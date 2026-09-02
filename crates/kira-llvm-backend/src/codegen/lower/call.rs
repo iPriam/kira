@@ -174,6 +174,10 @@ impl FunctionLowering<'_, '_> {
                     Type::Enum(_) => {
                         return Err(LlvmError::internal("a print of an enum"));
                     }
+                    // A `U64` prints as the unsigned value it is.
+                    Type::Int(kira_semantics_model::IntSpelling::U64) => {
+                        self.codegen.runtime.print_uint
+                    }
                     Type::Int(_) => self.codegen.runtime.print_int,
                     Type::Float(_) => self.codegen.runtime.print_float,
                     Type::Bool => {
@@ -210,6 +214,14 @@ impl FunctionLowering<'_, '_> {
                     | Type::MainThreadTask(_)
                     | Type::Cell(_) => {
                         return Err(LlvmError::internal("a print of a raw pointer"));
+                    }
+                    // Analysis rejects `print` of a distinct type — it is not
+                    // its representation, and rendering it as one would be the
+                    // implicit conversion the type exists to refuse — and
+                    // `kira-ir` erases the type anyway, so this is unreachable
+                    // twice over.
+                    Type::Distinct(_) => {
+                        return Err(LlvmError::internal("a print of a distinct type"));
                     }
                     // Analysis rejects `print` of an erased value for the same
                     // reason it rejects a struct or an array: no rendering is

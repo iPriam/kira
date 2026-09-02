@@ -21,41 +21,44 @@ Arithmetic and comparison require both sides to agree on a type. Logical operato
 
 ## Fixed-Width Scalars
 
-`I8`, `I16`, `I32`, `U8`, `U16`, `U32`, `U64`, and `F32` name narrower types alongside bare `Int` and `Float`. They are **spellings, not representations**: every integer is one 64-bit two's-complement value at run time and every float one 64-bit IEEE-754 value, so `I32` does not allocate a narrower box. `Int32` is accepted as an alias for `I32`.
+`I8`, `I16`, `I32`, `U8`, `U16`, `U32`, `U64`, and `F32` name narrower types alongside bare `Int` and `Float`. Every engine stores an integer as one 64-bit word and every float as one 64-bit IEEE-754 value, but the written width is the type's whole contract: its range in type checking, overflow, formatting, serialization, and FFI. `Int32` is accepted as an alias for `I32`.
 
 There is no `I64` and no `F64`. `Int` is the 64-bit signed integer and `Float` the 64-bit float, so a second spelling for either would be one type wearing two names. `U64` has no bare counterpart to collapse into, so it stays.
 
-A spelling decides exactly two things.
-
-**Distinctness.** Two written widths must match exactly. `u8Value + u32Value` is `KSEM071`, because the language has no implicit widening. Bare `Int` and `Float` are the exception: each is a wildcard matching any width in its kind, which is what lets an integer literal be written at any width.
+**Distinctness.** Two written widths must match exactly. `u8Value + u32Value` is `KSEM071`, because the language has no implicit widening between written widths. Bare `Int` and `Float` are the exception: each pairs with any width in its kind, which is what lets an integer literal be written at any width, and lets an `Int` value flow into narrower storage through a checked conversion.
 
 ```kira
-let small: U8 = 5      // a literal is plain `Int`, so it fits any width
-let plain: Int = small // a width flows into the wildcard
-let back: U8 = plain   // and back out of it
+let small: U8 = 5      // a literal adapts to the width it is written into
+let plain: Int = small // a width flows into `Int`, which holds every U8
+let back: U8 = plain   // checked: traps if the value no longer fits
+let never: U8 = 300    // KSEM350: the literal does not fit `U8`
 ```
 
-That makes assignability deliberately non-transitive: `U8` to `Int` and `Int` to `U32` both hold while `U8` to `U32` does not.
+A literal that cannot fit its slot is refused at compile time. Any other value that moves between `Int` and a written width, or between two widths through an explicit conversion such as `I32(small)`, converts at that point: nothing happens when every value of the source fits the destination (`U8` into `Int`, `I8` into `I16`), and the value is range-checked otherwise (`Int` into `U8`, `U64` into `Int`, `I32` into `U32`). A value the destination cannot hold is a trap, on every engine. A `U64` above the signed range is written in hexadecimal, `0xffffffffffffffff`, which as a `U64` names the unsigned value of those bits.
 
-**Signedness of `/`, `%`, and the four orderings.** A `U` spelling selects the unsigned form of those six operators and only those six. `+`, `-`, `*`, and `==` are bit-identical under either signedness.
+**The written width decides.** When one side is a plain `Int` or `Float` and the other carries a width, the operation takes its type and its signedness from the written width, whichever side wrote it. A `U` spelling selects the unsigned form of `/`, `%`, `>>`, and the four orderings.
 
 ```kira
-let big: U64 = -1
+let big: U64 = 18446744073709551615
 let two: U64 = 2
 print(big > two)   // true; signed this would be false
 print(big / two)   // 9223372036854775807; signed this would be 0
 ```
 
-**The left operand decides.** When one side is a plain `Int` or `Float` and the other carries a width, the operation takes its type and its signedness from the left side alone.
+**Overflow traps.** `+`, `-`, `*`, unary `-`, and `/` trap when the result leaves the range of the written width: `U8(250) + 10` is a trap, not `260` and not `4`, and `Int` traps past 64 bits. A fold that wants the wrap, a hash, a checksum, a pseudo-random step, spells it:
 
 ```kira
-let neg: Int = 0 - 10
-let three: U8 = 3
-print(neg / three)   // -3, a signed divide
-print(three / neg)   // 0, an unsigned one
+let mixed = wrappingMul(acc ^ part, 1099511628211)   // FNV, wrapping at 64 bits
+let low: U8 = wrappingAdd(byte, 1)                    // wraps at 8 bits: U8(255) + 1 is 0
 ```
 
-A width does **not** narrow arithmetic. A `U8` sum of `250` and `10` is `260`, not `4`: every operation wraps at the representation's 64 bits, never at the written width.
+`wrappingAdd`, `wrappingSub`, and `wrappingMul` take two integers of one spelling and wrap at that spelling's width.
+
+**Division.** `/` truncates toward zero and `%` takes the dividend's sign. A zero divisor traps, and so does `MIN / -1`, the one signed division whose answer does not fit.
+
+**Shifts.** `<<` and `>>` take their type from the left operand; the count may be any integer spelling, and must lie in `0..width` or the shift traps. `>>` is arithmetic on a signed spelling and logical on an unsigned one; `<<` discards the bits it pushes past the width.
+
+**Conversions between kinds.** `Float(i)` rounds to nearest, ties to even. `Int(f)` truncates toward zero and traps for NaN, an infinity, or a value outside the destination's range.
 
 `%` on floats is the truncated remainder, so the sign follows the dividend and `(0.0 - 9.0) % 4.0` is `-1.0`.
 
@@ -85,7 +88,7 @@ print(signed >> 60)       // -1
 print(unsigned >> 60)     // 15
 ```
 
-A shift count is taken modulo 64 on every backend rather than trapping, so `1 << 64` is `1`. Nothing is undefined: LLVM's shifts would be poison here, so the native backend masks the count explicitly to match the VM and wasm.
+A shift count must lie in `0..width` of the shifted value's spelling, so `1 << 64` on an `Int` and `byte << 8` on a `U8` both trap. Nothing is undefined: LLVM's shifts would be poison here, so the native backend checks the count before shifting, exactly as the VM and wasm do.
 
 ## Precedence
 

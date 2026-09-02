@@ -176,14 +176,6 @@ impl Analyzer<'_> {
                 if !reinitializes && !self.check_local_live(ctx, local, span) {
                     return None;
                 }
-                // Reinitializing is ordinarily free of consequence, because the
-                // value it replaces is dropped with its binding. A native-state
-                // handle is the one value that is not: it names storage the
-                // runtime releases only when told, so overwriting it is where
-                // the box becomes unreachable.
-                if reinitializes {
-                    self.check_native_state_overwrite(ctx, local, span);
-                }
                 if !ctx.is_mutable(local) {
                     self.emit(span, "KSEM021", purpose.immutable_root(&name));
                     return None;

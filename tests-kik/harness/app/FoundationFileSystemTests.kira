@@ -19,7 +19,7 @@ construct FsfTextRoundTrip() extends Test {
         return wrote && direct.ok && direct.text == "hello" && direct.size == 5
             && opened && throughFile.text == direct.text && removed
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct FsfBytesPreserveNulsAndRanges() extends Test {
@@ -38,10 +38,10 @@ construct FsfBytesPreserveNulsAndRanges() extends Test {
         return wrote && whole.count == 4 && whole[0] == 104 && whole[1] == 105
             && whole[2] == 0 && whole[3] == 122 && middle.count == 2
             && middle[0] == 0 && middle[1] == 122 && text.ok && text.size == 4
-            && text.text == "hi" && short.count == 0 && empty.count == 0
+            && text.text == "hi\0z" && short.count == 0 && empty.count == 0
             && negative.count == 0 && removed
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct FsfDirectoriesListAndRename() extends Test {
@@ -69,7 +69,7 @@ construct FsfDirectoriesListAndRename() extends Test {
             && count == 2 && outOfRange && negative && renamed && oldGone
             && newThere && isDir && removed && gone
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct FsfMissingPathsAnswerValues() extends Test {
@@ -86,5 +86,5 @@ construct FsfMissingPathsAnswerValues() extends Test {
             && makeDirectory(path + "/missing") == false
             && removePath(path) == false
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }

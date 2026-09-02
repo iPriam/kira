@@ -32,8 +32,8 @@ fn codes(result: &ParseResult) -> Vec<&str> {
 #[test]
 fn a_bodyless_extern_parses_with_its_block() {
     let result = parse_text(
-        "@FFI.Extern { library: ffimath; symbol: kira_ffi_add; abi: c; }\n\
-         function add(a: I32, b: I32) -> I32;",
+        "@FFI.Extern { library: ffimath, symbol: kira_ffi_add, abi: c }\n\
+         function add(a: I32, b: I32) -> I32",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let function = only_function(&result);
@@ -71,7 +71,7 @@ fn an_ordinary_function_carries_no_foreign_marker() {
 
 #[test]
 fn a_bodyless_ordinary_function_is_rejected() {
-    let result = parse_text("function f();");
+    let result = parse_text("function f()");
     assert_eq!(codes(&result), vec!["KPAR055"]);
     // The parser still yields a usable function: it never bails.
     assert!(matches!(result.tree.items(), [Item::Function(_)]));
@@ -88,7 +88,7 @@ fn a_bodyless_ordinary_function_is_rejected() {
 #[test]
 fn an_extern_with_a_body_is_rejected() {
     let result = parse_text(
-        "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
+        "@FFI.Extern { library: l, symbol: s, abi: c }\n\
          function add(a: I32) -> I32 { return a }",
     );
     assert_eq!(codes(&result), vec!["KPAR054"]);
@@ -98,37 +98,59 @@ fn an_extern_with_a_body_is_rejected() {
 
 #[test]
 fn a_missing_block_brace_is_rejected() {
-    let result = parse_text("@FFI.Extern function add(a: I32) -> I32;");
+    let result = parse_text("@FFI.Extern function add(a: I32) -> I32");
     assert_eq!(codes(&result), vec!["KPAR048"]);
 }
 
 #[test]
 fn a_non_identifier_field_key_is_rejected() {
-    let result = parse_text("@FFI.Extern { 42: x; }\nfunction add() -> I32;");
+    let result = parse_text("@FFI.Extern { 42: x }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR049"), "{:?}", codes(&result));
 }
 
 #[test]
 fn a_missing_field_colon_is_rejected() {
-    let result = parse_text("@FFI.Extern { library ffimath; }\nfunction add() -> I32;");
+    let result = parse_text("@FFI.Extern { library ffimath }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR050"), "{:?}", codes(&result));
 }
 
 #[test]
 fn a_non_identifier_field_value_is_rejected() {
-    let result = parse_text("@FFI.Extern { library: 42; }\nfunction add() -> I32;");
+    let result = parse_text("@FFI.Extern { library: 42 }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR051"), "{:?}", codes(&result));
 }
 
 #[test]
-fn a_missing_field_semicolon_is_rejected() {
-    let result = parse_text("@FFI.Extern { library: ffimath }\nfunction add() -> I32;");
+fn a_missing_field_comma_is_rejected() {
+    let result =
+        parse_text("@FFI.Extern { library: ffimath symbol: s }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR052"), "{:?}", codes(&result));
+}
+
+/// A trailing comma is allowed; a lone field needs none.
+#[test]
+fn a_trailing_field_comma_is_allowed() {
+    for text in [
+        "@FFI.Extern { library: l, symbol: s, abi: c, }\nfunction add() -> I32",
+        "@FFI.Syscall { name: write }\nfunction w() -> Int",
+    ] {
+        let result = parse_text(text);
+        assert!(result.diagnostics.is_empty(), "{text}: {:?}", result.diagnostics);
+    }
+}
+
+/// `;` is not a token of the language: the lexer reports it once (KLEX005)
+/// and the parser passes over it without a second diagnostic.
+#[test]
+fn a_semicolon_in_a_block_is_a_lexer_error_only() {
+    let result = parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nfunction add() -> I32;");
+    assert_eq!(codes(&result), vec!["KLEX005", "KLEX005", "KLEX005", "KLEX005"]);
+    assert_eq!(only_function(&result).params.len(), 0);
 }
 
 #[test]
 fn an_unknown_qualified_annotation_is_rejected() {
-    let result = parse_text("@FFI.Import { library: l; }\nfunction add() -> I32;");
+    let result = parse_text("@FFI.Import { library: l }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR053"), "{:?}", codes(&result));
     // A dotted name that is neither bodyless form records no foreign marker.
     assert!(only_function(&result).foreign.is_none());
@@ -147,8 +169,8 @@ fn an_unknown_qualified_annotation_is_rejected() {
 #[test]
 fn a_bodyless_syscall_parses_with_its_block() {
     let result = parse_text(
-        "@FFI.Syscall { name: write; }\n\
-         function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;",
+        "@FFI.Syscall { name: write }\n\
+         function sysWrite(fd: Int, buffer: CString, count: U64) -> Int",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let function = only_function(&result);
@@ -175,7 +197,7 @@ fn a_bodyless_syscall_parses_with_its_block() {
 /// not exist and refuse a declaration that is correct.
 #[test]
 fn a_kernel_name_with_an_underscore_is_one_field_value() {
-    let result = parse_text("@FFI.Syscall { name: exit_group; }\nfunction sysExit(status: Int);");
+    let result = parse_text("@FFI.Syscall { name: exit_group }\nfunction sysExit(status: Int)");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let mark = only_foreign(&result);
     let [field] = mark.fields.as_slice() else {
@@ -189,7 +211,7 @@ fn a_kernel_name_with_an_underscore_is_one_field_value() {
 #[test]
 fn an_extern_records_the_other_kind() {
     let result =
-        parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nfunction add(a: I32) -> I32;");
+        parse_text("@FFI.Extern { library: l, symbol: s, abi: c }\nfunction add(a: I32) -> I32");
     assert_eq!(only_foreign(&result).kind, ForeignKind::Extern);
 }
 
@@ -198,7 +220,7 @@ fn an_extern_records_the_other_kind() {
 /// reader looks for a declaration they never wrote.
 #[test]
 fn a_syscall_with_a_body_is_rejected_by_its_own_name() {
-    let result = parse_text("@FFI.Syscall { name: sync; }\nfunction sysSync() { return }");
+    let result = parse_text("@FFI.Syscall { name: sync }\nfunction sysSync() { return }");
     assert_eq!(codes(&result), vec!["KPAR054"]);
     let named = result.diagnostics.iter().any(|diagnostic| {
         diagnostic
@@ -212,7 +234,7 @@ fn a_syscall_with_a_body_is_rejected_by_its_own_name() {
 /// extern, with the written form's name in the message.
 #[test]
 fn a_malformed_syscall_block_reports_by_the_form_it_names() {
-    let result = parse_text("@FFI.Syscall function sysSync();");
+    let result = parse_text("@FFI.Syscall function sysSync()");
     assert_eq!(codes(&result), vec!["KPAR048"]);
     let named = result
         .diagnostics
@@ -220,7 +242,7 @@ fn a_malformed_syscall_block_reports_by_the_form_it_names() {
         .any(|diagnostic| diagnostic.message.contains("open the `@FFI.Syscall` block"));
     assert!(named, "{:?}", result.diagnostics);
 
-    let missing_value = parse_text("@FFI.Syscall { name: 42; }\nfunction sysSync();");
+    let missing_value = parse_text("@FFI.Syscall { name: 42 }\nfunction sysSync()");
     assert!(
         codes(&missing_value).contains(&"KPAR051"),
         "{:?}",
@@ -232,7 +254,7 @@ fn a_malformed_syscall_block_reports_by_the_form_it_names() {
 /// rule `@FFI.Extern` is — and by its own name.
 #[test]
 fn a_syscall_on_a_struct_is_rejected_by_its_own_name() {
-    let result = parse_text("@FFI.Syscall { name: sync; }\nstruct S {\n    var a: Int\n}");
+    let result = parse_text("@FFI.Syscall { name: sync }\nstruct S {\n    var a: Int\n}");
     assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
     let named = result.diagnostics.iter().any(|diagnostic| {
         diagnostic
@@ -254,7 +276,7 @@ fn only_ffi_kind(result: &ParseResult) -> &FfiTypeKind {
 #[test]
 fn ffi_struct_parses_layout_and_keeps_the_body() {
     let result = parse_text(
-        "@FFI.Struct { layout: c; }\n\
+        "@FFI.Struct { layout: c }\n\
          struct Color {\n    var r: U8\n    var g: U8\n}",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -272,7 +294,7 @@ fn ffi_struct_parses_layout_and_keeps_the_body() {
 #[test]
 fn ffi_pointer_parses_target_and_ownership() {
     let result =
-        parse_text("@FFI.Pointer { target: Color; ownership: borrowed; }\nstruct Color_ptr {}");
+        parse_text("@FFI.Pointer { target: Color, ownership: borrowed }\nstruct Color_ptr {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Pointer { target, ownership } => {
@@ -286,7 +308,7 @@ fn ffi_pointer_parses_target_and_ownership() {
 
 #[test]
 fn ffi_alias_parses_a_plain_target() {
-    let result = parse_text("@FFI.Alias { target: U64; }\nstruct Address {}");
+    let result = parse_text("@FFI.Alias { target: U64 }\nstruct Address {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Alias { target } => assert!(target.is_some()),
@@ -296,7 +318,7 @@ fn ffi_alias_parses_a_plain_target() {
 
 #[test]
 fn ffi_alias_tolerates_a_union_tag_on_the_target() {
-    let result = parse_text("@FFI.Alias { target: union Version; }\nstruct Version {}");
+    let result = parse_text("@FFI.Alias { target: union Version }\nstruct Version {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Alias { target } => assert!(target.is_some()),
@@ -306,7 +328,7 @@ fn ffi_alias_tolerates_a_union_tag_on_the_target() {
 
 #[test]
 fn ffi_array_parses_element_and_count() {
-    let result = parse_text("@FFI.Array { element: U8; count: 8; }\nstruct Bytes8 {}");
+    let result = parse_text("@FFI.Array { element: U8, count: 8 }\nstruct Bytes8 {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Array { element, count } => {
@@ -321,7 +343,7 @@ fn ffi_array_parses_element_and_count() {
 #[test]
 fn ffi_callback_parses_params_and_result() {
     let result = parse_text(
-        "@FFI.Callback { abi: c; params: [I32, RawPtr]; result: Void; }\nstruct Handler {}",
+        "@FFI.Callback { abi: c, params: [I32, RawPtr], result: Void }\nstruct Handler {}",
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
@@ -337,7 +359,7 @@ fn ffi_callback_parses_params_and_result() {
 
 #[test]
 fn ffi_callback_parses_an_empty_params_list() {
-    let result = parse_text("@FFI.Callback { abi: c; params: []; result: Int; }\nstruct Thunk {}");
+    let result = parse_text("@FFI.Callback { abi: c, params: [], result: Int }\nstruct Thunk {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Callback { params, .. } => assert!(params.is_empty()),
@@ -347,26 +369,27 @@ fn ffi_callback_parses_an_empty_params_list() {
 
 #[test]
 fn an_ffi_type_annotation_on_a_function_is_rejected() {
-    let result = parse_text("@FFI.Struct { layout: c; }\nfunction f() -> I32 { return 0 }");
+    let result = parse_text("@FFI.Struct { layout: c }\nfunction f() -> I32 { return 0 }");
     assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
 }
 
 #[test]
 fn an_ffi_extern_on_a_struct_is_rejected() {
-    let result = parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nstruct S {}");
+    let result = parse_text("@FFI.Extern { library: l, symbol: s, abi: c }\nstruct S {}");
     assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
 }
 
 #[test]
-fn an_empty_block_field_span_points_at_the_offending_token() {
-    // The `;` is missing, so KPAR052 must point at the `}` that stands where the
-    // `;` should be — the token the author would fix.
-    let result = parse_text("@FFI.Extern { library: ffimath }\nfunction add() -> I32;");
+fn a_missing_field_comma_span_points_at_the_offending_token() {
+    // The `,` is missing, so KPAR052 must point at the field that stands
+    // where the `,` should be — the token the author would fix.
+    let text = "@FFI.Extern { library: ffimath symbol: s }\nfunction add() -> I32";
+    let result = parse_text(text);
     let diagnostic = result
         .diagnostics
         .iter()
         .find(|diagnostic| diagnostic.has_code("KPAR052"))
-        .expect("a missing-semicolon diagnostic");
+        .expect("a missing-comma diagnostic");
     let span = diagnostic.labels[0].span.span;
-    assert_eq!(span.slice("@FFI.Extern { library: ffimath }"), "}");
+    assert_eq!(span.slice(text), "symbol");
 }

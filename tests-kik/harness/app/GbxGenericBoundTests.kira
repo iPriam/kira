@@ -80,7 +80,7 @@ construct GbxAConformingArgumentConstructsTheInstantiation() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct GbxAMethodThroughThePayloadRunsTheConformersBody() extends Test {
@@ -91,7 +91,7 @@ construct GbxAMethodThroughThePayloadRunsTheConformersBody() extends Test {
             Empty -> { return 0 - 1 }
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // `Copyable` and `Send` are compiler-known markers: the bound is answered by
@@ -118,7 +118,7 @@ construct GbxAMarkerBoundAdmitsAScalar() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct GbxTwoTraitsJoinedByPlusBothHold() extends Test {
@@ -128,7 +128,7 @@ construct GbxTwoTraitsJoinedByPlusBothHold() extends Test {
             One(m) -> { return m.score() }
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 construct GbxOneBoundedAndOneUnboundedParameterSideBySide() extends Test {
@@ -146,7 +146,7 @@ construct GbxOneBoundedAndOneUnboundedParameterSideBySide() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // The promise may be kept after the fact, exactly as any retroactive
@@ -169,7 +169,7 @@ construct GbxARetroactiveClaimSatisfiesTheBound() extends Test {
             Empty -> { return 0 - 1 }
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(600); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(600) return e }
 }
 
 // A family claiming the trait obliges every declaration backed by it, so a
@@ -196,7 +196,7 @@ construct GbxAFamilyBackedDeclarationKeepsTheBoundToo() extends Test {
             Empty -> { return 0 - 1 }
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 // A bounded template may sit inside another instantiation: the inner argument
@@ -211,7 +211,7 @@ construct GbxABoundedValueStoredInAFieldMatchesLater() extends Test {
         slot.held = GbxBoxed.Held(GbxMark(n: 5))
         return gbxUnbox(slot.held)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct GbxAnArrayOfBoundedValuesChurnsClean() extends Test {
@@ -234,7 +234,7 @@ construct GbxAnArrayOfBoundedValuesChurnsClean() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1052); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1052) return e }
 }
 
 function gbxSection() -> Int {

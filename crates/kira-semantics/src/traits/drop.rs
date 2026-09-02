@@ -83,7 +83,7 @@ impl Analyzer<'_> {
         for (ty, source, span) in claims {
             self.source = source;
             let type_name = self.program.types.type_name(Type::Struct(ty));
-            let qualified = format!("{type_name}.{DROP_MEMBER}");
+            let qualified = format!("{}.{DROP_MEMBER}", self.member_owner_name(Type::Struct(ty)));
             let Some(candidates) = self.sig_index.get(&qualified).cloned() else {
                 self.emit(
                     span,

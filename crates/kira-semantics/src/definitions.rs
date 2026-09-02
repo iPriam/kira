@@ -96,6 +96,15 @@ impl DeclSpans {
                         FileSpan::new(source, declaration.name_span),
                     );
                 }
+                // A distinct type is a type declaration like any other, so a
+                // jump from `TabId` in a signature lands on the `distinct` line
+                // that declared it.
+                Item::Distinct(declaration) => {
+                    spans.types.insert(
+                        interner.resolve(declaration.name).to_owned(),
+                        FileSpan::new(source, declaration.name_span),
+                    );
+                }
                 Item::Construct(declaration) => {
                     let owner = interner.resolve(declaration.name).to_owned();
                     spans

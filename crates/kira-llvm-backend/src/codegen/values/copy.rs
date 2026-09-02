@@ -65,6 +65,15 @@ impl Codegen<'_> {
         }
         match ty {
             Type::CBlock => self.clone_cblock_at(at),
+            // One owner more of the same state: the bits stay, the count moves.
+            Type::NativeState(_) => {
+                // SAFETY: `at` addresses one i64 callback-state token.
+                let handle = unsafe {
+                    LLVMBuildLoad2(self.builder, self.types.i64, at, c"native.state".as_ptr())
+                };
+                self.call(self.runtime.native_state_retain, &mut [handle], c"");
+                Ok(())
+            }
             Type::String => {
                 let handle = self.load_handle(at, "str");
                 self.copy_shared(handle, self.types.string_box, "str");

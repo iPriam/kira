@@ -51,8 +51,50 @@
 
 comptime macro Hashable {
     kind { derive }
-    appliesTo { struct }
+    appliesTo { struct distinct }
     expand(target: Declaration) -> Syntax {
+        // A distinct type folds the one word it is. Its own branch rather than
+        // the field loop below because the loop's fallback recurses through
+        // `hash_<FieldType>`, and a representation such as `U32` or `RawPtr`
+        // has no such function and should not grow one.
+        if target.kind == .Distinct {
+            // Two whole function bodies rather than one with an interpolated
+            // argument: a `#{...}` in argument position splices as a statement,
+            // so `fnvStep(seed, contribution)` has to be written out per case.
+            var body: Syntax = quote {
+                function hash_#{target.name}(v: borrow #{target.name}) -> Int {
+                    return fnvStep(fnvSeed(), Int(v.raw))
+                }
+            }
+            for field in target.fields {
+                if field.type == "Float" {
+                    Diagnostics.error(
+                        "Derive(Hashable): a distinct type over `Float` cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "F32" {
+                    Diagnostics.error(
+                        "Derive(Hashable): a distinct type over `F32` cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "RawPtr" {
+                    Diagnostics.error(
+                        "Derive(Hashable): a distinct type over `RawPtr` cannot be folded — an opaque foreign word has no stable value to hash across runs",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "Bool" {
+                    body = quote {
+                        function hash_#{target.name}(v: borrow #{target.name}) -> Int {
+                            return fnvStep(fnvSeed(), boolHashPart(v.raw))
+                        }
+                    }
+                }
+            }
+            return body
+        }
         var folds: [Syntax] = []
         for field in target.fields {
             var joined: String = ""
@@ -128,7 +170,7 @@ function fnvSeed() -> Int {
 // Wrapping is the point — the fold is a mixing function, not arithmetic anyone
 // reads the magnitude of.
 function fnvStep(acc: Int, part: Int) -> Int {
-    return (acc ^ part) * 1099511628211
+    return wrappingMul(acc ^ part, 1099511628211)
 }
 
 // A bool's contribution, as the two numbers FNV mixes best.

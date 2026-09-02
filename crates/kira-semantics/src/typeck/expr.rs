@@ -12,7 +12,9 @@ impl Analyzer<'_> {
     ) -> HirExprId {
         let node = self.tree.expr(id).clone();
         match node {
-            Expr::Int { value, .. } => self.program.exprs.alloc(HirExpr::Int(value)),
+            Expr::Int { value, span } => self.int_literal(value, span, expected),
+            Expr::TypeTest { value, ty, span } => self.analyze_type_test(ctx, value, ty, span),
+            Expr::TypeCast { value, ty, span } => self.analyze_type_cast(ctx, value, ty, span),
             Expr::Float { value, .. } => self.program.exprs.alloc(HirExpr::Float(value)),
             Expr::Bool { value, .. } => self.program.exprs.alloc(HirExpr::Bool(value)),
             Expr::Str { value, .. } => self.program.exprs.alloc(HirExpr::Str(value)),
@@ -394,6 +396,15 @@ impl Analyzer<'_> {
                     self.link_type_name(&name, callee_span);
                     return self.analyze_struct_memberwise_new(ctx, id, &args, callee_span);
                 }
+                // `TabId(word)` builds a value of a `distinct` type — the one
+                // way into one — and is recognized here for the reason a struct
+                // construction is: naming a type is not calling a function, so
+                // it must never be reported as a missing one.
+                if let Some(call) =
+                    self.analyze_distinct_construction(ctx, &name, &args, callee_span)
+                {
+                    return call;
+                }
                 // A bare call inside a method may name one of the receiver's
                 // own or inherited methods, the way a bare name may read one of
                 // its fields. A method exposes parameter names, so labels flow
@@ -561,6 +572,12 @@ impl Analyzer<'_> {
                 // its byte count, written exactly as an array's is.
                 if base_ty == Type::String {
                     return self.analyze_string_property(base_hir, &name, field_span);
+                }
+                // A distinct type has no fields and one property: `.raw`, the
+                // representation it is. The one way out of one, written the way
+                // an array's `.count` is.
+                if let Type::Distinct(id) = base_ty {
+                    return self.analyze_distinct_property(base_hir, id, &name, field_span);
                 }
                 if let Type::Enum(family_id) = base_ty
                     && self.construct_family_computed_member(family_id, &name)

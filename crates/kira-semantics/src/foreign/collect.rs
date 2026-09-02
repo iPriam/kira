@@ -112,6 +112,8 @@ impl<'a> Analyzer<'a> {
                 param_pointees: mapped.param_pointees,
                 result_pointee: mapped.result_pointee,
                 result_wrapper: mapped.result_wrapper,
+                param_distincts: mapped.param_distincts,
+                result_distinct: mapped.result_distinct,
                 name_span: function.name_span,
             }),
             _ => None,

@@ -37,6 +37,7 @@
 use std::collections::HashMap;
 
 use kira_core::Names;
+use kira_semantics_model::PackageIdentity;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::Item;
@@ -45,6 +46,28 @@ use crate::analyze::Analyzer;
 
 /// Separates a dependency package namespace from its package-relative module.
 const PACKAGE_MODULE_SEPARATOR: &str = "::";
+/// Separates a package name from its version inside a module identity.
+const PACKAGE_VERSION_SEPARATOR: &str = "@";
+/// Separates a package version from its dependency instance.
+const PACKAGE_INSTANCE_SEPARATOR: &str = "#";
+/// The module identity of the entry file, which no import names.
+const ENTRY_MODULE: &str = "main";
+
+/// The identity a module identity's package part spells: `name`, or
+/// `name@version#instance` when the assembly resolved the package.
+fn parse_package_identity(package: &str) -> PackageIdentity {
+    let (name, rest) = package
+        .split_once(PACKAGE_VERSION_SEPARATOR)
+        .unwrap_or((package, ""));
+    let (version, instance) = rest
+        .split_once(PACKAGE_INSTANCE_SEPARATOR)
+        .unwrap_or((rest, ""));
+    PackageIdentity {
+        name: name.to_owned(),
+        version: version.to_owned(),
+        instance: instance.to_owned(),
+    }
+}
 
 /// One resolved module binding in a file.
 #[derive(Debug, Clone)]
@@ -78,6 +101,13 @@ struct ModuleIndex {
     packages: HashMap<String, HashMap<String, SourceId>>,
     /// The dependency package each source belongs to.
     source_packages: HashMap<SourceId, String>,
+    /// The module identity of every file, by source: the package-relative
+    /// module for a dependency file, the written module for one of the
+    /// program's own.
+    source_modules: HashMap<SourceId, String>,
+    /// The resolved identity of every package a module identity named, by
+    /// package name.
+    identities: HashMap<String, PackageIdentity>,
 }
 
 impl ModuleIndex {
@@ -86,14 +116,21 @@ impl ModuleIndex {
         let mut index = Self::default();
         for (identity, source) in modules {
             if let Some((package, module)) = package_identity(identity) {
+                let resolved = parse_package_identity(package);
                 index
                     .packages
-                    .entry(package.to_owned())
+                    .entry(resolved.name.clone())
                     .or_default()
                     .insert(module.to_owned(), *source);
-                index.source_packages.insert(*source, package.to_owned());
+                index.source_packages.insert(*source, resolved.name.clone());
+                index.source_modules.insert(*source, module.to_owned());
+                index
+                    .identities
+                    .entry(resolved.name.clone())
+                    .or_insert(resolved);
             } else {
                 index.plain.insert(identity.clone(), *source);
+                index.source_modules.insert(*source, identity.clone());
             }
         }
         index
@@ -159,6 +196,32 @@ impl ImportTable {
     #[must_use]
     pub fn package_module_identity(package: &str, module: &str) -> String {
         format!("{package}{PACKAGE_MODULE_SEPARATOR}{module}")
+    }
+
+    /// The module identity of `module` inside the resolved `package`, carrying
+    /// the package's version and dependency instance so the analyzer records
+    /// the whole identity rather than the name alone.
+    #[must_use]
+    pub fn resolved_package_module_identity(package: &PackageIdentity, module: &str) -> String {
+        format!(
+            "{}{PACKAGE_VERSION_SEPARATOR}{}{PACKAGE_INSTANCE_SEPARATOR}{}{PACKAGE_MODULE_SEPARATOR}{module}",
+            package.name, package.version, package.instance
+        )
+    }
+
+    /// The identity of every package a module identity named.
+    pub fn packages(&self) -> impl Iterator<Item = &PackageIdentity> {
+        self.modules.identities.values()
+    }
+
+    /// The module identity of `source` inside its package, or the entry
+    /// file's when `source` is the entry file.
+    #[must_use]
+    pub fn module_of(&self, source: SourceId) -> &str {
+        self.modules
+            .source_modules
+            .get(&source)
+            .map_or(ENTRY_MODULE, String::as_str)
     }
 
     /// The dependency package a file belongs to, or `None` for a file of the

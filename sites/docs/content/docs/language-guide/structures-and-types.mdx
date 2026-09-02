@@ -1,6 +1,6 @@
 ---
 title: Structures and Types
-description: Structs and their value semantics, classes and flattening, enums and generic enums, type aliases, and the boundary rules each type carries.
+description: Structs and their value semantics, classes and flattening, enums and generic enums, type aliases, distinct types, and the boundary rules each type carries.
 ---
 
 ## Structs
@@ -158,15 +158,24 @@ The concrete argument must satisfy every bound; a failed obligation is
 that grows its own argument without end is `KSEM175` rather than a stack
 overflow.
 
-### Widening
+### One Specialization Never Becomes Another
 
-An instantiation reaches another instantiation of the same template when every type argument either stays as it was or becomes `Any`. `Result<Int, TestFailure>` therefore fills a `Result<Any, TestFailure>` position. Nothing about that rule knows the name `Result`, so a user's own `enum Crate<Held>` widens by the identical path.
+`Result<Int, TestFailure>` does not fill a `Result<Any, TestFailure>` position, and `Box<Child>` does not fill a `Box<Parent>` one. A specialization's type arguments are part of its identity, and that identity reaches dispatch, reflection, serialization, and the ABI, so a value that silently became another specialization would answer for a type it was never built as. Returning one where the other is declared is `KSEM032`.
 
-The boundary is that the arguments widen and a position that merely *contains* one does not: `[Result<Int, TestFailure>]` is not `[Result<Any, TestFailure>]`, for the same reason `[Int]` is not `[Any]`.
+Write the conversion instead: unpack the value and build the specialization the position declared, which erases each payload where it is written.
+
+```kira
+function widen(outcome: Result<Int, AppError>) -> Result<Any, AppError> {
+    match outcome {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
+}
+```
 
 ## `Any`
 
-`Any` is Kira's top type. A value crosses into it and is stored, copied, passed, returned, and released; nothing reads it back. The language has no `is`, no `as`, and no downcast form, so a value in an `Any` is reached through the declaration that produced it rather than through the `Any`.
+`Any` is Kira's top type. A value crosses into it and is stored, copied, passed, returned, and released. `value is Type` answers whether the erased value holds that type, by nominal runtime identity, and `value as Type` reads it back and traps when it holds anything else.
 
 ## Type Aliases
 
@@ -181,6 +190,43 @@ type Matrix = [Buffer]
 The target is an ordinary type reference, so an alias names anything a type position can. Aliases chain in either declaration order, because resolution is lazy rather than order-dependent the way a struct field's type is.
 
 A chain that comes back to where it started has no type at the end of it and is refused (`KSEM157`). A name that already means something, a builtin or a struct or an enum or an earlier alias, may not be claimed (`KSEM130`): a silently ignored `type Int = Float` would keep type-checking as `Int` and give a wrong answer instead of an error.
+
+## Distinct Types
+
+`distinct Name = Representation` is the opposite of an alias: a **new type** over one scalar word.
+
+```kira
+distinct TabId = U32
+distinct BookmarkId = U32
+
+function closeTab(id: TabId) { … }
+```
+
+An id is *named*, not counted. Spelling one `U32` lets a bookmark id, a window id, and a count all reach `closeTab`, and the compiler has nothing to say about it because they are one type. A `distinct` declaration gives each its own, so the mistake becomes a diagnostic at the call site instead of a wrong tab closing.
+
+Two crossings, both written:
+
+```kira
+let id = TabId(U32(1))     // in:  the only way to build one
+let word: U32 = id.raw     // out: the only way to read one
+```
+
+Nothing else crosses. `TabId` reaches no `U32` parameter, a `U32` reaches no `TabId` one, and a `BookmarkId` reaches neither — three types over one machine word.
+
+The type **costs nothing**. It has the size, the alignment, and the ABI of its representation, with no wrapper and no allocation, because lowering rewrites it away before any backend sees the program: `TabId(word)` and `id.raw` compile to no instruction at all. A `[TabId]` is laid out exactly as a `[U32]` and is still not one to the type checker.
+
+The representation is an integer width, a float width, `Bool`, `RawPtr`, or another distinct type. Anything that owns storage is refused (`KSEM345`): a name for a shape with fields is a `struct`.
+
+`==` and `!=` between two values of one distinct type are its whole operator surface. Arithmetic, ordering, and `print` are refused, which is the point — adding two ids or printing one as a number is treating an identity as a quantity. Fold, compare, and render one through the derives, or take `.raw` and say so.
+
+```kira
+@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+distinct Port = U32
+```
+
+Each derive delegates to the representation, so `serialize_Port(Port(U32(8080)))` writes `8080` rather than a struct envelope around it. `@Derive(Tagged)` does not apply — it answers which number a *variant* is — and `@Derive(Copy)` is refused, because one scalar word is copyable already.
+
+At an `@FFI.Extern` signature a distinct type crosses as its representation, so the C prototype is the scalar's and no unwrapping is written at the call. The Kira side stays nominal: a parameter declared `TabId` still refuses the `U32` underneath it.
 
 ## Crossing the Native Seam
 

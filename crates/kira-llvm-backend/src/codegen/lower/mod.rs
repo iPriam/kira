@@ -26,6 +26,7 @@ mod file_system;
 mod foreign;
 mod foreign_aggregate;
 mod foreign_field;
+mod numeric;
 mod math;
 mod operators;
 mod stmt;
@@ -295,6 +296,14 @@ impl<'a> Codegen<'a> {
                 Type::CString => {
                     return Err(LlvmError::internal(
                         "a CString local (it is a foreign-parameter-only type)",
+                    ));
+                }
+                // A `distinct` local holds the zero of the scalar it is, and
+                // `kira-ir` has already rewritten the slot's type to that
+                // scalar — so `llvm_type` above would have refused first.
+                Type::Distinct(_) => {
+                    return Err(LlvmError::internal(
+                        "a distinct type that lowering did not erase",
                     ));
                 }
                 // Every field zeroed, which for a `String` field is the null

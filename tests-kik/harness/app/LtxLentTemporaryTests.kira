@@ -62,7 +62,7 @@ construct LtxTwoLentTemporariesReleaseInOrder() extends Test {
         let holder = ltxHold("App", ltxMakeOuter("m", items))
         return ltxScore(holder)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
 }
 
 // The same shape churned: a per-call clobber or leak scales with the loop and
@@ -82,7 +82,7 @@ construct LtxLentTemporariesChurn() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(22200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(22200) return e }
 }
 
 // Three lent temporaries, nested call results, both field orders — the widest
@@ -99,5 +99,5 @@ construct LtxNestedLentTemporaries() extends Test {
         let holder = ltxHold("App", ltxMakeOuter("deep", items))
         return ltxScore(holder)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(112) return e }
 }

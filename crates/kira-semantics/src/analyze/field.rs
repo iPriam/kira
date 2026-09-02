@@ -84,10 +84,31 @@ impl<'a> Analyzer<'a> {
     }
 
     pub(crate) fn emit(&mut self, span: Span, code: &'static str, message: impl Into<String>) {
+        self.emit_with_severity(Severity::Error, span, code, message);
+    }
+
+    /// Records a warning: a program that compiles, about a form that is on
+    /// its way out of the language.
+    pub(crate) fn emit_warning(
+        &mut self,
+        span: Span,
+        code: &'static str,
+        message: impl Into<String>,
+    ) {
+        self.emit_with_severity(Severity::Warning, span, code, message);
+    }
+
+    fn emit_with_severity(
+        &mut self,
+        severity: Severity,
+        span: Span,
+        code: &'static str,
+        message: impl Into<String>,
+    ) {
         let message = message.into();
         let file_span = FileSpan::new(self.source, span);
         let mut diagnostic = Diagnostic::single(
-            Severity::Error,
+            severity,
             message.clone(),
             Label::primary(file_span, message),
         );

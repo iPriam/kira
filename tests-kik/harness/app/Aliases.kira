@@ -1,3 +1,5 @@
+import Foundation
+
 // Language-wide type aliases, exercised through scalar folds so the kik harness
 // catches canonicalization regressions across the executable backends.
 
@@ -13,7 +15,7 @@ struct AliasPacket {
 function aliasBufferSum(buffer: borrow ByteBuffer) -> Int {
     var total = 0
     for value in buffer {
-        total = total + value
+        total = total + Int(value)
     }
     return total
 }
@@ -52,5 +54,5 @@ function aliasesSection() -> Int {
     matrix.append(move packet.payload)
 
     let word: ByteWord = 9
-    return firstSum + packetSum + aliasMatrixScore(matrix) + word
+    return firstSum + packetSum + aliasMatrixScore(matrix) + Int(word)
 }

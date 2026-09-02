@@ -56,8 +56,9 @@ impl<'a> Analyzer<'a> {
                     function: &member.function,
                 })
                 .collect();
+            let key = self.template_key(source, &name);
             self.traits.insert(
-                name,
+                key,
                 TraitInfo {
                     source,
                     type_params: declaration.type_params.clone(),
@@ -80,14 +81,30 @@ impl<'a> Analyzer<'a> {
     fn check_supertrait_graph(&mut self) {
         let names: Vec<String> = self.traits.keys().cloned().collect();
         let mut unknown = Vec::new();
+        let here = self.source;
         for name in &names {
             let source = self.traits[name].source;
-            for entry in &self.traits[name].supertraits {
-                if !is_builtin_trait(&entry.name) && !self.traits.contains_key(&entry.name) {
-                    unknown.push((source, entry.span, name.clone(), entry.name.clone()));
+            // A supertrait is written as a bare name in the trait's own file,
+            // so it resolves against that file's package and imports; the
+            // stored name becomes the key it resolved to.
+            self.source = source;
+            let mut resolved: Vec<(usize, String)> = Vec::new();
+            for (index, entry) in self.traits[name].supertraits.iter().enumerate() {
+                if is_builtin_trait(&entry.name) {
+                    continue;
+                }
+                match self.visible_trait_key(&entry.name) {
+                    Some(key) => resolved.push((index, key)),
+                    None => unknown.push((source, entry.span, name.clone(), entry.name.clone())),
+                }
+            }
+            if let Some(declared) = self.traits.get_mut(name) {
+                for (index, key) in resolved {
+                    declared.supertraits[index].name = key;
                 }
             }
         }
+        self.source = here;
         for (source, span, name, super_name) in unknown {
             self.source = source;
             self.emit(

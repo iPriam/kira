@@ -32,7 +32,6 @@ impl Vm<'_> {
             | Value::Float(_)
             | Value::Bool(_)
             | Value::RawPtr(_)
-            | Value::NativeState(_)
             | Value::NativeView { .. }
             | Value::MainThreadTask(_)
             | Value::Void => self.stack.push(value),
@@ -59,7 +58,6 @@ impl Vm<'_> {
             | Value::Float(_)
             | Value::Bool(_)
             | Value::RawPtr(_)
-            | Value::NativeState(_)
             | Value::NativeView { .. }
             | Value::MainThreadTask(_)
             | Value::Void => self.stack.push(value),
@@ -175,9 +173,10 @@ impl Vm<'_> {
                 self.heap.drop_value(value);
             }
             Instruction::NativeState(type_word) => self.native_state_new(*type_word)?,
-            Instruction::NativeUserData => self.native_user_data()?,
+            Instruction::NativeUserData { shared } => self.native_user_data(*shared)?,
             Instruction::NativeRecover(type_word) => self.native_recover(*type_word)?,
-            Instruction::NativeStateFree => self.native_state_free()?,
+            Instruction::NativeStateRetain => self.native_state_retain()?,
+            Instruction::NativeStateRelease => self.native_state_release()?,
             Instruction::Print => {
                 let value = self.pop()?;
                 let line = self
@@ -213,6 +212,32 @@ impl Vm<'_> {
                 // a value what type it is, and the last holder's release is
                 // exactly where that question would have to be answered.
                 let id = self.heap.alloc_struct_dropping(fields, *glue);
+                self.stack.push(Value::Struct(id));
+            }
+            Instruction::NewStructOrdered { order, glue } => {
+                let first = self
+                    .stack
+                    .len()
+                    .checked_sub(order.len())
+                    .ok_or(VmError::StackUnderflow)?;
+                // The values sit in evaluation order; the struct stores them in
+                // declaration order. The loader proved `order` a permutation,
+                // so every slot is filled exactly once.
+                let mut evaluated: Vec<Option<Value>> =
+                    self.stack.split_off(first).into_iter().map(Some).collect();
+                let mut fields: Vec<Option<Value>> = (0..order.len()).map(|_| None).collect();
+                for (at, &slot) in order.iter().enumerate() {
+                    let slot = usize::try_from(slot).map_err(|_| VmError::ArrayTooLong)?;
+                    *fields.get_mut(slot).ok_or(VmError::StackUnderflow)? = evaluated[at].take();
+                }
+                let fields: Vec<Value> = fields
+                    .into_iter()
+                    .map(|field| field.ok_or(VmError::StackUnderflow))
+                    .collect::<Result<_, _>>()?;
+                let id = match glue {
+                    Some(glue) => self.heap.alloc_struct_dropping(fields, *glue),
+                    None => self.heap.alloc_struct(fields),
+                };
                 self.stack.push(Value::Struct(id));
             }
             Instruction::GetField(index) => {
@@ -667,13 +692,69 @@ impl Vm<'_> {
                 self.stack
                     .push(Value::Int(i64::from((value as f32).to_bits())));
             }
-            Instruction::ConvertFloatToInt => {
-                // Truncate toward zero, saturating out-of-range to
-                // `i64::MIN`/`i64::MAX` and mapping NaN to zero. Rust's saturating
-                // `f64 as i64` is exactly this, and the native backend mirrors it
-                // with a saturating select chain.
-                let value = self.pop_float()?;
-                self.stack.push(Value::Int(value as i64));
+            Instruction::ConvertFloatToInt => self.convert_float_to_int()?,
+            Instruction::AddIntChecked
+            | Instruction::SubIntChecked
+            | Instruction::MulIntChecked
+            | Instruction::DivIntChecked
+            | Instruction::AddUIntChecked
+            | Instruction::SubUIntChecked
+            | Instruction::MulUIntChecked => self.checked_int_arith(instruction)?,
+            Instruction::NegIntChecked => self.neg_int_checked()?,
+            Instruction::CheckInt(code) => self.check_int(*code)?,
+            Instruction::WrapInt(code) => self.wrap_int(*code)?,
+            Instruction::CheckShift(bits) => self.check_shift(*bits)?,
+            Instruction::ConvertInt { from, to } => self.convert_int(*from, *to)?,
+            Instruction::ConvertUIntToFloat => {
+                let value = self.pop_int()?;
+                self.stack.push(Value::Float(value as u64 as f64));
+            }
+            Instruction::PrintUnsigned => {
+                let value = self.pop_int()?;
+                self.host.write_line(&(value as u64).to_string());
+                self.stack.push(Value::Void);
+            }
+            Instruction::TypeTest(expected) => {
+                let value = self.pop()?;
+                let Value::Erased(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an `Any` to test the type of",
+                    });
+                };
+                let holds = self.heap.erased_type_id(id) == Some(*expected);
+                self.heap.drop_value(value);
+                self.stack.push(Value::Bool(holds));
+            }
+            Instruction::Downcast(expected) => {
+                // The same shape as `EnumPayload`: the box is consumed, an owned
+                // copy of what it held is pushed, and the box is freed.
+                let value = self.pop()?;
+                let Value::Erased(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an `Any` to cast",
+                    });
+                };
+                let actual = self.heap.erased_type_id(id).unwrap_or(0);
+                if actual != *expected {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeCastFailed {
+                        actual,
+                        expected: *expected,
+                    });
+                }
+                let Some(payload) = self.heap.erased_payload(id) else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::MissingEnumPayload);
+                };
+                self.heap.drop_value(value);
+                self.stack.push(payload);
+            }
+            Instruction::StringOfUnsigned => {
+                let value = self.pop_int()?;
+                let id = self.heap.alloc((value as u64).to_string());
+                self.stack.push(Value::Str(id));
             }
             // The outer dispatch loop keeps scalar integer arithmetic and
             // comparisons out of this general matcher. These arms remain for

@@ -86,14 +86,20 @@ impl Analyzer<'_> {
     fn compiler_parameters(&mut self, op: CompilerOp) -> Vec<Type> {
         let strings = self.string_array();
         match op {
-            CompilerOp::CheckPackages => vec![strings],
+            CompilerOp::CheckPackages
+            | CompilerOp::CheckPath
+            | CompilerOp::BuildPath
+            | CompilerOp::RunPath => vec![strings],
         }
     }
 
     /// The result type of one intrinsic.
     fn compiler_result(&mut self, op: CompilerOp) -> Type {
         match op {
-            CompilerOp::CheckPackages => self.string_array(),
+            CompilerOp::CheckPackages
+            | CompilerOp::CheckPath
+            | CompilerOp::BuildPath
+            | CompilerOp::RunPath => self.string_array(),
         }
     }
 

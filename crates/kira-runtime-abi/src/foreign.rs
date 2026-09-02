@@ -564,6 +564,12 @@ impl ForeignAdapterStatus {
     /// linked and the build succeeds; reaching this status means code that was
     /// only ever meant to run on another platform was actually called.
     pub const UNAVAILABLE_LIBRARY: Self = Self(6);
+    /// A C string crossing into Kira was not valid UTF-8.
+    ///
+    /// A Kira `String` holds UTF-8 and nothing else, so bytes that are not
+    /// are refused rather than rendered lossily; the same refusal the VM
+    /// makes with `ForeignCallError::InvalidCStringResult`.
+    pub const INVALID_UTF8: Self = Self(7);
 }
 
 /// The version of the generated foreign-adapter ABI.

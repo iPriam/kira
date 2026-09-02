@@ -95,6 +95,16 @@ impl Heap {
 
     /// The type id of the erased value behind a handle, or `None` when the
     /// handle does not name one.
+    /// An owned copy of what an erased box holds, leaving the box intact —
+    /// the `Any` twin of [`Heap::enum_payload`].
+    pub fn erased_payload(&mut self, id: ErasedId) -> Option<Value> {
+        let payload = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Erased { payload, .. })) => *payload,
+            _ => return None,
+        };
+        Some(self.copy_value(payload))
+    }
+
     pub fn erased_type_id(&self, id: ErasedId) -> Option<u64> {
         match self.slots.get(id.0 as usize) {
             Some(Some(Object::Erased { type_id, .. })) => Some(*type_id),

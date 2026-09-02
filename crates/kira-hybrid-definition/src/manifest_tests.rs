@@ -260,7 +260,7 @@ fn an_internal_function_count_round_trips_without_a_foreign_section() {
     assert!(decoded.foreign.is_empty());
 }
 
-/// A program that widens nothing writes the bytes it always did.
+/// A bytecode half that appends nothing writes the bytes it always did.
 ///
 /// What keeps the field append-only: the tail is omitted when the count is
 /// zero, so a manifest predating it decodes identically and one written now

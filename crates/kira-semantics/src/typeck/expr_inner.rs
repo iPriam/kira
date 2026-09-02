@@ -23,7 +23,9 @@ impl Analyzer<'_> {
     ) -> HirExprId {
         let node = self.tree.expr(id).clone();
         match node {
-            Expr::Int { value, .. } => self.program.exprs.alloc(HirExpr::Int(value)),
+            Expr::Int { value, span } => self.int_literal(value, span, expected),
+            Expr::TypeTest { value, ty, span } => self.analyze_type_test(ctx, value, ty, span),
+            Expr::TypeCast { value, ty, span } => self.analyze_type_cast(ctx, value, ty, span),
             Expr::Float { value, .. } => self.program.exprs.alloc(HirExpr::Float(value)),
             Expr::Bool { value, .. } => self.program.exprs.alloc(HirExpr::Bool(value)),
             Expr::Str { value, .. } => self.program.exprs.alloc(HirExpr::Str(value)),

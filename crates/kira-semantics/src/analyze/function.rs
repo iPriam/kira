@@ -140,7 +140,6 @@ impl<'a> Analyzer<'a> {
         }
         let param_count = function.params.len() as u32 + u32::from(callable.receiver.is_some());
         let body = self.analyze_block(&mut ctx, &function.body);
-        self.check_native_state_handles(&ctx);
         // Every expression this body could build now exists, so a member read
         // still unclaimed is one no borrowed position took.
         self.report_drop_extractions();
@@ -172,6 +171,7 @@ impl<'a> Analyzer<'a> {
             execution: function.execution,
             mutates_self: self.mutates_self(id),
             name_span: function.name_span,
+            signature: self.sigs[id.0 as usize].signature.clone(),
         };
         self.type_bindings = outer_bindings;
         result

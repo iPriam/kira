@@ -161,15 +161,18 @@ function runtime_through_native(value: Envelope) -> Envelope {
     return native_envelope(move value)
 }
 
-@Main
-@Runtime
-function main() {
-    let value = Envelope {
+function envelope() -> Envelope {
+    return Envelope {
         direct: "payload",
         layers: [[1, "one"], [true, 3.5]]
     }
-    let first = native_through_runtime(copy value)
-    let second = runtime_through_native(copy value)
+}
+
+@Main
+@Runtime
+function main() {
+    let first = native_through_runtime(envelope())
+    let second = runtime_through_native(envelope())
     let text: Any = "payload"
     let one: Any = "one"
     let truth: Any = true
@@ -636,8 +639,8 @@ function classify(code: Int) -> Outcome {
 @Native
 function describe(outcome: borrow Outcome) -> String {
     match outcome {
-        Ok -> return "ok";
-        Failed(reason) -> return reason;
+        Ok -> return "ok"
+        Failed(reason) -> return reason
     }
     return "?"
 }

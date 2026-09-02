@@ -25,7 +25,7 @@ construct FoundationOperatorsAcceptTemporaryValues() extends Test {
         let scaled = fndMakeVec2() * 2.0
         return Int(left.x) + Int(right.y) + Int(scaled.x)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct FoundationVec2Operations() extends Test {
@@ -41,7 +41,7 @@ construct FoundationVec2Operations() extends Test {
             + Int(scaled.x) + Int(halved.y) + fndScaled(unit.x, 1)
     }
     // 5 + 11 + 4 + 2 + 6 + 2 + 6 = 36
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 construct FoundationVec3CrossAndNormalize() extends Test {
@@ -57,7 +57,7 @@ construct FoundationVec3CrossAndNormalize() extends Test {
             + Int(scaled.x) + Int(halved.x)
     }
     // 1 + 10 + 4 + 4 + 1 = 20
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FoundationVec4Operations() extends Test {
@@ -72,7 +72,7 @@ construct FoundationVec4Operations() extends Test {
             + Int(scaled.w) + Int(halved.w)
     }
     // 8 + 5 + (-1) + 5 + 8 + 2 = 27
-    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(27) return e }
 }
 
 construct FoundationRectBoundaries() extends Test {
@@ -86,7 +86,7 @@ construct FoundationRectBoundaries() extends Test {
         }
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(130); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(130) return e }
 }
 
 construct FoundationMatrixComposition() extends Test {
@@ -101,7 +101,7 @@ construct FoundationMatrixComposition() extends Test {
             + Int(combined.m03) + Int(combined.m13) + Int(combined.m23)
     }
     // Translation 9, scale 18, and the translated scale 9.
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 construct FoundationQuaternionRotation() extends Test {
@@ -114,7 +114,7 @@ construct FoundationQuaternionRotation() extends Test {
             + fndScaled(rotated.m01, 0) + fndScaled(rotated.m10, 0)
     }
     // The two quarter turns carry -1 and +1 in both matrices.
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct FoundationQuaternionComposition() extends Test {
@@ -125,7 +125,7 @@ construct FoundationQuaternionComposition() extends Test {
         let zero = Quaternion(0.0, 0.0, 0.0, 0.0).normalize()
         return Int(same.x) + Int(same.y) + Int(same.z) + Int(same.w) + Int(zero.w)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 construct FoundationPerspectiveAndLookAt() extends Test {
@@ -139,7 +139,7 @@ construct FoundationPerspectiveAndLookAt() extends Test {
             + Int(view.m00) + Int(view.m11) + Int(view.m22) + Int(view.m23)
     }
     // The approximation is just below one: 0 + 0 + 1 + 1 + 1 - 1 = 2.
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct FoundationZeroNormalizesToTheIdentityFallback() extends Test {
@@ -148,5 +148,5 @@ construct FoundationZeroNormalizesToTheIdentityFallback() extends Test {
         let quaternion = Quaternion(0.0, 0.0, 0.0, 0.0).normalize()
         return Int(vector.x) + Int(vector.y) + Int(vector.z) + Int(quaternion.w)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }

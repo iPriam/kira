@@ -279,6 +279,17 @@ fn collect_item(symbols: &mut BTreeMap<String, Symbol>, names: &Names, item: &It
             CompletionItemKind::TYPE_PARAMETER,
             text,
         ),
+        // A distinct type completes as a struct rather than as an alias: it is
+        // a type a program constructs by naming, which is what the struct kind
+        // says and what the alias kind does not.
+        Item::Distinct(declaration) => add_declared(
+            symbols,
+            names,
+            declaration.name,
+            declaration.name_span,
+            CompletionItemKind::STRUCT,
+            text,
+        ),
         Item::Constant(declaration) => add_declared(
             symbols,
             names,

@@ -28,8 +28,8 @@ struct SkxState1 {
 // borrow_mut_struct_writeback
 // ---------------------------------------------------------------------------
 
-struct SkxPair2 { var w: Int = 0; var h: Int = 0 }
-struct SkxNode2 { var v: Int = 0; var sz: SkxPair2 = SkxPair2 {} }
+struct SkxPair2 { var w: Int = 0 var h: Int = 0 }
+struct SkxNode2 { var v: Int = 0 var sz: SkxPair2 = SkxPair2 {} }
 struct SkxTree2 { var nodes: [SkxNode2] = [] }
 
 function skxMutScalar2(s: borrow mut SkxPair2) {
@@ -70,10 +70,10 @@ class SkxCounter3 {
 // ---------------------------------------------------------------------------
 
 struct SkxCounter4 {
-    let step: Int = 1;
+    let step: Int = 1
 
     function next(value: Int) -> Int {
-        return value + step;
+        return value + step
     }
 }
 
@@ -124,17 +124,17 @@ function skxAppendRetainedNode5(tree: SkxRetainedTree5, parentId: Int, key: Int,
     next.nextId = next.nextId + 1
 
     var node = SkxRetainedNode5 {
-        id: nodeId
-        parentId: parentId
-        key: key
-        label: label
-        childIds: []
-        stateSlots: []
+        id: nodeId,
+        parentId: parentId,
+        key: key,
+        label: label,
+        childIds: [],
+        stateSlots: [],
         mounted: true
     }
     node.stateSlots.append(SkxStateSlot5 {
-        nodeId: nodeId
-        value: label.count + key
+        nodeId: nodeId,
+        value: label.count + key,
         active: true
     })
 
@@ -187,8 +187,8 @@ function skxBuildRetainedTree5() -> SkxRetainedTree5 {
     var copied = tree.nodes[1]
     copied.childIds.append(999)
     copied.stateSlots.append(SkxStateSlot5 {
-        nodeId: copied.id
-        value: copied.label.count + 400
+        nodeId: copied.id,
+        value: copied.label.count + 400,
         active: true
     })
     tree.nodes[1] = copied
@@ -298,7 +298,7 @@ construct SkxStructStateParity() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(60)
+        let e: Result<Any, TestFailure> = .Ok(60)
         return e
     }
 }
@@ -322,7 +322,7 @@ construct SkxBorrowMutStructWriteback() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(1221)
+        let e: Result<Any, TestFailure> = .Ok(1221)
         return e
     }
 }
@@ -334,28 +334,28 @@ construct SkxInstanceMethodParity() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(42)
+        let e: Result<Any, TestFailure> = .Ok(42)
         return e
     }
 }
 
 construct SkxWhileIndexStructMethods() extends Test {
     test {
-        var values = [1, 2, 3, 4];
-        var index = 0;
-        let counter = SkxCounter4 { step: 3 };
+        var values = [1, 2, 3, 4]
+        var index = 0
+        let counter = SkxCounter4 { step: 3 }
 
         while index < 4 {
             if index == 1 {
-                index = index + 1;
-                continue;
+                index = index + 1
+                continue
             } else if index == 3 {
-                values[index] = counter.next(values[index]);
-                break;
+                values[index] = counter.next(values[index])
+                break
             }
 
-            values[index] = counter.next(values[index]);
-            index = index + 1;
+            values[index] = counter.next(values[index])
+            index = index + 1
         }
 
         var out = values[0] + values[1] + values[2] + values[3]
@@ -363,7 +363,7 @@ construct SkxWhileIndexStructMethods() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(19)
+        let e: Result<Any, TestFailure> = .Ok(19)
         return e
     }
 }
@@ -377,8 +377,8 @@ construct SkxRetainedTreeAggregateDefaultsParity() extends Test {
         var mutatedCopy = copiedNode
         mutatedCopy.childIds.append(77)
         mutatedCopy.stateSlots.append(SkxStateSlot5 {
-            nodeId: 77
-            value: 88
+            nodeId: 77,
+            value: 88,
             active: true
         })
 
@@ -387,7 +387,7 @@ construct SkxRetainedTreeAggregateDefaultsParity() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(14)
+        let e: Result<Any, TestFailure> = .Ok(14)
         return e
     }
 }
@@ -399,7 +399,7 @@ construct SkxPrintableDispatchParity() extends Test {
     }
 
     expect {
-        let e: Result<String, TestFailure> = .Ok("Ada")
+        let e: Result<Any, TestFailure> = .Ok("Ada")
         return e
     }
 }
@@ -410,7 +410,7 @@ construct SkxConstructDeclarationFunctions() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(10)
+        let e: Result<Any, TestFailure> = .Ok(10)
         return e
     }
 }
@@ -425,7 +425,7 @@ construct SkxConstructArrayFieldOwnedValue() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(41)
+        let e: Result<Any, TestFailure> = .Ok(41)
         return e
     }
 }
@@ -436,7 +436,7 @@ construct SkxConstructAnyBindingMoveParity() extends Test {
     }
 
     expect {
-        let e: Result<Int, TestFailure> = .Ok(4)
+        let e: Result<Any, TestFailure> = .Ok(4)
         return e
     }
 }

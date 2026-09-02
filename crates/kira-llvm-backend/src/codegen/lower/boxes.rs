@@ -7,6 +7,8 @@
 
 use kira_ir::IrExprId;
 use kira_semantics_model::Type;
+use llvm_sys::LLVMIntPredicate;
+use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
 use super::FunctionLowering;
@@ -44,27 +46,6 @@ impl FunctionLowering<'_, '_> {
         self.codegen.erase_value(lowered, from)
     }
 
-    /// Carries one generic instantiation into another whose type arguments are
-    /// `Any`.
-    ///
-    /// The rebuild itself is a generated function, memoized per type pair —
-    /// see [`super::super::widening`] for why it is a function rather than
-    /// inline code, and what it does. A pair whose runtime forms already agree
-    /// gets no leaf and no call: the value is already what the destination
-    /// wants, which is the whole of the VM's answer to this node.
-    pub(super) fn lower_widen(
-        &mut self,
-        value: IrExprId,
-        from: Type,
-        to: Type,
-    ) -> Result<LLVMValueRef, LlvmError> {
-        let lowered = self.lower_expr(value)?;
-        let Some(leaf) = self.codegen.widen_leaf(from, to)? else {
-            return Ok(lowered);
-        };
-        Ok(self.call(leaf, &mut [lowered], c"widened"))
-    }
-
     /// Reads an enum value's discriminant tag as an `Int`.
     ///
     /// The VM's `EnumTag`, in the same order: the value is evaluated (a local
@@ -97,6 +78,61 @@ impl FunctionLowering<'_, '_> {
         let enum_value = self.lower_expr(value)?;
         let decoded = self.codegen.read_box_payload(enum_value, ty)?;
         self.drop_value(enum_value, value_ty)?;
+        Ok(decoded)
+    }
+
+    /// `value is Type`: the box's tag is the erased identity, so the test is
+    /// one compare; the box is released either way.
+    pub(super) fn lower_type_test(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"any.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        // SAFETY: two `i64`s compared on a live block.
+        let holds = unsafe {
+            LLVMBuildICmp(
+                self.codegen.builder,
+                LLVMIntPredicate::LLVMIntEQ,
+                tag,
+                expected,
+                c"any.is".as_ptr(),
+            )
+        };
+        self.drop_value(boxed, value_ty)?;
+        Ok(holds)
+    }
+
+    /// `value as Type`: the tag must be the erased identity, or the runtime
+    /// traps; then the payload is read out as `ty` and the box released, as
+    /// an enum payload is.
+    pub(super) fn lower_type_cast(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"any.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        // SAFETY: two `i64`s compared on a live block.
+        let mismatch = unsafe {
+            LLVMBuildICmp(
+                self.codegen.builder,
+                LLVMIntPredicate::LLVMIntNE,
+                tag,
+                expected,
+                c"any.mismatch".as_ptr(),
+            )
+        };
+        let mut args = [tag, expected];
+        self.trap_if(mismatch, self.codegen.runtime.trap_cast, &mut args, c"cast.trap")?;
+        let decoded = self.codegen.read_box_payload(boxed, ty)?;
+        self.drop_value(boxed, value_ty)?;
         Ok(decoded)
     }
 }

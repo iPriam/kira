@@ -122,13 +122,24 @@ impl HostCapabilities for Host<'_> {
         }
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         match &self.session.vm_state {
             Some(state) => state
                 .lock()
                 .unwrap_or_else(|held| held.into_inner())
-                .free(token),
-            None => self.session.library.native_state_free(token),
+                .retain(token),
+            None => self.session.library.native_state_retain(token),
+        }
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .release(token)
+                .map(|_| ()),
+            None => self.session.library.native_state_release(token),
         }
     }
 

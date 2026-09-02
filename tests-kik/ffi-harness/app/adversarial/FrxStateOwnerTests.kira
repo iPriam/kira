@@ -1,0 +1,71 @@
+import Foundation
+
+// Callback-state owners counted across the @Native / @Runtime seam. Prefix: frx / Frx.
+//
+// The two halves of a hybrid program share one store, so a token exported on
+// one side owns a reference the other side can release, and the state lives
+// exactly as long as one owner remains on either side.
+
+struct FrxCounter {
+    var hits: Int = 0
+    var label: String = ""
+}
+
+@Native
+function frxNativeExport(start: Int) -> RawPtr {
+    let state = nativeState(FrxCounter { hits: start, label: "native" })
+    return nativeUserData(state)
+}
+
+@Native
+function frxNativeBump(token: RawPtr) -> Int {
+    var view = nativeRecover<FrxCounter>(token)
+    view.hits = view.hits + 1
+    return view.hits
+}
+
+@Native
+function frxNativeRelease(token: RawPtr) {
+    nativeUserDataRelease(token)
+    return
+}
+
+@Runtime
+function frxRuntimeExport(start: Int) -> RawPtr {
+    let state = nativeState(FrxCounter { hits: start, label: "runtime" })
+    return nativeUserData(state)
+}
+
+@Runtime
+function frxRuntimeRetain(token: RawPtr) {
+    nativeUserDataRetain(token)
+    return
+}
+
+construct FrxATokenExportedNativelyIsReleasedAtRuntime() extends Test {
+    test {
+        let token = frxNativeExport(40)
+        let bumped = frxNativeBump(token)
+        var view = nativeRecover<FrxCounter>(token)
+        var seen = 0
+        if view.label == "native" { seen = view.hits }
+        nativeUserDataRelease(token)
+        return bumped * 100 + seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4141) return e }
+}
+
+construct FrxARetainOnOneSideNeedsAReleaseOnEither() extends Test {
+    test {
+        let token = frxRuntimeExport(1)
+        frxRuntimeRetain(token)
+        frxNativeRelease(token)
+        let bumped = frxNativeBump(token)
+        var view = nativeRecover<FrxCounter>(token)
+        var seen = 0
+        if view.label == "runtime" { seen = view.hits }
+        nativeUserDataRelease(token)
+        return bumped * 10 + seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
+}

@@ -3,7 +3,7 @@ title: Concurrency
 description: async functions, Task spawns, host-main-thread requests, cooperative yielding, the virtual clock, and the Send rules at both boundaries.
 ---
 
-`async function` marks a body meant to be *spawned*. Calling one directly is an ordinary call: the marker changes nothing about a call, only about what a task may run. `async` is contextual, so a local named `async` still binds.
+`async function` marks a task entry point: a body that is *spawned* with `Task { … }` and joined for its result. It is not a function to call: a direct call is `KSEM354`, and only an `async function` may be a task target (`KSEM352`). Its parameters are taken owned or copied, never borrowed (`KSEM353`), because the task runs after the caller's places may be gone. `async` is contextual, so a local named `async` still binds.
 
 `Task { work(a, b) }` spawns a deferred task and hands back an opaque handle. The arguments evaluate at the spawn; the body runs at the first drive.
 
@@ -35,7 +35,7 @@ A handle has exactly three operations, and anything else on one is `KSEM158`.
 
 ## What a Task Body May Be
 
-A direct call to a named function taking `Int` or `Float` parameters and returning `Int`, `Float`, or nothing, or a bare numeric literal (`Task { 41 }`). Anything else is `KSEM159`. That restriction is what lets a spawn evaluate its arguments now and its body later with no closure in between.
+A call to an `async function` taking `Int` or `Float` parameters and returning `Int`, `Float`, or nothing, chosen among overloads exactly as an ordinary call is, or a bare numeric literal (`Task { 41 }`). Anything else is `KSEM159`. That restriction is what lets a spawn evaluate its arguments now and its body later with no closure in between.
 
 ## The `Send` Rule
 
@@ -49,6 +49,10 @@ The task table belongs to one run. A VM creates it when execution starts; a
 native or hybrid host resets its thread-local table at the same boundary and
 clears it when the run ends. A task handle is therefore never valid in a later
 run, even when a hybrid library stays loaded between runs.
+
+Handles include a slot generation. Joining, detaching, or cancelling reclaims
+the task's table storage; a later spawn may reuse that storage, but the old
+handle cannot name the new task. Runnable tasks are selected in spawn order.
 
 ## Host Main Thread
 

@@ -25,6 +25,10 @@ function main() {
 
     print(scalarsSection())
     print(aliasesSection())
+    print(distinctsSection())
+    print(distinctDerivesSection())
+    print(distinctSerdeSection())
+    print(distinctOptionSection())
     print(asyncSpineSection())
     print(mainThreadSection())
 

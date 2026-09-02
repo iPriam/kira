@@ -18,7 +18,7 @@ construct StxCopyXIndep() extends Test {
         q.x = 99
         return p.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StxCopyYIndep() extends Test {
@@ -28,7 +28,7 @@ construct StxCopyYIndep() extends Test {
         q.y = 77
         return p.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxCopyBothUnchanged() extends Test {
@@ -40,7 +40,7 @@ construct StxCopyBothUnchanged() extends Test {
         q.y = 1
         return p.x + p.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct StxCopyNestedOriginX() extends Test {
@@ -54,7 +54,7 @@ construct StxCopyNestedOriginX() extends Test {
         r2.origin.x = 999
         return r.origin.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StxCopyNestedSizeY() extends Test {
@@ -68,7 +68,7 @@ construct StxCopyNestedSizeY() extends Test {
         r2.size.y = 888
         return r.size.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StxCopyMutateCopy() extends Test {
@@ -79,7 +79,7 @@ construct StxCopyMutateCopy() extends Test {
         q.x = 100
         return q.x + p.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(105); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(105) return e }
 }
 
 construct StxCopyBorrowMutNoEffect() extends Test {
@@ -90,7 +90,7 @@ construct StxCopyBorrowMutNoEffect() extends Test {
         stxBumpX(q)
         return p.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxCopyLoopIndependence() extends Test {
@@ -107,7 +107,7 @@ construct StxCopyLoopIndependence() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StxCopyScaleOriginalUnchanged() extends Test {
@@ -117,7 +117,7 @@ construct StxCopyScaleOriginalUnchanged() extends Test {
         let q = p.scale(10)
         return p.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxCopyCubeDepth() extends Test {
@@ -131,7 +131,7 @@ construct StxCopyCubeDepth() extends Test {
         c2.depth = 999
         return c.depth
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ construct StxArrRead1X() extends Test {
         pts.append(StxPoint { x: 5, y: 6 })
         return pts[1].x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxArrRead2Y() extends Test {
@@ -159,7 +159,7 @@ construct StxArrRead2Y() extends Test {
         pts.append(StxPoint { x: 5, y: 6 })
         return pts[2].y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StxArrSumX() extends Test {
@@ -177,7 +177,7 @@ construct StxArrSumX() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct StxArrForInSumY() extends Test {
@@ -193,7 +193,7 @@ construct StxArrForInSumY() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct StxArrWriteX() extends Test {
@@ -203,7 +203,7 @@ construct StxArrWriteX() extends Test {
         pts[0].x = 77
         return pts[0].x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(77) return e }
 }
 
 construct StxArrWriteY() extends Test {
@@ -213,7 +213,7 @@ construct StxArrWriteY() extends Test {
         pts[0].y = 88
         return pts[0].y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(88); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(88) return e }
 }
 
 construct StxArrDeepWriteRectOriginX() extends Test {
@@ -227,7 +227,7 @@ construct StxArrDeepWriteRectOriginX() extends Test {
         rects[0].origin.x = 77
         return rects[0].origin.x
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(77) return e }
 }
 
 construct StxArrDeepWriteRectSizeY() extends Test {
@@ -246,7 +246,7 @@ construct StxArrDeepWriteRectSizeY() extends Test {
         rects[1].size.y = 44
         return rects[1].size.y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(44); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(44) return e }
 }
 
 construct StxArrMixedWrites() extends Test {
@@ -263,7 +263,7 @@ construct StxArrMixedWrites() extends Test {
         pts[3].y = 40
         return pts[0].x + pts[1].y + pts[2].x + pts[3].y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct StxArrLoop100() extends Test {
@@ -283,7 +283,7 @@ construct StxArrLoop100() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10000) return e }
 }
 
 construct StxArrCount() extends Test {
@@ -297,7 +297,7 @@ construct StxArrCount() extends Test {
         }
         return pts.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct StxArrForInMethodSum() extends Test {
@@ -315,7 +315,7 @@ construct StxArrForInMethodSum() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct StxArrAfterDeepWrite() extends Test {
@@ -334,7 +334,7 @@ construct StxArrAfterDeepWrite() extends Test {
         }
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(54); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(54) return e }
 }
 
 construct StxArrTrapEmpty() extends Test {
@@ -342,7 +342,7 @@ construct StxArrTrapEmpty() extends Test {
         var pts: [StxPoint] = []
         return pts[0].x
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxArrTrapOOB() extends Test {
@@ -351,7 +351,7 @@ construct StxArrTrapOOB() extends Test {
         pts.append(StxPoint { x: 1, y: 2 })
         return pts[99].x
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +364,7 @@ construct StxBagTotal5() extends Test {
         var b = stxMakeBag(5)
         return b.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct StxBagTotal0() extends Test {
@@ -373,7 +373,7 @@ construct StxBagTotal0() extends Test {
         var b = stxMakeBag(0)
         return b.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct StxBagCount10() extends Test {
@@ -381,7 +381,7 @@ construct StxBagCount10() extends Test {
         var b = stxMakeBag(10)
         return b.count()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StxBagItems2() extends Test {
@@ -390,7 +390,7 @@ construct StxBagItems2() extends Test {
         var b = stxMakeBag(5)
         return b.items[2]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StxBagTag() extends Test {
@@ -398,7 +398,7 @@ construct StxBagTag() extends Test {
         var b = stxMakeBag(5)
         return b.tag
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StxBagTotal1() extends Test {
@@ -407,7 +407,7 @@ construct StxBagTotal1() extends Test {
         var b = stxMakeBag(1)
         return b.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct StxBagTotal3() extends Test {
@@ -416,7 +416,7 @@ construct StxBagTotal3() extends Test {
         var b = stxMakeBag(3)
         return b.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct StxBagLoopTotal() extends Test {
@@ -431,7 +431,7 @@ construct StxBagLoopTotal() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 construct StxBagItems0() extends Test {
@@ -440,7 +440,7 @@ construct StxBagItems0() extends Test {
         var b = stxMakeBag(3)
         return b.items[0]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct StxBagItems1() extends Test {
@@ -449,7 +449,7 @@ construct StxBagItems1() extends Test {
         var b = stxMakeBag(3)
         return b.items[1]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,17 +462,17 @@ construct StxTrapDivZeroField() extends Test {
         let p = StxPoint { x: 5, y: 0 }
         return p.x / p.y
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapModZero() extends Test {
     test { return 7 % 0 }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapDivZeroConst() extends Test {
     test { return 1 / 0 }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapArrLargeIndex() extends Test {
@@ -482,7 +482,7 @@ construct StxTrapArrLargeIndex() extends Test {
         pts.append(StxPoint { x: 3, y: 4 })
         return pts[99].x
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapDeepWriteOOB() extends Test {
@@ -495,7 +495,7 @@ construct StxTrapDeepWriteOOB() extends Test {
         })
         return rects[5].label
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapBagOOB() extends Test {
@@ -503,7 +503,7 @@ construct StxTrapBagOOB() extends Test {
         var b = stxMakeBag(3)
         return b.items[99]
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct StxTrapModZeroField() extends Test {
@@ -511,5 +511,5 @@ construct StxTrapModZeroField() extends Test {
         let p = StxPoint { x: 5, y: 0 }
         return p.x % p.y
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }

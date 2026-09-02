@@ -138,6 +138,12 @@ impl Analyzer<'_> {
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
             };
+        if self.refuse_direct_async_call(id, span) {
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
+            }
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let starts_lifecycle = self.sigs[id.0 as usize].is_main_thread_lifecycle;
         let refused_main_thread = self.sigs[id.0 as usize].is_main_thread
             && !ctx.main_thread

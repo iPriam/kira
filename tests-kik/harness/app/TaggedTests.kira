@@ -19,5 +19,5 @@ construct HxTaggedUsesDeclarationOrder() extends Test {
         let fallback = code_HxMaterial(HxMaterial_fromCode(99))
         return first + second + third + roundTrip + fallback
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }

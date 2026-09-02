@@ -134,7 +134,7 @@ impl Analyzer<'_> {
                 let receiver_hir = self.analyze_expr(ctx, receiver);
                 let receiver_ty = self.program.expr(receiver_hir).type_of();
                 let method_name = self.interner.resolve(method).to_owned();
-                let qualified = format!("{}.{method_name}", self.type_name(receiver_ty));
+                let qualified = format!("{}.{method_name}", self.member_owner_name(receiver_ty));
                 if self.lookup_function(&qualified).is_none() {
                     self.analyze_expr(ctx, body);
                     self.emit(

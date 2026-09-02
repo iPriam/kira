@@ -100,6 +100,10 @@ pub fn lower(program: &HirProgram) -> IrProgram {
             crate::mid::scope_releases(function, &ir.exprs, &ir.types);
         }
     }
+    // Last, once every function and every synthesized task helper exists: the
+    // IR a backend consumes carries no `distinct` type, so nothing below here
+    // has a distinct path to lay out, box, copy, release, or lower to C.
+    crate::erase::erase_distinct_types(&mut ir);
     ir
 }
 
@@ -296,6 +300,12 @@ impl Lowerer<'_> {
 
     fn lower_expr(&mut self, id: HirExprId) -> IrExprId {
         let node = match self.hir.expr(id).clone() {
+            // A `distinct` crossing lowers to the value that crossed, and to
+            // nothing else. `TabId(word)` and `id.raw` are the same bits either
+            // way, so the node that carried the type through the type checker
+            // has no instruction to become: it disappears here, which is the
+            // whole of what makes a distinct type cost nothing.
+            HirExpr::Distinct { value, .. } => return self.lower_expr(value),
             HirExpr::Int(value) => IrExpr::Int(value),
             HirExpr::Float(value) => IrExpr::Float(value),
             HirExpr::Bool(value) => IrExpr::Bool(value),
@@ -313,14 +323,30 @@ impl Lowerer<'_> {
                 slot: self.slot(local.0),
                 ty,
             },
-            HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
+            // A copy of a Copyable value is the value: every engine's read of a
+            // scalar is a copy, and a string or array read shares until written.
+            HirExpr::Copy { value, .. } => return self.lower_expr(value),
+            HirExpr::TypeTest { value, target } => IrExpr::TypeTest {
+                value: self.lower_expr(value),
+                target: kira_semantics_model::ErasedTypeId::of(target)
+                    .expect("analysis admits only erasable targets"),
+            },
+            HirExpr::TypeCast { value, target } => IrExpr::TypeCast {
+                value: self.lower_expr(value),
+                target: kira_semantics_model::ErasedTypeId::of(target)
+                    .expect("analysis admits only erasable targets"),
+                ty: target,
+            },
+            HirExpr::Unary { op, operand, ty } => IrExpr::Unary {
                 op,
                 operand: self.lower_expr(operand),
+                ty,
             },
-            HirExpr::Binary { op, lhs, rhs, .. } => IrExpr::Binary {
+            HirExpr::Binary { op, lhs, rhs, ty } => IrExpr::Binary {
                 op,
                 lhs: self.lower_expr(lhs),
                 rhs: self.lower_expr(rhs),
+                ty,
             },
             HirExpr::Select {
                 cond,
@@ -354,11 +380,16 @@ impl Lowerer<'_> {
                     writebacks,
                 }
             }
-            HirExpr::StructNew { struct_id, fields } => {
+            HirExpr::StructNew {
+                struct_id,
+                fields,
+                order,
+            } => {
                 let ir_fields = fields.iter().map(|&field| self.lower_expr(field)).collect();
                 IrExpr::StructNew {
                     struct_id,
                     fields: ir_fields,
+                    order,
                 }
             }
             HirExpr::Field { base, index, ty } => IrExpr::Field {
@@ -522,7 +553,10 @@ impl Lowerer<'_> {
                 type_id,
                 ty,
             },
-            HirExpr::NativeStateFree { token } => IrExpr::NativeStateFree {
+            HirExpr::NativeStateRetain { token } => IrExpr::NativeStateRetain {
+                token: self.lower_expr(token),
+            },
+            HirExpr::NativeStateRelease { token } => IrExpr::NativeStateRelease {
                 token: self.lower_expr(token),
             },
             HirExpr::Convert { operand, kind, ty } => IrExpr::Convert {
@@ -533,11 +567,6 @@ impl Lowerer<'_> {
             HirExpr::IntoAny { value, from } => IrExpr::IntoAny {
                 value: self.lower_expr(value),
                 from,
-            },
-            HirExpr::Widen { value, from, to } => IrExpr::Widen {
-                value: self.lower_expr(value),
-                from,
-                to,
             },
             HirExpr::MainThreadCall {
                 operation,

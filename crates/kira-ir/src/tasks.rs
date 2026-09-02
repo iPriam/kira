@@ -146,6 +146,7 @@ impl Build<'_> {
             op: IrBinOp::EqInt,
             lhs,
             rhs,
+            ty: Type::Bool,
         })
     }
 

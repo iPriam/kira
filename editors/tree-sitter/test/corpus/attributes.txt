@@ -233,12 +233,12 @@ function f() {}
 ================================================================================
 
 @FFI.Extern {
-    library: sokol;
-    symbol: sapp_run;
-    abi: c;
-    retains: desc;
+    library: sokol,
+    symbol: sapp_run,
+    abi: c,
+    retains: desc,
 }
-function sappRun(desc: SappDescPtr): Void;
+function sappRun(desc: SappDescPtr) -> Void
 
 --------------------------------------------------------------------------------
 
@@ -273,8 +273,8 @@ function sappRun(desc: SappDescPtr): Void;
 `@FFI.Syscall` names the call and nothing else
 ================================================================================
 
-@FFI.Syscall { name: write; }
-function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function sysWrite(fd: Int, buffer: CString, count: U64) -> Int
 
 --------------------------------------------------------------------------------
 
@@ -306,10 +306,10 @@ function sysWrite(fd: Int, buffer: CString, count: U64) -> Int;
 `@FFI.Struct` and `@FFI.Array` declare C types on a struct
 ================================================================================
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FaxSlot { var value: I32 }
 
-@FFI.Array { element: FaxSlot; count: 4; }
+@FFI.Array { element: FaxSlot, count: 4 }
 struct FaxSlots {}
 
 --------------------------------------------------------------------------------
@@ -348,7 +348,7 @@ struct FaxSlots {}
 `@FFI.Callback` carries a bracketed parameter list
 ================================================================================
 
-@FFI.Callback { abi: c; params: [I32, F32]; result: Void; }
+@FFI.Callback { abi: c, params: [I32, F32], result: Void }
 struct FaxCallback {}
 
 --------------------------------------------------------------------------------

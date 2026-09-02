@@ -14,7 +14,7 @@ impl<'a> Analyzer<'a> {
     /// takes a slot in the same table. Everything downstream of analysis — the
     /// IR, both compilers, the hybrid manifest — sees a flat list of functions
     /// and never learns that some of them were written inside a struct.
-    pub(super) fn callables(&self) -> Vec<Callable<'a>> {
+    pub(super) fn callables(&mut self) -> Vec<Callable<'a>> {
         let mut callables = Vec::new();
         for (source, item) in self.tree.items_with_source() {
             match item {
@@ -79,6 +79,7 @@ impl<'a> Analyzer<'a> {
                 Item::Constant(_)
                 | Item::Enum(_)
                 | Item::TypeAlias(_)
+                | Item::Distinct(_)
                 | Item::Import(_)
                 | Item::Extend(_)
                 | Item::Trait(_)
@@ -109,7 +110,7 @@ impl<'a> Analyzer<'a> {
     /// back to the parent's method, which is the bug this exists to remove. It
     /// is bounded by [`Self::SPECIALIZATION_LIMIT`], past which the function is
     /// left as written rather than silently half-specialized.
-    pub(super) fn specialize_callables(&self, callables: &mut Vec<Callable<'a>>) {
+    pub(super) fn specialize_callables(&mut self, callables: &mut Vec<Callable<'a>>) {
         let mut added: Vec<Callable<'a>> = Vec::new();
         for callable in callables.iter() {
             let choices = self.parameter_subclasses(callable);
@@ -135,6 +136,21 @@ impl<'a> Analyzer<'a> {
                 }
             }
             if combinations.len() > Self::SPECIALIZATION_LIMIT {
+                // Refused rather than quietly compiled against the parent's
+                // body: a call with a subclass argument must reach the subclass
+                // or not compile at all.
+                self.source = callable.source;
+                self.emit(
+                    callable.function.name_span,
+                    "KSEM357",
+                    format!(
+                        "`{}` takes class-typed parameters whose subclass combinations exceed \
+                         the {} specializations one function may have; split it, or take \
+                         fewer class-typed parameters",
+                        self.interner.resolve(callable.function.name),
+                        Self::SPECIALIZATION_LIMIT
+                    ),
+                );
                 continue;
             }
             for specialize in combinations {
@@ -236,7 +252,7 @@ impl<'a> Analyzer<'a> {
         let Some(receiver_ty) = callable.receiver else {
             return written.to_owned();
         };
-        let receiver = self.program.types.type_name(receiver_ty);
+        let receiver = self.member_owner_name(receiver_ty);
         // A class carries one copy of every method any ancestor declares. The
         // copy that wins bare lookup takes the plain `Class.method` name a call
         // site spells; a copy an override shadows takes a qualified name, which
@@ -252,7 +268,7 @@ impl<'a> Analyzer<'a> {
         );
         match (receiver_ty, callable.origin) {
             (Type::Struct(id), Some(origin)) if !self.is_most_derived(id, origin, &key) => {
-                let origin = self.program.types.type_name(Type::Struct(origin));
+                let origin = self.member_owner_name(Type::Struct(origin));
                 format!("{receiver}.{origin}${written}")
             }
             _ => format!("{receiver}.{written}"),
@@ -265,7 +281,23 @@ impl<'a> Analyzer<'a> {
     /// program can write, and the declaration's own name is in it so two
     /// declarations' initializers never share an overload set.
     pub(crate) fn initializer_name(&self, id: StructId) -> String {
-        format!("{}$init", self.program.types.type_name(Type::Struct(id)))
+        format!("{}$init", self.member_owner_name(Type::Struct(id)))
+    }
+
+    /// The name a type's members are filed under: its declared name,
+    /// qualified by the declaring package (`Pkg::Point`), so two packages'
+    /// same-named types never share an overload set.
+    pub(crate) fn member_owner_name(&self, ty: Type) -> String {
+        let name = self.program.types.type_name(ty);
+        let owner = match ty {
+            Type::Struct(id) => self.program.types.structs().owner_of(id),
+            Type::Enum(id) => self.program.types.enums().owner_of(id),
+            _ => None,
+        };
+        match owner {
+            Some(owner) => format!("{owner}::{name}"),
+            None => name,
+        }
     }
 
     /// What a class member is known by: its name together with what it takes.

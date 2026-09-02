@@ -240,11 +240,11 @@ async function total(a: Int, b: Int) -> Int {
           right: (identifier))))))
 
 ================================================================================
-An `@FFI.Extern` function is bodyless and ends with `;`
+An `@FFI.Extern` function is bodyless and ends with its signature
 ================================================================================
 
-@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
-function add(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffimath, symbol: ffi_add, abi: c }
+function add(a: I32, b: I32) -> I32
 
 --------------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ function add(a: I32, b: I32) -> I32;
       (type_identifier))))
 
 ================================================================================
-A trait requirement is bodyless with no `;`
+A trait requirement is bodyless
 ================================================================================
 
 trait Hashable {

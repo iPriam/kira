@@ -41,6 +41,24 @@ Both spellings construct it, because a qualified constructor carries no type arg
 
 `Result` is `Result`-shaped, so [`attempt` / `try` / `handle`](/docs/language-guide/control-flow#attempt-try-and-handle) unwraps it with nothing added. So does any enum a program writes with the same `Ok`/`Error` pair: the rule is structural, not nominal.
 
+## `Option`
+
+`Option.kira` ships `enum Option<Value>`.
+
+```kira
+let found: Option<TabId> = .Some(TabId(U32(3)))
+let missing: Option<TabId> = .None
+
+match found {
+    Some(id) -> return id.raw
+    None -> return U32(0)
+}
+```
+
+An ordinary generic enum, with nothing around it: no `?T` spelling, no implicit wrapping at a call site, and no unwrap operator. It goes wherever a generic enum goes and is matched the way `Result` is.
+
+Absence as a *variant* is the whole of what it buys over a sentinel value. A sentinel is a value of the type it stands in for, so nothing can tell "no tab" from "tab 0" and every reader has to remember which number means nothing; `None` is a case a `match` has to answer.
+
 ## `Printable`
 
 `Printable.kira` ships the `Printable` construct family, whose one requirement is `onPrint() -> String`.

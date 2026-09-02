@@ -16,7 +16,7 @@ description: Literals, operators and precedence, calls and labeled arguments, tr
 - `Task { call(args) }`.
 - `MainThread.invoke { call(args) }`, `MainThread.spawn { call(args) }`, and `MainThread.post { call(args) }`.
 - `quote { … }` and `#{ value }`, inside a `comptime macro` only.
-- `nativeState(v)`, `nativeUserData(s)`, `nativeRecover(t)`.
+- `nativeState(v)`, `nativeUserData(s)`, `nativeRecover<T>(t)`, `nativeUserDataRetain(t)`, `nativeUserDataRelease(t)`.
 
 ## Operators
 
@@ -27,6 +27,8 @@ description: Literals, operators and precedence, calls and labeled arguments, tr
 Loosest to tightest, exactly C's ladder. Unary `-`, `!`, and `~` bind tighter than every binary operator. The conditional nests to the right.
 
 `move x` and `copy x` are prefix operators, recognized only when an operand follows. A range `a..b` is not an expression: it appears only in a `for` header.
+
+`value is Type` and `value as Type` take a type on the right. They bind tighter than the comparisons and looser than the shifts, so `a is Point == b` tests first. `value` must be an `Any`; `is` answers whether it holds a `Type` by nominal runtime identity and releases the value, and `as` hands the held value back as an owned `Type`, trapping when it holds anything else. `Type` must be one an `Any` can hold: not `Void`, not `Any` itself.
 
 ## Calls
 

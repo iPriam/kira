@@ -26,12 +26,12 @@ macro mxSwap(a: place, b: place) {
 
 construct MxxSquare() extends Test {
     test { return mxSquare!(6) }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 construct MxxAdd3() extends Test {
     test { return mxAdd3!(1, 2, 3) }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct MxxSwapAndHygiene() extends Test {
@@ -43,7 +43,7 @@ construct MxxSwapAndHygiene() extends Test {
         let temporary = 100
         return x + y + temporary
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(130); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(130) return e }
 }
 
 construct MxxNestedExprSingleEval() extends Test {
@@ -52,7 +52,7 @@ construct MxxNestedExprSingleEval() extends Test {
         let r = mxSquare!(3) + mxSquare!(4)
         return r
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
 }
 
 // --- Procedural derive macros (comptime macro) ------------------------------
@@ -101,7 +101,7 @@ struct MxVec3 {
 
 construct MxxDeriveFieldCount() extends Test {
     test { return mxVecFieldCount() }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct MxxDeriveSum() extends Test {
@@ -109,7 +109,7 @@ construct MxxDeriveSum() extends Test {
         let v = MxVec3 { x: 4, y: 5, z: 6 }
         return mxSumVec(v)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 // --- Procedural attribute macro (@Name) -------------------------------------
@@ -138,7 +138,7 @@ struct MxTagHolder {
 
 construct MxxAttributeMacro() extends Test {
     test { return mxTaggedFieldCount() }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // --- Procedural function-position macro (name!(args) -> declarations) --------
@@ -167,7 +167,7 @@ mxBits!(MxRead, MxWrite, MxExec)
 
 construct MxxFunctionMacro() extends Test {
     test { return MxRead() + MxWrite() + MxExec() }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // --- Function-position procedural macro in EXPRESSION position --------------
@@ -182,7 +182,7 @@ comptime macro mxConst {
 
 construct MxxFuncMacroExpr() extends Test {
     test { return mxConst!() }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // --- Function-position procedural macro in STATEMENT position ---------------
@@ -203,7 +203,7 @@ construct MxxFuncMacroStmt() extends Test {
         mxAssignTen!()
         return r
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // --- Mid-identifier splice gluing (`mxp_#{name}` -> `mxp_Foo`) ---------------
@@ -230,7 +230,7 @@ mxPrefixed!(Foo, Bar)
 
 construct MxxSpliceGlue() extends Test {
     test { return mxp_Foo() + mxp_Bar() }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // --- Enum annotations: derive macro over an enum ----------------------------
@@ -261,7 +261,7 @@ enum MxColor {
 
 construct MxxEnumDerive() extends Test {
     test { return mxEnumVariantCount() }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // --- Property-wrapper attribute macro (@PropertyWrapper) ---------------------
@@ -314,17 +314,17 @@ struct MxPlainWrapper {
 
 construct MxxPropertyWrapperConformance() extends Test {
     test { return is_MxStateWrapper_propertyWrapper() }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct MxxPropertyWrapperHasProjected() extends Test {
     test { return has_MxStateWrapper_projectedValue() }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct MxxPropertyWrapperNoProjected() extends Test {
     test { return has_MxPlainWrapper_projectedValue() }
-    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
 }
 
 // --- Wrapper rewrite: a wrapped property as a named argument ------------------
@@ -413,7 +413,7 @@ construct MxLabelledCall() extends MxCounter {
 
 construct MxxWrappedPropertyIsANamedArgumentLabel() extends Test {
     test { return MxLabelledCall().total() }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 // --- String(syntax): a macro reads its input as plain text -------------------
@@ -443,5 +443,5 @@ mxMarkerText!(let marker = 7 + 2)
 
 construct MxxStringOfSyntax() extends Test {
     test { return mxMarkerTextResult() }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }

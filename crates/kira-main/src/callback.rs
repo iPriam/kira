@@ -533,12 +533,21 @@ impl HostCapabilities for SessionHost<'_> {
         Ok(())
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.session
             .state
             .lock()
             .unwrap_or_else(|held| held.into_inner())
-            .free(token)
+            .retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.session
+            .state
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .release(token)
+            .map(|_| ())
     }
 }
 

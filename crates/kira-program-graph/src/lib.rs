@@ -448,7 +448,7 @@ fn select_package_module(
     }
     let absolute = sources.identity(&path)?;
     Some(Selected {
-        module: kira_semantics::ImportTable::package_module_identity(&package.name, &module),
+        module: package.module_identity(&module),
         path,
         key: ModuleKey::PackagePath(absolute),
         package: Some(package.clone()),
@@ -489,7 +489,7 @@ fn select_aggregate_modules(package: &PackageRoot, sources: &mut Sources) -> Vec
     // The namespace has no root file. Emit its empty semantic alias after the
     // real files so package declarations retain dependency-first order.
     modules.push(Selected {
-        module: kira_semantics::ImportTable::package_module_identity(&package.name, &package.name),
+        module: package.module_identity(&package.name),
         path: package.source_dir.clone(),
         key: ModuleKey::PackageNamespace(package.name.clone(), absolute),
         package: Some(package.clone()),

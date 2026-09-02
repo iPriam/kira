@@ -137,6 +137,56 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&fields.to_le_bytes());
             out.extend_from_slice(&glue.to_le_bytes());
         }
+        Instruction::AddIntChecked => out.push(o::ADD_INT_CHECKED),
+        Instruction::SubIntChecked => out.push(o::SUB_INT_CHECKED),
+        Instruction::MulIntChecked => out.push(o::MUL_INT_CHECKED),
+        Instruction::NegIntChecked => out.push(o::NEG_INT_CHECKED),
+        Instruction::DivIntChecked => out.push(o::DIV_INT_CHECKED),
+        Instruction::AddUIntChecked => out.push(o::ADD_UINT_CHECKED),
+        Instruction::SubUIntChecked => out.push(o::SUB_UINT_CHECKED),
+        Instruction::MulUIntChecked => out.push(o::MUL_UINT_CHECKED),
+        Instruction::CheckInt(code) => {
+            out.push(o::CHECK_INT);
+            out.push(*code);
+        }
+        Instruction::WrapInt(code) => {
+            out.push(o::WRAP_INT);
+            out.push(*code);
+        }
+        Instruction::CheckShift(bits) => {
+            out.push(o::CHECK_SHIFT);
+            out.push(*bits);
+        }
+        Instruction::ConvertInt { from, to } => {
+            out.push(o::CONVERT_INT);
+            out.push(*from);
+            out.push(*to);
+        }
+        Instruction::ConvertUIntToFloat => out.push(o::CONVERT_UINT_TO_FLOAT),
+        Instruction::PrintUnsigned => out.push(o::PRINT_UNSIGNED),
+        Instruction::StringOfUnsigned => out.push(o::STRING_OF_UNSIGNED),
+        Instruction::TypeTest(id) => {
+            out.push(o::TYPE_TEST);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::Downcast(id) => {
+            out.push(o::DOWNCAST);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::NewStructOrdered { order, glue } => {
+            out.push(o::NEW_STRUCT_ORDERED);
+            out.extend_from_slice(&(order.len() as u64).to_le_bytes());
+            for slot in order {
+                out.extend_from_slice(&slot.to_le_bytes());
+            }
+            match glue {
+                Some(glue) => {
+                    out.push(1);
+                    out.extend_from_slice(&glue.to_le_bytes());
+                }
+                None => out.push(0),
+            }
+        }
         Instruction::GetField(index) => {
             out.push(o::GET_FIELD);
             out.extend_from_slice(&index.to_le_bytes());
@@ -257,8 +307,12 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
         Instruction::ConvertIntToRawPtr => out.push(o::CONVERT_INT_TO_RAW_PTR),
         Instruction::ConvertRawPtrToInt => out.push(o::CONVERT_RAW_PTR_TO_INT),
-        Instruction::NativeUserData => out.push(o::NATIVE_USER_DATA),
-        Instruction::NativeStateFree => out.push(o::NATIVE_STATE_FREE),
+        Instruction::NativeUserData { shared } => {
+            out.push(o::NATIVE_USER_DATA);
+            out.push(u8::from(*shared));
+        }
+        Instruction::NativeStateRetain => out.push(o::NATIVE_STATE_RETAIN),
+        Instruction::NativeStateRelease => out.push(o::NATIVE_STATE_RELEASE),
         Instruction::ConstRawPtrNull => out.push(o::RAW_PTR_NULL),
         Instruction::ForeignCallback(id) => {
             out.push(o::FOREIGN_CALLBACK);
@@ -440,6 +494,9 @@ impl Cursor<'_> {
             o::FOREIGN_CALLBACK => Instruction::ForeignCallback(u32::from_le_bytes(self.take()?)),
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
+            o::NATIVE_USER_DATA => Instruction::NativeUserData {
+                shared: self.read_bool()?,
+            },
             o::NEW_STRUCT => Instruction::NewStruct(self.read_slot(legacy)?),
             o::TAKE_LOCAL => Instruction::TakeLocal(self.read_slot(legacy)?),
             o::NEW_STRUCT_DROPPING => {
@@ -448,6 +505,48 @@ impl Cursor<'_> {
                     fields,
                     glue: u32::from_le_bytes(self.take()?),
                 }
+            }
+            o::ADD_INT_CHECKED => Instruction::AddIntChecked,
+            o::SUB_INT_CHECKED => Instruction::SubIntChecked,
+            o::MUL_INT_CHECKED => Instruction::MulIntChecked,
+            o::NEG_INT_CHECKED => Instruction::NegIntChecked,
+            o::DIV_INT_CHECKED => Instruction::DivIntChecked,
+            o::ADD_UINT_CHECKED => Instruction::AddUIntChecked,
+            o::SUB_UINT_CHECKED => Instruction::SubUIntChecked,
+            o::MUL_UINT_CHECKED => Instruction::MulUIntChecked,
+            o::CHECK_INT => {
+                let [code] = self.take()?;
+                Instruction::CheckInt(code)
+            }
+            o::WRAP_INT => {
+                let [code] = self.take()?;
+                Instruction::WrapInt(code)
+            }
+            o::CHECK_SHIFT => {
+                let [bits] = self.take()?;
+                Instruction::CheckShift(bits)
+            }
+            o::CONVERT_INT => {
+                let [from, to] = self.take()?;
+                Instruction::ConvertInt { from, to }
+            }
+            o::CONVERT_UINT_TO_FLOAT => Instruction::ConvertUIntToFloat,
+            o::PRINT_UNSIGNED => Instruction::PrintUnsigned,
+            o::STRING_OF_UNSIGNED => Instruction::StringOfUnsigned,
+            o::TYPE_TEST => Instruction::TypeTest(u64::from_le_bytes(self.take()?)),
+            o::DOWNCAST => Instruction::Downcast(u64::from_le_bytes(self.take()?)),
+            o::NEW_STRUCT_ORDERED => {
+                let count = self.read_slot(legacy)?;
+                let mut order = Vec::new();
+                for _ in 0..count {
+                    order.push(self.read_slot(legacy)?);
+                }
+                let glue = if self.read_bool()? {
+                    Some(u32::from_le_bytes(self.take()?))
+                } else {
+                    None
+                };
+                Instruction::NewStructOrdered { order, glue }
             }
             o::GET_FIELD => Instruction::GetField(self.read_slot(legacy)?),
             o::FOREIGN_OFFSET => Instruction::ForeignOffset(u32::from_le_bytes(self.take()?)),
@@ -704,8 +803,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::CONVERT_FLOAT_TO_INT => Instruction::ConvertFloatToInt,
         o::CONVERT_INT_TO_RAW_PTR => Instruction::ConvertIntToRawPtr,
         o::CONVERT_RAW_PTR_TO_INT => Instruction::ConvertRawPtrToInt,
-        o::NATIVE_USER_DATA => Instruction::NativeUserData,
-        o::NATIVE_STATE_FREE => Instruction::NativeStateFree,
+        o::NATIVE_STATE_RETAIN => Instruction::NativeStateRetain,
+        o::NATIVE_STATE_RELEASE => Instruction::NativeStateRelease,
         o::RAW_PTR_NULL => Instruction::ConstRawPtrNull,
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,

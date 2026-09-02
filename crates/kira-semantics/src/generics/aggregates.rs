@@ -36,8 +36,8 @@ impl<'a> Analyzer<'a> {
             any_error |= ty == Type::Error;
             resolved.push(ty);
         }
-        let enum_template = self.generic_enums.get(&text).copied();
-        let aggregate_template = self.generic_aggregates.get(&text).copied();
+        let enum_template = self.generic_enum_named(&text);
+        let aggregate_template = self.generic_aggregate_named(&text);
         let trait_template = self
             .traits
             .get(&text)
@@ -224,14 +224,19 @@ impl<'a> Analyzer<'a> {
         };
         self.struct_defaults.push(defaults);
         self.struct_sources.insert(id, template.source());
-        self.generic_instance_templates.insert(id, text.to_owned());
-        self.generic_instance_arguments.insert(
-            id,
-            Instantiation {
-                template: text.to_owned(),
-                arguments: args.to_vec(),
-            },
-        );
+        let module = self.imports.module_of(template.source()).to_owned();
+        self.program.types.structs_mut().set_module(id, &module);
+        self.generic_instance_templates
+            .insert(id, self.template_key(template.source(), text));
+        let instantiation = Instantiation {
+            template: self.template_identity(text, template.source()),
+            arguments: args.to_vec(),
+        };
+        self.program
+            .types
+            .structs_mut()
+            .record_instantiation(id, instantiation.clone());
+        self.generic_instance_arguments.insert(id, instantiation);
         self.own_methods.insert(id, methods.clone());
         if is_class {
             let mut info = ClassInfo {
@@ -315,7 +320,7 @@ impl<'a> Analyzer<'a> {
         let Some(template_name) = self.generic_instance_templates.get(&owner) else {
             return Vec::new();
         };
-        let Some(template) = self.generic_aggregates.get(template_name) else {
+        let Some(template) = self.generic_aggregate_by_key(template_name) else {
             return Vec::new();
         };
         let Some(arguments) = self.generic_instance_arguments.get(&owner) else {
@@ -382,7 +387,7 @@ impl<'a> Analyzer<'a> {
         for entry in declared {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && !self.traits.contains_key(&written_name) {
+                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
                     self.source = source;
                     self.emit(
                         entry.span,
@@ -482,12 +487,12 @@ impl<'a> Analyzer<'a> {
         expected: Option<Type>,
         span: Span,
     ) -> Option<StructId> {
-        let template = self.generic_aggregates.get(name).copied()?;
+        let template = self.generic_aggregate_named(name)?;
         if let Some(Type::Struct(id)) = expected
             && self
                 .generic_instance_templates
                 .get(&id)
-                .is_some_and(|text| text == name)
+                .is_some_and(|key| *key == self.template_key(template.source(), name))
             && explicit.is_empty()
         {
             return Some(id);

@@ -4,6 +4,7 @@
 //! Split from the declaration half because this is the only part that runs per
 //! *call site* rather than per declaration.
 
+use kira_semantics_model::hir::FieldOrder;
 use super::*;
 
 /// Borrowed signature context for lowering one foreign call's arguments.
@@ -11,6 +12,7 @@ struct ForeignArgShape<'a> {
     params: &'a [ForeignTypeSpec],
     wrappers: &'a [Option<StructId>],
     pointees: &'a [Option<kira_semantics_model::hir::ForeignPointee>],
+    distincts: &'a [Option<Type>],
     retained: &'a [bool],
     name: &'a str,
     span: Span,
@@ -42,15 +44,27 @@ impl<'a> Analyzer<'a> {
         // alongside: a single-scalar-field handle struct crosses as its field's
         // scalar, so the Kira side reads that field out of an argument and
         // rebuilds the struct around the result.
-        let (params, param_wrappers, param_pointees, result, result_pointee, result_wrapper, name) = {
+        let (
+            params,
+            param_wrappers,
+            param_pointees,
+            param_distincts,
+            result,
+            result_pointee,
+            result_wrapper,
+            result_distinct,
+            name,
+        ) = {
             let foreign = &self.program.foreign[id.0 as usize];
             (
                 foreign.signature.parameters().to_vec(),
                 foreign.param_wrappers.clone(),
                 foreign.param_pointees.clone(),
+                foreign.param_distincts.clone(),
                 foreign.signature.result(),
                 foreign.result_pointee,
                 foreign.result_wrapper,
+                foreign.result_distinct,
                 foreign.kira_name.clone(),
             )
         };
@@ -104,6 +118,7 @@ impl<'a> Analyzer<'a> {
                     params: &params,
                     wrappers: &param_wrappers,
                     pointees: &param_pointees,
+                    distincts: &param_distincts,
                     retained: &retained,
                     name: &name,
                     span,
@@ -118,11 +133,14 @@ impl<'a> Analyzer<'a> {
         let aggregate_result = result.aggregate().is_some();
         let call_type = match (aggregate_result, result_wrapper) {
             (true, Some(struct_id)) => Type::Struct(struct_id),
-            // A pointer result keeps its target, so the value handed back is the
-            // same type the declaration wrote rather than a bare word.
-            _ => match result_pointee {
-                Some(target) => self.program.types.foreign_ptr_to(target),
-                None => kira_type_for_spec(result),
+            // A `distinct` result is handed back as the type the declaration
+            // wrote, not as the scalar it crossed as. Nothing is rebuilt around
+            // the call — the value already *is* the representation — so this is
+            // one type on the node and no instruction anywhere.
+            _ => match (result_distinct, result_pointee) {
+                (Some(declared), _) => declared,
+                (None, Some(target)) => self.program.types.foreign_ptr_to(target),
+                (None, None) => kira_type_for_spec(result),
             },
         };
         let call = self.program.exprs.alloc(HirExpr::Call {
@@ -135,6 +153,7 @@ impl<'a> Analyzer<'a> {
             Some(struct_id) if !aggregate_result => self.program.exprs.alloc(HirExpr::StructNew {
                 struct_id,
                 fields: vec![call],
+                order: FieldOrder::Declared,
             }),
             _ => call,
         }
@@ -152,6 +171,7 @@ impl<'a> Analyzer<'a> {
             params,
             wrappers: param_wrappers,
             pointees: param_pointees,
+            distincts: param_distincts,
             retained,
             name,
             span,
@@ -159,6 +179,30 @@ impl<'a> Analyzer<'a> {
         let mut seam_args = Vec::with_capacity(arg_hirs.len());
         for (index, &arg) in arg_hirs.iter().enumerate() {
             let actual = self.program.expr(arg).type_of();
+            // A `distinct` parameter is checked on Kira's terms and lowered on
+            // C's: the argument must *be* that type — the representation
+            // underneath does not reach it, which is the whole point — and what
+            // crosses is the scalar, with no wrapper and no conversion.
+            if let Some(declared) = param_distincts.get(index).copied().flatten() {
+                if actual != Type::Error && !actual.assignable_to(declared) {
+                    self.emit(
+                        span,
+                        "KSEM183",
+                        format!(
+                            "argument {} of `{name}` expects `{}`, found `{}`",
+                            index + 1,
+                            self.type_name(declared),
+                            self.type_name(actual)
+                        ),
+                    );
+                }
+                let representation = self.program.types.representation(declared);
+                seam_args.push(self.program.exprs.alloc(HirExpr::Distinct {
+                    value: arg,
+                    ty: representation,
+                }));
+                continue;
+            }
             match param_wrappers[index] {
                 Some(struct_id) => {
                     if actual != Type::Error && actual != Type::Struct(struct_id) {

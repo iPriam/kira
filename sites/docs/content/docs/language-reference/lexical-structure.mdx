@@ -1,20 +1,27 @@
 ---
 title: Lexical Structure
-description: Comments, identifiers, keywords and contextual identifiers, punctuation, literals, string escapes, and statement terminators.
+description: Source encoding, comments, identifiers, keywords and contextual identifiers, punctuation, literals, string escapes, and how statements and lists are delimited.
 ---
+
+## Source text
+
+A source file is UTF-8. A leading byte-order mark is accepted and skipped; a byte-order mark anywhere else is `KLEX006`.
+
+Newlines are whitespace everywhere outside a string literal or a comment. Nothing in the grammar is line-sensitive: a statement, a declaration, or a list element may be split across lines or share a line with its neighbour.
 
 ## Comments
 
 ```kira
 // a line comment
 /// a documentation comment
+/* a block comment /* that nests */ and continues here */
 ```
 
-Consecutive `///` lines immediately above a declaration are its documentation. The lexer treats every comment as trivia, so a comment never reaches the parser.
+Consecutive `///` lines immediately above a declaration are its documentation. A block comment nests: every `/*` inside one opens another that its own `*/` closes. A block comment still open at the end of the file is `KLEX004`. The lexer treats every comment as trivia, so a comment never reaches the parser.
 
 ## Identifiers
 
-An identifier begins with a letter or `_` and continues with letters, digits, or `_`. A qualified name is dot-separated: `Geo.Point`, `FFI.Pointer`, `bindings.callbacks`.
+An identifier begins with a letter or `_` and continues with letters, digits, or `_`. Identifiers are case-sensitive and compared byte for byte, without Unicode normalization. A qualified name is dot-separated: `Geo.Point`, `FFI.Pointer`, `bindings.callbacks`.
 
 ## Keywords
 
@@ -24,10 +31,10 @@ These are reserved and cannot be used as names:
 function  let     var       return    if      else    while
 true      false   import    as        struct  enum    class
 construct trait   extends   override  match   attempt try
-for       in      break     continue  type
+for       in      break     continue  type    distinct  is
 ```
 
-`handle` is deliberately absent: it is recognized contextually after an `attempt` block and stays usable as a name everywhere else.
+`handle` is deliberately absent: it is recognized contextually after an `attempt` block and stays usable as a name everywhere else. There is no raw-identifier spelling: a keyword can never be a name.
 
 ## Contextual Identifiers
 
@@ -43,12 +50,12 @@ init  requires  lifecycle  self  For
 ## Punctuation and Operators
 
 ```text
-@  (  )  {  }  [  ]  ;  ,  :  .  ..  =  ->  ?
+@  (  )  {  }  [  ]  ,  :  .  ..  =  ->  ?
 !  ~  +  -  *  /  %  <<  >>  &  |  ^
 ==  !=  <  <=  >  >=  &&  ||
 ```
 
-`..` appears only in a `for` header. `#` is not a token of the language: `#{ … }` is read out of the raw source inside a macro `quote`, and a `#` anywhere else is an unknown character.
+`..` appears only in a `for` header. `#` is not a token of the language: `#{ … }` is read out of the raw source inside a macro `quote`, and a `#` anywhere else is an unknown character. `;` is not a token either: Kira has no statement terminator, and a `;` is `KLEX005`.
 
 ## Literals
 
@@ -67,8 +74,22 @@ A string literal resolves seven escapes:
 | `\\` | a backslash |
 | `\` before a newline | nothing: the literal continues on the next line |
 
-A backslash before anything else is `KLEX003` rather than the character itself.
+A backslash before anything else is `KLEX003`, and the literal never reaches semantic analysis: no guessed-at text stands in for it.
 
-## Terminators
+## Delimiters
 
-A statement ends at a newline or at a `;`. Both are accepted everywhere, and enum variants are separated by newlines or spaces rather than commas. Array and argument list commas are optional where a newline separates the elements.
+There are no statement terminators. A statement ends where the grammar says it does: `let a = 1 print(a)` is two statements whether it is written on one line or two, and an expression continues across a line break when the next token can continue it, so `5` followed by `-2` on the next line is the subtraction `5 - 2`.
+
+Elements of a list are separated by commas, and a trailing comma is allowed:
+
+- argument and parameter lists;
+- array literals;
+- struct-literal field initializers;
+- generic argument and parameter lists;
+- the fields of an `@FFI.*` or `@Export` annotation block.
+
+Two elements with nothing between them are an error at the second one (`KPAR002`), whatever whitespace separates them. Declarations and members, which each begin with a keyword or annotation, need no separator: struct members, enum variants, trait requirements, and match arms follow one another directly.
+
+A bodyless function (`@FFI.Extern`, `@FFI.Syscall`, a trait requirement, an `@Required` member) ends with its signature.
+
+Every `var` and `let` binding is written with its initializer: `var count = 0`. A binding without one is `KPAR011`.

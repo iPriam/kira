@@ -49,6 +49,9 @@ enum KiraError {
     KLEX001
     KLEX002
     KLEX003
+    KLEX004
+    KLEX005
+    KLEX006
     KPAR001
     KPAR002
     KPAR003
@@ -171,7 +174,6 @@ enum KiraError {
     KSEM113
     KSEM114
     KSEM115
-    KSEM116
     KSEM117
     KSEM118
     KSEM119
@@ -209,6 +211,16 @@ enum KiraError {
     KSEM151
     KSEM152
     KSEM153
+    KSEM350
+    KSEM352
+    KSEM353
+    KSEM354
+    KSEM356
+    KSEM357
+    KSEM358
+    KSEM359
+    KSEM360
+    KSEM361
     KSL011
     KSL012
     KSL013
@@ -274,10 +286,4 @@ enum KiraError {
     // Not a diagnostic code: what `kiraErrorFromCode` answers for a code this
     // enum does not list, so reading a diagnostic is total.
     Unrecognized
-}
-
-struct KiraDiagnostic {
-    let code: KiraError
-    let title: String
-    let message: String
 }

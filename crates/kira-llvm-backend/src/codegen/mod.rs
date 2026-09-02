@@ -45,7 +45,6 @@ mod syscall;
 mod target;
 mod types;
 mod values;
-mod widening;
 
 use kira_backend_api::NativeTarget;
 use kira_ir::IrProgram;
@@ -203,10 +202,6 @@ pub(crate) struct Codegen<'a> {
     /// The slots a copy or drop site hands its value to the leaf in, one pair
     /// per `(function, type)`. See [`glue`].
     scratch_slots: glue::ScratchSlots,
-    /// The rebuild that carries one generic instantiation into another, one per
-    /// `(from, to)`. `None` records a pair that needs no rebuild at all, so the
-    /// answer is computed once either way. See [`widening`].
-    widen_leaves: HashMap<(Type, Type), Option<Callable>>,
     /// Encode/decode leaves used by generic callback-state array conversion.
     native_state_leaves: HashMap<(Type, StateLeaf), LLVMValueRef>,
     /// Encode/decode helpers for payload-carrying enum callback state.

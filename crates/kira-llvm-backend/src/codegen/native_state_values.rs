@@ -41,6 +41,10 @@ fn no_node_form(ty: Type) -> LlvmError {
         // State inside state: the inner token names a box in a store the outer
         // value knows nothing about.
         Type::NativeState(_) => "native callback state inside native callback state",
+        // `kira-ir` rewrites a distinct type to the scalar it is before a
+        // backend runs, so one here means that pass was skipped rather than
+        // that the shape has no node form — the scalar underneath has one.
+        Type::Distinct(_) => "a distinct type that lowering did not erase",
         // Lowering only ever runs on a program that type-checked.
         _ => "a program that failed to type-check",
     })
@@ -143,6 +147,7 @@ impl Codegen<'_> {
             Type::Any => self.encode_any_node_through_leaf(value)?,
             Type::Void
             | Type::Error
+            | Type::Distinct(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)
             | Type::NativeState(_) => {
@@ -235,6 +240,7 @@ impl Codegen<'_> {
             Type::Any => self.decode_any_node_through_leaf(node)?,
             Type::Void
             | Type::Error
+            | Type::Distinct(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)
             | Type::NativeState(_) => {

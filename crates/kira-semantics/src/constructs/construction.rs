@@ -9,7 +9,7 @@
 //! a struct literal produces, so every backend runs a constructed widget — its
 //! children included — unchanged.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt};
+use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt, FieldOrder};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
@@ -282,6 +282,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
+            order: FieldOrder::Declared,
         })
     }
 

@@ -173,13 +173,16 @@ impl IrProgram {
                 .get(*slot as usize)
                 .copied()
                 .unwrap_or(Type::Error),
-            IrExpr::Unary { op, .. } => match op {
-                IrUnOp::NegInt => Type::INT,
+            IrExpr::Unary { op, ty, .. } => match op {
+                IrUnOp::NegInt => *ty,
                 IrUnOp::NegFloat => Type::FLOAT,
                 IrUnOp::Not => Type::Bool,
                 IrUnOp::BitNot => Type::INT,
             },
-            IrExpr::Binary { op, .. } => binop_result(*op),
+            IrExpr::Binary { op, ty, .. } => match binop_result(*op) {
+                Type::INT => *ty,
+                other => other,
+            },
             IrExpr::Call { result, .. } => *result,
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             IrExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
@@ -201,19 +204,22 @@ impl IrProgram {
             | IrExpr::StringOperation { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
+            IrExpr::TypeTest { .. } => Type::Bool,
+            IrExpr::TypeCast { ty, .. } => *ty,
             IrExpr::ConstantGet { ty, .. } => *ty,
+            IrExpr::StringCharAt { .. } => Type::Int(kira_semantics_model::IntSpelling::U8),
             IrExpr::ArrayLen { .. }
             | IrExpr::StringLen { .. }
-            | IrExpr::StringCharAt { .. }
             | IrExpr::StringIndexOf { .. }
             | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::StringSubstring { .. } | IrExpr::StringOf { .. } => Type::String,
             IrExpr::CStringNew { .. } | IrExpr::CLayoutAddress { .. } => Type::CBlock,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::IntoAny { .. } => Type::Any,
-            IrExpr::Widen { to, .. } => *to,
             IrExpr::MainThreadCall { ty, .. } | IrExpr::MainThreadJoin { ty, .. } => *ty,
-            IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
+            IrExpr::ArrayAppend { .. }
+            | IrExpr::NativeStateRetain { .. }
+            | IrExpr::NativeStateRelease { .. } => Type::Void,
             // Every primitive answers with one machine word, spelled `Int`.
             IrExpr::TaskOp { .. } => Type::INT,
         }
@@ -257,6 +263,9 @@ fn binop_result(op: IrBinOp) -> Type {
         IrBinOp::AddInt
         | IrBinOp::SubInt
         | IrBinOp::MulInt
+        | IrBinOp::WrappingAddInt
+        | IrBinOp::WrappingSubInt
+        | IrBinOp::WrappingMulInt
         | IrBinOp::DivInt
         | IrBinOp::RemInt
         | IrBinOp::DivUInt

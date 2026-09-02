@@ -264,6 +264,17 @@ impl Analyzer<'_> {
             | Type::String
             | Type::Void
             | Type::Error => true,
+            // A distinct type crosses as the representation it is. The wrapper
+            // a consumer generates names that scalar, because that is the whole
+            // of what leaves the boundary — the nominal half of a distinct type
+            // is a Kira-side fact, and no exported C prototype has a place to
+            // keep it.
+            Type::Distinct(_) => self.check_export_type(
+                self.program.types.representation(ty),
+                span,
+                position,
+                exported_classes,
+            ),
             // The C-seam types belong to the `@FFI.Extern` import direction, not
             // the `@Export` boundary: `RawPtr` is an opaque host word Kira never
             // interprets, and `CString` is borrowed C storage with no owned

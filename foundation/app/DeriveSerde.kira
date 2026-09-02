@@ -157,8 +157,29 @@ function __kira_deser_unquote(s: borrow String) -> String {
 
 comptime macro Serializable {
     kind { derive }
-    appliesTo { struct enum }
+    appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
+        // A distinct type writes the representation it is, and nothing around
+        // it. Not `TabId{raw=7}`: the type is one scalar word, so wrapping it
+        // in a struct envelope would put a Kira-side nominal fact on a wire
+        // that has no place to keep it and would make every reader parse a
+        // shape that carries no information. `7` round-trips, and a reader
+        // that wanted a `TabId` asked `deserialize_TabId` for one.
+        if target.kind == .Distinct {
+            for field in target.fields {
+                if field.type == "RawPtr" {
+                    Diagnostics.error(
+                        "Derive(Serializable): a distinct type over `RawPtr` has nothing to write — an opaque foreign word is an address, and it means nothing in another process or another run",
+                        at: target.syntax
+                    )
+                }
+            }
+            return quote {
+                function serialize_#{target.name}(v: borrow #{target.name}) -> String {
+                    return String(v.raw)
+                }
+            }
+        }
         // An enum writes the variant it holds by NAME — `Tool.Rotate` — and a
         // payload in parentheses after it. The name is the point: an ordinal
         // would make the wire format depend on declaration ORDER, so inserting a
@@ -168,7 +189,7 @@ comptime macro Serializable {
             for variant in target.fields {
                 var head: String = target.name.asString() + "." + variant.name.asString()
                 if variant.type.asSyntax() == "" {
-                    arms.append(quote { #{variant.name} -> return #{head}; })
+                    arms.append(quote { #{variant.name} -> return #{head} })
                 } else {
                     var isNumScalar: Bool = false
                     for sname in ["Int", "Float", "Bool", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "F32", "CBool"] {
@@ -178,16 +199,16 @@ comptime macro Serializable {
                     }
                     if isNumScalar {
                         arms.append(quote {
-                            #{variant.name}(payload) -> return #{head} + "(" + String(payload) + ")";
+                            #{variant.name}(payload) -> return #{head} + "(" + String(payload) + ")"
                         })
                     } else {
                         if variant.type == "String" {
                             arms.append(quote {
-                                #{variant.name}(payload) -> return #{head} + "(\"" + payload + "\")";
+                                #{variant.name}(payload) -> return #{head} + "(\"" + payload + "\")"
                             })
                         } else {
                             arms.append(quote {
-                                #{variant.name}(payload) -> return #{head} + "(" + serialize_#{variant.type.asSyntax()}(payload) + ")";
+                                #{variant.name}(payload) -> return #{head} + "(" + serialize_#{variant.type.asSyntax()}(payload) + ")"
                             })
                         }
                     }
@@ -250,8 +271,53 @@ comptime macro Serializable {
 
 comptime macro Deserializable {
     kind { derive }
-    appliesTo { struct enum }
+    appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
+        // The exact inverse of the distinct writer: read the representation and
+        // build the type by calling it. `TabId(...)` rather than a brace
+        // literal, because calling it is the one way into a distinct type — and
+        // an integer literal reaches any integer width, so a representation of
+        // `U32` needs no conversion between the parse and the construction.
+        if target.kind == .Distinct {
+            // Written as two whole function bodies rather than one body with an
+            // interpolated argument: a `#{...}` in argument position splices as
+            // a statement, which would turn `TabId(parse(s))` into a bare
+            // `TabId` and a stray call. The enum branch below carries the same
+            // rule for the same reason.
+            var body: Syntax = quote {
+                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                    return #{target.name}(__kira_deser_int(s))
+                }
+            }
+            for field in target.fields {
+                if field.type == "Float" {
+                    Diagnostics.error(
+                        "Derive(Deserializable): a distinct type over `Float` is not supported — there is no lossless Float parser, so derive Serializable only, or declare the type over an Int width",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "F32" {
+                    Diagnostics.error(
+                        "Derive(Deserializable): a distinct type over `F32` is not supported — there is no lossless Float parser, so derive Serializable only, or declare the type over an Int width",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "RawPtr" {
+                    Diagnostics.error(
+                        "Derive(Deserializable): a distinct type over `RawPtr` cannot be read back — an opaque foreign word is an address, and it means nothing in another process or another run",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "Bool" {
+                    body = quote {
+                        function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                            return #{target.name}(__kira_deser_bool(s))
+                        }
+                    }
+                }
+            }
+            return body
+        }
         // The inverse of the enum writer: validate `TypeName.`, read the variant
         // name up to `(` or the end, and rebuild that variant — carving the
         // payload out of the parentheses when there is one. An unknown name is a

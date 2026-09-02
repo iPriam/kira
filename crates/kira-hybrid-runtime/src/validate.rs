@@ -29,7 +29,7 @@ fn describe_entry(entry: Option<u32>) -> String {
 /// Proves `manifest` and `module` describe the same program.
 pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError> {
     // The bytecode half may carry helpers of its own after the program's
-    // functions — the widen rebuilds — so the manifest describes a *prefix*.
+    // functions, so the manifest describes a *prefix*.
     // The count is still exact: the helpers are declared in the manifest, so a
     // stale half carrying a function neither side described is still caught.
     let described = manifest.functions.len() + manifest.internal_functions as usize;

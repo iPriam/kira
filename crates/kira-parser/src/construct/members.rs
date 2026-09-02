@@ -181,7 +181,7 @@ impl Parser<'_> {
         self.bump(); // `requires`
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -220,7 +220,7 @@ impl Parser<'_> {
         self.bump(); // `lifecycle`
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -308,7 +308,6 @@ impl Parser<'_> {
             );
             self.parse_block();
         }
-        self.eat(TokenKind::Semicolon);
         let span = Span::from_bounds(start.start, self.previous_end());
         body.methods.push(ConstructMethod {
             computed: false,

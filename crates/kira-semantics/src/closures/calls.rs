@@ -1,9 +1,7 @@
 //! Calling a closure value, and finishing the desugar once analysis is done.
 
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirStmtId,
-    HirWriteback, LocalId, TaskTarget,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirStmtId,
+    FieldOrder, HirWriteback, LocalId, TaskTarget,};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::ExprId;
@@ -245,6 +243,7 @@ impl Analyzer<'_> {
                     execution: kira_semantics_model::Execution::Inherited,
                     mutates_self: false,
                     name_span: Span::new(0, 0),
+                    signature: CallableSignature::synthesized(&[], Type::Void),
                 });
             }
         }
@@ -405,6 +404,15 @@ impl Analyzer<'_> {
         if visiting.contains(&ty) {
             return None;
         }
+        // A distinct type's placeholder is its representation's, crossed into
+        // the distinct type — the same value with the type the slot declares.
+        // Built here rather than as an arm below because the crossing wraps a
+        // node that has to exist first.
+        if let Type::Distinct(_) = ty {
+            let representation = self.program.types.representation(ty);
+            let value = self.default_value_inside(representation, visiting)?;
+            return Some(self.program.exprs.alloc(HirExpr::Distinct { value, ty }));
+        }
         let node = match ty {
             Type::Float(_) => HirExpr::Float(0.0),
             Type::Bool => HirExpr::Bool(false),
@@ -433,6 +441,7 @@ impl Analyzer<'_> {
                 HirExpr::StructNew {
                     struct_id: id,
                     fields,
+                    order: FieldOrder::Declared,
                 }
             }
             Type::Enum(id) => {
@@ -489,7 +498,10 @@ impl Analyzer<'_> {
             // type this could pick without the type system having chosen one.
             // A capture slot of type `Any` is filled by the erasure that put a
             // value there, never by a placeholder.
-            Type::Int(_)
+            // A distinct type is answered above, before the match, because its
+            // placeholder wraps one that has to exist first.
+            Type::Distinct(_)
+            | Type::Int(_)
             | Type::Void
             | Type::Error
             | Type::RawPtr
@@ -567,6 +579,7 @@ impl Analyzer<'_> {
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self: false,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::synthesized(&[], Type::Void),
             };
         };
         let execution = self.dispatcher_execution(&impls);
@@ -657,6 +670,7 @@ impl Analyzer<'_> {
             execution,
             mutates_self: false,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], result),
         }
     }
 }

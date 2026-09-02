@@ -55,7 +55,7 @@ comptime macro Tagged {
             // Matching it needs no payload binding: the code is the position,
             // and a payload does not change it.
             toCode.append(quote {
-                #{variant.name} -> return #{index};
+                #{variant.name} -> return #{index}
             })
             fromCode.append(quote {
                 if id == #{index} {

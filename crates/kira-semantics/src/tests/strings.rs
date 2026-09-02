@@ -42,7 +42,12 @@ fn each_primitive_has_its_own_type() {
         .collect();
     assert_eq!(
         types,
-        vec![Type::INT, Type::String, Type::INT, Type::String],
+        vec![
+            Type::Int(kira_semantics_model::IntSpelling::U8),
+            Type::String,
+            Type::INT,
+            Type::String
+        ],
         "{types:?}"
     );
 }

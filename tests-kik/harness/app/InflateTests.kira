@@ -49,41 +49,41 @@ function inflateShortened(stream: borrow [U8], count: Int) -> [U8] {
 
 construct InflateStoredBlocks() extends Test {
     test { return inflateOutcome(inflateStoredStream()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(698935781); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(698935781) return e }
 }
 
 construct InflateStoredBlocksLength() extends Test {
     test { return inflateSize(inflateStoredStream()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(405); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(405) return e }
 }
 
 construct InflateFixedTables() extends Test {
     test { return inflateOutcome(inflateFixedStream()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(881232256); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(881232256) return e }
 }
 
 // The one that reads back references reaching thousands of bytes into what it
 // has already produced, and a table it had to build first.
 construct InflateDynamicTables() extends Test {
     test { return inflateOutcome(inflateDynamicStream()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(927257648); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(927257648) return e }
 }
 
 construct InflateDynamicTablesLength() extends Test {
     test { return inflateSize(inflateDynamicStream()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4436); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4436) return e }
 }
 
 // A stream that stops in the middle says so, rather than handing back what it
 // managed — the caller asked for a whole thing.
 construct InflateTruncatedStreamIsReported() extends Test {
     test { return inflateOutcome(inflateShortened(inflateDynamicStream(), 200)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 // The two header bytes carry a check value, and bytes that are not a zlib
 // stream fail it before a single block is read.
 construct InflateRejectsANonStream() extends Test {
     test { return inflateOutcome([9, 9, 9, 9, 9, 9, 9, 9]) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }

@@ -98,37 +98,37 @@ function strxLblFor(i: Int) -> StrxLbl {
 
 construct StrxLitA() extends Test {
     test { return "a".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct StrxLitHello() extends Test {
     test { return "hello".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxLitEmpty() extends Test {
     test { return "".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct StrxLitTen() extends Test {
     test { return "abcdefghij".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StrxLitKira() extends Test {
     test { return "kira".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct StrxLitSpace() extends Test {
     test { return "hello world".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 construct StrxLitTwelve() extends Test {
     test { return "123456789012".count }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,12 +137,12 @@ construct StrxLitTwelve() extends Test {
 
 construct StrxBorLitXyz() extends Test {
     test { return strxBorLen("xyz") }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct StrxBorLitEmpty() extends Test {
     test { return strxBorLen("") }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct StrxBorVar() extends Test {
@@ -150,7 +150,7 @@ construct StrxBorVar() extends Test {
         let s = "reuse"
         return strxBorLen(s)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxBorVarTwice() extends Test {
@@ -161,12 +161,12 @@ construct StrxBorVarTwice() extends Test {
         return out
     }
     // 2 + 2 = 4
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct StrxBorSix() extends Test {
     test { return strxBorLen("abcdef") }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct StrxBorMixed() extends Test {
@@ -176,7 +176,7 @@ construct StrxBorMixed() extends Test {
         return out
     }
     // 2 + 3 = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ construct StrxBorMixed() extends Test {
 
 construct StrxMvLit() extends Test {
     test { return strxMvLen(move "consume") }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct StrxMvVar() extends Test {
@@ -193,7 +193,7 @@ construct StrxMvVar() extends Test {
         let s = "transfer"
         return strxMvLen(move s)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ construct StrxPkApple() extends Test {
         return s.count
     }
     // "apple" = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxPkGo() extends Test {
@@ -215,7 +215,7 @@ construct StrxPkGo() extends Test {
         return s.count
     }
     // "go" = 2
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct StrxPkThreeStr() extends Test {
@@ -224,7 +224,7 @@ construct StrxPkThreeStr() extends Test {
         return s.count
     }
     // "three" = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxPkBy() extends Test {
@@ -233,7 +233,7 @@ construct StrxPkBy() extends Test {
         return s.count
     }
     // "by" = 2
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct StrxPkX() extends Test {
@@ -242,7 +242,7 @@ construct StrxPkX() extends Test {
         return s.count
     }
     // "x" = 1
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct StrxPkWrap() extends Test {
@@ -251,7 +251,7 @@ construct StrxPkWrap() extends Test {
         return s.count
     }
     // 5 % 5 = 0 -> "apple" = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxPkBorBound() extends Test {
@@ -260,7 +260,7 @@ construct StrxPkBorBound() extends Test {
         return strxBorLen(s)
     }
     // "three" = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxPkLoop20() extends Test {
@@ -275,7 +275,7 @@ construct StrxPkLoop20() extends Test {
         return total
     }
     // 4 periods of 15 = 60
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct StrxPkLoop40() extends Test {
@@ -290,13 +290,13 @@ construct StrxPkLoop40() extends Test {
         return total
     }
     // 8 periods of 15 = 120
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 // Return a String from the test block directly
 construct StrxRetHello() extends Test {
     test { return "hello" }
-    expect { let e: Result<String, TestFailure> = .Ok("hello"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("hello") return e }
 }
 
 construct StrxRetPk0() extends Test {
@@ -304,7 +304,7 @@ construct StrxRetPk0() extends Test {
         let s = strxPk(0)
         return s
     }
-    expect { let e: Result<String, TestFailure> = .Ok("apple"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("apple") return e }
 }
 
 construct StrxRetPk3() extends Test {
@@ -312,7 +312,7 @@ construct StrxRetPk3() extends Test {
         let s = strxPk(3)
         return s
     }
-    expect { let e: Result<String, TestFailure> = .Ok("by"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("by") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ construct StrxBoxNameLen() extends Test {
         return b.name.count
     }
     // "test" = 4
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct StrxBoxMethod() extends Test {
@@ -334,7 +334,7 @@ construct StrxBoxMethod() extends Test {
         return b.nameLen()
     }
     // "hello" = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxBoxCoded() extends Test {
@@ -343,7 +343,7 @@ construct StrxBoxCoded() extends Test {
         return b.coded()
     }
     // 99 + 1 = 100
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct StrxBoxBorFn() extends Test {
@@ -352,7 +352,7 @@ construct StrxBoxBorFn() extends Test {
         return strxBoxBor(b)
     }
     // 3 + 7 = 10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StrxBoxMutCode() extends Test {
@@ -366,7 +366,7 @@ construct StrxBoxMutCode() extends Test {
         return b.code
     }
     // 10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct StrxBoxNamePersist() extends Test {
@@ -376,7 +376,7 @@ construct StrxBoxNamePersist() extends Test {
         return b.name.count
     }
     // "hello" = 5 (name not changed)
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxBoxCopyIndep() extends Test {
@@ -387,7 +387,7 @@ construct StrxBoxCopyIndep() extends Test {
         return b.code
     }
     // original unchanged = 5
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct StrxBoxLoopBuild() extends Test {
@@ -403,7 +403,7 @@ construct StrxBoxLoopBuild() extends Test {
         return total
     }
     // 1 period: 5+2+5+2+1 = 15
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct StrxBoxLoopAcc() extends Test {
@@ -419,6 +419,6 @@ construct StrxBoxLoopAcc() extends Test {
         return acc
     }
     // i=0..7: nameLen=5,2,5,2,1,5,2,5 sum=27; code=0+1+2+3+4+5+6+7=28; total=55
-    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(55) return e }
 }
 

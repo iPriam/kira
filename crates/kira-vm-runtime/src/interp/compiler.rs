@@ -2,11 +2,19 @@
 //!
 //! The VM compiles nothing itself — it sits below the compiler in the layering
 //! and could never hold one. It pops the request array, reads it as a
-//! [`CheckRequest`], and hands that to the host, exactly as it hands a
-//! [`FileRequest`](kira_runtime_abi::FileRequest) to the same host. A host that
-//! links the frontend answers; one that does not says so by name.
+//! [`CheckRequest`] or a [`ToolRequest`], and hands that to the host, exactly
+//! as it hands a [`FileRequest`](kira_runtime_abi::FileRequest) to the same
+//! host. A host that links the frontend answers; one that does not says so by
+//! name.
+//!
+//! Which of the two request layouts an operation carries follows from the
+//! operation alone: [`CompilerOp::verb`] names one for the three that work on a
+//! package on disk, and none for the in-memory check. Both directions are
+//! `[String]`, so everything after the decode is the same code.
 
-use kira_runtime_abi::{CheckDiagnostic, CheckRequest, CompilerOp};
+use kira_runtime_abi::{
+    CheckDiagnostic, CheckRequest, CompilerOp, ToolAnswer, ToolRequest,
+};
 
 use super::Vm;
 use crate::error::VmError;
@@ -26,8 +34,8 @@ impl Vm<'_> {
         for operand in operands {
             self.heap.drop_value(operand);
         }
-        let diagnostics = result?;
-        let value = self.diagnostics_value(&diagnostics);
+        let fields = result?;
+        let value = self.string_array_value(&fields);
         self.stack.push(value);
         Ok(())
     }
@@ -40,15 +48,21 @@ impl Vm<'_> {
         &mut self,
         op: CompilerOp,
         operands: &[Value],
-    ) -> Result<Vec<CheckDiagnostic>, VmError> {
-        match op {
-            CompilerOp::CheckPackages => {
-                let fields = self.string_array(operands.first())?;
-                let request = CheckRequest::decode(&fields)
-                    .map_err(|error| VmError::Compiler(error.into()))?;
-                self.host.compiler(&request).map_err(VmError::Compiler)
-            }
-        }
+    ) -> Result<Vec<String>, VmError> {
+        let fields = self.string_array(operands.first())?;
+        let Some(verb) = op.verb() else {
+            let request =
+                CheckRequest::decode(&fields).map_err(|error| VmError::Compiler(error.into()))?;
+            let diagnostics = self.host.compiler(&request).map_err(VmError::Compiler)?;
+            return Ok(CheckDiagnostic::encode(&diagnostics));
+        };
+        let request =
+            ToolRequest::decode(&fields).map_err(|error| VmError::Toolchain(error.into()))?;
+        let answer: ToolAnswer = self
+            .host
+            .toolchain(verb, &request)
+            .map_err(VmError::Toolchain)?;
+        Ok(answer.encode())
     }
 
     /// Reads a `[String]` operand out of the heap as owned text.
@@ -69,11 +83,11 @@ impl Vm<'_> {
             .collect()
     }
 
-    /// Turns the host's diagnostics into the `[String]` the instruction pushes.
-    fn diagnostics_value(&mut self, diagnostics: &[CheckDiagnostic]) -> Value {
-        let elements: Vec<Value> = CheckDiagnostic::encode(diagnostics)
-            .into_iter()
-            .map(|field| Value::Str(self.heap.alloc(field)))
+    /// Turns the host's answer into the `[String]` the instruction pushes.
+    fn string_array_value(&mut self, fields: &[String]) -> Value {
+        let elements: Vec<Value> = fields
+            .iter()
+            .map(|field| Value::Str(self.heap.alloc(field.clone())))
             .collect();
         Value::Array(self.heap.alloc_array(elements))
     }

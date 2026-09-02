@@ -99,7 +99,7 @@ function main() {
 fn an_element_read_copies_the_arrays_inside_the_element() {
     let output = assert_parity(
         r#"
-struct Node { var name: String; var tags: [String] }
+struct Node { var name: String var tags: [String] }
 
 @Main
 function main() {

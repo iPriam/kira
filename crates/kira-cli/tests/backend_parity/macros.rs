@@ -488,14 +488,14 @@ comptime macro MwsPropertyWrapper {
                 accessors.append(quote {
                     function __pw_#{target.name}_get_#{field.name}() -> #{field.type.asSyntax()} {
                         let backing = __pw_#{target.name}_#{field.name} {
-                            wrappedValue: #{field.initializer}
+                            wrappedValue: #{field.initializer},
                             key: #{target.name.asString() + "." + field.name.asString()}
                         }
                         return backing.get()
                     }
                     function __pw_#{target.name}_set_#{field.name}(value: #{field.type.asSyntax()}) {
                         let backing = __pw_#{target.name}_#{field.name} {
-                            wrappedValue: #{field.initializer}
+                            wrappedValue: #{field.initializer},
                             key: #{target.name.asString() + "." + field.name.asString()}
                         }
                         backing.set(move value)

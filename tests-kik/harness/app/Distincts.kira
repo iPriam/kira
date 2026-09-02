@@ -1,0 +1,133 @@
+// `distinct Name = Representation`: nominal types over one scalar word,
+// exercised through folds so the kik harness catches a regression in the
+// erasure on any executable backend.
+//
+// Two declarations over one representation are the shape worth covering: a
+// `type` alias could express neither of them, because both would be `U32` and a
+// value of one would go where the other was expected.
+
+import Foundation
+
+distinct DistinctTabId = U32
+distinct DistinctBookmarkId = U32
+distinct DistinctMillis = U64
+distinct DistinctTicks = DistinctMillis
+
+@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+distinct DistinctPort = U32
+
+struct DistinctTab {
+    var id: DistinctTabId
+    var title: String
+}
+
+function distinctTabIndex(id: DistinctTabId) -> Int {
+    return Int(id.raw)
+}
+
+function distinctBookmarkIndex(id: DistinctBookmarkId) -> Int {
+    return Int(id.raw)
+}
+
+// A chain names the scalar at its end, not the link next to it: `DistinctTicks`
+// is built from a `U64` and `raw` reads one back, so a chain costs a reader no
+// extra unwrap however long it is.
+function distinctTickCount(value: DistinctTicks) -> Int {
+    return Int(value.raw)
+}
+
+function distinctTabSum(ids: borrow [DistinctTabId]) -> Int {
+    var total = 0
+    for id in ids {
+        total = total + distinctTabIndex(id)
+    }
+    return total
+}
+
+function distinctBuildTab(index: Int, title: String) -> DistinctTab {
+    return DistinctTab { id: DistinctTabId(index), title: move title }
+}
+
+// One fold over every position a distinct type reaches: a parameter, a local,
+// a struct field, an array element, and an equality test.
+function distinctsSection() -> Int {
+    let first = DistinctTabId(U32(3))
+    let second = DistinctTabId(U32(4))
+    var score = distinctTabIndex(first) * 100
+
+    if first == second {
+        score = score + 1
+    }
+    if first == DistinctTabId(U32(3)) {
+        score = score + 10
+    }
+
+    var ids: [DistinctTabId] = []
+    ids.append(first)
+    ids.append(second)
+    score = score + distinctTabSum(ids)
+
+    let tab = distinctBuildTab(9, "notes")
+    score = score + distinctTabIndex(tab.id) * 1000 + tab.title.count
+
+    score = score + distinctBookmarkIndex(DistinctBookmarkId(U32(2)))
+    score = score + distinctTickCount(DistinctTicks(U64(5)))
+    return score
+}
+
+// The derives, folded the same way: each answer is a number so a backend that
+// generated a different function shows up as a different total.
+function distinctDerivesSection() -> Int {
+    let port = DistinctPort(U32(41))
+    let copied = clone_DistinctPort(port)
+    var score = 0
+    if eq_DistinctPort(port, copied) {
+        score = score + 1
+    }
+    if eq_DistinctPort(port, DistinctPort(U32(42))) {
+        score = score + 10
+    }
+    if hash_DistinctPort(port) == hash_DistinctPort(copied) {
+        score = score + 100
+    }
+    if hash_DistinctPort(port) == hash_DistinctPort(DistinctPort(U32(42))) {
+        score = score + 1000
+    }
+    if lt_DistinctPort(port, DistinctPort(U32(42))) {
+        score = score + 10000
+    }
+    if lt_DistinctPort(DistinctPort(U32(42)), port) {
+        score = score + 100000
+    }
+    return score
+}
+
+// The wire form is the representation and nothing around it, and the round trip
+// is the identity.
+function distinctSerdeSection() -> Int {
+    let port = DistinctPort(U32(8080))
+    let wire = serialize_DistinctPort(port)
+    var score = wire.count
+    if wire == "8080" {
+        score = score + 10
+    }
+    if eq_DistinctPort(deserialize_DistinctPort(wire), port) {
+        score = score + 100
+    }
+    return score
+}
+
+// `Option<Value>` over a distinct type: an ordinary generic enum, matched the
+// ordinary way.
+function distinctOptionIndex(selected: borrow Option<DistinctTabId>) -> Int {
+    match selected {
+        Some(id) -> return distinctTabIndex(id)
+        None -> return 0 - 1
+    }
+}
+
+function distinctOptionSection() -> Int {
+    let found: Option<DistinctTabId> = .Some(DistinctTabId(U32(6)))
+    let missing: Option<DistinctTabId> = .None
+    return distinctOptionIndex(found) * 10 + distinctOptionIndex(missing)
+}

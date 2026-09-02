@@ -218,7 +218,21 @@ impl<'a> Analyzer<'a> {
     /// names.
     ///
     /// [`HirProgram::constants`]: kira_semantics_model::hir::HirProgram
+    /// Analyzes one constant in its own file, leaving the current file as it
+    /// was: a constant is analyzed on first read, from whatever file was
+    /// reading it, and that file's own names must still resolve afterwards.
     fn analyze_constant(&mut self, slot: u32, source: SourceId, declaration: &ConstantDecl) {
+        let here = self.source;
+        self.analyze_constant_in_file(slot, source, declaration);
+        self.source = here;
+    }
+
+    fn analyze_constant_in_file(
+        &mut self,
+        slot: u32,
+        source: SourceId,
+        declaration: &ConstantDecl,
+    ) {
         self.source = source;
         let name = self.interner.resolve(declaration.name).to_owned();
         let declared = declaration
@@ -310,6 +324,7 @@ impl<'a> Analyzer<'a> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span,
+            signature: kira_semantics_model::hir::CallableSignature::synthesized(&[], ty),
         };
         self.fill_synth(id, function);
     }

@@ -159,6 +159,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
+            order: FieldOrder::Declared,
         })
     }
 }

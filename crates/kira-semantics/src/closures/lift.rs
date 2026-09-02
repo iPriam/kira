@@ -1,6 +1,6 @@
 //! Minting function types, lifting closure literals, and capturing.
 
-use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId, HirFunction, HirStmt, LocalId};
+use kira_semantics_model::hir::{CallableSignature, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, LocalId, FieldOrder};
 use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, ClosureParam};
@@ -182,6 +182,7 @@ impl Analyzer<'_> {
                 execution,
                 mutates_self: false,
                 name_span: body.span,
+                signature: CallableSignature::synthesized(&[], result),
             },
         );
 
@@ -211,6 +212,7 @@ impl Analyzer<'_> {
         let expr = self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: repr,
             fields: vec![tag_expr],
+            order: FieldOrder::Declared,
         });
         self.closure_sites.push(ClosureSite {
             expr,

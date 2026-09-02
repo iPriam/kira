@@ -12,8 +12,35 @@ fn program(body: &str) -> String {
 }
 
 #[test]
-fn an_async_function_is_declared_and_called_like_any_other() {
-    assert!(diagnostics(&program("print(tskSum(1, 2))")).is_empty());
+fn an_async_function_is_a_task_entry_point_and_not_a_direct_call() {
+    assert_eq!(codes(&program("print(tskSum(1, 2))")), vec!["KSEM354"]);
+    assert!(diagnostics(&program("let t = Task { tskSum(1, 2) } print(t.await)")).is_empty());
+}
+
+/// Only an `async function` may be a task target; an ordinary function is
+/// called, not scheduled.
+#[test]
+fn a_task_target_must_be_async() {
+    let text = "function plain(a: Int) -> Int { return a }\n\
+                @Main function main() { let t = Task { plain(1) } print(t.await) return }";
+    assert_eq!(codes(text), vec!["KSEM352"]);
+}
+
+/// A task owns its arguments: a target that borrows a parameter is refused.
+#[test]
+fn a_task_target_may_not_borrow_a_parameter() {
+    let text = "async function peek(items: borrow [Int]) -> Int { return items.count }\n\
+                @Main function main() { let xs: [Int] = [1] let t = Task { peek(xs) } print(t.await) return }";
+    assert!(codes(text).contains(&"KSEM353".to_owned()), "{:?}", codes(text));
+}
+
+/// A task target is chosen among overloads by its arguments, as a call is.
+#[test]
+fn a_task_target_resolves_among_overloads() {
+    let text = "async function pick(a: Int) -> Int { return a }\n\
+                async function pick(a: Int, b: Int) -> Int { return a + b }\n\
+                @Main function main() { let t = Task { pick(1, 2) } print(t.await) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
 }
 
 #[test]
@@ -75,14 +102,13 @@ fn a_void_body_joins_as_an_int() {
 
 #[test]
 fn a_task_body_outside_the_executable_slice_is_refused() {
-    assert_eq!(
-        codes(&program("let h = Task { tskSum(1, 2) + 1 }")),
-        vec!["KSEM159"],
+    assert!(
+        codes(&program("let h = Task { tskSum(1, 2) + 1 }")).contains(&"KSEM159".to_owned()),
         "an expression that is not a direct call"
     );
     assert_eq!(
         codes(
-            "function tskText() -> String { return \"x\" }\n\
+            "async function tskText() -> String { return \"x\" }\n\
              @Main function main() { let h = Task { tskText() } return }"
         ),
         vec!["KSEM159"],
@@ -90,7 +116,7 @@ fn a_task_body_outside_the_executable_slice_is_refused() {
     );
     assert_eq!(
         codes(
-            "function tskFlag(on: Bool) -> Int { return 1 }\n\
+            "async function tskFlag(on: Bool) -> Int { return 1 }\n\
              @Main function main() { let h = Task { tskFlag(true) } return }"
         ),
         vec!["KSEM159"],

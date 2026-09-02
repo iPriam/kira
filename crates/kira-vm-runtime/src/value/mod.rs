@@ -349,6 +349,14 @@ pub struct Heap {
     /// stays alive until the body has run, which is what makes "before the
     /// members are released" true rather than nearly true.
     pending_drops: Vec<PendingDrop>,
+    /// Native-state handles copied since the interpreter last settled them.
+    ///
+    /// The heap cannot reach the host that counts a state's owners, so a copy
+    /// of a handle records the reference it took here, and [`crate::interp`]
+    /// settles it with the host between instructions.
+    native_state_retains: Vec<NativeStateToken>,
+    /// Native-state handles dropped since the interpreter last settled them.
+    native_state_releases: Vec<NativeStateToken>,
 }
 
 /// One struct object waiting for its user `Drop` body.
@@ -421,6 +429,20 @@ impl Heap {
     /// the answer is always no and nothing else runs.
     pub fn owes_drops(&self) -> bool {
         !self.pending_drops.is_empty()
+    }
+
+    /// Whether a handle copy or drop is waiting to be counted by the host.
+    pub fn owes_native_state(&self) -> bool {
+        !self.native_state_retains.is_empty() || !self.native_state_releases.is_empty()
+    }
+
+    /// Takes the references handles took and gave up since the last settle:
+    /// the retains, then the releases.
+    pub fn take_native_state_events(&mut self) -> (Vec<NativeStateToken>, Vec<NativeStateToken>) {
+        (
+            std::mem::take(&mut self.native_state_retains),
+            std::mem::take(&mut self.native_state_releases),
+        )
     }
 
     /// Takes the object whose user `Drop` body is owed next.

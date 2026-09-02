@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 
 use kira_semantics_model::Type;
+use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 
@@ -47,6 +48,10 @@ pub(crate) struct RequiredShape {
     /// existential writes back through its receiver exactly when this holds,
     /// so an implementation disagreeing here cannot be reached through one.
     pub(crate) receiver_mutates: bool,
+    /// The complete contract the requirement states: ownership modes,
+    /// labels, defaults, receiver mutability, `async`, and thread affinity —
+    /// everything an implementation must match beyond the types.
+    pub(crate) signature: CallableSignature,
 }
 
 impl Analyzer<'_> {
@@ -251,18 +256,51 @@ impl Analyzer<'_> {
         self.source = source;
         let shapes = members
             .into_iter()
-            .map(|(name, required, function)| RequiredShape {
-                name,
-                params: function
+            .map(|(name, required, function)| {
+                let params: Vec<Type> = function
                     .params
                     .iter()
                     .map(|param| self.resolve_type_ref(param.ty))
-                    .collect(),
-                result: function
+                    .collect();
+                let result = function
                     .return_type
-                    .map_or(Type::Void, |written| self.resolve_type_ref(written)),
-                required,
-                receiver_mutates: function.receiver.is_some_and(|receiver| receiver.mutable),
+                    .map_or(Type::Void, |written| self.resolve_type_ref(written));
+                let receiver_mutates = function.receiver.is_some_and(|receiver| receiver.mutable);
+                let signature = CallableSignature {
+                    // The receiver's type is whichever type conforms; only its
+                    // mutability is the requirement's to state.
+                    receiver: function.receiver.map(|receiver| ReceiverSignature {
+                        ty: Type::Error,
+                        mutable: receiver.mutable,
+                    }),
+                    params: function
+                        .params
+                        .iter()
+                        .zip(params.iter())
+                        .map(|(param, &ty)| ParamSignature {
+                            label: self.interner.resolve(param.name).to_owned(),
+                            ty,
+                            ownership: param.ownership,
+                            has_default: param.default.is_some(),
+                        })
+                        .collect(),
+                    result,
+                    is_async: function.is_async,
+                    affinity: if function.is_main_thread {
+                        ThreadAffinity::MainThread
+                    } else {
+                        ThreadAffinity::Any
+                    },
+                    execution: function.execution,
+                };
+                RequiredShape {
+                    name,
+                    params,
+                    result,
+                    required,
+                    receiver_mutates,
+                    signature,
+                }
             })
             .collect();
         self.source = here;
@@ -276,7 +314,7 @@ impl Analyzer<'_> {
             ty, source, span, ..
         } = *site;
         let type_name = self.program.types.type_name(ty);
-        let qualified = format!("{type_name}.{}", shape.name);
+        let qualified = format!("{}.{}", self.member_owner_name(ty), shape.name);
         let candidates: Vec<_> = self
             .sig_index
             .get(&qualified)
@@ -371,6 +409,26 @@ impl Analyzer<'_> {
         // receiver exactly when the requirement says it may, so an
         // implementation disagreeing here would lose or invent writes on every
         // call that did not name the type.
+        // The contract is the whole signature, not its types: an
+        // implementation that borrows where the requirement moves, labels a
+        // parameter differently, adds or drops a default, or is `async` or
+        // `@MainThread` where the requirement is not, is not the requirement.
+        let differences = self.sigs[matched.0 as usize]
+            .signature
+            .contract_differences(&shape.signature);
+        if !differences.is_empty() {
+            self.source = declared_source;
+            self.emit(
+                name_span,
+                "KSEM293",
+                format!(
+                    "`{type_name}.{}` does not match the contract `{trait_name}` states: {}",
+                    shape.name,
+                    differences.join("; ")
+                ),
+            );
+            self.source = source;
+        }
         let implements_mutates = self.mutates_self(*matched);
         if implements_mutates != shape.receiver_mutates {
             let (written, wanted) = match implements_mutates {

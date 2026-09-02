@@ -9,6 +9,22 @@ use kira_syntax_model::ast::{CallArg, TypeRefId};
 
 use crate::analyze::{Analyzer, FnCtx};
 
+/// Which way a userdata token's owner count moves.
+#[derive(Debug, Clone, Copy)]
+enum Counting {
+    Retain,
+    Release,
+}
+
+impl Counting {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Retain => "nativeUserDataRetain",
+            Self::Release => "nativeUserDataRelease",
+        }
+    }
+}
+
 impl Analyzer<'_> {
     /// Analyzes one callback-state intrinsic, or returns `None` for another name.
     pub(super) fn analyze_native_state_intrinsic(
@@ -23,6 +39,12 @@ impl Analyzer<'_> {
             "nativeState" => self.analyze_native_state(ctx, type_args, args, span),
             "nativeUserData" => self.analyze_native_user_data(ctx, type_args, args, span),
             "nativeRecover" => self.analyze_native_recover(ctx, type_args, args, span),
+            "nativeUserDataRetain" => {
+                self.analyze_native_state_count(ctx, Counting::Retain, type_args, args, span)
+            }
+            "nativeUserDataRelease" => {
+                self.analyze_native_state_count(ctx, Counting::Release, type_args, args, span)
+            }
             "nativeStateFree" => self.analyze_native_state_free(ctx, type_args, args, span),
             _ => return None,
         })
@@ -100,17 +122,6 @@ impl Analyzer<'_> {
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
-        }
-        // Handing the token out is where the compiler loses the thread. The
-        // raw word can be stored in a slot, returned inside a struct, or given
-        // to a C callback as its user data, and any of those owners may free
-        // it — so this body is no longer the one that must. It is NOT a move:
-        // the handle is still usable here, and the ordinary idiom hands the
-        // token out and then frees the handle on its way out of the function.
-        if let Some(arg) = args.first()
-            && let Some(local) = self.named_local(ctx, arg.value)
-        {
-            ctx.mark_handed_out(local);
         }
         self.program.exprs.alloc(HirExpr::NativeUserData { state })
     }
@@ -202,6 +213,42 @@ impl Analyzer<'_> {
         })
     }
 
+    /// `nativeUserDataRetain(token)` and `nativeUserDataRelease(token)`: one
+    /// owner more or fewer of the state a userdata token names.
+    fn analyze_native_state_count(
+        &mut self,
+        ctx: &mut FnCtx,
+        counting: Counting,
+        type_args: &[TypeRefId],
+        args: &[CallArg],
+        span: Span,
+    ) -> HirExprId {
+        let name = counting.name();
+        self.reject_intrinsic_type_args(name, type_args, span);
+        let Some(token) = self.one_intrinsic_arg(ctx, name, args, span) else {
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let ty = self.program.expr(token).type_of();
+        if ty != Type::RawPtr && ty != Type::Error {
+            self.emit(
+                span,
+                "KSEM361",
+                format!(
+                    "`{name}` expects a userdata token of type `RawPtr`, found `{}`. A handle \
+                     releases its own reference when it goes out of scope.",
+                    self.type_name(ty)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        self.program.exprs.alloc(match counting {
+            Counting::Retain => HirExpr::NativeStateRetain { token },
+            Counting::Release => HirExpr::NativeStateRelease { token },
+        })
+    }
+
+    /// `nativeStateFree(handle)`: the pre-1.9.1 spelling of one release,
+    /// kept so that programs keep compiling and warned about (`KSEM360`).
     fn analyze_native_state_free(
         &mut self,
         ctx: &mut FnCtx,
@@ -228,18 +275,22 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        // Freeing CONSUMES the handle. The binding still holds the same bits,
-        // but they now name a box the runtime has torn down, and reading them
-        // again is a use-after-free the box's magic word would catch at run
-        // time. Marking it moved is what makes the existing `KSEM107` say so at
-        // compile time instead, and it is what tells the end-of-body check this
-        // handle was accounted for.
+        self.emit_warning(
+            span,
+            "KSEM360",
+            "`nativeStateFree` is deprecated: it releases one reference, not the state. Let \
+             the handle go out of scope to release its reference, and pair every \
+             `nativeUserData` token with `nativeUserDataRelease`.",
+        );
+        // Releasing through the handle consumes it: the handle's reference is
+        // the one given up, so the binding no longer owns anything to release
+        // at the end of its scope, and reading it again is a use after move.
         if let Some(arg) = args.first()
             && let Some(local) = self.named_local(ctx, arg.value)
         {
             ctx.mark_moved(local, span);
         }
-        self.program.exprs.alloc(HirExpr::NativeStateFree { token })
+        self.program.exprs.alloc(HirExpr::NativeStateRelease { token })
     }
 
     fn one_intrinsic_arg(
@@ -341,6 +392,14 @@ impl Analyzer<'_> {
             | Type::String
             | Type::RawPtr
             | Type::ForeignPtr(_) => true,
+            // A distinct type is eligible exactly when the scalar it is would
+            // be, and its runtime identity is its own — see
+            // `TypeTable::native_state_type_id`, which fingerprints the name so
+            // a recovery cannot confuse a `TabId` state with a `U32` one.
+            Type::Distinct(_) => {
+                let representation = self.program.types.representation(ty);
+                self.native_state_eligible_inner(representation, visiting)
+            }
             Type::Struct(id) => self.native_state_struct_eligible(id, visiting),
             Type::Array(id) => self
                 .program

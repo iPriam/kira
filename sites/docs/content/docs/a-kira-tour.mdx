@@ -55,9 +55,9 @@ enum Note {
 
 function describe(n: borrow Note) -> Int {
     match n {
-        Blank -> return 0;
-        Rank(value) -> return value;
-        Tag(text) -> return text.count;
+        Blank -> return 0
+        Rank(value) -> return value
+        Tag(text) -> return text.count
     }
 }
 ```
@@ -143,8 +143,8 @@ function process(n: Int) -> Int {
 ## Calling C
 
 ```kira
-@FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
-function add(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffimath, symbol: ffi_add, abi: c }
+function add(a: I32, b: I32) -> I32
 
 @Main function main() { print(add(20, 22)) return }
 ```
@@ -155,7 +155,7 @@ No `@Native`, no glue. The package lists `ffimath` in its manifest and the same 
 
 ```kira
 @Derive(Equatable, Serializable, Deserializable)
-struct Point { var x: Int; var y: Int }
+struct Point { var x: Int var y: Int }
 
 let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
 ```

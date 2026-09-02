@@ -186,6 +186,9 @@ impl<'a> Analyzer<'a> {
             Expr::Unary { operand, .. } | Expr::Ownership { operand, .. } => {
                 self.expr_mutates_self(*operand, owner)
             }
+            Expr::TypeTest { value, .. } | Expr::TypeCast { value, .. } => {
+                self.expr_mutates_self(*value, owner)
+            }
             Expr::Try { value, .. } => self.expr_mutates_self(*value, owner),
             Expr::Binary { lhs, rhs, .. } => {
                 self.expr_mutates_self(*lhs, owner) || self.expr_mutates_self(*rhs, owner)

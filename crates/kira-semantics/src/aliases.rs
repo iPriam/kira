@@ -35,6 +35,9 @@ pub(crate) struct AliasHeader {
     body: AliasBody,
     /// Span of the alias name, where a cycle is reported.
     name_span: Span,
+    /// The file that declared it, which decides its owning package and the
+    /// imports its body resolves against.
+    source: kira_source::SourceId,
     /// How far this alias has got through resolution.
     state: AliasState,
     /// What a foreign declaration said about the C type it names, when this
@@ -72,6 +75,15 @@ enum AliasState {
     /// itself rather than one of its use sites. Every later use answers
     /// `Type::Error` silently, so the report is exactly once.
     Failed,
+}
+
+/// `"{package}::{name}"`, or the bare name for one of the program's own files:
+/// two packages may each declare a `type Byte = U8`.
+fn owned_alias_key(owner: Option<&str>, name: &str) -> String {
+    match owner {
+        Some(owner) => format!("{owner}::{name}"),
+        None => name.to_owned(),
+    }
 }
 
 impl Analyzer<'_> {
@@ -167,7 +179,8 @@ impl Analyzer<'_> {
         body: AliasBody,
         description: Option<String>,
     ) {
-        if let Some(existing) = self.aliases.get(&name)
+        let key = owned_alias_key(self.imports.package_of(self.source), &name);
+        if let Some(existing) = self.aliases.get(&key)
             && description.is_some()
             && existing.description == description
         {
@@ -182,14 +195,33 @@ impl Analyzer<'_> {
             return;
         }
         self.aliases.insert(
-            name,
+            key,
             AliasHeader {
                 body,
                 name_span,
+                source: self.source,
                 state: AliasState::Unresolved,
                 description,
             },
         );
+    }
+
+    /// The key of the alias `name` resolves to from the current file: the
+    /// file's own package first, then the program's own declarations, then
+    /// the packages the file imports.
+    pub(crate) fn visible_alias_key(&self, name: &str) -> Option<String> {
+        let home = owned_alias_key(self.imports.package_of(self.source), name);
+        if self.aliases.contains_key(&home) {
+            return Some(home);
+        }
+        if self.aliases.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .map(|package| owned_alias_key(Some(&package), name))
+            .find(|key| self.aliases.contains_key(key))
     }
 
     /// Whether some declaration in the program describes the C type `name`,
@@ -215,7 +247,10 @@ impl Analyzer<'_> {
         if Type::from_name(name).is_some() {
             return Some(format!("the builtin type `{name}`"));
         }
-        if self.aliases.contains_key(name) {
+        if self
+            .aliases
+            .contains_key(&owned_alias_key(self.imports.package_of(self.source), name))
+        {
             return Some(format!("an earlier type alias `{name}`"));
         }
         // The struct and enum tables are empty at this point, so the check runs
@@ -250,6 +285,8 @@ impl Analyzer<'_> {
     /// rather than inheriting whichever site happened to touch the alias
     /// first.
     pub(crate) fn resolve_alias_name(&mut self, name: &str, context: &NameContext) -> Option<Type> {
+        let key = self.visible_alias_key(name)?;
+        let name = key.as_str();
         let header = self.aliases.get(name)?.clone();
         match header.state {
             AliasState::Resolved(ty) => return Some(ty),
@@ -271,6 +308,11 @@ impl Analyzer<'_> {
             AliasState::Unresolved => {}
         }
         self.set_alias_state(name, AliasState::Resolving);
+        // The body was written in the declaring file, so it resolves against
+        // that file's package and imports rather than the use site's.
+        let here = self.source;
+        self.source = header.source;
+        let declared = name.rsplit("::").next().unwrap_or(name).to_owned();
         let ty = match header.body {
             // A pointer is one machine word whatever it points at. The target
             // is looked up silently: generated bindings point at C types nobody
@@ -279,9 +321,10 @@ impl Analyzer<'_> {
             // struct is an opaque handle rather than a mistake and stays a plain
             // `RawPtr`. One that does resolve keeps what it points at, which is
             // what lets a field be read through it.
-            AliasBody::Pointer => self.foreign_pointer_type(name),
+            AliasBody::Pointer => self.foreign_pointer_type(&declared),
             AliasBody::Written(target) => self.resolve_type_in(target, context),
         };
+        self.source = here;
         let state = match ty {
             Type::Error => AliasState::Unresolved,
             resolved => AliasState::Resolved(resolved),

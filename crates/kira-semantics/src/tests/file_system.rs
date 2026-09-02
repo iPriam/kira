@@ -33,15 +33,15 @@ fn every_file_system_intrinsic_type_checks_with_its_own_result() {
 #[test]
 fn an_intrinsic_refuses_the_wrong_number_of_arguments() {
     assert_eq!(
-        codes("@Main function main() { fsReadText(); return }"),
+        codes("@Main function main() { fsReadText() return }"),
         vec!["KSEM252"]
     );
     assert_eq!(
-        codes(r#"@Main function main() { fsReadRange("a", 0); return }"#),
+        codes(r#"@Main function main() { fsReadRange("a", 0) return }"#),
         vec!["KSEM252"]
     );
     assert_eq!(
-        codes(r#"@Main function main() { fsFileSize("a", "b"); return }"#),
+        codes(r#"@Main function main() { fsFileSize("a", "b") return }"#),
         vec!["KSEM252"]
     );
 }
@@ -49,15 +49,15 @@ fn an_intrinsic_refuses_the_wrong_number_of_arguments() {
 #[test]
 fn an_intrinsic_refuses_an_argument_of_the_wrong_type() {
     assert_eq!(
-        codes("@Main function main() { fsReadText(7); return }"),
+        codes("@Main function main() { fsReadText(7) return }"),
         vec!["KSEM253"]
     );
     assert_eq!(
-        codes(r#"@Main function main() { fsReadRange("a", "b", 2); return }"#),
+        codes(r#"@Main function main() { fsReadRange("a", "b", 2) return }"#),
         vec!["KSEM253"]
     );
     assert_eq!(
-        codes(r#"@Main function main() { fsWriteBytes("a", "not bytes"); return }"#),
+        codes(r#"@Main function main() { fsWriteBytes("a", "not bytes") return }"#),
         vec!["KSEM253"]
     );
 }
@@ -84,5 +84,5 @@ fn writing_bytes_requires_a_byte_array() {
 /// An intrinsic takes a label and ignores it, like every other call surface.
 #[test]
 fn an_intrinsic_accepts_and_ignores_an_argument_label() {
-    assert!(diagnostics(r#"@Main function main() { fsReadText(path: "a"); return }"#).is_empty());
+    assert!(diagnostics(r#"@Main function main() { fsReadText(path: "a") return }"#).is_empty());
 }

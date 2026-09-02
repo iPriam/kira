@@ -314,7 +314,7 @@ construct GenGenericDeclarationsAndBoundsWork() extends Test {
         let inferredBox = genUnbox(GenBox(value: GenScore(value: 9)))
         return boxed.score() + held.score() + genBoundRead(provider) + inferred + explicit + explicitBox.score() + unboxed.score() + inferredBox.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(44); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(44) return e }
 }
 
 construct GenParameterizedInheritanceWorks() extends Test {
@@ -322,7 +322,7 @@ construct GenParameterizedInheritanceWorks() extends Test {
         let child = GenChild(value: 6)
         return child.get()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 function genDeclarationSection() -> Int {

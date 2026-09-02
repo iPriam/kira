@@ -188,14 +188,71 @@ impl FunctionLowering<'_, '_> {
         self.materialize_native_state(token, type_id, ty)
     }
 
-    /// Frees a callback-state token and yields a harmless expression value.
-    pub(super) fn lower_native_state_free(
+    /// Exports a handle's userdata token, which owns one reference.
+    ///
+    /// A handle a local keeps owning is read in place — an ordinary read would
+    /// take it — and the token takes a reference of its own. A temporary
+    /// handle hands the token the reference it held.
+    pub(super) fn lower_native_user_data(
+        &mut self,
+        state: kira_ir::IrExprId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let kira_ir::IrExpr::Local(slot) = *self.codegen.program.expr(state) else {
+            return self.lower_expr(state);
+        };
+        if self
+            .function
+            .native_state_locals
+            .get(slot as usize)
+            .copied()
+            .flatten()
+            .is_some()
+        {
+            return self.lower_expr(state);
+        }
+        let pointer = self.local_pointer(slot)?;
+        // SAFETY: a handle local is an i64 token slot in the entry block.
+        let token = unsafe {
+            LLVMBuildLoad2(
+                self.codegen.builder,
+                self.codegen.types.i64,
+                pointer,
+                c"native.state.handle".as_ptr(),
+            )
+        };
+        let status = self.call(
+            self.codegen.runtime.native_state_retain,
+            &mut [token],
+            c"native.state.status",
+        );
+        self.check_native_state_status(status);
+        Ok(token)
+    }
+
+    /// Adds one owner to a callback state and yields a harmless expression value.
+    pub(super) fn lower_native_state_retain(
         &mut self,
         token: kira_ir::IrExprId,
     ) -> Result<LLVMValueRef, LlvmError> {
         let token = self.lower_expr(token)?;
         let status = self.call(
-            self.codegen.runtime.native_state_free,
+            self.codegen.runtime.native_state_retain,
+            &mut [token],
+            c"native.state.status",
+        );
+        self.check_native_state_status(status);
+        Ok(self.codegen.const_bool(false))
+    }
+
+    /// Removes one owner from a callback state and yields a harmless
+    /// expression value.
+    pub(super) fn lower_native_state_release(
+        &mut self,
+        token: kira_ir::IrExprId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let token = self.lower_expr(token)?;
+        let status = self.call(
+            self.codegen.runtime.native_state_release,
             &mut [token],
             c"native.state.status",
         );

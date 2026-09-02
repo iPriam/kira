@@ -3,7 +3,9 @@ title: Compiling Kira From Kira
 description: "`Kira/Compiler.kira`: checking a package set from a Kira program, why the unit is a package set rather than a string, and which hosts grant the capability."
 ---
 
-`Kira/Compiler.kira` lets a Kira program compile Kira. The unit is a **package set**, not a source string: `checkPackages` takes a `KiraCheckRequest`, a list of `KiraPackage`, each a `package.kira` text plus its named source files with one of them named as the root, and answers with a `KiraCheckResult` holding typed `KiraCheckDiagnostic` values.
+`Kira/Compiler.kira` lets a Kira program compile Kira. The unit is a **package set**, not a source string: `checkPackages` takes a `KiraCheckRequest`, a list of `KiraPackage`, each a `package.kira` text plus its named source files with one of them named as the root, and answers with a `KiraPackageCheckResult` holding typed `KiraPackageDiagnostic` values.
+
+For checking, building, and running a package that is already on a disk, see [`Kira/Toolchain.kira`](/docs/foundation/running-kira). This surface is the in-memory one: it takes its sources as values and touches no disk.
 
 ```kira
 import Foundation
@@ -36,7 +38,7 @@ None of that can be said with one string of source.
 
 ## Diagnostics
 
-Each diagnostic carries the code as a `KiraError` value, its severity, and the **file** it points into, so a test asserts `.KSEM061` in `app/FileC.kira` rather than matching text that gets reworded.
+Each `KiraPackageDiagnostic` carries the code as a `KiraError` value, its severity, and the **file** it points into, so a test asserts `.KSEM061` in `app/FileC.kira` rather than matching text that gets reworded.
 
 `codeText` carries the code exactly as the compiler wrote it, for a code this Foundation's enum does not list. `kiraErrorFromCode` in `Kira/DiagnosticCodes.kira` is the mapping, and it answers `.Unrecognized` for one it does not know.
 

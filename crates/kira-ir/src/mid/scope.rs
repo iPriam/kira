@@ -276,9 +276,10 @@ impl Scan<'_> {
                     self.expr(*payload, path, owners);
                 }
             }
-            IrExpr::EnumTag { value } | IrExpr::EnumPayload { value, .. } => {
-                self.expr(*value, path, owners)
-            }
+            IrExpr::EnumTag { value }
+            | IrExpr::EnumPayload { value, .. }
+            | IrExpr::TypeTest { value, .. }
+            | IrExpr::TypeCast { value, .. } => self.expr(*value, path, owners),
             IrExpr::CellNew { value, .. } => self.expr(*value, path, owners),
             IrExpr::CellGet { slot, .. } => self.reference(*slot, path, owners),
             IrExpr::Field { base, .. }
@@ -346,11 +347,11 @@ impl Scan<'_> {
             IrExpr::NativeState { value, .. } => self.expr(*value, path, owners),
             IrExpr::NativeUserData { state } => self.expr(*state, path, owners),
             IrExpr::NativeRecover { raw, .. } => self.expr(*raw, path, owners),
-            IrExpr::NativeStateFree { token } => self.expr(*token, path, owners),
-            IrExpr::Convert { operand, .. } => self.expr(*operand, path, owners),
-            IrExpr::IntoAny { value, .. } | IrExpr::Widen { value, .. } => {
-                self.expr(*value, path, owners)
+            IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
+                self.expr(*token, path, owners)
             }
+            IrExpr::Convert { operand, .. } => self.expr(*operand, path, owners),
+            IrExpr::IntoAny { value, .. } => self.expr(*value, path, owners),
             IrExpr::TaskOp { operands, .. } => {
                 for operand in operands {
                     self.expr(*operand, path, owners);

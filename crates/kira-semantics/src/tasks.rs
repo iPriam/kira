@@ -19,7 +19,7 @@
 //! synthesizes — see `kira_ir`'s task lowering and
 //! `kira_runtime_abi::TaskExecutor`.
 
-use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId, TaskTarget};
+use kira_semantics_model::hir::{Builtin, Callee, FuncId, HirExpr, HirExprId, TaskTarget};
 use kira_semantics_model::{TaskResult, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, Expr, ExprId, UnaryOp};
@@ -111,10 +111,11 @@ impl Analyzer<'_> {
         callee_span: Span,
         span: Span,
     ) -> HirExprId {
-        let Some((id, params, return_type)) = self
-            .lookup_function(name)
-            .map(|(id, params, ret)| (id, params.to_vec(), ret))
-        else {
+        // The target is chosen the way an ordinary call chooses among
+        // overloads: by the arguments as written, with defaults and labels
+        // playing their usual part.
+        let candidates = self.visible_overloads(name);
+        if candidates.is_empty() {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
             }
@@ -124,8 +125,62 @@ impl Analyzer<'_> {
                 format!("call to undefined function `{name}`"),
             );
             return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let probed = self.try_argument_types(ctx, &[], args);
+        let id = match self.resolve_overload(&candidates, &probed) {
+            Ok(id) => id,
+            Err(crate::typeck::overloads::OverloadFailure::Ambiguous(winners)) => {
+                for arg in args {
+                    self.analyze_expr(ctx, arg.value);
+                }
+                let list = self.overload_list(&winners);
+                self.emit(
+                    span,
+                    "KSEM275",
+                    format!("this task target `{name}` fits {list} equally well"),
+                );
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
+            Err(crate::typeck::overloads::OverloadFailure::None) => candidates[0],
+        };
+        let (params, return_type) = {
+            let sig = &self.sigs[id.0 as usize];
+            (sig.params.clone(), sig.return_type)
         };
         self.link_function(id, callee_span);
+        // A task runs a task entry point: an `async function`. An ordinary
+        // function is called synchronously, or marked `async` if it is meant
+        // to be scheduled.
+        if !self.sigs[id.0 as usize].signature.is_async {
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
+            }
+            self.emit(
+                callee_span,
+                "KSEM352",
+                format!(
+                    "`{name}` is not `async`, so it cannot be a task target: mark it `async \
+                     function` to schedule it, or call it directly"
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // A task owns what it runs on: nothing crosses into it borrowed, because
+        // the caller's place may be gone, or written, by the time the task runs.
+        if self.sigs[id.0 as usize].signature.borrows_any_parameter() {
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
+            }
+            self.emit(
+                callee_span,
+                "KSEM353",
+                format!(
+                    "`{name}` borrows a parameter, so it cannot be a task target: a task takes \
+                     its arguments owned or copied, never borrowed"
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         if let Some(refusal) = self.task_sends_everything_it_crosses(name, &params, return_type) {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
@@ -358,5 +413,26 @@ impl Analyzer<'_> {
             writebacks: Vec::new(),
             ty: Type::Void,
         }))
+    }
+}
+
+impl Analyzer<'_> {
+    /// Refuses a direct call of an `async function`, which is a task entry
+    /// point rather than a function to call: `Task { name(…) }` schedules it.
+    /// Returns whether the call was refused.
+    pub(crate) fn refuse_direct_async_call(&mut self, id: FuncId, span: Span) -> bool {
+        if !self.sigs[id.0 as usize].signature.is_async {
+            return false;
+        }
+        let name = self.sigs[id.0 as usize].name.clone();
+        self.emit(
+            span,
+            "KSEM354",
+            format!(
+                "`{name}` is `async`, so it cannot be called directly: write `Task {{ {name}(…) }}` \
+                 to schedule it, and `.await` the handle for its result"
+            ),
+        );
+        true
     }
 }

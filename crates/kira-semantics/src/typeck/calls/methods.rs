@@ -90,7 +90,7 @@ impl Analyzer<'_> {
         let receiver_hir = self.analyze_expr(ctx, receiver);
         let receiver_ty = self.program.expr(receiver_hir).type_of();
         let name = self.interner.resolve(method).to_owned();
-        let qualified = format!("{}.{name}", self.type_name(receiver_ty));
+        let qualified = format!("{}.{name}", self.member_owner_name(receiver_ty));
         let has_user_method = self.lookup_function(&qualified).is_some();
 
         if receiver_ty.is_array() {

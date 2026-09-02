@@ -22,7 +22,7 @@ construct CkxCallbackBuilderStyleParity() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // ── callback_mutable_value_capture ────────────────────────────────────────────
@@ -36,7 +36,7 @@ construct CkxCallbackMutableValueCapture() extends Test {
         printer(1)
         return offset
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ── callback_return_value_parity ──────────────────────────────────────────────
@@ -54,7 +54,7 @@ construct CkxCallbackReturnValueParity() extends Test {
         let printer = ckxMakePrinter()
         return printer(5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // ── callback_value_capture ────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ construct CkxCallbackValueCapture() extends Test {
         }
         return printer(1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ── callback_value_parity ─────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ construct CkxCallbackValueParity() extends Test {
         ckxTrigger(box)
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(52); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(52) return e }
 }
 
 // ── trailing_callback_captures ────────────────────────────────────────────────
@@ -183,7 +183,7 @@ construct CkxTrailingCallbackCaptures() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(122); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(122) return e }
 }
 
 // ── trailing_callback_mutable_capture ─────────────────────────────────────────
@@ -201,7 +201,7 @@ construct CkxTrailingCallbackMutableCapture() extends Test {
         }
         return offset
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ── closure_export_distinct_dispatch ──────────────────────────────────────────
@@ -232,7 +232,7 @@ construct CkxClosureExportDistinctDispatchSequential() extends Test {
         // FF1 bug would give 11 + 11 = 22 (stale-pointer reuse); correct is 112.
         return r1 + r2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(112) return e }
 }
 
 construct CkxClosureExportDistinctDispatchTwo() extends Test {
@@ -244,5 +244,5 @@ construct CkxClosureExportDistinctDispatchTwo() extends Test {
         // FF1 bug would give (1+10) + (2+10) = 23; correct is 113.
         return ckxInvokeTwo(move cbA, move cbB, 1, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(113); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(113) return e }
 }

@@ -47,16 +47,18 @@ pub(crate) fn resolve_unary(op: UnaryOp, operand: Type) -> Option<(HirUnaryOp, T
 /// *different* written widths agree on nothing — `u8Value + i64Value` is a type
 /// error, not a promotion — because the language has no widening.
 fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
-    let compatible = match (lt, rt) {
-        (Type::Int(a), Type::Int(b)) => {
-            a == b || a == IntSpelling::Plain || b == IntSpelling::Plain
-        }
-        (Type::Float(a), Type::Float(b)) => {
-            a == b || a == FloatSpelling::Plain || b == FloatSpelling::Plain
-        }
-        _ => false,
-    };
-    compatible.then_some(lt)
+    match (lt, rt) {
+        (Type::Int(a), Type::Int(b)) if a == b => Some(lt),
+        // A bare literal adapts to the written spelling on the other side,
+        // whichever side that is: `1 + u8Value` is `U8` arithmetic exactly as
+        // `u8Value + 1` is.
+        (Type::Int(a), Type::Int(_)) if a == IntSpelling::Plain => Some(rt),
+        (Type::Int(_), Type::Int(b)) if b == IntSpelling::Plain => Some(lt),
+        (Type::Float(a), Type::Float(b)) if a == b => Some(lt),
+        (Type::Float(a), Type::Float(_)) if a == FloatSpelling::Plain => Some(rt),
+        (Type::Float(_), Type::Float(b)) if b == FloatSpelling::Plain => Some(lt),
+        _ => None,
+    }
 }
 
 /// The type the two branches of a `? :` agree on, or `None` when they do not.
@@ -67,11 +69,10 @@ fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
 /// non-numeric must match exactly — there is no widening and no common
 /// supertype, because the language has no subtyping.
 ///
-/// When both are numeric the **then** branch decides the spelling, mirroring
-/// the left-operand rule in [`unify_numeric`], so the pairing is not
-/// symmetric: `wide ? u8Value : 0` types as `U8`, and `wide ? 0 : u8Value`
-/// types as plain `Int`. The asymmetry is observable, because the width picks
-/// the shift: `(true ? u64AllOnes : 0) >> 60` is an unsigned shift printing
+/// When both are numeric the written spelling decides, from whichever branch
+/// wrote one, as in [`unify_numeric`]: `wide ? u8Value : 0` and `wide ? 0 :
+/// u8Value` both type as `U8`. The width is observable, because it picks the
+/// shift: `(true ? u64AllOnes : 0) >> 60` is an unsigned shift printing
 /// `15`, while `(false ? 0 : u64AllOnes) >> 60` is a signed one printing `-1`.
 /// `a_conditional_takes_its_width_from_the_then_branch` pins both spellings.
 pub(crate) fn unify_branches(then: Type, otherwise: Type) -> Option<Type> {
@@ -139,8 +140,8 @@ fn bitwise(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
 /// i64Places` is not. Signedness is read off the left operand alone, which is
 /// what decides whether `>>` propagates the sign or fills with zeros.
 ///
-/// The shift amount is taken modulo 64 at run time on every backend rather than
-/// trapping, so a count of 64 or more is defined rather than undefined.
+/// The shift amount must lie in `0..width` of the left operand at run time;
+/// every backend traps on a count outside it.
 fn shift(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     use BinaryOp as B;
     use HirBinaryOp as H;
@@ -164,14 +165,10 @@ fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
         return Some((H::ConcatStr, Type::String));
     }
     let ty = unify_numeric(lt, rt)?;
-    // `/` and `%` are the two arithmetic operators whose result depends on
-    // signedness. `+`, `-`, and `*` wrap identically either way, and at 64 bits
-    // for every width: a `U8` sum of 250 and 10 is 260, not 4. Narrowing to the
-    // written width is behavior the language does not define, so nothing here
-    // masks.
-    //
-    // `ty` is the *left* operand's type (see `unify_numeric`), so this reads
-    // signedness off the LHS alone.
+    // `/` and `%` are the two arithmetic operators whose opcode depends on
+    // signedness. `+`, `-`, and `*` share an opcode; the result type carries
+    // the width, and every backend traps when the result leaves it: a `U8`
+    // sum of 250 and 10 is an overflow, not 260 and not 4.
     let unsigned = ty.is_unsigned_int();
     let hir = match (op, ty) {
         (B::Add, Type::Int(_)) => H::AddInt,

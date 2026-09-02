@@ -692,5 +692,6 @@ fn is_heap_value(value: &Value) -> bool {
             | Value::NativeSnapshot(_)
             | Value::CBlock(_)
             | Value::MainThreadTask(_)
+            | Value::NativeState(_)
     )
 }

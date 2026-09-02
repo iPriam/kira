@@ -1,3 +1,5 @@
+use kira_semantics_model::hir::CallableSignature;
+use kira_semantics_model::hir::FieldOrder;
 use super::*;
 
 impl Analyzer<'_> {
@@ -314,6 +316,7 @@ impl Analyzer<'_> {
         let expr = self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: repr,
             fields: vec![tag_expr],
+            order: FieldOrder::Declared,
         });
         self.closure_sites.push(ClosureSite {
             expr,
@@ -402,6 +405,7 @@ impl Analyzer<'_> {
                 execution: self.current_execution,
                 mutates_self: false,
                 name_span: Span::new(0, 0),
+                signature: CallableSignature::synthesized(&[], result),
             },
         );
         wrapper

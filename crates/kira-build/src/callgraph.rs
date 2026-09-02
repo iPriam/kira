@@ -109,6 +109,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         }
         IrExpr::EnumTag { value } => walk_expr(program, *value, found),
         IrExpr::EnumPayload { value, .. } => walk_expr(program, *value, found),
+        IrExpr::TypeTest { value, .. } | IrExpr::TypeCast { value, .. } => {
+            walk_expr(program, *value, found)
+        }
         IrExpr::Field { base, .. } => walk_expr(program, *base, found),
         IrExpr::ScalarText { value } | IrExpr::ArrayElements { value, .. } => {
             walk_expr(program, *value, found)
@@ -193,13 +196,12 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         // An erasure wraps the value it erases, and a call inside that value is
         // reachable exactly as it would be anywhere else.
         IrExpr::IntoAny { value, .. } => walk_expr(program, *value, found),
-        // A widening wraps its value for the same reason, so a call inside one
-        // is reachable the same way.
-        IrExpr::Widen { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
         IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
-        IrExpr::NativeStateFree { token } => walk_expr(program, *token, found),
+        IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
+            walk_expr(program, *token, found)
+        }
         // Leaves: nothing inside can be a call.
         IrExpr::Int(_)
         | IrExpr::Float(_)

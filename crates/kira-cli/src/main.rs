@@ -36,6 +36,7 @@ mod shader;
 mod supervisor;
 mod sync;
 mod timings;
+mod toolchain_host;
 mod update;
 mod wasm;
 
@@ -48,6 +49,9 @@ fn main() {
     // Granted before anything runs, because a program reaches the compiler from
     // whichever engine it happens to be on and both are started below.
     compiler_host::grant();
+    // Granted for the same reason and at the same time: a program reaches the
+    // toolchain from whichever engine it runs on.
+    toolchain_host::grant();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("__hybrid-debug-host") => {

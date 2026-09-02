@@ -55,7 +55,7 @@ construct EmxArrayEnumStringPayloadFree() extends Test {
         return total
     }
     // 500 * (1 + 0 + 2) = 1500
-    expect { let e: Result<Int, TestFailure> = .Ok(1500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1500) return e }
 }
 
 // Struct-payload enum teardown (kira_destroy_enum_<T> ffi_struct arm): an enum
@@ -89,8 +89,8 @@ class EmxCard extends EmxSurface {
 
 function emxPaintScore(p: borrow EmxPaint) -> Int {
     match p {
-        Flat -> return 1;
-        Glow(payload) -> return payload.color.r * 10 + payload.radius;
+        Flat -> return 1
+        Glow(payload) -> return payload.color.r * 10 + payload.radius
     }
     return 0
 }
@@ -112,7 +112,7 @@ construct EmxStructPayloadEnumDefaultsFree() extends Test {
         return total
     }
     // per iteration: Flat=1, Glow(r:5, radius:4)=54 -> 55; 200 * 55 = 11000
-    expect { let e: Result<Int, TestFailure> = .Ok(11000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11000) return e }
 }
 
 // Construct_any-payload enum teardown churn (kira_capi_dynamic_destroy arm +
@@ -132,7 +132,7 @@ construct EmxConstructAnyPayloadEnumChurn() extends Test {
         return total
     }
     // per iteration: count=3 + area=7 -> 10; 200 * 10 = 2000
-    expect { let e: Result<Int, TestFailure> = .Ok(2000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2000) return e }
 }
 
 // Array-payload enum teardown (kira_destroy_enum_<T> .array arm): a variant
@@ -185,5 +185,5 @@ construct EmxArrayPayloadEnumFree() extends Test {
         return total
     }
     // per iteration: sum(0,2,4,6,8)=20 + (-1) -> 19; 300 * 19 = 5700
-    expect { let e: Result<Int, TestFailure> = .Ok(5700); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5700) return e }
 }

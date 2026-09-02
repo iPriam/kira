@@ -57,6 +57,9 @@ impl Analyzer<'_> {
         // Analyze each written initializer against the field it names, keeping
         // source order so diagnostics read in the order they were written.
         let mut slots: Vec<Option<HirExprId>> = vec![None; field_count];
+        // The declaration index of each written initializer, in source order:
+        // the sequence the construction evaluates them in.
+        let mut written: Vec<u32> = Vec::with_capacity(inits.len());
         for init in inits {
             let field_name = self.interner.resolve(init.name).to_owned();
             // The field is resolved before its value, so the field's type is
@@ -113,6 +116,7 @@ impl Analyzer<'_> {
                 self.coerce_into(value, field_ty)
             };
             slots[index as usize] = Some(value);
+            written.push(index);
         }
 
         // Fill what the literal left out. A `@FFI.Struct { layout: c }` starts
@@ -126,6 +130,9 @@ impl Analyzer<'_> {
                 fields.push(value);
                 continue;
             }
+            // A default is evaluated after every written initializer, in
+            // declaration order among the defaults.
+            written.push(index);
             match self.resolve_field_default_at(ctx, id, index) {
                 Some(default) => fields.push(default),
                 None if is_c_layout => {
@@ -162,6 +169,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
+            order: kira_semantics_model::hir::FieldOrder::from_written(written),
         })
     }
 }

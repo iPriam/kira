@@ -6,7 +6,7 @@
 //! as an ordinary construction, so VM, LLVM, hybrid, and WASM lowering need no
 //! construct-specific update operation.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt, LocalId};
+use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt, LocalId, FieldOrder};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
@@ -292,6 +292,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id,
             fields: values,
+            order: FieldOrder::Declared,
         })
     }
 

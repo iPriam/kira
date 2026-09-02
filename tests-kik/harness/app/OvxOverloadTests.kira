@@ -39,14 +39,14 @@ construct OvxFreeFunctionsByType() extends Test {
     test {
         return ovxDescribe(3) + ovxDescribe("hi") + ovxDescribe(1.5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(237); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(237) return e }
 }
 
 construct OvxFreeFunctionsByArity() extends Test {
     test {
         return ovxDescribe(2, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ construct OvxConcreteBeatsErased() extends Test {
     test {
         return ovxSize(OvxSquare(side: 3))
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9000) return e }
 }
 
 construct OvxErasedTakesTheFamilyOverload() extends Test {
@@ -85,14 +85,14 @@ construct OvxErasedTakesTheFamilyOverload() extends Test {
         let erased: Any OvxShape = OvxSquare(side: 2)
         return ovxSize(move erased)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct OvxAnUnrelatedVariantStillErases() extends Test {
     test {
         return ovxSize(OvxStrip(length: 6))
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,14 +111,14 @@ construct OvxExactArityBeatsADefault() extends Test {
     test {
         return ovxTag(5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct OvxAFilledDefaultSlotReachesTheOtherOverload() extends Test {
     test {
         return ovxTag(5, 4)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ construct OvxStructMethodsOverload() extends Test {
         let v = OvxVec2 { x: 2, y: 3 }
         return v.scaled(by: 4) + v.scaled(by: 4, plus: 1) + v.scaled(label: "abc")
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(44); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(44) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ construct OvxClassMethodsOverload() extends Test {
         var c = OvxCounter { }
         return c.bump() + c.bump(step: 10)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct OvxOverridingOneOverloadInheritsTheRest() extends Test {
@@ -183,7 +183,7 @@ construct OvxOverridingOneOverloadInheritsTheRest() extends Test {
         // `bump(step:)` runs the subclass's.
         return f.bump() + f.bump(step: 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(302); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(302) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +209,7 @@ construct OvxConstructMembersOverload() extends Test {
         let leaf = OvxLeaf(number: 3)
         return leaf.grown(by: 1) + leaf.grown(by: 1, times: 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -240,21 +240,21 @@ construct OvxConstructionReachesTheHeader() extends Test {
         let link = OvxLink(destination: OvxLeaf(number: 3), label: OvxText(text: "ab"))
         return link.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(302); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(302) return e }
 }
 
 construct OvxConstructionReachesAnInit() extends Test {
     test {
         return OvxLink(title: "abc", value: 7).total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(703); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(703) return e }
 }
 
 construct OvxATrailingBlockFillsAnInitContentParameter() extends Test {
     test {
         return OvxLink(value: 5) { OvxText(text: "wxyz") }.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(504); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(504) return e }
 }
 
 construct OvxAnInitValueCrossesTheFamilyBoundary() extends Test {
@@ -264,7 +264,7 @@ construct OvxAnInitValueCrossesTheFamilyBoundary() extends Test {
         let inner: Any OvxWidget = OvxLeaf(number: 9)
         return OvxLink(value: 2) { move inner }.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(209); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(209) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,26 +353,26 @@ construct OvxParenlessTrailingClosures() extends Test {
             return 3
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(123); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(123) return e }
 }
 
 construct OvxAnArgumentThenTrailingClosures() extends Test {
     test {
         return ovxPick(3) { return 1 } other: { return 2 }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct OvxTheOtherBranchOfTrailingClosures() extends Test {
     test {
         return ovxPick(0) { return 1 } other: { return 2 }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct OvxTheSameBraceShapeStillPassesChildren() extends Test {
     test {
         return OvxRow(gap: 1) { OvxText(text: "ab") OvxText(text: "cde") }.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }

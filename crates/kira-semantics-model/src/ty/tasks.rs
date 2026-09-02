@@ -74,7 +74,13 @@ impl MainThreadTaskResult {
             super::Type::RawPtr => Self::RawPtr,
             super::Type::ForeignPtr(id) => Self::ForeignPtr(id),
             super::Type::Any => Self::Any,
-            super::Type::Error
+            // A distinct type has no descriptor here, so a `MainThread.spawn`
+            // of a function returning one is refused by name rather than
+            // joined as the scalar underneath — awaiting it would hand back a
+            // `U32` where a `TabId` was declared, which is the one thing the
+            // type exists to prevent. Return `.raw` and rebuild after the join.
+            super::Type::Distinct(_)
+            | super::Type::Error
             | super::Type::Cell(_)
             | super::Type::CString
             | super::Type::CBlock

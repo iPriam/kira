@@ -97,6 +97,16 @@ fn bridge_tag_of(
         // aggregate, while the node retains the recursively owned value.
         Type::Any => (BridgeValueTag::ANY.0, Some(PayloadForm::Node)),
         Type::Error => return Err(LlvmError::internal("a value with no type")),
+        // `kira-ir` rewrites every `distinct` type to the scalar it is before
+        // a backend sees the program, so what crosses this seam is that
+        // scalar's tag. One reaching here is a lowering that skipped the
+        // erasure, which is a broken contract rather than a value to guess a
+        // tag for.
+        Type::Distinct(_) => {
+            return Err(LlvmError::internal(
+                "a distinct type that lowering did not erase",
+            ));
+        }
     })
 }
 
@@ -181,6 +191,11 @@ impl Codegen<'_> {
                 Type::Void | Type::Error => {
                     return Err(LlvmError::internal("a parameter with no runtime value"));
                 }
+                Type::Distinct(_) => {
+                    return Err(LlvmError::internal(
+                        "a distinct type that lowering did not erase",
+                    ));
+                }
             })
         }
     }
@@ -262,6 +277,7 @@ impl Codegen<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kira_semantics_model::hir::CallableSignature;
     use kira_runtime_abi::Execution;
     use kira_semantics_model::Type;
     use kira_semantics_model::hir::{HirExpr, HirFunction, HirProgram, HirStmt};
@@ -292,6 +308,7 @@ mod tests {
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(0, 6),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         let ir = kira_ir::lower(&program);
 
@@ -331,6 +348,7 @@ mod tests {
             execution: Execution::Runtime,
             mutates_self: false,
             name_span: Span::new(0, 4),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         let unused_value = program.exprs.alloc(HirExpr::Int(7));
         let unused_return = program.stmts.alloc(HirStmt::Return {
@@ -348,6 +366,7 @@ mod tests {
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(5, 17),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         program.main = Some(kira_semantics_model::hir::FuncId(0));
         let ir = kira_ir::lower(&program);

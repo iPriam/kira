@@ -253,7 +253,119 @@ fn is_leaf_copyable(ty: Type) -> bool {
             | Type::Void
             | Type::RawPtr
             | Type::ForeignPtr(_)
-            | Type::Cell(_)
+            // A distinct type is one scalar word — its representation can be
+            // nothing else — so a struct holding one is copyable exactly as a
+            // struct holding the scalar is.
+            | Type::Distinct(_)
             | Type::CString
     )
+}
+
+impl Analyzer<'_> {
+    /// Why a value of `ty` may not be written `copy`, or `None` when it is
+    /// Copyable.
+    ///
+    /// `copy` needs proof: a scalar, a string, an array of copyable elements,
+    /// and a struct or enum whose members are copyable and that runs no user
+    /// `Drop` body may be copied. Native state, a cell, a task handle, an
+    /// erased `Any` (whose payload nothing here can prove copyable), and a
+    /// closure whose captures are not copyable may not — each owns something
+    /// a second holder would release twice or write through unseen.
+    pub(crate) fn copy_refusal(&self, ty: Type) -> Option<String> {
+        self.copy_refusal_seen(ty, &mut HashSet::new())
+    }
+
+    /// [`Analyzer::copy_refusal`], with the shapes already being examined.
+    ///
+    /// A struct may hold itself through an array or an enum, so the walk
+    /// records what it is deciding: a shape cannot be the reason it is itself
+    /// uncopyable.
+    ///
+    /// This is a different question from the one `@Derive(Copy)` asks, and
+    /// deliberately a weaker one. The derive asserts that a type copies
+    /// *implicitly*, so a member that owns storage disqualifies it: gaining a
+    /// `String` field would otherwise silently turn free copies into clones.
+    /// `copy value` is the explicit spelling of that clone, so it asks only
+    /// whether duplication is defined at all — which it is for every value the
+    /// language already deep-copies on bind, and is not for a value with one
+    /// owner (native state, a cell, a task handle, C storage), a value whose
+    /// payload cannot be proven (`Any`), or a value whose `Drop` body would run
+    /// a second time.
+    fn copy_refusal_seen(&self, ty: Type, seen: &mut HashSet<Type>) -> Option<String> {
+        match ty {
+            Type::NativeState(_) => {
+                Some("it is native state, which has exactly one owner".to_owned())
+            }
+            Type::Cell(_) => Some(
+                "it is a cell: shared mutable storage a copy would write through unseen".to_owned(),
+            ),
+            Type::Task(_) | Type::MainThreadTask(_) => {
+                Some("it is a task handle, which is joined or detached exactly once".to_owned())
+            }
+            Type::Any => Some(
+                "it is an `Any`, whose payload cannot be proven copyable; downcast it with `as` \
+                 first"
+                    .to_owned(),
+            ),
+            Type::CBlock => Some("it is C storage, which has exactly one owner".to_owned()),
+            Type::Array(_) => {
+                if !seen.insert(ty) {
+                    return None;
+                }
+                self.program
+                    .types
+                    .element_of(ty)
+                    .and_then(|element| self.copy_refusal_seen(element, seen))
+                    .map(|reason| format!("its elements cannot be copied: {reason}"))
+            }
+            Type::Struct(_) | Type::Enum(_) => self.aggregate_copy_refusal(ty, seen),
+            _ => None,
+        }
+    }
+
+    /// Why a struct or enum may not be written `copy`.
+    ///
+    /// A user `Drop` body is the aggregate's own reason; otherwise the reason
+    /// belongs to the first member that has one.
+    fn aggregate_copy_refusal(&self, ty: Type, seen: &mut HashSet<Type>) -> Option<String> {
+        if !seen.insert(ty) {
+            return None;
+        }
+        let owner = self.type_name(ty);
+        if self.conforms_to(ty, crate::traits::DROP) {
+            return Some(format!(
+                "`{owner}` runs a user `Drop` body, which a copy would run a second time for \
+                 storage that only goes away once"
+            ));
+        }
+        let members: Vec<(String, Type)> = match ty {
+            Type::Struct(id) => self
+                .program
+                .types
+                .structs()
+                .get(id)?
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), field.ty))
+                .collect(),
+            Type::Enum(id) => self
+                .program
+                .types
+                .enums()
+                .get(id)?
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    variant
+                        .payload
+                        .map(|payload| (variant.name.clone(), payload))
+                })
+                .collect(),
+            _ => return None,
+        };
+        members.into_iter().find_map(|(member, member_ty)| {
+            let reason = self.copy_refusal_seen(member_ty, seen)?;
+            Some(format!("`{owner}`'s member `{member}` cannot be copied: {reason}"))
+        })
+    }
 }

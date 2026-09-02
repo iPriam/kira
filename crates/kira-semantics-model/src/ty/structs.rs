@@ -1,6 +1,7 @@
 //! Declared struct shapes and the program's struct table.
 
 use super::Type;
+use super::enums::Instantiation;
 
 /// Index of a declared struct within a [`StructTable`].
 ///
@@ -147,6 +148,12 @@ pub struct StructTable {
     // "whose is this?" — a question name lookups cannot, because names repeat
     // across packages by design.
     owners: Vec<Option<String>>,
+    // Index-aligned with `defs`: the module inside its package each row was
+    // declared in, or empty for a row minted by the compiler.
+    modules: Vec<String>,
+    // Only the rows a generic template minted appear here, so a hand-written
+    // struct is distinguishable from an instantiation by absence.
+    instantiations: std::collections::HashMap<StructId, Instantiation>,
 }
 
 /// The index key a declaration sits under.
@@ -170,6 +177,19 @@ impl StructTable {
     /// Creates an empty table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Rewrites every field's type through `visit`.
+    ///
+    /// Names and order are untouched, so layout is exactly what it was: this
+    /// exists so a field written at a distinct type carries the representation
+    /// once the frontend is done with it.
+    pub fn visit_field_types_mut(&mut self, visit: &dyn Fn(&mut Type)) {
+        for def in &mut self.defs {
+            for field in &mut def.fields {
+                visit(&mut field.ty);
+            }
+        }
     }
 
     /// Adds a struct owned by no package — the program's own.
@@ -215,7 +235,36 @@ impl StructTable {
         self.defs.push(def);
         self.origins.push(StructOrigin::Declared);
         self.owners.push(owner.map(str::to_owned));
+        self.modules.push(String::new());
         Some(id)
+    }
+
+    /// Records the module `id` was declared in.
+    pub fn set_module(&mut self, id: StructId, module: &str) {
+        if let Some(slot) = self.modules.get_mut(id.0 as usize) {
+            *slot = module.to_owned();
+        }
+    }
+
+    /// The module `id` was declared in, or empty for a compiler-minted row.
+    pub fn module_of(&self, id: StructId) -> &str {
+        self.modules
+            .get(id.0 as usize)
+            .map_or("", String::as_str)
+    }
+
+    /// Notes what generic template `id` was minted from, and with what.
+    pub fn record_instantiation(&mut self, id: StructId, instantiation: Instantiation) -> bool {
+        if self.get(id).is_none() {
+            return false;
+        }
+        self.instantiations.insert(id, instantiation);
+        true
+    }
+
+    /// What `id` was instantiated from, or `None` for a hand-written row.
+    pub fn instantiation(&self, id: StructId) -> Option<&Instantiation> {
+        self.instantiations.get(&id)
     }
 
     /// The struct `name` declares in the program's own files.

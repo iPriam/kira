@@ -36,7 +36,7 @@ impl Analyzer<'_> {
         let Type::Struct(receiver) = lhs_ty else {
             return None;
         };
-        let qualified = format!("{}.{}", self.type_name(lhs_ty), method);
+        let qualified = format!("{}.{}", self.member_owner_name(lhs_ty), method);
         let candidates: Vec<_> = self
             .visible_overloads(&qualified)
             .into_iter()

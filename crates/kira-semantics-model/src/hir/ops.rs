@@ -63,6 +63,13 @@ pub enum HirBinaryOp {
     SubInt,
     /// Integer multiplication.
     MulInt,
+    /// `wrappingAdd(a, b)`: integer addition that wraps at the operands'
+    /// width instead of trapping.
+    WrappingAddInt,
+    /// `wrappingSub(a, b)`, wrapping at the operands' width.
+    WrappingSubInt,
+    /// `wrappingMul(a, b)`, wrapping at the operands' width.
+    WrappingMulInt,
     /// Integer division (truncating), signed.
     DivInt,
     /// Integer remainder, signed.

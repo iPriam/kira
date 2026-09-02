@@ -121,6 +121,12 @@ pub extern "C" fn kira_rt_print_int(value: i64) {
     print_line(value.to_string().as_bytes());
 }
 
+/// Prints a `U64` word as the unsigned value it is.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_print_uint(value: i64) {
+    print_line((value as u64).to_string().as_bytes());
+}
+
 /// Prints a `Float` and a newline.
 ///
 /// Uses the standard library's `f64` `Display`, exactly as the VM does, so a
@@ -416,6 +422,12 @@ pub extern "C" fn kira_rt_str_of_int(value: i64) -> KStr {
     bytes_to_handle(value.to_string().into_bytes())
 }
 
+/// A `U64` word rendered as the unsigned value it is.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_str_of_uint(value: i64) -> KStr {
+    bytes_to_handle((value as u64).to_string().into_bytes())
+}
+
 /// A `Float` rendered as a fresh string; see [`kira_rt_str_of_int`].
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_str_of_float(value: f64) -> KStr {
@@ -477,6 +489,11 @@ pub unsafe extern "C" fn kira_rt_str_from_cstr(value: *const c_char) -> KStr {
     let bytes = unsafe { CStr::from_ptr(value) }.to_bytes();
     if bytes.is_empty() {
         return std::ptr::null_mut();
+    }
+    // A `String` holds UTF-8 and nothing else: bytes that are not are a
+    // foreign contract failure, never a lossy rendering.
+    if core::str::from_utf8(bytes).is_err() {
+        kira_rt_trap_foreign(kira_runtime_abi::ForeignAdapterStatus::INVALID_UTF8.0);
     }
     into_handle(bytes.to_vec().into_boxed_slice())
 }
@@ -580,6 +597,9 @@ fn explain_foreign_status(status: u32) -> String {
         Status::BAD_RESULT_SLOT => {
             "the caller presented no writable buffer for an aggregate result"
         }
+        Status::INVALID_UTF8 => {
+            "a C string crossing into Kira was not valid UTF-8, and a `String` holds nothing else"
+        }
         Status::UNAVAILABLE_LIBRARY => {
             "this import's native library is not available on this platform, and its declaration \
              said it need not be — so the call was never linked. Reaching it means code meant for \
@@ -620,7 +640,7 @@ pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
 /// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
 /// below is what keeps the two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_abi_version_13() {}
+pub extern "C" fn kira_rt_abi_version_14() {}
 
 #[cfg(test)]
 mod tests {
@@ -635,12 +655,12 @@ mod tests {
     fn the_abi_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::RUNTIME_ABI_MARKER,
-            "kira_rt_abi_version_13"
+            "kira_rt_abi_version_14"
         );
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 13);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 14);
         // Referenced so the marker cannot be dead-code-eliminated out of an
         // rlib build, and so a rename breaks this test rather than the link.
-        kira_rt_abi_version_13();
+        kira_rt_abi_version_14();
     }
 
     /// The backend reads `shares` out of this object, so its shape is a

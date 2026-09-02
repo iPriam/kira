@@ -10,20 +10,20 @@ import Foundation
 // ffi_nested_fixed_array_assignment native leak). The store now writes the
 // element into the inline storage and the read-back proves it persisted.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfaColorAction {
     var load_action: I32
 }
 
-@FFI.Array { element: FfaColorAction; count: 4; }
+@FFI.Array { element: FfaColorAction, count: 4 }
 struct FfaColorArray4 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfaPassAction {
     var colors: FfaColorArray4
 }
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfaPass {
     var action: FfaPassAction
 }
@@ -47,7 +47,7 @@ function ffaStoreReadback() -> Int {
 
 construct FfaInlineArrayStoreReadback() extends Test {
     test { return ffaStoreReadback() }
-    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
 }
 
 // Churn the store/read cycle so a per-iteration native leak (the old orphaned
@@ -62,5 +62,5 @@ construct FfaInlineArrayChurn() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11100) return e }
 }

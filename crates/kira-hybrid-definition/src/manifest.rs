@@ -117,15 +117,16 @@ pub struct HybridManifest {
     /// How many functions the bytecode half carries beyond
     /// [`HybridManifest::functions`].
     ///
-    /// The VM half synthesizes helpers of its own — the widen rebuilds — which
-    /// are appended after the program's functions and belong to no crossing:
-    /// nothing native calls one, because a crossing names a function by its
-    /// manifest id and these have none. They still have to be *counted*, or the
-    /// bundle check could not tell a legitimate helper from a stale bytecode
-    /// half carrying a function the manifest never described.
+    /// The bytecode compiler may append helpers of its own after the program's
+    /// functions, and they belong to no crossing: nothing native calls one,
+    /// because a crossing names a function by its manifest id and these have
+    /// none. They still have to be *counted*, or the bundle check could not
+    /// tell a legitimate helper from a stale bytecode half carrying a function
+    /// the manifest never described.
     ///
-    /// Zero for a program that widens nothing, and for a manifest written
-    /// before this field existed — which is what keeps those bytes unchanged.
+    /// Zero for a bytecode half that appends nothing, and for a manifest
+    /// written before this field existed — which is what keeps those bytes
+    /// unchanged.
     pub internal_functions: u32,
     /// Native instrumentation that must be active before this bundle loads.
     ///
@@ -354,8 +355,8 @@ impl HybridManifest {
         }
         // The trailing sections are positional, not tagged, so a later one can
         // only be written if every earlier one is — otherwise the decoder reads
-        // this section's count as the foreign count. A program that widens
-        // nothing writes no tail at all and keeps its bytes unchanged.
+        // this section's count as the foreign count. A program with nothing to
+        // record here writes no tail at all and keeps its bytes unchanged.
         let has_retained = self
             .foreign
             .iter()
@@ -472,7 +473,7 @@ impl HybridManifest {
         let mut foreign = read_foreign(&mut reader)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign)?;
         // Absent means zero: a manifest written before this field existed ends
-        // here, and so does one for a program that widens nothing.
+        // here, and so does one whose bytecode half appends nothing.
         let internal_functions = if reader.is_at_end() { 0 } else { reader.u32()? };
         read_foreign_retained(&mut reader, &mut foreign)?;
         let sanitizer = if reader.is_at_end() {

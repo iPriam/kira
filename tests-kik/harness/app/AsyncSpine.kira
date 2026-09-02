@@ -1,9 +1,11 @@
+import Foundation
+
 // Async task spine (deferred execution), exercised through scalar folds so the
 // kik harness catches backend-parity regressions in async lowering.
 //
 // Semantics under test (identical on vm/llvm/hybrid):
 //
-//   * `async function` bodies execute like synchronous functions when called
+//   * `async function` bodies are task entry points, started with `Task { }` and joined with `.await`; a direct call is refused (KSEM354), so each one is
 //     directly (no reactor-backed suspend points yet).
 //   * `Task { f(args) }` spawns a DEFERRED task: args evaluate at the spawn
 //     site, the call runs at first drive (`.await` joins it, `.detach()`
@@ -19,20 +21,31 @@ async function asyncSum(a: Int, b: Int) -> Int {
     return a + b
 }
 
-async function asyncDouble(value: Int) -> Int {
-    return asyncSum(value, value)
+// An async body may call ordinary functions; another async function is
+// reached only as a task.
+function sumOf(a: Int, b: Int) -> Int {
+    return a + b
 }
 
-async function asyncFactorial(n: Int) -> Int {
+async function asyncDouble(value: Int) -> Int {
+    return sumOf(value, value)
+}
+
+function factorialOf(n: Int) -> Int {
     if n <= 1 {
         return 1
     }
-    return n * asyncFactorial(n - 1)
+    return n * factorialOf(n - 1)
 }
 
-// A pure `async function` called directly behaves like a synchronous call.
-function asyncDirectCall() -> Int {
-    return asyncDouble(21)
+async function asyncFactorial(n: Int) -> Int {
+    return factorialOf(n)
+}
+
+// An `async function` is started as a task and joined for its result.
+function asyncSpawnDouble() -> Int {
+    let handle = Task { asyncDouble(21) }
+    return handle.await
 }
 
 // Spawn a deferred task and join it: the call runs at the `.await`.
@@ -96,7 +109,7 @@ async function asyncNapper(ms: Int, value: Int) -> Int {
 }
 
 function asyncSpineSection() -> Int {
-    let direct = asyncDirectCall()             // 42
+    let direct = asyncSpawnDouble()             // 42
     let joined = asyncSpawnJoin()               // 120
     let siblings = asyncCancelDetachSiblings()  // 142
     return direct + joined + siblings           // 304

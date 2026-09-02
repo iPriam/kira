@@ -120,7 +120,7 @@ type StateNodeFreeFn = unsafe extern "C" fn(StateNode);
 type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
 type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
 type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
-type StateFreeFn = unsafe extern "C" fn(u64) -> u32;
+type StateCountFn = unsafe extern "C" fn(u64) -> u32;
 type CBlockReleaseRetainedFn = unsafe extern "C" fn();
 /// The loaded library lease carried by a decoded cell's release closure.
 struct CellReleaseOwner<L> {
@@ -197,7 +197,8 @@ const STATE_VALUE_FREE: &[u8] = b"kira_rt_native_value_free\0";
 const STATE_NEW: &[u8] = b"kira_rt_native_state_new\0";
 const STATE_RECOVER: &[u8] = b"kira_rt_native_state_recover\0";
 const STATE_REPLACE: &[u8] = b"kira_rt_native_state_replace\0";
-const STATE_FREE: &[u8] = b"kira_rt_native_state_free\0";
+const STATE_RETAIN: &[u8] = b"kira_rt_native_state_retain\0";
+const STATE_RELEASE: &[u8] = b"kira_rt_native_state_release\0";
 const CBLOCK_RELEASE_RETAINED: &[u8] = b"kira_rt_cblock_release_retained\0";
 
 /// The native half of a hybrid program, loaded and bound.
@@ -271,7 +272,8 @@ pub struct NativeLibrary {
     state_new: StateNewFn,
     state_recover: StateRecoverFn,
     state_replace: StateReplaceFn,
-    state_free: StateFreeFn,
+    state_retain: StateCountFn,
+    state_release: StateCountFn,
     cblock_release_retained: CBlockReleaseRetainedFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
@@ -381,7 +383,8 @@ impl NativeLibrary {
         let state_new = bind(&library, path, STATE_NEW)?;
         let state_recover = bind(&library, path, STATE_RECOVER)?;
         let state_replace = bind(&library, path, STATE_REPLACE)?;
-        let state_free = bind(&library, path, STATE_FREE)?;
+        let state_retain = bind(&library, path, STATE_RETAIN)?;
+        let state_release = bind(&library, path, STATE_RELEASE)?;
         let cblock_release_retained = bind(&library, path, CBLOCK_RELEASE_RETAINED)?;
 
         let mut trampolines = vec![None; functions.len()];
@@ -476,7 +479,8 @@ impl NativeLibrary {
             state_new,
             state_recover,
             state_replace,
-            state_free,
+            state_retain,
+            state_release,
             cblock_release_retained,
             _library: library,
         })

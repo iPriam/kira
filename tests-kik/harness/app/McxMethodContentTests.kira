@@ -70,7 +70,7 @@ construct McxAMethodTakesOneChild() extends Test {
         }
         return node.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(34); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(34) return e }
 }
 
 construct McxAMethodTakesSeveralChildren() extends Test {
@@ -81,7 +81,7 @@ construct McxAMethodTakesSeveralChildren() extends Test {
         }
         return node.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 // The block is the whole argument list, so the parentheses go away entirely —
@@ -93,7 +93,7 @@ construct McxAMethodWithNoArgumentsNeedsNoParentheses() extends Test {
         }
         return node.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(27) return e }
 }
 
 // A builder inside the block produces children exactly as one inside a
@@ -107,7 +107,7 @@ construct McxAForInsideTheBlockProducesChildren() extends Test {
         }
         return node.total()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // A family requirement can mutate its erased receiver. The payload is updated
@@ -129,7 +129,7 @@ construct McxAMutableFamilyDispatchWritesBackThePayload() extends Test {
         var node: some McxMutableNode = McxMutableLeaf(total: 5)
         return node.bump(by: 6)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
 
 function mcxSection() -> Int {

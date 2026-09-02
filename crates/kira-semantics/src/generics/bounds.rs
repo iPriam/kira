@@ -81,10 +81,10 @@ impl<'a> Analyzer<'a> {
 
     /// The parameter declarations for any generic source-level template.
     fn generic_parameters(&self, name: &str) -> Option<Vec<kira_syntax_model::ast::TypeParamDecl>> {
-        if let Some(template) = self.generic_enums.get(name) {
+        if let Some(template) = self.generic_enum_named(name) {
             return Some(template.decl.type_params.clone());
         }
-        if let Some(template) = self.generic_aggregates.get(name) {
+        if let Some(template) = self.generic_aggregate_named(name) {
             return Some(template.type_params().to_vec());
         }
         if let Some(template) = self

@@ -93,3 +93,71 @@ fn the_derive_changes_nothing_about_an_eligible_type() {
     }
     assert_eq!(codes(&with), codes(&without), "{with:?} vs {without:?}");
 }
+
+/// `copy` needs proof the value is Copyable: a struct that runs a user `Drop`
+/// body, native state, a cell, or an `Any` cannot be copied, while a plain
+/// struct or a string can.
+#[test]
+fn a_copy_expression_needs_a_copyable_value() {
+    let dropping = "struct Handle {\n    var id: Int = 1\n}\n\
+                    extend Handle: Drop {\n    function drop(borrow mut self) { return }\n}\n\
+                    function take(h: Handle) -> Int { return h.id }\n\
+                    @Main function main() { let h = Handle() print(take(copy h)) return }";
+    assert_eq!(codes(dropping), vec!["KSEM356"]);
+
+    let erased = "@Main function main() { let a: Any = 1 let b: Any = copy a return }";
+    assert_eq!(codes(erased), vec!["KSEM356"]);
+
+    let plain = "struct Point {\n    var x: Int = 1\n}\n\
+                 function take(p: Point) -> Int { return p.x }\n\
+                 @Main function main() {\n    let p = Point()\n    let s = \"hi\"\n\
+                 print(take(copy p) + p.x + (copy s).count)\n    return\n}";
+    assert!(diagnostics(plain).is_empty(), "{:?}", codes(plain));
+}
+
+/// `copy` is the *explicit* spelling of a clone, so it accepts every value the
+/// language already duplicates on bind — including a struct holding a string
+/// and an array — and asks only about the values with one owner. This is the
+/// question `@Derive(Copy)` answers more strictly, and the two must not be one
+/// check: a struct holding a `String` is ineligible for the derive and still
+/// copyable by hand.
+#[test]
+fn copying_a_value_that_owns_storage_is_the_explicit_clone() {
+    let heap = "struct Boxed {\n    var text: String = \"keep\"\n    var items: [Int] = [1]\n}\n\
+                @Main function main() {\n    var original = Boxed()\n\
+                var duplicate = copy original\n    duplicate.items.append(9)\n\
+                print(original.items.count + duplicate.items.count)\n    return\n}";
+    assert!(diagnostics(heap).is_empty(), "{:?}", codes(heap));
+
+    let elements = "struct Boxed {\n    var text: String = \"keep\"\n}\n\
+                    @Main function main() {\n    let all = [Boxed()]\n\
+                    let mine = copy all\n    print(mine.count)\n    return\n}";
+    assert!(diagnostics(elements).is_empty(), "{:?}", codes(elements));
+
+    // The derive still refuses what it always refused.
+    let derived = "@Derive(Copy)\nstruct Boxed {\n    var text: String = \"keep\"\n}\n\
+                   @Main function main() { return }";
+    assert_eq!(codes(derived), vec!["KIR005"]);
+}
+
+/// A member with one owner is what `copy` refuses, and the reason names it.
+#[test]
+fn copying_an_aggregate_that_holds_a_single_owner_value_is_refused() {
+    let nested = "struct Inner {\n    var id: Int = 1\n}\n\
+                  extend Inner: Drop {\n    function drop(borrow mut self) { return }\n}\n\
+                  struct Outer {\n    var inner: Inner = Inner()\n}\n\
+                  @Main function main() {\n    let value = Outer()\n\
+                  let mine = copy value\n    print(mine.inner.id)\n    return\n}";
+    assert_eq!(codes(nested), vec!["KSEM356"]);
+}
+
+/// A `copy` parameter promises to copy every argument, so its type must be
+/// Copyable at the declaration.
+#[test]
+fn a_copy_parameter_needs_a_copyable_type() {
+    let text = "struct Handle {\n    var id: Int = 1\n}\n\
+                extend Handle: Drop {\n    function drop(borrow mut self) { return }\n}\n\
+                function keep(h: copy Handle) -> Int { return h.id }\n\
+                @Main function main() { return }";
+    assert!(codes(text).contains(&"KSEM356".to_owned()), "{:?}", codes(text));
+}

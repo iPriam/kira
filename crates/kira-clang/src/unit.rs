@@ -267,7 +267,14 @@ mod tests {
         let arguments = function.c_type().arguments();
         assert_eq!(arguments.len(), 2);
         assert_eq!(arguments[0].kind(), TypeKind::POINTER);
-        assert_eq!(arguments[1].pointee().canonical().kind(), TypeKind::CHAR_S);
+        // Plain `char` canonicalizes to whichever signedness the target gives
+        // it — signed on x86-64, unsigned on aarch64 — so the binding is proved
+        // by naming a character type rather than by pinning one platform's.
+        let pointee = arguments[1].pointee().canonical().kind();
+        assert!(
+            pointee == TypeKind::CHAR_S || pointee == TypeKind::CHAR_U,
+            "a `const char *` points at plain `char`, found {pointee:?}"
+        );
         assert!(arguments[1].pointee().is_const());
     }
 

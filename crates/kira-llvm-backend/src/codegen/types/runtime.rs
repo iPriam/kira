@@ -68,6 +68,23 @@ pub(in crate::codegen) struct Runtime {
     /// whatever the instance inside it owned.
     pub(in crate::codegen) box_free: Callable,
     pub(in crate::codegen) trap_div_zero: Callable,
+    /// `kira_rt_trap_overflow(width_code)`: integer arithmetic left the range
+    /// of its spelling.
+    pub(in crate::codegen) trap_overflow: Callable,
+    /// `kira_rt_print_uint(word)`: a `U64` printed as the unsigned value.
+    pub(in crate::codegen) print_uint: Callable,
+    /// `kira_rt_str_of_uint(word)`: a `U64` rendered as unsigned text.
+    pub(in crate::codegen) str_of_uint: Callable,
+    /// `kira_rt_trap_shift(count, bits)`: a shift count outside `0..bits`.
+    pub(in crate::codegen) trap_shift: Callable,
+    /// `kira_rt_trap_narrow(word, from_code, to_code)`: a conversion whose
+    /// value the destination spelling cannot hold.
+    pub(in crate::codegen) trap_narrow: Callable,
+    /// `kira_rt_trap_float_to_int(value)`: a float with no integer value.
+    pub(in crate::codegen) trap_float_to_int: Callable,
+    /// `kira_rt_trap_cast(actual, expected)`: an `as` of an `Any` holding
+    /// another type.
+    pub(in crate::codegen) trap_cast: Callable,
     /// `kira_rt_task_op`: the whole deferred-task surface, in one call.
     ///
     /// One symbol rather than a dozen, because the *policy* is generated Kira
@@ -193,7 +210,10 @@ pub(in crate::codegen) struct Runtime {
     pub(in crate::codegen) native_state_new: Callable,
     pub(in crate::codegen) native_state_recover: Callable,
     pub(in crate::codegen) native_state_replace: Callable,
-    pub(in crate::codegen) native_state_free: Callable,
+    /// Adds one owner to a callback state, boxed or stored.
+    pub(in crate::codegen) native_state_retain: Callable,
+    /// Removes one owner from a callback state; the last release destroys it.
+    pub(in crate::codegen) native_state_release: Callable,
     /// Allocates a box holding one state value in this backend's own layout.
     pub(in crate::codegen) native_state_box_new: Callable,
     /// The address of the value inside a box, type-checked.

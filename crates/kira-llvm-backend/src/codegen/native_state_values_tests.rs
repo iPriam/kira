@@ -1,5 +1,5 @@
 use kira_runtime_abi::Execution;
-use kira_semantics_model::hir::{HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
+use kira_semantics_model::hir::{CallableSignature, HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
 use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, Type};
 use kira_source::Span;
 
@@ -58,6 +58,7 @@ fn a_c_string_member_crosses_the_hybrid_seam_as_an_opaque_word() {
         execution: Execution::Native,
         mutates_self: false,
         name_span: Span::new(0, 12),
+        signature: CallableSignature::synthesized(&[], ty),
     });
     let ir = kira_ir::lower(&program);
 

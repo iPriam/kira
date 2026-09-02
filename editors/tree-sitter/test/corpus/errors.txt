@@ -1,21 +1,12 @@
 ================================================================================
-There is no block comment
+An unterminated block comment is an error
+:error
 ================================================================================
 
-/* not a comment */
+/* never closed
 function f() {}
 
 --------------------------------------------------------------------------------
-
-(source_file
-  (ERROR
-    (identifier)
-    (identifier)
-    (identifier))
-  (function_definition
-    name: (identifier)
-    parameters: (parameters)
-    body: (block)))
 
 ================================================================================
 A function is declared with `function`, never `func`

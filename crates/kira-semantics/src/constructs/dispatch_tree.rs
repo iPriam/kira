@@ -5,10 +5,8 @@
 //! arms makes the frame that performs selection independent of the concrete
 //! aggregate each variant carries.
 
-use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback,
-    LocalId,
-};
+use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback,
+    LocalId,};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 
@@ -188,6 +186,7 @@ impl Analyzer<'_> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self,
             name_span: Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], result),
         }
     }
 

@@ -1,12 +1,22 @@
 //! Where a value crosses into a wider declared type.
 //!
-//! Two crossings live here, and they are the language's only two: a value whose
-//! type stops being known ([`Type::Any`]), and a generic instantiation whose
-//! *type arguments* stop being known (`Result<Int, E>` where `Result<Any, E>` is
-//! written). [`Analyzer::admits`] answers whether a position accepts a value and
-//! [`Analyzer::coerce_into`] inserts the node that makes it true, and the two are
-//! one pair on purpose: a position that admits a value without inserting the
-//! node would hand a backend a value in the wrong machine form.
+//! One crossing lives here, and it is the language's only one: a value whose
+//! type stops being known ([`Type::Any`]). [`Analyzer::admits`] answers whether
+//! a position accepts a value and [`Analyzer::coerce_into`] inserts the node
+//! that makes it true, and the two are one pair on purpose: a position that
+//! admits a value without inserting the node would hand a backend a value in
+//! the wrong machine form.
+//!
+//! # Why one generic specialization does not reach another
+//!
+//! `Result<Int, E>` is not admitted where `Result<Any, E>` is written, and
+//! `Box<Child>` is not admitted where `Box<Parent>` is. A specialization's
+//! identity is part of its nominal identity, and that identity reaches
+//! dispatch, reflection, serialization, and the ABI, so a value that silently
+//! became another specialization would answer `.type` with a type it was never
+//! built as. Kira aggregates are mutable values as well, so a widening would
+//! have to be a rebuild whose writes land in a copy. A program that wants the
+//! other specialization builds it, one payload at a time.
 //!
 //! Every position that admits a value of a *declared* type routes through the
 //! pair — a `let` with an annotation, an assignment, a `return`, a call
@@ -23,29 +33,30 @@
 //! pointer. Making the crossing a node in the tree means both engines are handed
 //! the same answer instead of deriving it.
 //!
-//! # Why there is no way back
+//! # The way back
 //!
-//! The language has no `is`, no `as`, and no downcast form, so nothing can ask
-//! an `Any` what it holds — see [`Type::Any`] — and nothing can ask a
-//! `Result<Any, E>` to become the `Result<Int, E>` it was built from. Both
-//! crossings are deliberately one-directional, and will stay so until the
-//! language grows the surface that would justify the other half.
+//! `value is T` and `value as T` ask an erased value what it holds, so the
+//! crossing into `Any` is reversible by a checked downcast rather than by an
+//! implicit rule. Nothing turns a `Result<Any, E>` back into a
+//! `Result<Int, E>`: the payload is reachable through the downcast, and the
+//! specialization is rebuilt from it.
 
-use kira_semantics_model::Type;
-use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::{IntSpelling, Type};
+use kira_source::Span;
+use kira_semantics_model::hir::{
+    ConvertKind,HirExpr, HirExprId};
 
 use crate::analyze::Analyzer;
 
 impl Analyzer<'_> {
     /// Whether a value of `actual` may be used where `expected` is declared.
     ///
-    /// The lattice's own rule ([`Type::assignable_to`]) plus the one rule that
-    /// needs the program's tables to answer: an instantiation of a generic enum
-    /// widening into another instantiation of the same template. Every position
-    /// that pairs its check with [`Analyzer::coerce_into`] asks this rather than
-    /// `assignable_to`, so the check and the conversion admit the same set.
+    /// The lattice's own rule, and nothing else. Every position that pairs its
+    /// check with [`Analyzer::coerce_into`] asks this rather than
+    /// `assignable_to` directly, so the check and the conversion stay one pair
+    /// as the lattice grows.
     pub(crate) fn admits(&self, actual: Type, expected: Type) -> bool {
-        self.program.types.admits(actual, expected)
+        actual.assignable_to(expected)
     }
 
     /// [`Analyzer::admits`], plus the subclass a *call argument* may be.
@@ -106,13 +117,69 @@ impl Analyzer<'_> {
                 .exprs
                 .alloc(HirExpr::IntoAny { value: expr, from });
         }
-        if !self.program.types.widens_to(from, expected) {
+        if let (Type::Int(from_spelling), Type::Int(to_spelling)) = (from, expected)
+            && from_spelling != to_spelling
+        {
+            return self.narrow_int(expr, from_spelling, to_spelling);
+        }
+        expr
+    }
+
+    /// An integer reaching storage of another spelling.
+    ///
+    /// A bare literal that fits needs nothing; one that does not was already
+    /// reported where it was typed ([`Analyzer::int_literal`]), and any that
+    /// arrives here untyped converts at run time like every other value: an
+    /// identity when every value of the source fits the destination, a
+    /// checked narrowing otherwise.
+    fn narrow_int(&mut self, expr: HirExprId, from: IntSpelling, to: IntSpelling) -> HirExprId {
+        if let HirExpr::Int(value) = *self.program.expr(expr) {
+            // A hexadecimal literal is a bit pattern, and the one way a
+            // literal can be negative: as a `U64` it names the unsigned
+            // value of those bits.
+            let denoted = if to == IntSpelling::U64 && value < 0 {
+                i128::from(value as u64)
+            } else {
+                i128::from(value)
+            };
+            if to.holds(denoted) {
+                return expr;
+            }
+        }
+        if from.widens_into(to) {
             return expr;
         }
-        self.program.exprs.alloc(HirExpr::Widen {
-            value: expr,
-            from,
-            to: expected,
+        self.program.exprs.alloc(HirExpr::Convert {
+            operand: expr,
+            kind: ConvertKind::IntToInt,
+            ty: Type::Int(to),
         })
+    }
+
+    /// An integer literal, checked against the spelling expected of it.
+    ///
+    /// A literal adapts to any written width, so this is the one place a
+    /// literal too large for its slot can be refused at compile time rather
+    /// than trapping when the value is finally narrowed.
+    pub(crate) fn int_literal(&mut self, value: i64, span: Span, expected: Option<Type>) -> HirExprId {
+        // A hexadecimal literal is a bit pattern, and the one way a literal
+        // can be negative: written into a `U64`, it names the unsigned value
+        // of those bits.
+        let denoted = if matches!(expected, Some(Type::Int(IntSpelling::U64))) && value < 0 {
+            i128::from(value as u64)
+        } else {
+            i128::from(value)
+        };
+        if let Some(Type::Int(spelling)) = expected
+            && !spelling.holds(denoted)
+        {
+            self.emit(
+                span,
+                "KSEM350",
+                format!("the literal `{value}` does not fit `{}`", spelling.name()),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        self.program.exprs.alloc(HirExpr::Int(value))
     }
 }

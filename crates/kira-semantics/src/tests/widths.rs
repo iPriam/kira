@@ -183,12 +183,10 @@ fn a_bare_int_accepts_and_is_accepted_by_any_width() {
 }
 
 #[test]
-fn a_mixed_operation_takes_its_type_from_the_left_operand() {
-    // The left operand decides, and this is *asymmetric*: `1 + i32Value` is a
-    // plain `Int` (wildcard-assignable to `Int`), while `i32Value + 1` is an
-    // `I32` (which is not). Verified against the oracle in both directions —
-    // a symmetric "the written width wins" rule accepts the second and passes
-    // every backend-parity test while still being wrong.
+fn a_mixed_operation_takes_its_type_from_the_written_width() {
+    // The written width decides, from either side: `1 + i32Value` and
+    // `i32Value + 1` are both `I32`. An `I32` widens into `Int` without a
+    // conversion, and does not flow into `U32` at all.
     assert!(
         diagnostics(
             "@Main function main() {
@@ -329,4 +327,101 @@ fn there_is_no_128_bit_width_and_no_char() {
         );
         assert_eq!(codes(&source), vec!["KSEM050"], "{absent} must not resolve");
     }
+}
+
+/// A literal too large for the width it is written into is refused where it
+/// is typed, not left to trap when the value is finally narrowed.
+#[test]
+fn a_literal_that_does_not_fit_its_width_is_rejected() {
+    assert_eq!(
+        codes("@Main function main() { let a: U8 = 256 return }"),
+        vec!["KSEM350"]
+    );
+    assert_eq!(
+        codes("@Main function main() { let a: I8 = 128 return }"),
+        vec!["KSEM350"]
+    );
+    assert!(diagnostics("@Main function main() { let a: U8 = 255 let b: I8 = -128 return }").is_empty());
+}
+
+/// A hexadecimal literal is a bit pattern: as a `U64` it names the unsigned
+/// value of those bits, which no decimal literal can spell.
+#[test]
+fn a_hexadecimal_literal_fills_a_u64() {
+    assert!(
+        diagnostics("@Main function main() { let a: U64 = 0xffffffffffffffff print(a > 1) return }")
+            .is_empty()
+    );
+}
+
+/// Two integer operands of different spellings do not mix by themselves: a
+/// bare literal adapts, a value does not.
+#[test]
+fn a_named_int_does_not_mix_with_a_written_width() {
+    assert_eq!(
+        codes(
+            "@Main function main() {
+                 let wide: Int = 10
+                 let byte: U8 = 3
+                 print(wide + byte)
+                 return
+             }"
+        ),
+        vec!["KSEM071"]
+    );
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 let byte: U8 = 3
+                 print(250 + byte)
+                 print(byte + 250)
+                 print(byte < 4)
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+/// A shift count is a count, not a value of the shifted kind: any integer
+/// spelling may supply it.
+#[test]
+fn a_shift_count_may_be_any_spelling() {
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 let byte: U8 = 3
+                 let places: Int = 2
+                 print(byte << places)
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+/// The wrapping builtins type like `+`: two integers of one spelling, and
+/// that spelling as the result.
+#[test]
+fn the_wrapping_builtins_type_like_arithmetic() {
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 let byte: U8 = 255
+                 let next: U8 = wrappingAdd(byte, 1)
+                 print(next)
+                 print(wrappingMul(3, 4))
+                 return
+             }"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        codes("@Main function main() { print(wrappingAdd(1.5, 2)) return }"),
+        vec!["KSEM063"]
+    );
+    assert_eq!(
+        codes("@Main function main() { print(wrappingSub(1)) return }"),
+        vec!["KSEM062"]
+    );
 }

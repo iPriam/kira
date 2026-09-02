@@ -20,7 +20,7 @@ A missing file, a parent directory that does not exist, a directory where a file
 Two answers are worth knowing before relying on them:
 
 - `removePath` is **recursive** on a directory.
-- `readFile`'s `text` stops at the first NUL byte while its `size` counts the whole file, so binary data belongs in `readFileRange`.
+- `readFile`'s `text` is the whole file, NUL bytes included, when the file is valid UTF-8; a file that is not is not text and reads as `""`. Binary data belongs in `readFileRange`.
 
 ## One Implementation, Three Backends
 

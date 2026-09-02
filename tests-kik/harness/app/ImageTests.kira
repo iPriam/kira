@@ -68,24 +68,24 @@ function imageTruncated(bytes: borrow [U8], count: Int) -> [U8] {
 
 construct ImagePngRgba8Extent() extends Test {
     test { return imageExtent(imagePngRgba8Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4003); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4003) return e }
 }
 
 construct ImagePngRgba8Pixels() extends Test {
     test { return imagePixelChecksum(imagePngRgba8Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(877726118); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(877726118) return e }
 }
 
 // A four-bit palette with transparency: two expansions at once, an index
 // unpacked from half a byte and an alpha taken from a table beside the colours.
 construct ImagePngPalette4Extent() extends Test {
     test { return imageExtent(imagePngPalette4Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(7005); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7005) return e }
 }
 
 construct ImagePngPalette4Pixels() extends Test {
     test { return imagePixelChecksum(imagePngPalette4Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(913834597); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(913834597) return e }
 }
 
 // Sixteen bits per sample and Adam7 interlacing together: seven sparse passes,
@@ -93,24 +93,24 @@ construct ImagePngPalette4Pixels() extends Test {
 // row before the next one fills in between.
 construct ImagePngGrey16InterlacedExtent() extends Test {
     test { return imageExtent(imagePngGrey16InterlacedBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9007); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9007) return e }
 }
 
 construct ImagePngGrey16InterlacedPixels() extends Test {
     test { return imagePixelChecksum(imagePngGrey16InterlacedBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(356720403); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(356720403) return e }
 }
 
 construct ImagePngGreyAlpha8Pixels() extends Test {
     test { return imagePixelChecksum(imagePngGreyAlpha8Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(555376892); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(555376892) return e }
 }
 
 // Transparency named as a colour rather than as a channel: one exact triple is
 // see-through and every other pixel is opaque.
 construct ImagePngTruecolourTransparencyPixels() extends Test {
     test { return imagePixelChecksum(imagePngTruecolourTransparencyBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(888967917); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(888967917) return e }
 }
 
 // --- JPEG ------------------------------------------------------------------
@@ -119,43 +119,43 @@ construct ImagePngTruecolourTransparencyPixels() extends Test {
 // decode has to stretch two channels back over the third.
 construct ImageJpegColour420Extent() extends Test {
     test { return imageExtent(imageJpegColour420Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(17009); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(17009) return e }
 }
 
 construct ImageJpegColour420Pixels() extends Test {
     test { return imagePixelChecksum(imageJpegColour420Bytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(19047066); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(19047066) return e }
 }
 
 // Full-resolution chroma and a restart every two coded units: the difference
 // chain that carries each block's average restarts with them.
 construct ImageJpegColour444RestartsExtent() extends Test {
     test { return imageExtent(imageJpegColour444RestartsBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(11013); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11013) return e }
 }
 
 construct ImageJpegColour444RestartsPixels() extends Test {
     test { return imagePixelChecksum(imageJpegColour444RestartsBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(887078426); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(887078426) return e }
 }
 
 // One component: no colour conversion and no stretch, so the transform is on
 // its own and a mistake in it has nowhere to hide.
 construct ImageJpegGreyscalePixels() extends Test {
     test { return imagePixelChecksum(imageJpegGreyscaleBytes()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(316885714); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(316885714) return e }
 }
 
 // --- What a decode refuses -------------------------------------------------
 
 construct ImageBytesInNoFormatAreUnknown() extends Test {
     test { return imageRefusal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct ImageNothingIsUnknown() extends Test {
     test { return imageRefusal([]) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // A PNG signature over a stream that stops halfway is damage, not a format
@@ -163,14 +163,14 @@ construct ImageNothingIsUnknown() extends Test {
 // a download cares which it was.
 construct ImageHalfAPngIsMalformed() extends Test {
     test { return imageRefusal(imageTruncated(imagePngRgba8Bytes(), 60)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // A JPEG cut short still decodes: everything up to the cut is real picture,
 // and the bits past it read as zero rather than trapping.
 construct ImageHalfAJpegStillDecodes() extends Test {
     test { return imageExtent(imageTruncated(imageJpegColour420Bytes(), 700)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(17009); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(17009) return e }
 }
 
 // A path with no file behind it is answered, not trapped.
@@ -187,5 +187,5 @@ construct ImageMissingFileIsUnreadable() extends Test {
             }
         }
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }

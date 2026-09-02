@@ -115,13 +115,28 @@ impl Codegen<'_> {
             }
             // The constants go back before the heap is asked to balance, so a
             // clean program still reports every allocation reclaimed.
-            self.lower_constants_release()?;
-            // The native counterpart of the VM's `current == 0`: after the
-            // program's last value is released and before the process is gone,
-            // ask the runtime whether everything it allocated came back. Silent
-            // unless `KIRA_HEAP_REPORT` is set, so an ordinary run pays one
-            // `getenv` here and nothing else.
-            self.call_runtime(self.runtime.heap_report, &mut [], c"");
+            //
+            // Only where `@Main` returning is the end of the program. Under a
+            // native event loop it is not: `@MainThreadLifecycle` runs as a
+            // fiber the main thread keeps servicing after the helper is done —
+            // `kira_rt_main_thread_run` leaves its loop on
+            // `helper_result.is_some() && !fiber::active()`, so a lifecycle
+            // that opened a window outlives `@Main` by the whole life of the
+            // window. Releasing here freed every module constant out from under
+            // it, and a read after that found a default-constructed value: a
+            // catalog with no catalogs in it, a list with no items. The release
+            // moves to the real entry, after the loop this helper is only one
+            // participant in has finished. Same reason a consumer-entered
+            // library skips it — see `constants.rs`.
+            if !native_event_loop {
+                self.lower_constants_release()?;
+                // The native counterpart of the VM's `current == 0`: after the
+                // program's last value is released and before the process is
+                // gone, ask the runtime whether everything it allocated came
+                // back. Silent unless `KIRA_HEAP_REPORT` is set, so an ordinary
+                // run pays one `getenv` here and nothing else.
+                self.call_runtime(self.runtime.heap_report, &mut [], c"");
+            }
             LLVMBuildRet(self.builder, LLVMConstInt(self.types.i32, 0, 0));
 
             let main = LLVMAddFunction(self.module, symbol.as_ptr(), entry_ty);
@@ -167,6 +182,13 @@ impl Codegen<'_> {
                     c"kira.main.status".as_ptr(),
                 )
             };
+            // The lifecycle is over only once the loop above has returned, so
+            // this is where a native-event-loop program's constants go back and
+            // where its heap is asked to balance.
+            if native_event_loop {
+                self.lower_constants_release()?;
+                self.call_runtime(self.runtime.heap_report, &mut [], c"");
+            }
             LLVMBuildRet(self.builder, result);
         }
         Ok(())

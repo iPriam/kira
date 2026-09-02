@@ -151,7 +151,7 @@ construct ColxAStatSumRange10() extends Test {
         return st.sum
     }
     // [0..9] sum=45
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 construct ColxAStatCountRange10() extends Test {
@@ -160,7 +160,7 @@ construct ColxAStatCountRange10() extends Test {
         let st = colxaStatFrom(xs)
         return st.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct ColxAStatMinRange10() extends Test {
@@ -169,7 +169,7 @@ construct ColxAStatMinRange10() extends Test {
         let st = colxaStatFrom(xs)
         return st.minVal
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ColxAStatMaxRange10() extends Test {
@@ -178,7 +178,7 @@ construct ColxAStatMaxRange10() extends Test {
         let st = colxaStatFrom(xs)
         return st.maxVal
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct ColxAStatSumPlusCountPlusMax() extends Test {
@@ -188,7 +188,7 @@ construct ColxAStatSumPlusCountPlusMax() extends Test {
         return st.sum + st.count + st.maxVal
     }
     // 45+10+9=64
-    expect { let e: Result<Int, TestFailure> = .Ok(64); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(64) return e }
 }
 
 construct ColxAStatFromLiteral() extends Test {
@@ -208,7 +208,7 @@ construct ColxAStatFromLiteral() extends Test {
         return st.maxVal - st.minVal
     }
     // [3,1,4,1,5,9,2,6,5,3] sum=39, min=1, max=9 -> 8
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct ColxAStatSumLiteral() extends Test {
@@ -228,7 +228,7 @@ construct ColxAStatSumLiteral() extends Test {
         return st.sum
     }
     // 3+1+4+1+5+9+2+6+5+3 = 39
-    expect { let e: Result<Int, TestFailure> = .Ok(39); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(39) return e }
 }
 
 construct ColxAStatSingle() extends Test {
@@ -239,7 +239,7 @@ construct ColxAStatSingle() extends Test {
         return st.sum + st.count + st.minVal + st.maxVal
     }
     // sum=42, count=1, min=42, max=42 -> 127
-    expect { let e: Result<Int, TestFailure> = .Ok(127); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(127) return e }
 }
 
 construct ColxAStatRange20Sum() extends Test {
@@ -249,7 +249,7 @@ construct ColxAStatRange20Sum() extends Test {
         return st.sum - st.count
     }
     // sum=190, count=20 -> 170
-    expect { let e: Result<Int, TestFailure> = .Ok(170); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(170) return e }
 }
 
 construct ColxAStatEvenOnly() extends Test {
@@ -264,7 +264,7 @@ construct ColxAStatEvenOnly() extends Test {
         return st.sum + st.count + st.maxVal - st.minVal
     }
     // sum=30, count=5, max=10, min=2 -> 30+5+10-2=43
-    expect { let e: Result<Int, TestFailure> = .Ok(43); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(43) return e }
 }
 
 construct ColxAStatAccumLoop() extends Test {
@@ -278,7 +278,7 @@ construct ColxAStatAccumLoop() extends Test {
         return stat.sum
     }
     // values: 1,3,5,7,9 -> sum=25
-    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
 }
 
 construct ColxAStatAccumMin() extends Test {
@@ -291,7 +291,7 @@ construct ColxAStatAccumMin() extends Test {
         colxaAccumStat(stat, 5)
         return stat.minVal
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct ColxAStatAccumMax() extends Test {
@@ -304,7 +304,7 @@ construct ColxAStatAccumMax() extends Test {
         colxaAccumStat(stat, 5)
         return stat.maxVal
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct ColxAStatFromSquares() extends Test {
@@ -314,7 +314,7 @@ construct ColxAStatFromSquares() extends Test {
         return st.maxVal
     }
     // [0,1,4,9,16,25] -> max=25
-    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
 }
 
 construct ColxAStatChurn50() extends Test {
@@ -335,7 +335,7 @@ construct ColxAStatChurn50() extends Test {
     // sum(r^2 for r=0..49) = 49*50*99/6 = 40425
     // sum(r for r=0..49) = 1225
     // total = (40425+1225)/2 = 41650/2 = 20825
-    expect { let e: Result<Int, TestFailure> = .Ok(20825); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20825) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +353,7 @@ construct ColxARowSum5() extends Test {
         let row = ColxARow { vals: move vals }
         return row.rowSum()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct ColxARowCount5() extends Test {
@@ -367,7 +367,7 @@ construct ColxARowCount5() extends Test {
         let row = ColxARow { vals: move vals }
         return row.rowCount()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct ColxARowSumRange10() extends Test {
@@ -376,7 +376,7 @@ construct ColxARowSumRange10() extends Test {
         let row = ColxARow { vals: move vals }
         return row.rowSum()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 construct ColxARowCountRange10() extends Test {
@@ -385,7 +385,7 @@ construct ColxARowCountRange10() extends Test {
         let row = ColxARow { vals: move vals }
         return row.rowCount()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct ColxARowEmpty() extends Test {
@@ -394,7 +394,7 @@ construct ColxARowEmpty() extends Test {
         let row = ColxARow { vals: move vals }
         return row.rowSum() + row.rowCount()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ColxARowMatrixTotalSum() extends Test {
@@ -416,7 +416,7 @@ construct ColxARowMatrixTotalSum() extends Test {
         return total
     }
     // r=0:6, r=1:22, r=2:38, r=3:54, r=4:70 -> 190
-    expect { let e: Result<Int, TestFailure> = .Ok(190); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(190) return e }
 }
 
 construct ColxARowMatrixRowCounts() extends Test {
@@ -437,7 +437,7 @@ construct ColxARowMatrixRowCounts() extends Test {
         return totalCells
     }
     // row counts: 1+2+3+4+5=15
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct ColxARowSquaresSum() extends Test {
@@ -447,7 +447,7 @@ construct ColxARowSquaresSum() extends Test {
         return row.rowSum()
     }
     // [0,1,4,9,16] -> 30
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct ColxARowFibSum() extends Test {
@@ -457,7 +457,7 @@ construct ColxARowFibSum() extends Test {
         return row.rowSum()
     }
     // [0,1,1,2,3,5,8,13] -> 33
-    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(33) return e }
 }
 
 construct ColxARowChurn30() extends Test {
@@ -473,7 +473,7 @@ construct ColxARowChurn30() extends Test {
         return total
     }
     // squares(6)=[0,1,4,9,16,25] sum=55; 55*30=1650
-    expect { let e: Result<Int, TestFailure> = .Ok(1650); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1650) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +495,7 @@ construct ColxASortedFirst() extends Test {
         let s = colxaSorted(xs)
         return s[0]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct ColxASortedLast() extends Test {
@@ -513,7 +513,7 @@ construct ColxASortedLast() extends Test {
         let s = colxaSorted(xs)
         return s[8]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct ColxASortedSum() extends Test {
@@ -532,7 +532,7 @@ construct ColxASortedSum() extends Test {
         return colxSum(s)
     }
     // [1..9] sum=45
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 construct ColxASortedDuplicates() extends Test {
@@ -548,7 +548,7 @@ construct ColxASortedDuplicates() extends Test {
         return s[0] + s[5]
     }
     // sorted=[1,3,3,7,7,7] -> s[0]=1, s[5]=7 -> 8
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct ColxASortedDuplicatesSum() extends Test {
@@ -564,7 +564,7 @@ construct ColxASortedDuplicatesSum() extends Test {
         return colxSum(s)
     }
     // 1+3+3+7+7+7=28
-    expect { let e: Result<Int, TestFailure> = .Ok(28); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
 }
 
 construct ColxASortedTwo() extends Test {
@@ -576,7 +576,7 @@ construct ColxASortedTwo() extends Test {
         return s[0] * 1000 + s[1]
     }
     // sorted=[1,100] -> 1*1000+100=1100
-    expect { let e: Result<Int, TestFailure> = .Ok(1100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1100) return e }
 }
 
 construct ColxASortedSingle() extends Test {
@@ -586,7 +586,7 @@ construct ColxASortedSingle() extends Test {
         let s = colxaSorted(xs)
         return s[0]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct ColxASortedAlreadySorted() extends Test {
@@ -596,7 +596,7 @@ construct ColxASortedAlreadySorted() extends Test {
         return s[0] + s[7]
     }
     // [0,1,2,3,4,5,6,7] sorted = same -> s[0]=0, s[7]=7 -> 7
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct ColxASortedReverseInput() extends Test {
@@ -612,7 +612,7 @@ construct ColxASortedReverseInput() extends Test {
         return s[0] + s[9]
     }
     // sorted=[0..9], s[0]=0, s[9]=9 -> 9
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct ColxASortedCount() extends Test {
@@ -624,6 +624,6 @@ construct ColxASortedCount() extends Test {
         let s = colxaSorted(xs)
         return s.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 

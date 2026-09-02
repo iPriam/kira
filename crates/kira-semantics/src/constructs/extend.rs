@@ -12,7 +12,7 @@
 //! ordinary direct call and runs byte-identically on every backend. No new IR,
 //! opcode, or serialized shape is introduced.
 
-use kira_semantics_model::hir::{FuncId, HirFunction};
+use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity, FuncId, HirFunction};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::SourceId;
 use kira_syntax_model::ast::{ExtendDecl, Function, Item};
@@ -30,7 +30,8 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn collect_extend_blocks(&mut self) {
         for (source, declaration) in self.extend_declarations() {
             self.source = source;
-            let family_name = self.interner.resolve(declaration.name).to_owned();
+            let written = self.interner.resolve(declaration.name).to_owned();
+            let family_name = self.visible_family_key(&written).unwrap_or(written);
             if !self.construct_families.contains_key(&family_name) {
                 // A class is the other thing `extend` may name, and it is
                 // handled where a class's methods are collected rather than
@@ -290,6 +291,28 @@ impl<'a> Analyzer<'a> {
                 format!("modifier `Any {family}.{method}` may finish without returning a value"),
             );
         }
+        let signature = CallableSignature {
+            receiver: Some(ReceiverSignature {
+                ty: Type::Enum(enum_id),
+                mutable: mutates_self,
+            }),
+            params: function
+                .params
+                .iter()
+                .zip(params.iter())
+                .zip(ownership.iter())
+                .map(|((param, &ty), &mode)| ParamSignature {
+                    label: self.interner.resolve(param.name).to_owned(),
+                    ty,
+                    ownership: mode,
+                    has_default: param.default.is_some(),
+                })
+                .collect(),
+            result,
+            is_async: function.is_async,
+            affinity: ThreadAffinity::Any,
+            execution: function.execution,
+        };
         HirFunction {
             name: format!("Any {family}.{method}"),
             param_count: 1 + function.params.len() as u32,
@@ -307,6 +330,7 @@ impl<'a> Analyzer<'a> {
             execution: function.execution,
             mutates_self,
             name_span: function.name_span,
+            signature,
         }
     }
 
@@ -323,6 +347,7 @@ impl<'a> Analyzer<'a> {
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: kira_source::Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], Type::Void),
         }
     }
 

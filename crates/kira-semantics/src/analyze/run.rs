@@ -47,6 +47,7 @@ impl<'a> Analyzer<'a> {
             instantiation_depth: 0,
             payload_blame: None,
             aliases: AliasTable::new(),
+            distincts: crate::distincts::DistinctTable::new(),
             pointer_targets: HashMap::new(),
             classes: HashMap::new(),
             constructs: HashMap::new(),
@@ -83,6 +84,12 @@ impl<'a> Analyzer<'a> {
             definitions: Vec::new(),
             decl_spans: crate::definitions::DeclSpans::collect(tree, interner),
         };
+        // The packages the program was assembled from, so every identity the
+        // table answers carries the resolved package rather than its name.
+        let packages: Vec<_> = analyzer.imports.packages().cloned().collect();
+        for package in packages {
+            analyzer.program.types.declare_package(package);
+        }
         analyzer.report_unresolved_imports(&entries);
         analyzer.link_resolved_imports(&entries);
         analyzer
@@ -93,6 +100,11 @@ impl<'a> Analyzer<'a> {
         // below may name one; they resolve lazily on first use, so registering
         // them here does not require the struct or enum table to exist yet.
         self.collect_type_aliases();
+        // `distinct` declarations are registered beside the aliases and for the
+        // same reason: any collection below may name one, and both resolve
+        // lazily on first use. Registered *after* the aliases so a distinct
+        // type's name can be refused for colliding with one.
+        self.collect_distinct_types();
         // Traits are registered from syntax alone, before any type table, because
         // one type namespace means a struct, class, enum, or family declared
         // below has to be able to lose its name to a trait.
@@ -137,6 +149,12 @@ impl<'a> Analyzer<'a> {
         // Every type a payload could name now has an id, so the variants the
         // header pass left empty are filled here.
         self.resolve_enum_payloads(&enum_headers);
+        // Every `distinct` declaration resolves here whether or not anything
+        // names it, so a representation the type cannot be built over is
+        // reported at the declaration. Run after the nominal tables so
+        // `distinct Anchor = Point` is refused for being a struct rather than
+        // for naming a type that does not exist yet.
+        self.resolve_declared_distinct_types();
         // Conformance names a type, so it is resolved once every struct-shaped
         // one has an id — and before callables are enumerated, because a
         // default a conforming type did not write becomes one of its methods.

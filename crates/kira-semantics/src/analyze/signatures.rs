@@ -8,6 +8,7 @@
 use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
 use kira_semantics_model::ty::StructId;
 use kira_semantics_model::{OwnershipMode, Type};
+use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity};
 use kira_source::{FileSpan, SourceId, Span};
 
 use super::{Analyzer, Callable, FieldDefault};
@@ -38,6 +39,10 @@ pub(crate) struct FuncSig {
     pub(crate) is_main: bool,
     pub(crate) is_main_thread_lifecycle: bool,
     pub(crate) is_main_thread: bool,
+    /// The complete contract: receiver, per-parameter ownership and labels,
+    /// defaults, result, `async`, and thread affinity. What every comparison
+    /// of two callables reads, so none compares types alone.
+    pub(crate) signature: CallableSignature,
 }
 
 impl<'a> Analyzer<'a> {
@@ -102,6 +107,27 @@ impl<'a> Analyzer<'a> {
             // Defaults align with `params`, receiver included. A receiver slot
             // never has one; each written parameter carries its default as
             // unresolved syntax bound to this file, resolved once below.
+            // A `copy` parameter promises a second holder of every argument, so
+            // its type has to be Copyable.
+            for (param, &ty) in function
+                .params
+                .iter()
+                .zip(params.iter().skip(usize::from(callable.receiver.is_some())))
+            {
+                if param.ownership == OwnershipMode::Copy
+                    && let Some(reason) = self.copy_refusal(ty)
+                {
+                    self.emit(
+                        function.name_span,
+                        "KSEM356",
+                        format!(
+                            "parameter `{}` cannot be `copy {}`: {reason}",
+                            self.interner.resolve(param.name),
+                            self.type_name(ty)
+                        ),
+                    );
+                }
+            }
             let mut param_defaults: Vec<Option<FieldDefault>> =
                 callable.receiver.map(|_| None).into_iter().collect();
             param_defaults.extend(function.params.iter().map(|param| {
@@ -190,11 +216,37 @@ impl<'a> Analyzer<'a> {
                 );
             }
             main_seen = main_seen || is_main;
+            let signature = CallableSignature {
+                receiver: callable.receiver.map(|ty| ReceiverSignature {
+                    ty,
+                    mutable: function.receiver.is_some_and(|receiver| receiver.mutable),
+                }),
+                params: function
+                    .params
+                    .iter()
+                    .zip(params.iter().skip(usize::from(callable.receiver.is_some())))
+                    .zip(param_ownership.iter().skip(usize::from(callable.receiver.is_some())))
+                    .map(|((param, &ty), &ownership)| ParamSignature {
+                        label: self.interner.resolve(param.name).to_owned(),
+                        ty,
+                        ownership,
+                        has_default: param.default.is_some(),
+                    })
+                    .collect(),
+                result: return_type,
+                is_async: function.is_async,
+                affinity: if function.is_main_thread || function.is_main_thread_lifecycle {
+                    ThreadAffinity::MainThread
+                } else {
+                    ThreadAffinity::Any
+                },
+                execution: function.execution,
+            };
             self.sigs.push(FuncSig {
                 // Filled by `name_overloads` once every declaration is in, so a
                 // symbol depends on the overload set rather than on which
                 // declaration happened to be read first.
-                symbol: name.clone(),
+                symbol: self.qualified_symbol(callable.source, &name),
                 name,
                 params,
                 param_ownership,
@@ -204,6 +256,7 @@ impl<'a> Analyzer<'a> {
                 is_main,
                 is_main_thread_lifecycle: function.is_main_thread_lifecycle,
                 is_main_thread: function.is_main_thread,
+                signature,
             });
             // Pushed in lockstep with `sigs` so a `FuncId` indexes both. A
             // synthesized function reserves a later id with no row here, so the
@@ -234,12 +287,23 @@ impl<'a> Analyzer<'a> {
             .collect();
         for id in overloaded {
             let params = self.sigs[id.0 as usize].params.clone();
-            let mut symbol = self.sigs[id.0 as usize].name.clone();
+            let mut symbol =
+                self.qualified_symbol(self.sigs[id.0 as usize].source, &self.sigs[id.0 as usize].name);
             for param in params {
                 symbol.push('$');
-                symbol.push_str(&self.program.types.type_name(param).replace(' ', "_"));
+                symbol.push_str(&self.program.types.identity_key(param).replace(' ', "_"));
             }
             self.sigs[id.0 as usize].symbol = symbol;
+        }
+    }
+
+    /// The symbol a function declared in `source` gets: its name, qualified
+    /// by the declaring package so two packages' same-named functions never
+    /// share one.
+    pub(crate) fn qualified_symbol(&self, source: SourceId, name: &str) -> String {
+        match self.imports.package_of(source) {
+            Some(package) => format!("{package}::{name}"),
+            None => name.to_owned(),
         }
     }
 
@@ -326,7 +390,7 @@ impl<'a> Analyzer<'a> {
         receiver: StructId,
         method: &str,
     ) -> Option<(FuncId, &[Type], Type)> {
-        let qualified = format!("{}.{method}", self.type_name(Type::Struct(receiver)));
+        let qualified = format!("{}.{method}", self.member_owner_name(Type::Struct(receiver)));
         let ids = self.sig_index.get(&qualified)?;
         let wanted = Type::Struct(receiver);
         let id = *ids

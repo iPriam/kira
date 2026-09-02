@@ -34,14 +34,21 @@
 //     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
 //   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
 //     parsing primitive, so refusing beats shipping a lossy parser.
-//   * The four structural derives take a struct or an enum. A struct holding an enum field recurses
+//   * The four structural derives take a struct, an enum, or a `distinct` type.
+//     A struct holding an enum field recurses
 //     through that enum's own `eq_` / `clone_` / `serialize_` / `deserialize_`
 //     and those have to exist — which is what `@Derive(Equatable) enum Blend
 //     { … }` gives.
+//
+// A `distinct` type reflects with one field named `raw` whose type is its
+// representation, so the field walk below handles one unchanged. What needs its
+// own line is CONSTRUCTION: a distinct type is built by calling it,
+// `TabId(value)`, so `Clone` returns `#{target.name}(v.raw)` rather than a brace
+// literal, and `Deserializable` does the same.
 
 comptime macro Equatable {
     kind { derive }
-    appliesTo { struct enum }
+    appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
         // An enum is one value, not a fold over fields: `==` on two enum values
         // is structural and total — it compares the tag, and the payloads when
@@ -95,8 +102,18 @@ comptime macro Equatable {
 
 comptime macro Clone {
     kind { derive }
-    appliesTo { struct enum }
+    appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
+        // A distinct type is built by calling it, not by a brace literal, so it
+        // gets its own line rather than the struct path's `Name { field: … }`.
+        // The representation is a scalar word, so the copy is the read.
+        if target.kind == .Distinct {
+            return quote {
+                function clone_#{target.name}(v: borrow #{target.name}) -> #{target.name} {
+                    return #{target.name}(v.raw)
+                }
+            }
+        }
         // An enum is cloned by naming the variant it holds. A payload-less
         // variant rebuilds to itself; a payload recurses through its own
         // `clone_`, the same rule a struct field follows — so an enum of plain
@@ -106,7 +123,7 @@ comptime macro Clone {
             var arms: [Syntax] = []
             for variant in target.fields {
                 if variant.type.asSyntax() == "" {
-                    arms.append(quote { #{variant.name} -> return .#{variant.name}; })
+                    arms.append(quote { #{variant.name} -> return .#{variant.name} })
                 } else {
                     // A payload is classified exactly as a struct field is: a
                     // scalar copies by read, anything else recurses through its
@@ -119,10 +136,10 @@ comptime macro Clone {
                         }
                     }
                     if isScalar {
-                        arms.append(quote { #{variant.name}(payload) -> return .#{variant.name}(payload); })
+                        arms.append(quote { #{variant.name}(payload) -> return .#{variant.name}(payload) })
                     } else {
                         arms.append(quote {
-                            #{variant.name}(payload) -> return .#{variant.name}(clone_#{variant.type.asSyntax()}(payload));
+                            #{variant.name}(payload) -> return .#{variant.name}(clone_#{variant.type.asSyntax()}(payload))
                         })
                     }
                 }

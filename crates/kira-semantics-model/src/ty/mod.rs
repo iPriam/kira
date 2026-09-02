@@ -8,18 +8,21 @@
 
 pub mod arrays;
 pub mod cells;
+pub mod distincts;
 pub mod enums;
 pub mod erased;
 pub mod foreign_ptr;
+pub mod identity;
 pub mod native_state;
 pub mod scalars;
 pub mod structs;
 pub mod table;
 pub mod tasks;
-pub mod widening;
 
+pub use identity::{NominalIdentity, NominalKind, PackageIdentity};
 pub use arrays::{ArrayId, ArrayTable};
 pub use cells::{CellId, CellTable};
+pub use distincts::{DistinctDef, DistinctId, DistinctTable};
 pub use enums::{EnumDef, EnumId, EnumTable, Instantiation, VariantDef};
 pub use erased::ErasedTypeId;
 pub use foreign_ptr::{ForeignPtrId, ForeignPtrTable};
@@ -64,6 +67,16 @@ pub enum Type {
     /// Like a struct, an enum is a nominal type: two enums with the same
     /// variants are still distinct, so this compares by [`EnumId`].
     Enum(EnumId),
+    /// A `distinct Name = Representation` type, named by its row in the
+    /// program's [`DistinctTable`], which holds the representation.
+    ///
+    /// Nominal in the strongest sense the lattice has: it is assignable to
+    /// nothing but itself, so `TabId` reaches no `U32` parameter and no
+    /// `BookmarkId` one, and a representation reaches it only through the
+    /// written `TabId(value)`. That refusal is the whole type — at run time it
+    /// *is* the representation, and `kira-ir` erases it before any backend
+    /// sees a program, so it costs no word, no box, and no instruction.
+    Distinct(DistinctId),
     /// Shared mutable storage for a captured `var`, named by its row in the
     /// program's [`CellTable`], which holds the type inside it.
     ///
@@ -122,11 +135,10 @@ pub enum Type {
     /// [`Type::erases_into_any`] for what each backend does with it, and
     /// `kira-ir`'s `IrExpr::IntoAny` for where the compiler inserts it.
     ///
-    /// It is opaque in the other direction. The language has no `is`, `as`, or
-    /// downcast surface, so an `Any` may be stored, copied, passed, returned,
-    /// and dropped, and never read. That is a property of the language's
-    /// surface, not a shortcut here: a recovery form would be new syntax, and
-    /// this type does not invent it.
+    /// Reading one back is a checked question rather than an implicit rule:
+    /// `value is T` answers by nominal runtime identity and `value as T` hands
+    /// the held value back, trapping on anything else. Nothing narrows a
+    /// specialization built over `Any` back to the one it was rebuilt from.
     Any,
     /// A borrowed, NUL-terminated C string, legal **only** as a foreign
     /// (`@FFI.Extern`) parameter (`CString`).
@@ -257,6 +269,14 @@ impl Type {
             // hands one address back as `void*` in one function and as `T*` in
             // the next — which C itself converts between without a cast.
             (Type::ForeignPtr(_), Type::RawPtr) | (Type::RawPtr, Type::ForeignPtr(_)) => true,
+            // A distinct type is assignable to itself and to nothing else, in
+            // either direction. Stated as its own arm rather than left to the
+            // equality below because it is the feature: the wildcard that lets
+            // a bare `Int` literal reach any width must not reach *through* a
+            // distinct type, and neither must the representation it was
+            // declared over. `TabId(value)` and `id.raw` are the two crossings.
+            (Type::Distinct(from), Type::Distinct(to)) => from == to,
+            (Type::Distinct(_), _) | (_, Type::Distinct(_)) => false,
             _ => self == target,
         }
     }
@@ -323,6 +343,10 @@ impl Type {
                 | Type::NativeState(_)
                 | Type::Task(_)
                 | Type::MainThreadTask(_)
+                // A distinct type is one scalar word: its representation is
+                // restricted to the scalars precisely so this answer needs no
+                // table. See `ty::distincts`.
+                | Type::Distinct(_)
         )
     }
 
@@ -360,12 +384,15 @@ impl Type {
             // trivially copyable by the same logic.
             // A task handle is a word naming a table row, so copying one copies
             // bits: the executor owns the task, not the handle.
+            // A distinct type copies as the scalar it is: `f(tabId)` needs no
+            // `move`, exactly as `f(u32Value)` does not.
             Type::RawPtr
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
-            | Type::MainThreadTask(_) => true,
+            | Type::MainThreadTask(_)
+            | Type::Distinct(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -443,8 +470,16 @@ impl Type {
             // cell-typed read the analyzer emits is synthetic anyway; no source
             // expression ever names one.
             | Type::Cell(_)
+            // A distinct type is the scalar word it was declared over, and a
+            // scalar aliases nothing.
+            | Type::Distinct(_)
             | Type::Struct(_) => false,
         }
+    }
+
+    /// Whether this is a `distinct` type.
+    pub fn is_distinct(self) -> bool {
+        matches!(self, Type::Distinct(_))
     }
 }
 

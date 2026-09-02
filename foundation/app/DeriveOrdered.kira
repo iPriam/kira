@@ -61,8 +61,47 @@ enum Ordering {
 
 comptime macro Ordered {
     kind { derive }
-    appliesTo { enum }
+    appliesTo { enum distinct }
     expand(target: Declaration) -> Syntax {
+        // A distinct type orders by the word it is. No private ordinal is
+        // needed here — unlike an enum, whose position this derive deliberately
+        // keeps out of reach — because `raw` is already the value's own, and a
+        // program that wants it writes `.raw`.
+        if target.kind == .Distinct {
+            for field in target.fields {
+                if field.type == "RawPtr" {
+                    Diagnostics.error(
+                        "Derive(Ordered): a distinct type over `RawPtr` has no order — an opaque foreign word is an address, and comparing two of them means nothing across runs",
+                        at: target.syntax
+                    )
+                }
+                if field.type == "Bool" {
+                    Diagnostics.error(
+                        "Derive(Ordered): a distinct type over `Bool` has no order worth deriving — write the comparison you mean by hand",
+                        at: target.syntax
+                    )
+                }
+            }
+            return quote {
+                function compare_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Ordering {
+                    if a.raw < b.raw {
+                        return .Less
+                    }
+                    if a.raw > b.raw {
+                        return .Greater
+                    }
+                    return .Equal
+                }
+
+                function lt_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Bool {
+                    match compare_#{target.name}(a, b) {
+                        Less -> return true
+                        Equal -> return false
+                        Greater -> return false
+                    }
+                }
+            }
+        }
         var rankArms: [Syntax] = []
         var index: Int = 0
         for variant in target.fields {
@@ -78,7 +117,7 @@ comptime macro Ordered {
             // Matching needs no payload binding: the rank is the position, and
             // a refused payload never reaches here anyway.
             rankArms.append(quote {
-                #{variant.name} -> return #{index};
+                #{variant.name} -> return #{index}
             })
             index = index + 1
         }
@@ -103,9 +142,9 @@ comptime macro Ordered {
 
             function lt_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Bool {
                 match compare_#{target.name}(a, b) {
-                    Less -> return true;
-                    Equal -> return false;
-                    Greater -> return false;
+                    Less -> return true
+                    Equal -> return false
+                    Greater -> return false
                 }
             }
         }

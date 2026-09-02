@@ -6,7 +6,7 @@
 //! member access become an ordinary field read or call — so the IR and every
 //! backend stay unaware that classes exist.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::hir::{FieldOrder, HirExpr, HirExprId};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
@@ -112,6 +112,7 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
+            order: FieldOrder::Declared,
         })
     }
 
@@ -267,8 +268,8 @@ impl Analyzer<'_> {
         leading: &[HirExprId],
         args: &[CallArg],
     ) -> String {
-        let receiver_name = self.program.types.type_name(Type::Struct(receiver));
-        let qualifier_name = self.program.types.type_name(Type::Struct(qualifier));
+        let receiver_name = self.member_owner_name(Type::Struct(receiver));
+        let qualifier_name = self.member_owner_name(Type::Struct(qualifier));
         let plain = format!("{receiver_name}.{method}");
         let shadowed = format!("{receiver_name}.{qualifier_name}${method}");
         let prefix = format!("{method}(");
@@ -436,7 +437,7 @@ impl Analyzer<'_> {
         }
         let qualified = format!(
             "{}.{name}",
-            self.program.types.type_name(Type::Struct(owner))
+            self.member_owner_name(Type::Struct(owner))
         );
         self.lookup_function(&qualified)?;
         let local = ctx.resolve("self")?;

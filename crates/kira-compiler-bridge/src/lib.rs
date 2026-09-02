@@ -41,7 +41,7 @@ use std::cell::RefCell;
 use kira_check::CheckSession;
 use kira_native_bridge::array::KArray;
 use kira_native_bridge::values::{string_array, take_string_array};
-use kira_runtime_abi::{CheckDiagnostic, CheckRequest};
+use kira_runtime_abi::{CheckDiagnostic, CheckRequest, ToolRequest, ToolVerb};
 
 thread_local! {
     /// The compiler this thread checks with.
@@ -80,6 +80,82 @@ pub unsafe extern "C" fn kira_rt_compiler_check_packages(request: KArray, esize:
     };
     // SAFETY: forwarded `esize` contract.
     unsafe { string_array(&CheckDiagnostic::encode(&diagnostics), esize) }
+}
+
+/// Checks the package at a path, answering with its diagnostics.
+///
+/// # Safety
+/// `request` must be null or a live array of string handles built with `esize`,
+/// and is freed here; `esize` must be the ABI size the backend gives a
+/// string-handle element.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_compiler_check_path(request: KArray, esize: i64) -> KArray {
+    // SAFETY: forwarded contract; this consumes the array and its handles.
+    let fields = unsafe { take_string_array(request, esize) };
+    // SAFETY: forwarded `esize` contract.
+    unsafe { string_array(&toolchain(ToolVerb::Check, &fields), esize) }
+}
+
+/// Builds the package at a path, answering with its diagnostics.
+///
+/// # Safety
+/// The same contract [`kira_rt_compiler_check_path`] carries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_compiler_build_path(request: KArray, esize: i64) -> KArray {
+    // SAFETY: forwarded contract; this consumes the array and its handles.
+    let fields = unsafe { take_string_array(request, esize) };
+    // SAFETY: forwarded `esize` contract.
+    unsafe { string_array(&toolchain(ToolVerb::Build, &fields), esize) }
+}
+
+/// Builds the package at a path and runs it, answering with its exit code.
+///
+/// # Safety
+/// The same contract [`kira_rt_compiler_check_path`] carries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_compiler_run_path(request: KArray, esize: i64) -> KArray {
+    // SAFETY: forwarded contract; this consumes the array and its handles.
+    let fields = unsafe { take_string_array(request, esize) };
+    // SAFETY: forwarded `esize` contract.
+    unsafe { string_array(&toolchain(ToolVerb::Run, &fields), esize) }
+}
+
+/// Performs one toolchain verb against whatever this process installed.
+///
+/// Unlike checking a package set held in memory, this crate cannot answer on
+/// its own: it contains a frontend, and building a project on a disk needs a
+/// backend, a linker, and somewhere to put what they produce. So the native
+/// half asks the process-wide slot, which the program that owns the build fills
+/// — `kira` does it at startup, and a hybrid run's native half reaches the one
+/// its runtime half is using.
+///
+/// A process that installed none traps, and does not answer. A refused request
+/// must never come back as an empty diagnostic list, because no diagnostics is
+/// exactly what "it compiled" looks like, and a standalone native binary — one
+/// that was compiled ahead of time and ships without a build system — is
+/// precisely where that would be read as a clean check of a package it never
+/// looked at. Trapping is the native mirror of the VM raising `VmError`: the
+/// same refusal, said the only way native code can say it.
+fn toolchain(verb: ToolVerb, fields: &[String]) -> Vec<String> {
+    let request = match ToolRequest::decode(fields) {
+        Ok(request) => request,
+        Err(error) => trap_toolchain(&error.to_string()),
+    };
+    match kira_runtime_abi::toolchain::perform(verb, &request) {
+        Ok(answer) => answer.encode(),
+        Err(error) => trap_toolchain(&error.to_string()),
+    }
+}
+
+/// Ends the process on a toolchain the program cannot reach.
+///
+/// The native counterpart of a VM trap: it names what went wrong and stops,
+/// rather than letting a program continue on an answer it did not get. A
+/// standalone native build has no build system to install one, so a program
+/// that calls a toolchain verb from a shipped binary lands here.
+fn trap_toolchain(reason: &str) -> ! {
+    eprintln!("kira: runtime trap: toolchain operation failed: {reason}");
+    std::process::exit(1);
 }
 
 #[cfg(test)]

@@ -112,7 +112,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    pub(super) fn native_user_data(&mut self) -> Result<(), VmError> {
+    pub(super) fn native_user_data(&mut self, shared: bool) -> Result<(), VmError> {
         let state = self.pop()?;
         let Value::NativeState(token) = state else {
             self.heap.drop_value(state);
@@ -121,8 +121,61 @@ impl Vm<'_> {
                 kind: "a value that is not callback state",
             });
         };
+        // The token owns one reference. A handle a local keeps owning was read
+        // in place, so the token's reference is a new one; a temporary handle
+        // gives the token the reference it held.
+        if shared {
+            self.host
+                .native_state_retain(token)
+                .map_err(VmError::NativeState)?;
+        }
         self.stack.push(Value::RawPtr(token.as_word()));
         Ok(())
+    }
+
+    pub(super) fn native_state_retain(&mut self) -> Result<(), VmError> {
+        let token = self.pop_state_token(NativeStateOperation::Retain)?;
+        self.host
+            .native_state_retain(token)
+            .map_err(VmError::NativeState)?;
+        self.stack.push(Value::Void);
+        Ok(())
+    }
+
+    /// Settles the reference changes the heap recorded while copying and
+    /// dropping handles, retains before releases so a copy-and-drop of one
+    /// handle never destroys the state between the two.
+    pub(super) fn settle_native_state(&mut self) -> Result<(), VmError> {
+        let (retains, releases) = self.heap.take_native_state_events();
+        for token in retains {
+            self.host
+                .native_state_retain(token)
+                .map_err(VmError::NativeState)?;
+        }
+        for token in releases {
+            self.host
+                .native_state_release(token)
+                .map_err(VmError::NativeState)?;
+        }
+        Ok(())
+    }
+
+    fn pop_state_token(
+        &mut self,
+        operation: NativeStateOperation,
+    ) -> Result<kira_runtime_abi::NativeStateToken, VmError> {
+        let value = self.pop()?;
+        match value {
+            Value::NativeState(token) => Ok(token),
+            Value::RawPtr(word) => Ok(kira_runtime_abi::NativeStateToken::from_word(word)),
+            other => {
+                self.heap.drop_value(other);
+                Err(VmError::NativeStateValueMismatch {
+                    operation,
+                    kind: "a value that is neither callback state nor a token",
+                })
+            }
+        }
     }
 
     pub(super) fn native_recover(&mut self, type_word: u64) -> Result<(), VmError> {
@@ -147,21 +200,10 @@ impl Vm<'_> {
         Ok(())
     }
 
-    pub(super) fn native_state_free(&mut self) -> Result<(), VmError> {
-        let value = self.pop()?;
-        let token = match value {
-            Value::NativeState(token) => token,
-            Value::RawPtr(word) => kira_runtime_abi::NativeStateToken::from_word(word),
-            other => {
-                self.heap.drop_value(other);
-                return Err(VmError::NativeStateValueMismatch {
-                    operation: NativeStateOperation::Free,
-                    kind: "a value that is neither callback state nor a token",
-                });
-            }
-        };
+    pub(super) fn native_state_release(&mut self) -> Result<(), VmError> {
+        let token = self.pop_state_token(NativeStateOperation::Release)?;
         self.host
-            .native_state_free(token)
+            .native_state_release(token)
             .map_err(VmError::NativeState)?;
         self.stack.push(Value::Void);
         Ok(())

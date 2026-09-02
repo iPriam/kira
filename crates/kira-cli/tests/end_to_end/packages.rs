@@ -477,3 +477,186 @@ fn a_program_build_writes_the_bytecode_it_reports() {
         &written[..written.len().min(8)]
     );
 }
+
+/// Two packages may each declare the same nominal names — struct, enum,
+/// distinct, class, generic enum, trait, construct family — and the program that imports both keeps
+/// them apart everywhere identity is asked: each package's functions take
+/// their own types, generic instantiations over them are separate rows, and
+/// erased values of the two never compare equal.
+#[test]
+fn same_named_declarations_in_two_packages_are_different_types_on_every_host_backend() {
+    let tree = PackageTree::new("nominal-identity");
+    tree.write(
+        "app/package.kira",
+        r#"Package IdentityApp {
+    let kind = .App
+    let dependencies = [
+        Dependency { name: "Alpha", path: "../alpha" },
+        Dependency { name: "Beta", path: "../beta" }
+    ]
+}
+"#,
+    );
+    for (package, weight) in [("Alpha", 1), ("Beta", 100)] {
+        let lower = package.to_lowercase();
+        tree.write(
+            &format!("{lower}/package.kira"),
+            &format!(
+                "Package {package} {{\n    let kind = .Library\n    let moduleRoot = \"{package}\"\n}}\n"
+            ),
+        );
+        tree.write(
+            &format!("{lower}/app/{package}.kira"),
+            &format!(
+                r#"struct Point {{
+    let x: Int
+}}
+
+enum Shade {{
+    Light
+    Dark
+}}
+
+distinct Id = Int
+
+class Widget {{
+    var size: Int = {weight}
+}}
+
+enum Box<T> {{
+    Full(T)
+    Empty
+}}
+
+function {lower}Point() -> Point {{
+    return Point(x: {weight})
+}}
+
+function {lower}Weigh(p: borrow Point) -> Int {{
+    return p.x
+}}
+
+function {lower}Shade() -> Shade {{
+    return .Dark
+}}
+
+function {lower}ShadeCode(s: Shade) -> Int {{
+    match s {{
+        Light -> return {weight}
+        Dark -> return {weight} * 2
+    }}
+}}
+
+function {lower}Id() -> Id {{
+    return Id({weight})
+}}
+
+function {lower}Raw(id: Id) -> Int {{
+    return id.raw
+}}
+
+function {lower}Widget() -> Widget {{
+    return Widget()
+}}
+
+function {lower}Size(w: borrow Widget) -> Int {{
+    return w.size
+}}
+
+function {lower}Boxed() -> Box<Point> {{
+    return .Full({lower}Point())
+}}
+
+function {lower}Unbox(b: Box<Point>) -> Int {{
+    match b {{
+        Full(p) -> return {lower}Weigh(p)
+        Empty -> return 0
+    }}
+}}
+
+function {lower}Erased() -> Any {{
+    return {lower}Point()
+}}
+
+trait Named {{
+    function label(borrow self) -> Int
+}}
+
+extend Point: Named {{
+    function label(borrow self) -> Int {{
+        return x * 3
+    }}
+}}
+
+function {lower}Labelled() -> Named {{
+    return {lower}Point()
+}}
+
+function {lower}Label(value: Named) -> Int {{
+    return value.label()
+}}
+
+construct Shape {{
+    @Required function area() -> Int
+}}
+
+construct Square(side: Int) extends Shape {{
+    function area() -> Int {{
+        return side * side
+    }}
+}}
+
+function {lower}Shape() -> Any Shape {{
+    return Square(side: {weight})
+}}
+
+function {lower}Area(shape: Any Shape) -> Int {{
+    return shape.area()
+}}
+"#
+            ),
+        );
+    }
+    tree.write(
+        "app/app/main.kira",
+        r#"import Alpha
+import Beta
+
+@Main
+function main() {
+    print(alphaWeigh(alphaPoint()) + betaWeigh(betaPoint()))
+    print(alphaShadeCode(alphaShade()) + betaShadeCode(betaShade()))
+    print(alphaRaw(alphaId()) + betaRaw(betaId()))
+    print(alphaSize(alphaWidget()) + betaSize(betaWidget()))
+    print(alphaUnbox(alphaBoxed()) + betaUnbox(betaBoxed()))
+    print(alphaErased() == betaErased())
+    print(alphaErased() == alphaErased())
+    print(alphaLabel(alphaLabelled()) + betaLabel(betaLabelled()))
+    print(alphaArea(alphaShape()) + betaArea(betaShape()))
+    return
+}
+"#,
+    );
+    let app = tree.path().join("app");
+    let app = app.to_str().expect("UTF-8 temp path");
+
+    let checked = kira(&["check", app]);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    for backend in ["vm", "llvm", "hybrid"] {
+        let run = kira(&["run", "--backend", backend, app]);
+        assert!(
+            run.status.success(),
+            "{backend} run failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "101\n202\n101\n101\n101\nfalse\ntrue\n303\n10001\n",
+            "unexpected {backend} output"
+        );
+    }
+}

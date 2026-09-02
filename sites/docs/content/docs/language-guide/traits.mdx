@@ -31,7 +31,7 @@ struct Mesh: Hashable, Tagged {
 class Panel: Hashable extends Surface { }
 ```
 
-A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement's parameters or result is `KSEM293`.
+A conforming type that presents no member of a requirement's name is `KSEM292`; one whose member disagrees with the requirement is `KSEM293`. A requirement is the member's whole contract, not its types alone: the receiver's mutability (`borrow self` or `borrow mut self`), every parameter's ownership mode, label, and default, the result, `async`, and `@MainThread` all have to match exactly, because a call through the trait reaches whichever implementation the value carries and must mean the same thing for every one of them.
 
 ## Generic Traits
 

@@ -26,6 +26,9 @@ pub enum Item {
     Enum(EnumDecl),
     /// A `type Name = Target` alias.
     TypeAlias(TypeAliasDecl),
+    /// A `distinct Name = Representation` nominal type over one
+    /// representation.
+    Distinct(DistinctDecl),
     /// A `let Name: T = value` constant at module scope.
     Constant(ConstantDecl),
     /// An `import Module [as Alias]` declaration.
@@ -296,6 +299,26 @@ pub struct TypeAliasDecl {
     pub name_span: Span,
     /// The written target type.
     pub target: TypeRefId,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// A `distinct Name = Representation` declaration: a new nominal type that is
+/// the representation at run time and nothing like it to the type checker.
+///
+/// The opposite of a [`TypeAliasDecl`] in the one way that matters. An alias is
+/// a second spelling for one type, so a value crosses between the two names
+/// freely. A `distinct` declaration mints a *second type* over one
+/// representation, so nothing crosses without being written: `TabId(value)`
+/// makes one and `id.raw` reads the representation back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DistinctDecl {
+    /// The declared type's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The written representation type.
+    pub representation: TypeRefId,
     /// Span covering the whole declaration.
     pub span: Span,
 }

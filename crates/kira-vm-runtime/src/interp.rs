@@ -28,6 +28,7 @@ mod frames;
 mod host;
 mod instructions;
 mod main_thread;
+mod numeric;
 mod native_state;
 mod operators;
 mod place;
@@ -405,6 +406,14 @@ impl Vm<'_> {
             if self.heap.owes_drops() {
                 self.run_pending_drop(module, frames)?;
                 continue;
+            }
+            if self.heap.owes_native_state() {
+                self.settle_native_state()?;
+                // The last state owner may hold a capture cell. Releasing the
+                // state queues that cell through the host-safe release channel;
+                // drain it now because a completed program has no next
+                // instruction whose prologue could do so.
+                self.heap.drain_released_cells();
             }
             // Only once nothing is left to dispatch: a `Drop` body entered
             // after the entry function returned is still a frame, and it has

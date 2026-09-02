@@ -184,7 +184,6 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM113" { return .KSEM113 }
     if text == "KSEM114" { return .KSEM114 }
     if text == "KSEM115" { return .KSEM115 }
-    if text == "KSEM116" { return .KSEM116 }
     if text == "KSEM117" { return .KSEM117 }
     if text == "KSEM118" { return .KSEM118 }
     if text == "KSEM119" { return .KSEM119 }
@@ -222,6 +221,16 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM151" { return .KSEM151 }
     if text == "KSEM152" { return .KSEM152 }
     if text == "KSEM153" { return .KSEM153 }
+    if text == "KSEM350" { return .KSEM350 }
+    if text == "KSEM352" { return .KSEM352 }
+    if text == "KSEM353" { return .KSEM353 }
+    if text == "KSEM354" { return .KSEM354 }
+    if text == "KSEM356" { return .KSEM356 }
+    if text == "KSEM357" { return .KSEM357 }
+    if text == "KSEM358" { return .KSEM358 }
+    if text == "KSEM359" { return .KSEM359 }
+    if text == "KSEM360" { return .KSEM360 }
+    if text == "KSEM361" { return .KSEM361 }
     if text == "KSL011" { return .KSL011 }
     if text == "KSL012" { return .KSL012 }
     if text == "KSL013" { return .KSL013 }

@@ -66,7 +66,7 @@ Constants share one namespace with top-level functions (a collision is `KSEM316`
 
 ## Statement Terminators
 
-A statement ends at a newline or at a `;`. Both spellings are accepted everywhere and mean the same thing.
+There is no statement terminator. Newlines are whitespace, and a statement ends where the grammar says it does: `let a = 1 print(a)` is two statements on one line, and a `;` is an error. Elements of a list (arguments, array elements, struct-literal fields) are separated by commas.
 
 ## Imports
 

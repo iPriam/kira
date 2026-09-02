@@ -305,6 +305,13 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return ty;
         }
+        // A `distinct` declaration sits beside the aliases for lookup and
+        // opposite them in meaning: this returns the declaration's *own*
+        // nominal type, never the representation it was written over.
+        if let Some(ty) = self.resolve_distinct_name(&text, context) {
+            self.link_type_name(&text, span);
+            return ty;
+        }
         // A family's *name* is not one of its values. Naming the type takes
         // `Any Widget` or `some Widget`, which say that the value is one of the
         // declarations backing the family rather than the family itself.
@@ -336,8 +343,8 @@ impl Analyzer<'_> {
             );
             return Type::Error;
         }
-        if self.traits.contains_key(&text) {
-            if self.is_generic_trait(&text) {
+        if let Some(key) = self.visible_trait_key(&text) {
+            if self.is_generic_trait(&key) {
                 self.emit(
                     span,
                     "KSEM172",
@@ -348,7 +355,7 @@ impl Analyzer<'_> {
                 );
                 return Type::Error;
             }
-            let Some(enum_id) = self.reserve_trait_existential(&text, span) else {
+            let Some(enum_id) = self.reserve_trait_existential(&key, span) else {
                 return Type::Error;
             };
             self.link_type_name(&text, span);

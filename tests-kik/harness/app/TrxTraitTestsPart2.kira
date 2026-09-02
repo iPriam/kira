@@ -32,7 +32,7 @@ construct TrxAnExistentialBindingWrapsAndDispatches() extends Test {
         let any: TrxScored = TrxKey(n: 3)
         return any.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct TrxASecondConformerIsADifferentVariantOfTheSameExistential() extends Test {
@@ -40,14 +40,14 @@ construct TrxASecondConformerIsADifferentVariantOfTheSameExistential() extends T
         let other: TrxScored = TrxToken(n: 4)
         return other.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 construct TrxAParameterSpelledWithTheTraitAcceptsEitherConformer() extends Test {
     test {
         return trxScoreAny(value: TrxKey(n: 9)) + trxScoreAny(value: TrxToken(n: 7))
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(79); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(79) return e }
 }
 
 construct TrxAnArrayOfExistentialsHoldsHeterogeneousConformers() extends Test {
@@ -59,7 +59,7 @@ construct TrxAnArrayOfExistentialsHoldsHeterogeneousConformers() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(302); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(302) return e }
 }
 
 construct TrxADefaultRunsThroughAnExistential() extends Test {
@@ -67,7 +67,7 @@ construct TrxADefaultRunsThroughAnExistential() extends Test {
         let any: TrxScored = TrxKey(n: 6)
         return any.doubled()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct TrxTwoExistentialValuesCompareByTheirConcreteValue() extends Test {
@@ -83,7 +83,7 @@ construct TrxTwoExistentialValuesCompareByTheirConcreteValue() extends Test {
         }
         return a.score() + b.score() + c.score()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 // ----- bare family-conformance head ---------------------------------------
@@ -106,5 +106,5 @@ construct TrxBareHeadIsCollected() extends Test {
         let head = TrxBareHeadCase()
         return head.bare()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(77) return e }
 }

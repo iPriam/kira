@@ -142,7 +142,7 @@ impl Parser<'_> {
         } else {
             self.parse_expr()
         };
-        while self.eat(TokenKind::Semicolon) {}
+        self.skip_unknown();
         if !self.at(TokenKind::RBrace) && !self.at_eof() {
             self.error(
                 self.current().span,

@@ -71,22 +71,22 @@ function fdrNativeChurn(rounds: Int) -> Int {
 
 construct FdrANativeScopeReleasesItsOwnValue() extends Test {
     test { return fdrNativeScope(21) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct FdrARuntimeScopeReleasesItsOwnValue() extends Test {
     test { return fdrRuntimeScope(14) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // The two halves answer identically, which is what one body compiled for both
 // engines means.
 construct FdrBothHalvesReadThroughTheOwner() extends Test {
     test { return fdrNativeReads(5) - fdrRuntimeReads(5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct FdrANativeChurnLeaksNothing() extends Test {
     test { return fdrNativeChurn(200) }
-    expect { let e: Result<Int, TestFailure> = .Ok(20100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20100) return e }
 }

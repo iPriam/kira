@@ -13,7 +13,7 @@ use crate::assert_parity;
 fn a_c_layout_empty_literal_zero_fills_every_field() {
     let output = assert_parity(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct V {
     var a: I32
     var b: Int
@@ -39,7 +39,7 @@ function main() {
 fn a_c_layout_paren_call_zero_fills_like_an_empty_literal() {
     let output = assert_parity(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct V {
     var a: I32
     var b: I32
@@ -62,7 +62,7 @@ function main() {
 fn a_c_layout_initializer_overrides_only_its_field() {
     let output = assert_parity(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct V {
     var a: I32
     var b: I32
@@ -86,13 +86,13 @@ function main() {
 fn a_nested_c_layout_struct_zero_fills_recursively() {
     let output = assert_parity(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Inner {
     var x: I32
     var y: I32
 }
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Outer {
     var inner: Inner
     var tag: I32

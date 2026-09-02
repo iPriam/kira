@@ -159,8 +159,9 @@ pub fn engines(program: &IrProgram) -> Vec<Execution> {
 
 /// How many functions the compiled bytecode half carries beyond the program's.
 ///
-/// The VM synthesizes widen helpers and appends them, so this is a subtraction
-/// rather than a count of anything the IR holds. A module with *fewer*
+/// The bytecode compiler may append functions the IR never named, so this is a
+/// subtraction rather than a count of anything the IR holds. A module with
+/// *fewer*
 /// functions than the program is a compiler bug, and is reported as one rather
 /// than wrapping into an enormous count.
 pub fn internal_function_count(
@@ -185,7 +186,7 @@ pub fn internal_function_count(
 /// records the name the backend *emitted*, never a second guess at it.
 ///
 /// `internal_functions` is how many functions the compiled bytecode half
-/// carries beyond the program's own — the VM's synthesized widen helpers. It is
+/// carries beyond the program's own. It is
 /// taken from the compiled module rather than recomputed, for the same reason
 /// `exports` is taken from the backend: the manifest records what was built.
 pub fn manifest(
@@ -380,10 +381,12 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
                 ty,
             });
         }
-        // A verified IR carries no `Error` type: reaching one means the frontend
-        // let a broken program through, which is a compiler bug rather than
-        // something to encode into an artifact.
-        Type::Error => {
+        // A verified IR carries no `distinct` type either — `kira-ir` rewrites
+        // every one to the scalar it is, so a manifest row describes that
+        // scalar's tag — and no `Error` type: reaching either means the
+        // frontend let a broken program through, which is a compiler bug rather
+        // than something to encode into an artifact.
+        Type::Distinct(_) | Type::Error => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,

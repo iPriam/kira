@@ -205,7 +205,14 @@ fn resolve_packages(package: Option<&Manifest>) -> Result<ResolvedDependencies, 
     let roots = graph
         .packages
         .iter()
-        .map(|resolved| PackageRoot::new(resolved.name.clone(), resolved.source_dir.clone()))
+        .map(|resolved| {
+            PackageRoot::resolved(
+                resolved.name.clone(),
+                resolved.source_dir.clone(),
+                resolved.version.clone(),
+                resolved.root_dir.to_string_lossy().into_owned(),
+            )
+        })
         .collect();
     let diagnostics = graph.diagnostics.clone();
     Ok(ResolvedDependencies {

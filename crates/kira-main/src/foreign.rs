@@ -283,8 +283,12 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.native_state_replace(token, ty, value)
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.inner.native_state_free(token)
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_release(token)
     }
 
     /// Enters this process's kernel, which is the same one the emitted call

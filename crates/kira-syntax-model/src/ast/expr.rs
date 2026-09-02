@@ -220,6 +220,24 @@ pub enum Expr {
         /// Span covering `try <value>`.
         span: Span,
     },
+    /// `value is Type`: whether the erased `value` holds a `Type`.
+    TypeTest {
+        /// The `Any` being asked.
+        value: ExprId,
+        /// The type tested for.
+        ty: TypeRefId,
+        /// Span covering value, operator, and type.
+        span: Span,
+    },
+    /// `value as Type`: the `Type` an erased `value` holds, checked.
+    TypeCast {
+        /// The `Any` being unboxed.
+        value: ExprId,
+        /// The type cast to.
+        ty: TypeRefId,
+        /// Span covering value, operator, and type.
+        span: Span,
+    },
     /// An ownership transfer written on an expression (`move mesh`,
     /// `copy count`).
     ///
@@ -413,6 +431,8 @@ impl Expr {
             | Expr::DotMember { span, .. }
             | Expr::Try { span, .. }
             | Expr::Ownership { span, .. }
+            | Expr::TypeTest { span, .. }
+            | Expr::TypeCast { span, .. }
             | Expr::Closure { span, .. }
             | Expr::ContentFor { span, .. }
             | Expr::ContentIf { span, .. }

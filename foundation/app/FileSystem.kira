@@ -94,14 +94,14 @@ function openFile(path: borrow String) -> File {
 function readFile(path: borrow String) -> FileContents {
     if fsFileExists(path) == false {
         return FileContents {
-            ok: false
-            text: ""
+            ok: false,
+            text: "",
             size: 0
         }
     }
     return FileContents {
-        ok: true
-        text: fsReadText(path)
+        ok: true,
+        text: fsReadText(path),
         size: fsFileSize(path)
     }
 }

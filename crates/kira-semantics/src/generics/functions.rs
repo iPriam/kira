@@ -31,7 +31,7 @@ impl<'a> Analyzer<'a> {
         args: &[kira_syntax_model::ast::CallArg],
         trailing: &[kira_semantics_model::hir::HirExprId],
     ) -> Option<kira_semantics_model::hir::FuncId> {
-        let template = self.generic_functions.get(name).copied()?;
+        let template = self.generic_function_named(name)?;
         if !leading.is_empty() {
             return None;
         }

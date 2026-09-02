@@ -16,7 +16,7 @@
 //! instead of truncating, or masked an int-to-int cast to the target width would
 //! produce a different number here rather than the same one.
 
-use crate::assert_parity;
+use crate::{assert_parity, assert_trap_parity};
 
 #[test]
 fn float_to_int_truncates_toward_zero() {
@@ -33,20 +33,19 @@ fn float_to_int_truncates_toward_zero() {
     assert_eq!(output, "2\n-2\n2\n-2\n");
 }
 
+/// A magnitude past `i64`'s range has no integer value: the conversion traps
+/// rather than clamping, wrapping, or invoking undefined behavior. The
+/// literal is `1e20`, written without an exponent because the lexer has none.
 #[test]
-fn float_to_int_saturates_and_never_traps() {
-    // A magnitude far past `i64`'s range clamps to the endpoints rather than
-    // wrapping or invoking undefined behavior. The literal is `1e20`, written
-    // without an exponent because the lexer has none, and it exceeds
-    // `i64::MAX` (~9.2e18).
-    let output = assert_parity(
+fn float_to_int_traps_past_the_integer_range() {
+    assert_trap_parity(
         r#"@Main function main() {
+            print(Int(9223372036854775000.0))
             print(Int(100000000000000000000.0))
-            print(Int(0.0 - 100000000000000000000.0))
             return
         }"#,
+        "9223372036854774784\n",
     );
-    assert_eq!(output, "9223372036854775807\n-9223372036854775808\n");
 }
 
 #[test]
@@ -75,23 +74,23 @@ fn a_round_trip_through_float_and_back_holds() {
     assert_eq!(output, "true\n5\n");
 }
 
+/// A conversion between integer spellings keeps a value that fits the
+/// destination, whatever the widths; one that does not fit traps (see
+/// `widths`).
 #[test]
-fn int_to_int_is_identity_across_widths() {
-    // A width is an annotation over one 64-bit representation, so a conversion
-    // neither truncates nor extends: `I8(300)` is `300`, and `U64(-1)` is the
-    // same bit pattern the source held — printed signed, as every width is.
+fn int_to_int_conversions_keep_a_fitting_value() {
     let output = assert_parity(
         r#"@Main function main() {
-            let big: U64 = -1
+            let big: U64 = 0xffffffffffffffff
             print(U64(big))
-            print(I8(300))
-            print(U8(300))
-            let n: Int = 5000000000
-            print(I32(n))
+            print(I8(100))
+            print(U8(200))
+            let n: Int = 4000000000
+            print(U32(n))
             return
         }"#,
     );
-    assert_eq!(output, "-1\n300\n300\n5000000000\n");
+    assert_eq!(output, "18446744073709551615\n100\n200\n4000000000\n");
 }
 
 #[test]
@@ -113,17 +112,17 @@ fn float_to_float_is_identity_and_math_runs_at_full_width() {
 #[test]
 fn a_conversion_result_drives_unsigned_operators() {
     // The target width reaches the operator selector: `U64(...)` on the left of
-    // `/` and `>` is unsigned, so `-1` reads as the large magnitude, not `-1`.
+    // `/` and `>` is unsigned.
     let output = assert_parity(
         r#"@Main function main() {
-            let neg: Int = 0 - 1
+            let big: Int = 9223372036854775807
             let two: U64 = 2
-            print(U64(neg) / two)
-            print(U64(neg) > two)
+            print(U64(big) / two)
+            print(U64(big) > two)
             return
         }"#,
     );
-    assert_eq!(output, "9223372036854775807\ntrue\n");
+    assert_eq!(output, "4611686018427387903\ntrue\n");
 }
 
 #[test]

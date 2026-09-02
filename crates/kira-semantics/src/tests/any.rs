@@ -1,7 +1,7 @@
 //! Analysis of `Any`, Kira's top type: what widens into it, what does not, and
 //! where the erasure lands in the tree.
 
-use super::{analyze_text, codes};
+use super::{analyze_text, codes, diagnostics};
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirStmt};
 
@@ -207,8 +207,8 @@ fn any_cannot_cross_the_c_seam() {
     assert_eq!(
         codes(
             r#"
-@FFI.Extern { library: l; symbol: host_take; abi: c; }
-function hostTake(value: Any) -> I32;
+@FFI.Extern { library: l, symbol: host_take, abi: c }
+function hostTake(value: Any) -> I32
 
 @Main
 function main() {
@@ -293,5 +293,27 @@ function main() {
 "#,
         )
         .is_empty()
+    );
+}
+
+/// `is` and `as` read an `Any`: a value whose type is already known has
+/// nothing to ask, and a type no `Any` can hold can never answer.
+#[test]
+fn is_and_as_need_an_any_and_an_erasable_target() {
+    let fine = "struct P { let x: Int }\n\
+                @Main function main() {\n    let a: Any = P(x: 1)\n\
+                if a is P { print((a as P).x) }\n    return\n}";
+    assert!(diagnostics(fine).is_empty(), "{:?}", codes(fine));
+    assert_eq!(
+        codes("@Main function main() { let n = 1 print(n is Int) return }"),
+        vec!["KSEM358"]
+    );
+    assert_eq!(
+        codes("@Main function main() { let a: Any = 1 print(a is Any) return }"),
+        vec!["KSEM359"]
+    );
+    assert_eq!(
+        codes("@Main function main() { let a: Any = 1 let v: Void = a as Void return }"),
+        vec!["KSEM359"]
     );
 }

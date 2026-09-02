@@ -285,6 +285,13 @@ pub(crate) struct Analyzer<'a> {
     /// Registered before anything is resolved and consulted from
     /// `resolve_named_type`, so an alias reaches every type position at once.
     pub(crate) aliases: AliasTable,
+    /// Every `distinct Name = Representation` declaration, keyed by name.
+    ///
+    /// Registered beside the aliases and consulted from the same
+    /// `resolve_named_type`, so a distinct type reaches every type position at
+    /// once. The row in the program's type table is minted on first
+    /// resolution, which is why this is memoized rather than recomputed.
+    pub(crate) distincts: crate::distincts::DistinctTable,
     /// What each `@FFI.Pointer` alias points at, by name — alias name to
     /// written target name.
     ///

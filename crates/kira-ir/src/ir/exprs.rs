@@ -9,6 +9,7 @@
 //! deliberately — it resolves a local against the enclosing function's slot
 //! types, so it is a question about a program, not about a node.
 
+use kira_semantics_model::hir::FieldOrder;
 use kira_runtime_abi::{
     CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
 };
@@ -56,6 +57,27 @@ pub enum IrExpr {
         op: IrUnOp,
         /// The operand.
         operand: IrExprId,
+        /// The result type, carrying the integer width the operation is
+        /// checked at.
+        ty: Type,
+    },
+    /// `value is Type`: whether the erased value's runtime identity is
+    /// `target`'s. The value is consumed.
+    TypeTest {
+        /// The `Any` being asked.
+        value: IrExprId,
+        /// The erased identity tested for.
+        target: kira_semantics_model::ErasedTypeId,
+    },
+    /// `value as Type`: the payload of an erased value whose identity is
+    /// `target`'s, owned; any other identity traps.
+    TypeCast {
+        /// The `Any` being unboxed.
+        value: IrExprId,
+        /// The erased identity expected.
+        target: kira_semantics_model::ErasedTypeId,
+        /// The type the payload is read as.
+        ty: Type,
     },
     /// A binary operation.
     Binary {
@@ -65,6 +87,9 @@ pub enum IrExpr {
         lhs: IrExprId,
         /// Right operand.
         rhs: IrExprId,
+        /// The result type, carrying the integer width the operation is
+        /// checked at.
+        ty: Type,
     },
     /// A conditional expression, `cond ? then : otherwise`.
     ///
@@ -113,6 +138,8 @@ pub enum IrExpr {
         struct_id: StructId,
         /// One initializer per field, in declaration order.
         fields: Vec<IrExprId>,
+        /// The sequence the initializers are evaluated in.
+        order: FieldOrder,
     },
     /// Construction of an enum value: a variant (by `tag`) plus its optional
     /// single payload, defaults already filled in by analysis.
@@ -393,8 +420,14 @@ pub enum IrExpr {
         /// The Kira value type exposed by the mutable view.
         ty: Type,
     },
-    /// Releases a callback-state handle or userdata token exactly once.
-    NativeStateFree {
+    /// Adds one owner to the callback state a handle or userdata token names.
+    NativeStateRetain {
+        /// The state handle or raw token.
+        token: IrExprId,
+    },
+    /// Removes one owner from the callback state a handle or userdata token
+    /// names. The last owner's release destroys the state.
+    NativeStateRelease {
         /// The state handle or raw token.
         token: IrExprId,
     },
@@ -432,25 +465,6 @@ pub enum IrExpr {
         value: IrExprId,
         /// The type it had before erasure, which is what says what it owns.
         from: Type,
-    },
-    /// One generic instantiation carried into another whose type arguments are
-    /// `Any`.
-    ///
-    /// The two engines split here, and for the same reason. A VM `Value`
-    /// carries its own tag, but an `Int` payload sits inline in its box while
-    /// an `Any` payload is a pointer to another box — so the bytecode compiler
-    /// synthesizes per-instantiation rebuild helpers and calls one. Native
-    /// code keeps the same two layouts and the LLVM backend rebuilds inline:
-    /// read the tag, box the payloads that crossed into `Any`, and build the
-    /// destination row's value. Both types are carried because the rebuild
-    /// reads a variant list from each.
-    Widen {
-        /// The value being widened.
-        value: IrExprId,
-        /// The instantiation it had.
-        from: Type,
-        /// The instantiation the position declared.
-        to: Type,
     },
     /// A call routed through the host's main-thread event loop.
     MainThreadCall {

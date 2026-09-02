@@ -147,6 +147,7 @@ impl FunctionLowering<'_, '_> {
             Type::Bool => self.codegen.runtime.str_of_bool,
             Type::Float(_) => self.codegen.runtime.str_of_float,
             Type::String => return Ok(operand),
+            Type::Int(kira_semantics_model::IntSpelling::U64) => self.codegen.runtime.str_of_uint,
             _ => self.codegen.runtime.str_of_int,
         };
         Ok(self.call(callable, &mut [operand], c"String"))

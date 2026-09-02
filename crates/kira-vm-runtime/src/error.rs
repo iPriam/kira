@@ -9,7 +9,7 @@
 use kira_bytecode::ModuleValidateError;
 use kira_runtime_abi::{
     CompilerError, FileSystemError, ForeignCallError, ForeignTypeSpec, MainThreadError,
-    NativeCallError, NativeStateError,
+    NativeCallError, NativeStateError, ToolchainError,
 };
 
 /// A trap raised while executing bytecode.
@@ -35,6 +35,48 @@ pub enum VmError {
     /// Integer division or remainder by zero.
     #[error("vm divide does not allow division by zero")]
     DivideByZero,
+    /// Integer arithmetic left the range of the operands' spelling.
+    ///
+    /// Ordinary arithmetic traps rather than wraps, at the written width:
+    /// `U8(250) + 10` fails here, as does `i64::MAX + 1`. `wrappingAdd` and
+    /// its siblings are the spelling for a fold that wants the wrap.
+    #[error("integer overflow: the result does not fit `{spelling}`")]
+    IntegerOverflow {
+        /// The spelling whose range was left.
+        spelling: &'static str,
+    },
+    /// A shift count outside `0..width`.
+    #[error("shift count {count} is outside 0..{bits}")]
+    ShiftOutOfRange {
+        /// The count that was asked for.
+        count: i64,
+        /// The width of the shifted value.
+        bits: u32,
+    },
+    /// A conversion to a narrower or differently signed integer spelling was
+    /// given a value the destination cannot hold.
+    #[error("integer conversion: {value} does not fit `{spelling}`")]
+    NarrowingOutOfRange {
+        /// The value, as the source spelling read it.
+        value: i128,
+        /// The destination spelling.
+        spelling: &'static str,
+    },
+    /// An `as` cast of an erased value that holds a different type.
+    #[error("type cast: the `Any` holds type identity {actual:#x}, not {expected:#x}")]
+    TypeCastFailed {
+        /// The identity the value carries.
+        actual: u64,
+        /// The identity the cast named.
+        expected: u64,
+    },
+    /// A float-to-integer conversion of NaN, an infinity, or a value outside
+    /// the integer range.
+    #[error("float to integer conversion: {value} has no integer value")]
+    FloatToIntOutOfRange {
+        /// The float that was converted.
+        value: f64,
+    },
     /// The operand stack was empty when a value was expected.
     #[error("operand stack underflow")]
     StackUnderflow,
@@ -114,6 +156,14 @@ pub enum VmError {
     /// only if its embedder hands it one.
     #[error("compiler operation failed: {0}")]
     Compiler(CompilerError),
+    /// A toolchain operation could not be attempted.
+    ///
+    /// The sibling of [`VmError::Compiler`], and a separate variant for the
+    /// reason the capability is separate: a host may provide a compiler for
+    /// source it is handed and still have no directory to build, so the two
+    /// refusals name different missing things.
+    #[error("toolchain operation failed: {0}")]
+    Toolchain(ToolchainError),
     /// A main-thread request could not be serviced by the host event loop.
     #[error("main-thread operation failed: {0}")]
     MainThread(#[from] MainThreadError),
@@ -408,8 +458,10 @@ pub enum NativeStateOperation {
     UserData,
     /// `nativeRecover<T>(...)`: the value is not a callback-state token.
     Recover,
-    /// Freeing callback state: the value is neither state nor a token.
-    Free,
+    /// Retaining callback state: the value is neither state nor a token.
+    Retain,
+    /// Releasing callback state: the value is neither state nor a token.
+    Release,
 }
 
 impl std::fmt::Display for NativeStateOperation {
@@ -418,7 +470,8 @@ impl std::fmt::Display for NativeStateOperation {
             Self::Store => "nativeState",
             Self::UserData => "nativeUserData",
             Self::Recover => "nativeRecover",
-            Self::Free => "free",
+            Self::Retain => "nativeUserDataRetain",
+            Self::Release => "nativeUserDataRelease",
         })
     }
 }

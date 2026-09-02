@@ -31,24 +31,6 @@ pub enum CompileError {
     /// program the user can write.
     #[error("bytecode compiler invariant violated: a type with no value was erased into `Any`")]
     ErasureOfAValuelessType,
-    /// Internal invariant: a widening reached codegen with a non-enum row.
-    ///
-    /// Only a generic instantiation widens, and `TypeTable::admits` refuses
-    /// every other pair before lowering runs.
-    #[error("bytecode compiler invariant violated: a widening of something not an enum")]
-    WidenedNonEnum,
-    /// Internal invariant: a widening named an enum the program never declared.
-    #[error("bytecode compiler invariant violated: a widening of an undeclared enum")]
-    WidenedUndeclaredEnum,
-    /// Internal invariant: the two rows of a widening disagree about their
-    /// variants — a different count, or one carrying a payload where the other
-    /// does not.
-    #[error("bytecode compiler invariant violated: a widening between rows that disagree")]
-    WidenedMismatchedRows,
-    /// Internal invariant: a widened payload crossed to a type the type rule
-    /// admits no crossing to.
-    #[error("bytecode compiler invariant violated: a widening of a payload the type rule refuses")]
-    WidenedPayloadTypeRefused,
     /// Internal invariant: a `break`/`continue` reached codegen with no
     /// enclosing loop, which analysis is supposed to have rejected.
     #[error(

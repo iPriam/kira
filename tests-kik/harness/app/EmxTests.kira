@@ -30,7 +30,7 @@ construct EmxParseErrorInvalidText() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("Not the expected format"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("Not the expected format") return e }
 }
 
 construct EmxParseErrorEndedBranch() extends Test {
@@ -44,7 +44,7 @@ construct EmxParseErrorEndedBranch() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("end"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("end") return e }
 }
 
 construct EmxParseErrorEmptyBranch() extends Test {
@@ -58,7 +58,7 @@ construct EmxParseErrorEmptyBranch() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("empty"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("empty") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ construct EmxEqualityTagCompareTotal() extends Test {
             total = total + 100 }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(116); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(116) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,8 +130,8 @@ struct EmxGrid {
 
 function emxAreaOf(c: borrow EmxCell) -> Int {
     match c {
-        Filled(shape) -> return shape.area;
-        Empty -> return 0;
+        Filled(shape) -> return shape.area
+        Empty -> return 0
     }
 }
 
@@ -152,7 +152,7 @@ construct EmxEnumKindSplitCacheParity() extends Test {
         return out
     }
     // count=3, totalArea=7 -> 3*100+7=307
-    expect { let e: Result<Int, TestFailure> = .Ok(307); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(307) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ construct EmxPayloadMoveChainParity() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("payload"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("payload") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ construct EmxResultParitySuccess() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("ok"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("ok") return e }
 }
 
 construct EmxResultParityFailureText() extends Test {
@@ -237,7 +237,7 @@ construct EmxResultParityFailureText() extends Test {
         }
         return out
     }
-    expect { let e: Result<String, TestFailure> = .Ok("bad"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("bad") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ construct EmxVarReassignReturn() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6960); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6960) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,12 +336,12 @@ function emxReportReason(r: Result<Int, EmxRenderFailure>) -> String {
 
 construct EmxNestedEnumPayloadParityMissing() extends Test {
     test { return emxReportReason(emxFailWith(true)) }
-    expect { let e: Result<String, TestFailure> = .Ok("boom"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("boom") return e }
 }
 
 construct EmxNestedEnumPayloadParityInvalid() extends Test {
     test { return emxReportReason(emxFailWith(false)) }
-    expect { let e: Result<String, TestFailure> = .Ok("halt"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("halt") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,9 +361,9 @@ struct EmxSizeBox {
 
 function emxConsume(d: EmxDimension) -> Int {
     match d {
-        Fill -> return 1;
-        Fixed(_) -> return 0;
-        Bounded(_) -> return 0;
+        Fill -> return 1
+        Fixed(_) -> return 0
+        Bounded(_) -> return 0
     }
 }
 
@@ -378,7 +378,7 @@ construct EmxCopyablePayloadEnumFieldReuse() extends Test {
         let box = EmxSizeBox { width: .Fill, height: .Fixed(3.0) }
         return emxCheck(move box)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -411,12 +411,12 @@ function emxScore(descriptor: EmxDescriptor) -> Int {
 construct EmxFieldlessEnumIsCopy() extends Test {
     test {
         let descriptor = EmxDescriptor {
-            axis: .Vertical
+            axis: .Vertical,
             weight: 5
         }
         return emxScore(move descriptor)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -455,22 +455,22 @@ function emxBump(x: Int) -> Int {
 
 construct EmxAttemptHandlePayloadlessVariantOk() extends Test {
     test { return emxProcess(50) }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct EmxAttemptHandlePayloadlessVariantTooSmall() extends Test {
     test { return emxProcess(0 - 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 construct EmxAttemptHandlePayloadlessVariantTooBig() extends Test {
     test { return emxProcess(200) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }
 
 construct EmxAttemptHandlePayloadlessVariantBump() extends Test {
     test { return emxBump(41) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,11 +507,11 @@ function emxAttemptTryHandleFailReason() -> String {
 
 construct EmxAttemptTryHandleOk() extends Test {
     test { return emxAttemptTryHandleOk() }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct EmxAttemptTryHandleFail() extends Test {
     test { return emxAttemptTryHandleFailReason() }
-    expect { let e: Result<String, TestFailure> = .Ok("boom"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("boom") return e }
 }
 
