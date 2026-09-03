@@ -160,4 +160,4 @@ struct Point { var x: Int var y: Int }
 let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
 ```
 
-Those six derives are Kira source in Foundation, written on `comptime macro`. Read the [Macros](/docs/macros) section next, or start the [Language Guide](/docs/language-guide) from the beginning.
+Foundation's seven derive macros are Kira source, written on `comptime macro`; `@Derive(Copy)` is the eighth and the compiler's own, because it asserts a fact rather than generating code. Read the [Macros](/docs/macros) section next, or start the [Language Guide](/docs/language-guide) from the beginning.

@@ -229,6 +229,27 @@ The walk now records that it stopped, `ModuleWalk::overflowed` carries it, and a
 into `AssemblyError::TooManyModules { reached }`, which the CLI already exits 1 on. `MAX_MODULES`
 is documented where imports are.
 
+### Next: canonical Serde, then the derive surface
+The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
+Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only
+by folding deserialization into `Serializable`.
+
+That fold depends on the Serde slice, and in the right order. `Deserializable` today refuses `Float`
+and `F32` fields because there is no lossless parser for the decimal form it writes. The 1.9.1
+grammar removes the reason: floats serialize as their exact bits (`Float(0x…)`, `F32(0x…)`), which
+reads back exactly. So:
+
+1. Implement the canonical grammar in `foundation/app/DeriveSerde.kira`: type-tagged integers,
+   bit-exact floats, qualified type names, the full-input rule, duplicate and unknown field
+   refusals, range-checked integers, and typed `DeserializeError` instead of sentinels.
+2. Then fold `Deserializable` into `Serializable`, which is what makes the documented set seven,
+   and migrate every `@Derive(Deserializable)` in the harnesses and docs.
+3. Round-trip coverage is the invariant the spec states: `deserialize_T(serialize_T(value)) == value`
+   compared by IEEE bits for floats.
+
+The tour's stale "six derives" is corrected; the derives reference already says seven for
+Foundation's macros.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with
