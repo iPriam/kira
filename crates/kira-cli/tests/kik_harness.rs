@@ -310,7 +310,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1448 passed, 0 failed, 0 skipped, 1448 total");
+    assert_eq!(vm, "1450 passed, 0 failed, 0 skipped, 1450 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 

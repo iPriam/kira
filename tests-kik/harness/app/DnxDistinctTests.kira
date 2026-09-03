@@ -100,3 +100,52 @@ construct DnxSerdeCarriesLineEndingsAndTabs() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
+
+// Floats travel as their exact bits, which is the only way a signed zero, an
+// infinity, or a NaN payload survives a round trip at all.
+
+@Derive(Serializable, Deserializable)
+struct DnxReading {
+    var value: Float
+    var label: String
+}
+
+@Derive(Serializable, Deserializable)
+distinct DnxRatio = Float
+
+construct DnxSerdeCarriesAFloatExactly() extends Test {
+    test {
+        var score = 0
+        let tenth = DnxReading(value: 0.1, label: "tenth")
+        if deserialize_DnxReading(serialize_DnxReading(tenth)).value == 0.1 { score = score + 1 }
+        let third = DnxReading(value: 1.0 / 3.0, label: "third")
+        if deserialize_DnxReading(serialize_DnxReading(third)).value == third.value {
+            score = score + 10
+        }
+        if deserialize_DnxRatio(serialize_DnxRatio(DnxRatio(2.5))).raw == 2.5 {
+            score = score + 100
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct DnxSerdeCarriesTheFloatsADecimalCannot() extends Test {
+    test {
+        var score = 0
+        let zero = DnxReading(value: 0.0 - 0.0, label: "zero")
+        let zeroBack = deserialize_DnxReading(serialize_DnxReading(zero))
+        if floatToBits(zeroBack.value) == floatToBits(zero.value) { score = score + 1 }
+
+        let infinite = DnxReading(value: 1.0 / 0.0, label: "inf")
+        if deserialize_DnxReading(serialize_DnxReading(infinite)).value == infinite.value {
+            score = score + 10
+        }
+
+        let undefined = DnxReading(value: 0.0 / 0.0, label: "nan")
+        let undefinedBack = deserialize_DnxReading(serialize_DnxReading(undefined))
+        if floatToBits(undefinedBack.value) == floatToBits(undefined.value) { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}

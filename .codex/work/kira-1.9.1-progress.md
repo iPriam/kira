@@ -239,6 +239,22 @@ Harness: two constructs in `DnxDistinctTests.kira`, tally 1448 on VM and native.
 Note for the next steps: `knvm binstall` copies Foundation into the toolchain, so a Foundation edit
 is only visible to `kira test` after a fresh binstall.
 
+### Serde step 2: floats travel as their bits (2026-09-03)
+A `Float` is written `0x` and the sixteen hex digits of `floatToBits`, and read back with
+`bitsToFloat`. A decimal rendering rounds twice — once writing, once reading — and cannot carry a
+signed zero, an infinity, or a NaN payload at all, so `Deserializable` used to refuse floats
+outright. It no longer refuses them: struct fields, enum payloads, and a `distinct` over `Float` all
+round-trip exactly, proved on VM, native, and hybrid.
+
+Found on the way: the enum reader's fallback constructed the first variant even when it carried a
+payload, so any enum whose first variant has one generated invalid code. It now takes a payload-free
+variant when the enum has one and otherwise traps before building.
+
+`DeriveSerde.kira` passed the 700-line cap, so the shared reader and writer helpers moved to
+`foundation/app/SerdeText.kira` (304 and 461 lines).
+
+Harness: two constructs for escaping and two for floats, tally 1450 on VM and native.
+
 ### Next: canonical Serde, then the derive surface
 The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
 Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only
