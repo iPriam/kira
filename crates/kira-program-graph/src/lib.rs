@@ -56,9 +56,14 @@ pub(crate) use sources::Sources;
 ///
 /// A bound rather than a promise of unboundedness: the module ids are handed to
 /// [`kira_source::SourceMap`] and to salsa as small integers, and a program
-/// that reached this many files has a generator loop, not a design. Hitting it
-/// stops the walk instead of growing without limit.
-const MAX_MODULES: usize = 1024;
+/// that reached this many files has a generator loop, not a design.
+///
+/// Reaching it stops the walk *and is recorded*, because a graph cut short is
+/// a different program: the modules that were dropped come back as undefined
+/// names in files that are perfectly correct, and nothing points at the file
+/// that was never read. [`ModuleWalk::overflowed`] is what the assembler turns
+/// into a refusal.
+pub(crate) const MAX_MODULES: usize = 1024;
 
 /// The identity used to stop a module-loading cycle.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -166,6 +171,8 @@ pub struct ModuleWalk<'a> {
     bundles: &'a [BundledRoot],
     packages: &'a [PackageRoot],
     sources: Sources,
+    /// Whether a walk stopped at [`MAX_MODULES`] with modules still to read.
+    overflowed: bool,
 }
 
 impl<'a> ModuleWalk<'a> {
@@ -176,6 +183,7 @@ impl<'a> ModuleWalk<'a> {
             bundles,
             packages,
             sources: Sources::default(),
+            overflowed: false,
         }
     }
 
@@ -189,13 +197,25 @@ impl<'a> ModuleWalk<'a> {
         // The module root is the entry file's directory. A module path is a
         // sequence of identifiers, so it can name nothing above the root.
         let root = entry_path.parent().unwrap_or_else(|| Path::new("."));
-        walk(
+        let (modules, overflowed) = walk(
             Some(root),
             imports_of(entry_text),
             self.bundles,
             self.packages,
             &mut self.sources,
-        )
+        );
+        self.overflowed |= overflowed;
+        modules
+    }
+
+    /// Whether any walk this one performed stopped at [`MAX_MODULES`].
+    ///
+    /// Sticky, and read by the assembler after every walk it drives: a program
+    /// that reached the limit anywhere is refused whole rather than compiled
+    /// from the part that fit.
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
     }
 
     /// The text of a source file, read once however often it is asked for.
@@ -223,6 +243,7 @@ pub fn load_bundled_modules(imports: &[String], bundles: &[BundledRoot]) -> Vec<
         &[],
         &mut Sources::default(),
     )
+    .0
 }
 
 /// The transitive module walk, from a seed of import names.
@@ -236,8 +257,11 @@ fn walk(
     bundles: &[BundledRoot],
     packages: &[PackageRoot],
     sources: &mut Sources,
-) -> Vec<ModuleSource> {
+) -> (Vec<ModuleSource>, bool) {
     let mut loaded: Vec<ModuleSource> = Vec::new();
+    // Set when the walk stops with modules still to read, so the caller can
+    // refuse the program instead of compiling the part that fit.
+    let mut overflowed = false;
     let mut seen: HashSet<ModuleKey> = HashSet::new();
     let mut stack: Vec<Step> = Vec::new();
     push_resolves(&mut stack, seed, None);
@@ -265,6 +289,7 @@ fn walk(
                 // modules, and only one past that is the generator loop this
                 // refuses.
                 if seen.len() >= MAX_MODULES {
+                    overflowed = true;
                     break;
                 }
                 // The bytes are wanted here and nowhere earlier: a module
@@ -295,7 +320,7 @@ fn walk(
         }
     }
 
-    loaded
+    (loaded, overflowed)
 }
 
 /// Schedules imports to resolve in source order, first one first.

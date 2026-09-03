@@ -21,6 +21,8 @@ import Foundation
 
 A module name is a name, not a path. One segment is a sibling file; a dot is a directory separator. Imports are file-scoped, and an import naming no readable file is `KSEM032`. Referring to a namespace root this file did not import is `KSEM027`.
 
+One program is built from at most 1024 modules, its entry file included. A program that reaches more is refused and told how many it reached; the graph is never cut short, because the modules that were dropped would come back as undefined names in files that are perfectly correct.
+
 ## `function`
 
 ```kira

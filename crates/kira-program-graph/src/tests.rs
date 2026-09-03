@@ -503,3 +503,50 @@ fn a_bare_bundle_import_loads_every_file_in_the_bundle() {
         "{loaded:?}"
     );
 }
+
+/// A program at the limit compiles, and one past it is named rather than cut.
+///
+/// The graph a compilation walks is what every later stage reads, so a limit
+/// that truncated would hand the frontend a program the author did not write:
+/// the missing modules would surface as undefined names far from the file that
+/// was dropped.
+#[test]
+fn a_program_past_the_module_limit_is_refused_rather_than_truncated() {
+    // One `main` importing every other module, so the walk reaches them all.
+    let count = crate::assembly::MAX_MODULES;
+    let mut modules: Vec<(String, String)> = Vec::new();
+    let imports: String = (1..count)
+        .map(|index| format!("import m{index}\n"))
+        .collect();
+    modules.push(("main".to_owned(), imports));
+    for index in 1..count {
+        modules.push((format!("m{index}"), format!("function m{index}f() {{ return }}\n")));
+    }
+    let borrowed: Vec<(&str, &str)> = modules
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str()))
+        .collect();
+    let entry = write_modules("module-limit", &borrowed);
+    let text = std::fs::read_to_string(&entry).expect("the entry file");
+
+    // `main` plus `count - 1` imports is exactly the limit.
+    let at_limit = crate::assembly::load_program(&entry, &text).expect("a program at the limit");
+    assert_eq!(at_limit.modules.len() + 1, count);
+
+    // One more module puts the program over it.
+    std::fs::write(
+        entry.with_file_name("over.kira"),
+        "function overf() { return }\n",
+    )
+    .expect("write the extra module");
+    let over_text = format!("import over\n{text}");
+    std::fs::write(&entry, &over_text).expect("rewrite the entry");
+    let refused = crate::assembly::load_program(&entry, &over_text);
+    assert!(
+        matches!(
+            refused,
+            Err(crate::assembly::AssemblyError::TooManyModules { .. })
+        ),
+        "a program past the limit must be refused"
+    );
+}

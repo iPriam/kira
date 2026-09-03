@@ -219,6 +219,16 @@ no reference.
   `a_tried_cast_answers_its_failure_on_every_backend` with heap balance, semantics tests for the
   handled, unhandled, and outside-an-attempt cases, and the statements reference.
 
+### Audit defect closed: the module limit (2026-09-03)
+The walk stopped at 1024 modules with a bare `break`, so a program past the limit compiled from the
+part that fit: the modules it never read came back as undefined names in files that were correct,
+and nothing pointed at the file that was dropped. A test that builds 1024 modules and then one more
+proved it — `m1023` simply vanished.
+
+The walk now records that it stopped, `ModuleWalk::overflowed` carries it, and assembly turns it
+into `AssemblyError::TooManyModules { reached }`, which the CLI already exits 1 on. `MAX_MODULES`
+is documented where imports are.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with
