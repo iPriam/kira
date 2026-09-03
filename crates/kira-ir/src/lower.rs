@@ -342,6 +342,25 @@ impl Lowerer<'_> {
             // `value.type` on a value whose type is known needs no runtime
             // question: the answer is the id lowering just interned, and the
             // operand is still evaluated and released for its effects.
+            HirExpr::TypeCastResult {
+                value,
+                target,
+                failure,
+                ty,
+            } => {
+                let Type::Enum(result) = ty else {
+                    // Analysis mints the row before it builds the node, so a
+                    // non-enum here is a lowering that skipped it.
+                    return self.ir.exprs.alloc(IrExpr::Int(0));
+                };
+                IrExpr::TypeCastResult {
+                    value: self.lower_expr(value),
+                    target: self.descriptor_of(target),
+                    result,
+                    failure,
+                    payload: target,
+                }
+            }
             HirExpr::TypeField {
                 descriptor,
                 field,

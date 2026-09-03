@@ -823,3 +823,49 @@ function main() {
         "true\nfalse\ntrue\nPoint\nstruct\n0\n1\nGreets\nCrate\n1\nInt\narray\nString\ntrue\n"
     );
 }
+
+/// A failed cast written under `try` is a value the handler answers, and the
+/// same cast without one still traps.
+///
+/// The two engines build the result differently — the VM branches over a stack
+/// answer, native code branches over the same box tag in generated blocks — so
+/// the payload, the failure, and the heap accounting all have to agree.
+#[test]
+fn a_tried_cast_answers_its_failure_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = Point(x: 7)
+    attempt {
+        let p = try boxed as Point
+        print(p.x)
+    } handle {
+        Mismatch(actual) { print("unreachable: " + actual.name) }
+    }
+
+    let text: Any = "text"
+    attempt {
+        let q = try text as Point
+        print(q.x)
+    } handle {
+        Mismatch(actual) { print(actual.name) }
+    }
+
+    let held: Any = 3
+    attempt {
+        let n = try held as Int
+        print(n * 2)
+    } handle {
+        Mismatch(actual) { print(actual.name) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\nString\n6\n");
+}

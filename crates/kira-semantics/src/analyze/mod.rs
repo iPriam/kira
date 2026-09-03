@@ -326,6 +326,15 @@ pub(crate) struct Analyzer<'a> {
     /// Beside the type table rather than in it: conformance is resolved away
     /// before the HIR exists, so nothing downstream carries it.
     pub(crate) conformances: Vec<crate::traits::Conformance>,
+    /// The compiler's own cast-failure enum, minted on first use.
+    ///
+    /// Held rather than looked up by name: a program may declare a
+    /// `TypeCastError` of its own, and a name lookup would hand a cast that
+    /// enum instead of this one.
+    pub(crate) cast_error: Option<EnumId>,
+    /// The result row each cast target answers with, minted on first use, for
+    /// the same reason.
+    pub(crate) cast_results: HashMap<Type, EnumId>,
     /// Number of conformance rows already checked. Generic instances can be
     /// discovered while a body is analyzed, after the initial conformance
     /// pass; checking only the suffix keeps that late activation diagnostic-

@@ -60,6 +60,92 @@ impl FunctionLowering<'_, '_> {
         Ok(self.codegen.const_int(id.as_i64()))
     }
 
+    /// `try value as Type`: the cast as a result rather than a trap.
+    ///
+    /// The same tag comparison [`Self::lower_type_cast`] makes, answered with a
+    /// value instead of a trap: `Ok(payload)` on the branch where the box holds
+    /// the target, `Error(Mismatch(type))` on the branch where it holds
+    /// something else. The box is released on both, exactly as the trapping
+    /// cast releases it on the one path it has.
+    pub(super) fn lower_type_cast_result(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+        result: kira_semantics_model::EnumId,
+        failure: kira_semantics_model::EnumId,
+        payload: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        use kira_semantics_model::cast_result::{ERROR_TAG, MISMATCH_TAG, OK_TAG};
+
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"cast.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        let function = self.current_function();
+        let ok_block = self.append_block(function, c"cast.ok");
+        let error_block = self.append_block(function, c"cast.error");
+        let done_block = self.append_block(function, c"cast.end");
+        let builder = self.codegen.builder;
+        // SAFETY: two `i64`s compared on a live block, branching to blocks of
+        // this function, each terminated exactly once below.
+        unsafe {
+            let holds = LLVMBuildICmp(
+                builder,
+                LLVMIntPredicate::LLVMIntEQ,
+                tag,
+                expected,
+                c"cast.holds".as_ptr(),
+            );
+            LLVMBuildCondBr(builder, holds, ok_block, error_block);
+        }
+
+        self.position_at(ok_block);
+        let decoded = self.codegen.read_box_payload(boxed, payload)?;
+        self.drop_value(boxed, value_ty)?;
+        let payload_ty = self.codegen.enum_payload_type(result, OK_TAG)?;
+        let ok_tag = self.codegen.const_int(i64::from(OK_TAG));
+        let ok_value = self
+            .codegen
+            .box_new(ok_tag, payload_ty, decoded, c"cast.ok.enum")?;
+        // SAFETY: the block is unterminated, and the exit is re-read because
+        // building the payload may itself have created blocks.
+        let ok_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
+        };
+
+        self.position_at(error_block);
+        // The descriptor the value does hold, read before the box goes.
+        let held = tag;
+        self.drop_value(boxed, value_ty)?;
+        let mismatch_payload = self.codegen.enum_payload_type(failure, MISMATCH_TAG)?;
+        let mismatch_tag = self.codegen.const_int(i64::from(MISMATCH_TAG));
+        let mismatch = self
+            .codegen
+            .box_new(mismatch_tag, mismatch_payload, held, c"cast.mismatch")?;
+        let error_payload = self.codegen.enum_payload_type(result, ERROR_TAG)?;
+        let error_tag = self.codegen.const_int(i64::from(ERROR_TAG));
+        let error_value =
+            self.codegen
+                .box_new(error_tag, error_payload, mismatch, c"cast.error.enum")?;
+        // SAFETY: as above, for the failing branch.
+        let error_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
+        };
+
+        self.position_at(done_block);
+        // SAFETY: both predecessors answer with the same enum handle type.
+        let joined = unsafe {
+            let phi = LLVMBuildPhi(builder, self.codegen.types.ptr, c"cast.result".as_ptr());
+            let mut values = [ok_value, error_value];
+            let mut blocks = [ok_exit, error_exit];
+            LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), 2);
+            phi
+        };
+        Ok(joined)
+    }
+
     /// A property of a runtime type descriptor, through the generated reader
     /// for that property.
     pub(super) fn lower_type_field(

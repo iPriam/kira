@@ -356,7 +356,8 @@ impl Scan<'_> {
             | IrExpr::TypeOf { value }
             | IrExpr::TypeField {
                 descriptor: value, ..
-            } => self.expr(*value, path, owners),
+            }
+            | IrExpr::TypeCastResult { value, .. } => self.expr(*value, path, owners),
             IrExpr::TaskOp { operands, .. } => {
                 for operand in operands {
                     self.expr(*operand, path, owners);

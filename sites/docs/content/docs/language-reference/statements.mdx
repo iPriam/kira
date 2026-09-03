@@ -93,6 +93,23 @@ attempt {
 
 Statements after a `try` run only when it succeeded.
 
+### A Cast That Can Fail
+
+`value as Type` traps when the value holds something else. Written under `try`, it is an ordinary fallible step instead:
+
+```kira
+attempt {
+    let widget = try boxed as Widget
+    return widget.width
+} handle {
+    Mismatch(actual) { return 0 - actual.name.count }
+}
+```
+
+The failure is `TypeCastError`, whose one variant `Mismatch` carries the `Type` the value actually held — the fact the handler cannot recover otherwise, since the value is gone. `try` binds looser than `as`, so `try boxed as Widget` is the cast being tried.
+
+A cast without `try` still traps. The failure point is written because Kira has no unwinding: a cast that routed its own failure to a handler would be an invisible jump out of an expression.
+
 ## Return
 
 A function with a declared result type must definitely return one. An exhaustive `match` or a fully covered `attempt` counts.

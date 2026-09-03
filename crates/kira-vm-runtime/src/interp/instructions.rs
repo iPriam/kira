@@ -757,6 +757,32 @@ impl Vm<'_> {
                 self.stack.push(Value::Str(id));
             }
             Instruction::ConstType(id) => self.stack.push(Value::Type(*id)),
+            Instruction::TypeCastResult(expected) => {
+                let value = self.pop()?;
+                let Value::Erased(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an `Any` to cast",
+                    });
+                };
+                let actual = self.heap.erased_type_id(id).unwrap_or(0);
+                if actual == *expected {
+                    let Some(payload) = self.heap.erased_payload(id) else {
+                        self.heap.drop_value(value);
+                        return Err(VmError::MissingEnumPayload);
+                    };
+                    self.heap.drop_value(value);
+                    self.stack.push(payload);
+                    self.stack.push(Value::Bool(true));
+                } else {
+                    // The descriptor the value does hold is the one fact the
+                    // handler cannot recover: the value itself is released
+                    // here, exactly as a successful cast releases its box.
+                    self.heap.drop_value(value);
+                    self.stack.push(Value::Type(actual));
+                    self.stack.push(Value::Bool(false));
+                }
+            }
             Instruction::TypeField(field) => self.type_field(module, *field)?,
             Instruction::TypeOf => {
                 let value = self.pop()?;

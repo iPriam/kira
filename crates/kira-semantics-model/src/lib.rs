@@ -7,6 +7,7 @@
 //! global state and the language server and compiler share it. See [`hir`] for
 //! the tree and [`ty`] for the v0 type lattice.
 
+pub mod cast_result;
 pub mod hir;
 pub mod ty;
 

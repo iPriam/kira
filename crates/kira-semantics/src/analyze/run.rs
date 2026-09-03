@@ -57,6 +57,8 @@ impl<'a> Analyzer<'a> {
             existential_traits: HashMap::new(),
             traits: crate::traits::TraitTable::new(),
             conformances: Vec::new(),
+            cast_error: None,
+            cast_results: HashMap::new(),
             checked_conformances: 0,
             drop_extractions: Vec::new(),
             enum_payload_sites: Vec::new(),

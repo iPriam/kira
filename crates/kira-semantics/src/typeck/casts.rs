@@ -116,7 +116,7 @@ impl Analyzer<'_> {
 
     /// The analyzed `Any` operand and the resolved target of `is` or `as`, or
     /// `None` once the mistake is reported.
-    fn erased_operand_and_target(
+    pub(crate) fn erased_operand_and_target(
         &mut self,
         ctx: &mut FnCtx,
         value: ExprId,

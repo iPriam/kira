@@ -202,28 +202,22 @@ no reference.
 - `kira-desktop-runner`'s subprocess test hid the child's exit status when it failed; it prints it
   now.
 
-### Next: a failed cast through `attempt`
-The spec says a failed downcast produces `TypeCastError` through the nearest `attempt` context and
-traps without one. Kira's failure model is static and statement-scoped: `try` is accepted only as
-the whole initializer of a `let` inside an `attempt`, and every `try` in one `attempt` fails with
-one enum (KSEM137, KSEM138, KSEM141). There is no unwinding, deliberately, so a trap raised in
-arbitrary expression position cannot reach a handler.
-
-The spelling that fits: `let p = try boxed as Point`. A bare `boxed as Point` keeps trapping, which
-is what the spec asks for outside an attempt, and the `try` marks the failure point the way it does
-for every other fallible step. Automatic routing would mean invisible control flow out of nested
-expression positions, which is the thing `try` exists to prevent.
-
-To build:
-- A compiler-minted `TypeCastError` enum with `Mismatch(Type)` carrying the descriptor the value
-  actually held, identified as the compiler's own (`kira::TypeCastError`) so two programs agree.
-- A `HirExpr::TypeCastResult { value, target }` node yielding the `Result`-shaped value the existing
-  `try` machinery already consumes, rather than HIR-level branching: a `Select` over the operand
-  would make the operand's move conditional, and all-path release would have to prove a join the
-  language has no other case of.
-- VM and LLVM lowerings beside `TypeTest`/`Downcast`, which already read the same box tag.
-- Coverage: the harness gets a suite, parity gets a case that handles the failure and one that
-  traps without a handler, and the statements reference gains the `try` + `as` row.
+### Slice 3 completed: a failed cast through `attempt` (2026-09-03)
+- `try value as Type` is the cast as a fallible step: it answers `Ok(target)` or
+  `Error(TypeCastError.Mismatch(Type))`, and the enclosing `handle` covers it with the rules every
+  other failure already has (KSEM139, KSEM141). A cast without `try` still traps.
+- `try` now binds looser than `is`/`as`, so `try boxed as Point` is the cast being tried. Parser and
+  tree-sitter moved together, with corpus coverage.
+- Analysis mints two rows the language owns: `TypeCastError` once per program, and a
+  `CastResult<T>` per target recorded as an instantiation of `Kira::CastResult` so its runtime
+  identity carries the target. Neither is spellable in source and neither is Foundation's: a cast is
+  a language operation, and a failure a program cannot name is a failure it cannot handle.
+- One VM instruction (`TypeCastResult`, 0x8f) leaves the payload or the held descriptor under a
+  `Bool`, and the bytecode branch wraps whichever it left. Native code branches over the same box
+  tag in generated blocks. `Type` became a boxable enum payload on both engines.
+- Coverage: three harness constructs (tally 1446), parity
+  `a_tried_cast_answers_its_failure_on_every_backend` with heap balance, semantics tests for the
+  handled, unhandled, and outside-an-attempt cases, and the statements reference.
 
 ## Beyond 1.9.1
 

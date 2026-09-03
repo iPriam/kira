@@ -375,6 +375,13 @@ pub enum Instruction {
     /// Pop a runtime type descriptor and push one of its properties: the
     /// operand selects which, by [`TypeField::as_byte`].
     TypeField(u8),
+    /// Pop an erased `Any` and answer whether it holds the operand's type.
+    ///
+    /// Pushes the payload and `true` when it does, and the descriptor it does
+    /// hold and `false` when it does not. The box is released either way. What
+    /// makes a failed cast a value a handler can read rather than a trap: the
+    /// branch that follows builds the `Ok` or the `Error`.
+    TypeCastResult(u64),
     /// Pop a struct, push a copy of field `n`, and drop the struct.
     GetField(u64),
     /// Pop a pointer word and push it advanced by `offset` bytes.

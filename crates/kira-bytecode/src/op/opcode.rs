@@ -278,3 +278,4 @@ pub const TYPE_OF: u8 = 0x8b;
 pub const EQ_TYPE: u8 = 0x8c;
 pub const NE_TYPE: u8 = 0x8d;
 pub const TYPE_FIELD: u8 = 0x8e;
+pub const TYPE_CAST_RESULT: u8 = 0x8f;

@@ -110,7 +110,16 @@ impl Analyzer<'_> {
 
             guard.saw_try = true;
             let operand_span = self.tree.expr(guarded.value).span();
-            let result = self.analyze_expr(ctx, guarded.value);
+            // A cast is fallible in exactly this position: written here it
+            // answers with a result a handler can read, and written anywhere
+            // else it traps. Analyzed before the general path because the
+            // general path is what makes it trap.
+            let result = match self.tree.expr(guarded.value).clone() {
+                Expr::TypeCast { value, ty, span } => {
+                    self.analyze_try_cast(ctx, value, ty, span)
+                }
+                _ => self.analyze_expr(ctx, guarded.value),
+            };
             let result_ty = self.program.expr(result).type_of();
             let Some(shape) = self.result_shape(result_ty, operand_span) else {
                 self.bind_invalid_try(ctx, &guarded);

@@ -142,6 +142,22 @@ pub enum HirExpr {
         /// The operand's static type.
         of: Type,
     },
+    /// `try value as Type`: the cast as a value a handler can answer.
+    ///
+    /// Yields the `Result`-shaped row the `attempt` machinery consumes —
+    /// `Ok(target)` or `Error(TypeCastError.Mismatch(Type))` — so a failed cast
+    /// is an ordinary fallible step rather than a trap. A cast written without
+    /// `try` stays [`HirExpr::TypeCast`] and still traps.
+    TypeCastResult {
+        /// The `Any` being unboxed, consumed either way.
+        value: HirExprId,
+        /// The type cast to.
+        target: Type,
+        /// The failure enum the error variant carries.
+        failure: EnumId,
+        /// The result row: `Ok(target)`, `Error(failure)`.
+        ty: Type,
+    },
     /// A property of a runtime type descriptor: `t.name`, `t.package`,
     /// `t.kind`, or `t.arguments`.
     TypeField {
@@ -801,7 +817,7 @@ impl HirExpr {
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::TypeTest { .. } => Type::Bool,
             HirExpr::TypeOf { .. } => Type::RuntimeType,
-            HirExpr::TypeField { ty, .. } => *ty,
+            HirExpr::TypeField { ty, .. } | HirExpr::TypeCastResult { ty, .. } => *ty,
             HirExpr::TypeCast { target, .. } => *target,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,

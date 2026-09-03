@@ -409,6 +409,32 @@ impl FnCompiler<'_> {
                 self.compile_expr(value)?;
                 self.code.push(Instruction::TypeOf);
             }
+            // The cast that answers instead of trapping. `TypeCastResult`
+            // leaves the payload or the descriptor under a `Bool`, and the
+            // branch below wraps whichever it left: `Ok(payload)` on one side,
+            // `Error(Mismatch(type))` on the other. Both sides leave one value,
+            // so the join is implicit exactly as a conditional's is.
+            IrExpr::TypeCastResult { value, target, .. } => {
+                let (value, target) = (*value, *target);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::TypeCastResult(target.as_u64()));
+                let to_error = self.emit_placeholder_jump_if_false();
+                self.code.push(Instruction::NewEnum {
+                    tag: u64::from(kira_semantics_model::cast_result::OK_TAG),
+                    has_payload: true,
+                });
+                let to_end = self.emit_placeholder_jump();
+                self.patch_to_here(to_error)?;
+                self.code.push(Instruction::NewEnum {
+                    tag: u64::from(kira_semantics_model::cast_result::MISMATCH_TAG),
+                    has_payload: true,
+                });
+                self.code.push(Instruction::NewEnum {
+                    tag: u64::from(kira_semantics_model::cast_result::ERROR_TAG),
+                    has_payload: true,
+                });
+                self.patch_to_here(to_end)?;
+            }
             IrExpr::TypeField {
                 descriptor, field, ..
             } => {

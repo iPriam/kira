@@ -182,6 +182,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::CONST_TYPE);
             out.extend_from_slice(&id.to_le_bytes());
         }
+        Instruction::TypeCastResult(id) => {
+            out.push(o::TYPE_CAST_RESULT);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
         Instruction::NewStructOrdered { order, glue } => {
             out.push(o::NEW_STRUCT_ORDERED);
             out.extend_from_slice(&(order.len() as u64).to_le_bytes());
@@ -547,6 +551,7 @@ impl Cursor<'_> {
             o::TYPE_TEST => Instruction::TypeTest(u64::from_le_bytes(self.take()?)),
             o::DOWNCAST => Instruction::Downcast(u64::from_le_bytes(self.take()?)),
             o::CONST_TYPE => Instruction::ConstType(u64::from_le_bytes(self.take()?)),
+            o::TYPE_CAST_RESULT => Instruction::TypeCastResult(u64::from_le_bytes(self.take()?)),
             o::TYPE_OF => Instruction::TypeOf,
             o::TYPE_FIELD => {
                 let [field] = self.take()?;

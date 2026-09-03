@@ -69,6 +69,13 @@ impl FunctionLowering<'_, '_> {
             IrExpr::IntoAny { value, from, tag } => self.lower_into_any(value, from, tag),
             IrExpr::TypeConst { value, id } => self.lower_type_const(value, id),
             IrExpr::TypeOf { value } => self.lower_type_of(value),
+            IrExpr::TypeCastResult {
+                value,
+                target,
+                result,
+                failure,
+                payload,
+            } => self.lower_type_cast_result(value, target, result, failure, payload),
             IrExpr::TypeField {
                 descriptor, field, ..
             } => self.lower_type_field(descriptor, field),

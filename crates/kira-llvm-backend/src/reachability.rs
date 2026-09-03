@@ -275,6 +275,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         | IrExpr::TypeField {
             descriptor: operand, ..
         }
+        | IrExpr::TypeCastResult { value: operand, .. }
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }

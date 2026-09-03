@@ -362,3 +362,72 @@ fn descriptors_compare_only_with_descriptors() {
                 @Main function main() { print(Point().type == 1) return }";
     assert!(!codes(text).is_empty());
 }
+
+/// A cast under `try` is a fallible step the enclosing `attempt` handles; the
+/// same cast without one traps and needs no handler.
+#[test]
+fn a_cast_under_try_is_handled_like_any_other_failure() {
+    let handled = "struct Point { let x: Int = 1 }\n\
+                   @Main function main() {\n\
+                       let boxed: Any = Point()\n\
+                       attempt {\n\
+                           let p = try boxed as Point\n\
+                           print(p.x)\n\
+                       } handle {\n\
+                           Mismatch(actual) { print(actual.name) }\n\
+                       }\n\
+                       return\n\
+                   }";
+    assert!(diagnostics(handled).is_empty(), "{:?}", codes(handled));
+
+    // The handler must cover the failure, exactly as it must for a call.
+    let unhandled = "struct Point { let x: Int = 1 }\n\
+                     @Main function main() {\n\
+                         let boxed: Any = Point()\n\
+                         attempt {\n\
+                             let p = try boxed as Point\n\
+                             print(p.x)\n\
+                         } handle {\n\
+                         }\n\
+                         return\n\
+                     }";
+    assert!(
+        codes(&unhandled).contains(&"KSEM139".to_owned()),
+        "{:?}",
+        codes(unhandled)
+    );
+
+    // Outside an `attempt` a cast is not fallible, so `try` is refused there
+    // for the reason it is always refused.
+    let loose = "struct Point { let x: Int = 1 }\n\
+                 @Main function main() {\n\
+                     let boxed: Any = Point()\n\
+                     let p = try boxed as Point\n\
+                     print(p.x)\n\
+                     return\n\
+                 }";
+    assert!(
+        codes(&loose).contains(&"KSEM137".to_owned()),
+        "{:?}",
+        codes(loose)
+    );
+}
+
+/// A program may declare a `TypeCastError` of its own; the compiler's is a
+/// different type and a tried cast still reports through its own.
+#[test]
+fn a_programs_own_cast_error_name_does_not_capture_the_compilers() {
+    let text = "enum TypeCastError { Other }\n\
+                struct Point { let x: Int = 1 }\n\
+                @Main function main() {\n\
+                    let boxed: Any = Point()\n\
+                    attempt {\n\
+                        let p = try boxed as Point\n\
+                        print(p.x)\n\
+                    } handle {\n\
+                        Mismatch(actual) { print(actual.name) }\n\
+                    }\n\
+                    return\n\
+                }";
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
+}

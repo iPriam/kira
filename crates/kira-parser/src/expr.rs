@@ -154,6 +154,24 @@ impl Parser<'_> {
     /// every expression passes through it exactly once on its way to a primary,
     /// and charging that would halve the depth an ordinary parenthesized
     /// expression is allowed.
+    /// What a `try` applies to: a unary expression and any `is`/`as` written on
+    /// it, and nothing looser.
+    ///
+    /// Binding through the type operators is what makes `try value as T` the
+    /// cast being tried. Stopping there is what keeps `try f() + 1` the sum of
+    /// a tried call, rather than a try of a sum that has no failure to name.
+    fn parse_try_operand(&mut self) -> ExprId {
+        let allowed = self.enter_nesting();
+        let expr = if allowed {
+            self.parse_binary(TYPE_OPERATOR_BP - 1)
+        } else {
+            self.recover_refused_nesting();
+            self.error_expr(self.current().span)
+        };
+        self.exit_nesting();
+        expr
+    }
+
     fn parse_unary_nested(&mut self) -> ExprId {
         let allowed = self.enter_nesting();
         let expr = if allowed {
@@ -168,12 +186,16 @@ impl Parser<'_> {
 
     fn parse_unary(&mut self) -> ExprId {
         // `try` binds like a prefix operator so `try f(n)` takes the whole
-        // call. Whether this position is one where a `try` is allowed at all is
-        // a question for analysis, not the parser.
+        // call, and looser than `is`/`as` so `try value as T` is the cast being
+        // tried rather than a cast of what was tried. That is the only reading
+        // the language has a meaning for: a `try` names the fallible step, and
+        // the fallible step there is the cast. Whether this position is one
+        // where a `try` is allowed at all is a question for analysis, not the
+        // parser.
         if self.at(TokenKind::Try) {
             let start = self.current().span;
             self.bump(); // `try`
-            let value = self.parse_unary_nested();
+            let value = self.parse_try_operand();
             let value_span = self.tree.expr(value).span();
             let span = Span::from_bounds(start.start, value_span.end());
             return self.tree.add_expr(Expr::Try { value, span });

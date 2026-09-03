@@ -201,6 +201,7 @@ impl Analyzer<'_> {
             | HirExpr::Distinct { value: operand, .. }
             | HirExpr::IntoAny { value: operand, .. }
             | HirExpr::TypeOf { value: operand, .. }
+            | HirExpr::TypeCastResult { value: operand, .. }
             | HirExpr::TypeField {
                 descriptor: operand,
                 ..

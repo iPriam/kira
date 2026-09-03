@@ -167,7 +167,10 @@ impl Codegen<'_> {
                 // no conversion when it does.
                 // A task handle is a word naming a row in the running
                 // program's task table, so it is already the box's word too.
-                Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => value,
+                // A runtime type descriptor is a word naming a table row, so it
+                // is already the box.s word too: the `Mismatch` payload of a
+                // failed cast is one.
+                Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) | Type::RuntimeType => value,
                 // A nested enum is a handle exactly as a `String` is, so it
                 // encodes the same way; only the kind the box records differs,
                 // which is what makes its clone/free recurse.
@@ -203,7 +206,11 @@ impl Codegen<'_> {
         // there by `encode_box_payload`, and the builder is on a live block.
         unsafe {
             Ok(match ty {
-                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => word,
+                Type::Int(_)
+                | Type::RawPtr
+                | Type::ForeignPtr(_)
+                | Type::Task(_)
+                | Type::RuntimeType => word,
                 Type::Float(_) => {
                     LLVMBuildBitCast(builder, word, types.f64, c"enum.payload.float".as_ptr())
                 }

@@ -198,6 +198,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         IrExpr::IntoAny { value, .. } => walk_expr(program, *value, found),
         IrExpr::TypeConst { value, .. }
         | IrExpr::TypeOf { value }
+        | IrExpr::TypeCastResult { value, .. }
         | IrExpr::TypeField {
             descriptor: value, ..
         } => walk_expr(program, *value, found),

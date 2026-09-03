@@ -227,6 +227,7 @@ impl IrProgram {
             IrExpr::IntoAny { .. } => Type::Any,
             IrExpr::TypeConst { .. } | IrExpr::TypeOf { .. } => Type::RuntimeType,
             IrExpr::TypeField { ty, .. } => *ty,
+            IrExpr::TypeCastResult { result, .. } => Type::Enum(*result),
             IrExpr::MainThreadCall { ty, .. } | IrExpr::MainThreadJoin { ty, .. } => *ty,
             IrExpr::ArrayAppend { .. }
             | IrExpr::NativeStateRetain { .. }

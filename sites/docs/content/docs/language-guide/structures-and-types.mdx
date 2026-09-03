@@ -195,6 +195,17 @@ The answer is a `Type`, and two of them are equal exactly when they name one typ
 
 A descriptor carries a name, a package, a kind, generic arguments, and conformances. It does not carry fields, layout, methods, or source spans: those are compile-time facts, reached through comptime reflection.
 
+A cast that cannot answer traps. Inside an `attempt`, writing it under `try` makes the failure ordinary instead, and the handler is told what the value actually held:
+
+```kira
+attempt {
+    let widget = try boxed as Widget
+    print(widget.width)
+} handle {
+    Mismatch(actual) { print("not a widget: " + actual.name) }
+}
+```
+
 ## Type Aliases
 
 `type Name = Target` binds a name to a written type. It is a **spelling, not a new type**: `Count` and `Int` below are the same type, so a value of one goes anywhere the other does and no backend ever learns the alias existed.

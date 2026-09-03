@@ -487,6 +487,24 @@ pub enum IrExpr {
         /// The `Any` being asked, consumed by the read.
         value: IrExprId,
     },
+    /// `try value as Type`: the cast as a result a handler can answer.
+    ///
+    /// Builds `Ok(payload)` when the box holds `target` and
+    /// `Error(Mismatch(type))` when it does not, so a failed cast is a value
+    /// rather than a trap. Both engines lower it as a branch over the same box
+    /// tag [`IrExpr::TypeTest`] reads.
+    TypeCastResult {
+        /// The `Any` being unboxed, consumed either way.
+        value: IrExprId,
+        /// The identity the payload must carry.
+        target: kira_semantics_model::ErasedTypeId,
+        /// The result row being built.
+        result: kira_semantics_model::EnumId,
+        /// The failure row the error variant carries.
+        failure: kira_semantics_model::EnumId,
+        /// The payload type read on the success path.
+        payload: Type,
+    },
     /// A property of a runtime type descriptor.
     TypeField {
         /// The descriptor being read.

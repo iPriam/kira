@@ -963,9 +963,15 @@ module.exports = grammar({
         $.boolean_literal,
       ),
 
-    // `try f(n)` binds like a prefix operator, so it takes the whole call.
+    // `try f(n)` binds like a prefix operator, so it takes the whole call, and
+    // looser than `is`/`as` so `try value as T` is the cast being tried. That
+    // is the only reading with a meaning: a `try` names the fallible step, and
+    // there the fallible step is the cast.
     try_expression: ($) =>
-      prec.right(PREC.unary, seq('try', field('value', $._expression))),
+      prec.right(
+        PREC.typeOperator - 1,
+        seq('try', field('value', $._expression)),
+      ),
 
     // The callee is a name or a field path, never an arbitrary expression:
     // `Expr::Call` carries a Symbol, so `(f)(x)` is not a call.

@@ -23,6 +23,8 @@ Two written widths must match exactly. Bare `Int` and `Float` are wildcards matc
 
 `Any` accepts every value. What it holds is asked with `value is Type` (a `Bool`, by nominal runtime identity: two packages' same-named `Point`s are different answers) and read back with `value as Type`, which traps when the value holds anything else.
 
+A failed cast traps, and `try value as Type` inside an `attempt` makes it an answerable failure instead: see [statements](/docs/language-reference/statements).
+
 `value.type` answers with a `Type`, the runtime descriptor of what the value is. Two descriptors are equal exactly when they name one type by package-qualified nominal identity. A descriptor exposes five things and no more:
 
 | Member | Answers |

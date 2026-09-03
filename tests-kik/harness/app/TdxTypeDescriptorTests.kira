@@ -144,3 +144,49 @@ construct TdxEverySpellingOfAnIntIsOneType() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
+
+construct TdxATriedCastAnswersWithItsPayload() extends Test {
+    test {
+        let boxed: Any = TdxPoint(x: 4, y: 5)
+        attempt {
+            let p = try boxed as TdxPoint
+            return p.x + p.y
+        } handle {
+            Mismatch(actual) { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
+}
+
+construct TdxATriedCastHandsTheHandlerWhatItHeld() extends Test {
+    test {
+        let boxed: Any = "text"
+        attempt {
+            let p = try boxed as TdxPoint
+            return p.x
+        } handle {
+            Mismatch(actual) {
+                if actual.name == "String" { return 1 }
+                return 0
+            }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TdxATriedCastOfAnEnumIsOrdinary() extends Test {
+    test {
+        let held: TdxCrate<Int> = .Full(6)
+        let boxed: Any = held
+        attempt {
+            let recovered = try boxed as TdxCrate<Int>
+            match recovered {
+                Full(value) -> { return value }
+                Empty -> { return 0 }
+            }
+        } handle {
+            Mismatch(actual) { return 0 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
+}

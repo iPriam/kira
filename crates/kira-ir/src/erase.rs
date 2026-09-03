@@ -160,6 +160,7 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::MainThreadCall { ty, .. }
         | IrExpr::MainThreadJoin { ty, .. } => erase(ty),
         IrExpr::IntoAny { from, .. } | IrExpr::TypeField { ty: from, .. } => erase(from),
+        IrExpr::TypeCastResult { payload, .. } => erase(payload),
         // The rest carry no type: a literal is its own, a struct or enum
         // construction names its row, and everything else reads its type off
         // the table or off the node it was built from.

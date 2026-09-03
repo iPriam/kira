@@ -1007,3 +1007,45 @@ function f() -> String {
           receiver: (field_expression
             receiver: (identifier))
           field: (identifier))))))
+
+================================================================================
+A tried cast is the cast being tried
+================================================================================
+
+function f() -> Int {
+    attempt {
+        let p = try boxed as Point
+        return p.x
+    } handle {
+        Mismatch(actual) { return 0 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (attempt_statement
+        body: (block
+          (variable_declaration
+            name: (identifier)
+            value: (try_expression
+              value: (type_cast_expression
+                value: (identifier)
+                type: (type_identifier))))
+          (return_statement
+            value: (field_expression
+              receiver: (identifier)
+              field: (identifier))))
+        (handler_arm
+          pattern: (variant_pattern
+            variant: (identifier)
+            binding: (identifier))
+          body: (block
+            (return_statement
+              value: (integer_literal))))))))
