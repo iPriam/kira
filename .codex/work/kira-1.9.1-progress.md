@@ -286,6 +286,23 @@ Three fixes from the Serde work, each proven before it was built on:
   blank the unscannable tail so no `#{` leaks to the parser, and the unclosed-body messages say the
   rest of the file was skipped. E2e proves an unclosed macro reports KMAC012 with no KLEX001.
 
+### Serde step 4: arrays, nested to any depth (2026-09-03)
+`[Int(1),Int(2)]`, `[["a"]]`, `[Point{x:Int(1)}]`: arrays of scalars, strings, nested arrays, and
+named derived types round-trip on VM, LLVM, and hybrid, with empty arrays and trailing-comma and
+empty-element refusal. The field scanner tracks all three bracket kinds now. Generation is two
+recursive comptime helpers (one writes into a caller-owned string, one reads into a caller-named
+binding), so one dispatch point serves fields, payloads, and nesting levels alike.
+Proving the machinery took a new compiler builtin: comptime `substring`, eval-level only (the
+`StringOp` wire format is untouched), with tests and a documented ASCII note.
+Harness: three array constructs plus a U64-max case (tally 1458 on VM and native); parity
+`serde_arrays_balance_on_every_backend` with heap balance; e2e refusal of `[Option<Int>]` naming
+the element rule.
+
+Repair on the way in, and it matters: `Diagnostics.error` records a refusal but evaluation
+continues, and the array helpers fail hard (KMAC013) on the same input — discarding the recorded
+refusal under their own error. Every array branch now skips codegen once refused, so the refusal is
+what surfaces. Any future validation-then-generate macro code must follow the same shape.
+
 ### Next: canonical Serde, then the derive surface
 The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
 Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only

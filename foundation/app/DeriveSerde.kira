@@ -51,6 +51,205 @@
 // this file: they are the same code for every derived type, and only the format
 // they read and write is described here.
 
+// The helpers both macros generate calls to live in `SerdeText.kira`, beside
+// this file: they are the same code for every derived type, and only the format
+// they read and write is described here.
+//
+// The five functions below are the macros' own shared logic: classifying a
+// type text, spelling an annotation for one, and writing or reading a value of
+// one. They run at compile time, take and return plain values, and recurse for
+// nested arrays — so there is one place that knows how each shape travels,
+// however deeply it nests, instead of one copy per position that names it.
+
+// The integer spelling `text` names, or `""` when it names none. The tag an
+// integer writes and the check a reader applies come from here, so the eight
+// spellings are listed once.
+comptime function __kira_serde_int_tag(text: String) -> String {
+    for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+        if text == sname {
+            return sname
+        }
+    }
+    return ""
+}
+
+// Whether a value of the type `text` reads as can be generated: scalars,
+// nested arrays of the same, and single identifiers addressed by name through
+// generated `serialize_`/`deserialize_` calls. Generics, qualified names, and
+// function types answer false — the generated code could not name what they
+// mean — and the caller reports them with the span only it has.
+comptime function __kira_serde_ok(text: String) -> Bool {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        if t.endsWith("]") == false {
+            return false
+        }
+        return __kira_serde_ok(t.substring(1, t.count - 1).trim())
+    }
+    if __kira_serde_int_tag(t) != "" {
+        return true
+    }
+    if t == "Float" {
+        return true
+    }
+    if t == "F32" {
+        return true
+    }
+    if t == "Bool" {
+        return true
+    }
+    if t == "String" {
+        return true
+    }
+    if t == "CBool" {
+        return true
+    }
+    if t.contains("<") {
+        return false
+    }
+    if t.contains("(") {
+        return false
+    }
+    if t.contains(")") {
+        return false
+    }
+    if t.contains(",") {
+        return false
+    }
+    if t.contains(":") {
+        return false
+    }
+    if t.contains(" ") {
+        return false
+    }
+    if t.contains("[") {
+        return false
+    }
+    if t.contains("]") {
+        return false
+    }
+    if t == "" {
+        return false
+    }
+    return true
+}
+
+// The annotation syntax for the type `text` reads as: a plain name splices
+// directly, and an array nests. Only called on text `__kira_serde_ok`
+// accepted, so every name here resolves where the annotation lands.
+comptime function __kira_serde_ann(text: String) -> Syntax {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        var inner: Syntax = __kira_serde_ann(t.substring(1, t.count - 1).trim())
+        return quote { [#{inner}] }
+    }
+    return quote { #{Identifier(t)} }
+}
+
+// Statements serializing the value `value` reads as — of the type `typeText`
+// reads as — appended to the string `target` names. Scalars append one piece;
+// an array appends its brackets around one element per turn, recursing for the
+// element. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_write_into(typeText: String, value: Syntax, target: Syntax, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        return quote { #{target} = #{target} + #{tag} + "(" + String(#{value}) + ")" }
+    }
+    if t == "Float" {
+        return quote { #{target} = #{target} + __kira_serde_float(#{value}) }
+    }
+    if t == "F32" {
+        return quote { #{target} = #{target} + __kira_serde_float32(#{value}) }
+    }
+    if t == "Bool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "CBool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "String" {
+        return quote { #{target} = #{target} + "\"" + __kira_serde_escape(#{value}) + "\"" }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var wrote: Syntax = __kira_serde_write_into(inner, quote { #{Identifier("__e" + stem)} }, target, nest)
+        return quote {
+            #{target} = #{target} + "["
+            var #{Identifier("__n" + stem)}: Int = 0
+            for #{Identifier("__e" + stem)} in #{value} {
+                if #{Identifier("__n" + stem)} != 0 {
+                    #{target} = #{target} + ","
+                }
+                #{wrote}
+                #{Identifier("__n" + stem)} = #{Identifier("__n" + stem)} + 1
+            }
+            #{target} = #{target} + "]"
+        }
+    }
+    return quote { #{target} = #{target} + #{Identifier("serialize_" + t)}(#{value}) }
+}
+
+// Statements reading one value of the type `typeText` reads as out of the
+// string `source` reads as, binding it to the name `result` carries. Scalars
+// bind one conversion; an array carves its elements out of the brackets and
+// recurses for each. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_read_value(typeText: String, source: Syntax, result: String, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var ann: Syntax = __kira_serde_ann(t)
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        if t == "U64" {
+            return quote { let #{Identifier(result)}: #{ann} = U64(__kira_deser_tagged_uint(#{source}, "U64")) }
+        }
+        return quote { let #{Identifier(result)}: #{ann} = #{Identifier(t)}(__kira_deser_tagged_int(#{source}, #{tag})) }
+    }
+    if t == "Float" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float(#{source}) }
+    }
+    if t == "F32" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float32(#{source}) }
+    }
+    if t == "Bool" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_bool(#{source}) }
+    }
+    if t == "String" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_unquote(#{source}) }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var read: Syntax = __kira_serde_read_value(inner, quote { #{Identifier("__e" + stem)} }, "__v" + nest, nest)
+        return quote {
+            let #{Identifier("__a" + stem)} = #{source}
+            var #{Identifier("__o" + stem)}: #{ann} = []
+            var #{Identifier("__p" + stem)}: Int = 1
+            while #{Identifier("__p" + stem)} < #{Identifier("__a" + stem)}.count - 1 {
+                let #{Identifier("__end" + stem)}: Int = __kira_deser_scan(#{Identifier("__a" + stem)}, #{Identifier("__p" + stem)})
+                if #{Identifier("__end" + stem)} == #{Identifier("__p" + stem)} {
+                    #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                }
+                let #{Identifier("__e" + stem)}: String = #{Identifier("__a" + stem)}.substring(#{Identifier("__p" + stem)}, #{Identifier("__end" + stem)})
+                #{read}
+                #{Identifier("__o" + stem)}.append(#{Identifier("__v" + nest)})
+                #{Identifier("__p" + stem)} = #{Identifier("__end" + stem)}
+                if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 44 {
+                    #{Identifier("__p" + stem)} = #{Identifier("__p" + stem)} + 1
+                    if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 93 {
+                        #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                    }
+                }
+            }
+            if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) != 93 {
+                #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+            }
+            let #{Identifier(result)}: #{ann} = #{Identifier("__o" + stem)}
+        }
+    }
+    return quote { let #{Identifier(result)}: #{ann} = #{Identifier("deserialize_" + t)}(#{source}) }
+}
+
 comptime macro Serializable {
     kind { derive }
     appliesTo { struct enum distinct }
@@ -120,7 +319,22 @@ comptime macro Serializable {
                             intTag = sname
                         }
                     }
-                    if intTag != "" {
+                    var payloadText: String = String(variant.type.asSyntax()).trim()
+                    var isArrayPayload: Bool = payloadText.startsWith("[") && payloadText.endsWith("]")
+                    if isArrayPayload {
+                        if __kira_serde_ok(payloadText) == false {
+                            Diagnostics.error("Derive(Serializable): variant `" + variant.name.asString() + "` has payload type `" + payloadText + "`, which Serde cannot generate: array elements are an integer width, Float, F32, Bool, String, a nested array thereof, or a named type with its own `serialize_` function", at: variant.syntax)
+                        } else {
+                            var stem: String = "p" + variant.name.asString()
+                            arms.append(quote {
+                                #{variant.name}(payload) -> {
+                                    var #{Identifier("__s" + stem)}: String = ""
+                                    #{__kira_serde_write_into(payloadText, quote { payload }, quote { #{Identifier("__s" + stem)} }, stem)}
+                                    return #{head} + "(" + #{Identifier("__s" + stem)} + ")"
+                                }
+                            })
+                        }
+                    } else if intTag != "" {
                         arms.append(quote {
                             #{variant.name}(payload) -> return #{head} + "(" + #{intTag} + "(" + String(payload) + "))"
                         })
@@ -176,12 +390,26 @@ comptime macro Serializable {
                 joined = joined + id.asString()
             }
             if joined != field.type.asSyntax() {
-                Diagnostics.error("Derive(Serializable): field has an unsupported array or generic type; only an integer width, Float, F32, Bool, String, or a nested @Derive(Serializable) struct field are supported", at: target.syntax)
+                var asArray: String = String(field.type.asSyntax()).trim()
+                if asArray.startsWith("[") == false || asArray.endsWith("]") == false {
+                    Diagnostics.error("Derive(Serializable): field has an unsupported generic type; only an integer width, Float, F32, Bool, String, an array thereof, or a nested @Derive(Serializable) struct field are supported", at: target.syntax)
+                }
             }
             var sep: String = ""
             if idx != 0 {
                 sep = ","
             }
+            var fieldText: String = String(field.type.asSyntax()).trim()
+            var isArrayField: Bool = fieldText.startsWith("[") && fieldText.endsWith("]")
+            if isArrayField {
+                if __kira_serde_ok(fieldText) == false {
+                    Diagnostics.error("Derive(Serializable): field `" + field.name.asString() + "` has type `" + fieldText + "`, which Serde cannot generate: array elements are an integer width, Float, F32, Bool, String, a nested array thereof, or a named type with its own `serialize_` function", at: field.syntax)
+                } else {
+                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" })
+                    stmts.append(__kira_serde_write_into(fieldText, quote { v.#{field.name} }, quote { out }, "f" + field.name.asString()))
+                }
+                idx = idx + 1
+            } else {
             // An integer writes its spelling around its digits — `U8(7)`, not
             // `7` — so the value carries its width and a reader range-checks
             // it before building the field.
@@ -211,6 +439,7 @@ comptime macro Serializable {
                 stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + "\"" + __kira_serde_escape(v.#{field.name}) + "\"" })
             } else {
                 stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + serialize_#{field.type.asSyntax()}(v.#{field.name}) })
+            }
             }
             idx = idx + 1
         }
@@ -366,7 +595,24 @@ comptime macro Deserializable {
                 } else {
                     // One arm shape for every payload: only the conversion
                     // differs, and a splice in argument position renders inline
-                    // like any other splice.
+                    // like any other splice. An array payload parses through
+                    // statements first, so its arm holds those too.
+                    var payloadText: String = String(variant.type.asSyntax()).trim()
+                    var isArrayPayload: Bool = payloadText.startsWith("[") && payloadText.endsWith("]")
+                    if isArrayPayload {
+                        if __kira_serde_ok(payloadText) == false {
+                            Diagnostics.error("Derive(Deserializable): variant `" + variant.name.asString() + "` has payload type `" + payloadText + "`, which Serde cannot generate: array elements are an integer width, Float, F32, Bool, String, a nested array thereof, or a named type with its own `deserialize_` function", at: variant.syntax)
+                        } else {
+                            var stem: String = "p" + variant.name.asString()
+                            arms.append(quote {
+                                if __name == #{variant.name.asString()} {
+                                    #{__kira_serde_read_value(payloadText, quote { __inner }, "__v" + stem, stem)}
+                                    return .#{variant.name}(#{Identifier("__v" + stem)})
+                                }
+                            })
+                        }
+                    }
+                    else {
                     var intTag: String = ""
                     for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32"] {
                         if variant.type == sname {
@@ -394,6 +640,7 @@ comptime macro Deserializable {
                             return .#{variant.name}(#{conv})
                         }
                     })
+                    }
                 }
             }
             return quote {
@@ -445,8 +692,33 @@ comptime macro Deserializable {
                 joined = joined + id.asString()
             }
             if joined != field.type.asSyntax() {
-                Diagnostics.error("Derive(Deserializable): field has an unsupported array or generic type; only an integer width, Float, F32, Bool, String, or a nested @Derive(Deserializable) struct field are supported", at: target.syntax)
+                var asArray: String = String(field.type.asSyntax()).trim()
+                if asArray.startsWith("[") == false || asArray.endsWith("]") == false {
+                    Diagnostics.error("Derive(Deserializable): field has an unsupported generic type; only an integer width, Float, F32, Bool, String, an array thereof, or a nested @Derive(Deserializable) struct field are supported", at: target.syntax)
+                }
             }
+
+            var fieldText: String = String(field.type.asSyntax()).trim()
+            var isArrayField: Bool = fieldText.startsWith("[") && fieldText.endsWith("]")
+            if isArrayField {
+                if __kira_serde_ok(fieldText) == false {
+                    Diagnostics.error("Derive(Deserializable): field `" + field.name.asString() + "` has type `" + fieldText + "`, which Serde cannot generate: array elements are an integer width, Float, F32, Bool, String, a nested array thereof, or a named type with its own `deserialize_` function", at: field.syntax)
+                } else {
+                    stmts.append(quote {
+                        let __rest#{idx}: String = s.substring(pos, s.count)
+                        let __eq#{idx}: Int = __rest#{idx}.indexOf(":")
+                        let __eqAt#{idx}: Int = pos + __eq#{idx}
+                        if s.substring(pos, __eqAt#{idx}) != #{field.name.asString()} {
+                            pos = __kira_deser_trap(s)
+                        }
+                        pos = __eqAt#{idx} + 1
+                        let __end#{idx}: Int = __kira_deser_scan(s, pos)
+                        let __val#{idx}: String = s.substring(pos, __end#{idx})
+                        pos = __end#{idx}
+                    })
+                    stmts.append(__kira_serde_read_value(fieldText, quote { __val#{idx} }, field.name.asString(), "f" + field.name.asString()))
+                }
+            } else {
 
             // The tag the writer wrote, checked exactly before the digits are
             // read, and the narrowing conversion that range-checks them: a
@@ -493,6 +765,7 @@ comptime macro Deserializable {
                 let #{field.name}: #{field.type.asSyntax()} = #{conv}
                 pos = __end#{idx}
             })
+            }
 
             if idx < total - 1 {
                 stmts.append(quote {

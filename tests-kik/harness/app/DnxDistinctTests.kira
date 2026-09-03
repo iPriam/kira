@@ -239,3 +239,67 @@ construct DnxSerdeCarriesU64PastTheSignedRange() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
+
+// Arrays travel as bracketed element lists, nested to any depth: `[Int(1)]`,
+// `[[U8(1)]]`, `[Point{x:Int(1)}]`. An empty array is `[]`, and every level
+// parses with the same tag and range checks a scalar field gets.
+
+@Derive(Serializable, Deserializable)
+struct DnxInner {
+    var n: Int
+}
+
+@Derive(Serializable, Deserializable)
+struct DnxBatch {
+    var xs: [Int]
+    var names: [String]
+    var matrix: [[U8]]
+    var inners: [DnxInner]
+}
+
+@Derive(Serializable, Deserializable)
+enum DnxLoad {
+    Nums([Int])
+    Word(String)
+    Point
+}
+
+construct DnxSerdeCarriesArraysOfScalars() extends Test {
+    test {
+        let batch = DnxBatch(xs: [1, 2, 3], names: ["a,b}c", "d"], matrix: [[U8(1)]], inners: [DnxInner(n: 1)])
+        let back = deserialize_DnxBatch(serialize_DnxBatch(batch))
+        var score = 0
+        if back.xs[2] == 3 { score = score + 1 }
+        if back.names[0] == "a,b}c" { score = score + 10 }
+        if back.matrix[0][0] == U8(1) { score = score + 100 }
+        if back.inners[0].n == 1 { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeCarriesEmptyAndNestedArrays() extends Test {
+    test {
+        let batch = DnxBatch(xs: [], names: [], matrix: [[], [U8(3)]], inners: [])
+        let back = deserialize_DnxBatch(serialize_DnxBatch(batch))
+        var score = 0
+        if back.xs.count == 0 { score = score + 1 }
+        if back.matrix[0].count == 0 { score = score + 10 }
+        if back.matrix[1][0] == U8(3) { score = score + 100 }
+        if back.inners.count == 0 { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeCarriesAnArrayPayload() extends Test {
+    test {
+        let loaded = DnxLoad.Nums([7, 8])
+        match deserialize_DnxLoad(serialize_DnxLoad(loaded)) {
+            Nums(v) -> { return v[0] + v[1] }
+            Word(v) -> { return 0 - 1 }
+            Point -> { return 0 - 2 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}

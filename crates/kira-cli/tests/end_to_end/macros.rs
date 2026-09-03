@@ -54,3 +54,18 @@ fn an_identifier_built_from_a_non_name_is_refused_where_the_text_is() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("KMAC013"), "{stderr}");
 }
+
+#[test]
+fn an_array_of_a_generic_is_refused_with_what_it_holds() {
+    let output = check_program(
+        "import Foundation\n\
+         @Derive(Serializable)\n\
+         struct Boxed {\n\
+             var items: [Option<Int>]\n\
+         }\n\
+         @Main function main() { print(1) return }",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array elements"), "{stderr}");
+}

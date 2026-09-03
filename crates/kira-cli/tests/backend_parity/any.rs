@@ -869,3 +869,39 @@ function main() {
     );
     assert_eq!(output, "7\nString\n6\n");
 }
+
+/// Serde arrays round-trip identically on every backend, nested and empty
+/// included, with the heap balanced: every box the reader builds is released
+/// with the value that holds it.
+#[test]
+fn serde_arrays_balance_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+@Derive(Serializable, Deserializable)
+struct Record {
+    var code: Int
+}
+
+@Derive(Serializable, Deserializable)
+struct Batch {
+    var xs: [Int]
+    var matrix: [[U8]]
+    var records: [Record]
+}
+
+@Main
+function main() {
+    let batch = Batch(xs: [1, 2], matrix: [[U8(3)], []], records: [Record(code: 7)])
+    let back = deserialize_Batch(serialize_Batch(batch))
+    print(back.xs[1])
+    print(back.matrix[0][0])
+    print(back.matrix[1].count)
+    print(back.records[0].code)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n3\n0\n7\n");
+}
