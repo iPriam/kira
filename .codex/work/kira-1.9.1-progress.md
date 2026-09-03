@@ -229,6 +229,16 @@ The walk now records that it stopped, `ModuleWalk::overflowed` carries it, and a
 into `AssemblyError::TooManyModules { reached }`, which the CLI already exits 1 on. `MAX_MODULES`
 is documented where imports are.
 
+### Serde step 1: string escaping (2026-09-03)
+A `String` value went onto the wire unescaped, so any text carrying `"`, `;`, or `}` parsed back as
+structure: the read succeeded and answered something else, which is the one failure a wire format
+must not have. Values now escape `\"`, `\\`, `\n`, `\r`, `\t`, and `\0`, the reader undoes exactly
+those and traps on any other escape, and the field scanner treats a quoted region as content.
+Harness: two constructs in `DnxDistinctTests.kira`, tally 1448 on VM and native.
+
+Note for the next steps: `knvm binstall` copies Foundation into the toolchain, so a Foundation edit
+is only visible to `kira test` after a fresh binstall.
+
 ### Next: canonical Serde, then the derive surface
 The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
 Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only

@@ -141,7 +141,7 @@ The variant is **named, never numbered**: an ordinal would tie the format to dec
 
 ## Two Limits
 
-A `String` value is **not escaped**: a `String` field or payload whose text contains `"`, `;`, or `}` is out of contract. No error is raised, but the wire string is then ambiguous and will not round-trip.
+A `String` value is escaped on the way out and unescaped on the way back: `\"`, `\\`, `\n`, `\r`, `\t`, and `\0`. Everything else is written as itself, and the scanner that carves a field out reads a quoted region as content, so a value holding `;` or `}` round-trips. An escape the format does not define is malformed input and traps, rather than being passed through as text nothing wrote.
 
 `Deserializable` **refuses a `Float`** field or payload. There is no lossless `Float` parsing primitive, so refusing beats shipping a parser that silently loses the low bits.
 

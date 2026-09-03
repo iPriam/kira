@@ -60,3 +60,43 @@ construct DnxSiblingIdsAreSeparateTypes() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
+
+// Serde escaping: a text value that carries the format's own delimiters comes
+// back as itself. Before escaping existed the parse succeeded and answered
+// something else, which is the one failure a wire format must not have.
+
+@Derive(Serializable, Deserializable)
+struct DnxAwkward {
+    var title: String
+    var body: String
+    var rank: Int
+}
+
+construct DnxSerdeEscapesTheFormatsOwnDelimiters() extends Test {
+    test {
+        let note = DnxAwkward(
+            title: "a\"b",
+            body: "semi; brace} back\\slash",
+            rank: 7
+        )
+        let back = deserialize_DnxAwkward(serialize_DnxAwkward(note))
+        var score = 0
+        if back.title == note.title { score = score + 1 }
+        if back.body == note.body { score = score + 10 }
+        if back.rank == note.rank { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct DnxSerdeCarriesLineEndingsAndTabs() extends Test {
+    test {
+        let note = DnxAwkward(title: "one\ntwo", body: "tab\there\r", rank: 1)
+        let back = deserialize_DnxAwkward(serialize_DnxAwkward(note))
+        var score = 0
+        if back.title == note.title { score = score + 1 }
+        if back.body == note.body { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
