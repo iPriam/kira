@@ -108,7 +108,7 @@ function distinctSerdeSection() -> Int {
     let port = DistinctPort(U32(8080))
     let wire = serialize_DistinctPort(port)
     var score = wire.count
-    if wire == "8080" {
+    if wire == "DistinctPort(U32(8080))" {
         score = score + 10
     }
     if eq_DistinctPort(deserialize_DistinctPort(wire), port) {

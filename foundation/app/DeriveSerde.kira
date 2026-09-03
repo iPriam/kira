@@ -8,23 +8,29 @@
 //
 //   TypeName{field1:VALUE,field2:VALUE,...}
 //
-// An Int or Bool field is `String(value)`; a Float is `0x` and the sixteen hex
-// digits of its exact bits; a String field is its escaped text wrapped in `"`;
-// a nested derived struct is `serialize_<FieldType>(value)` recursed inline, so
-// `from: Point{x: 1, y: 2}` sits inside its parent's braces.
+// An integer writes its spelling around its digits — `U8(7)`, `I32(-5)`; a
+// Float is `Float(0x` and the sixteen hex digits of its exact bits, an F32 is
+// `F32(0x` and eight; a Bool is `true` or `false`; a String field is its
+// escaped text wrapped in `"`; a nested derived struct is
+// `serialize_<FieldType>(value)` recursed inline, so
+// `from:Point{id:TabId(U32(7))}` sits inside its parent's braces. A distinct
+// writes its name around its representation the same way: `TabId(U32(7))`.
 //
 // An ENUM is written as `TypeName.Variant`, with a payload in parentheses after
-// it — `Tool.Rotate`, `Note.Rank(42)`, `Slot.At(Point{x=1;y=2})`. The variant is
+// it — `Tool.Rotate`, `Note.Rank(Int(42))`, `Slot.At(Point{x:Int(1),y:Int(2)})`. The variant is
 // named, never numbered: an ordinal would tie the format to declaration order,
 // so inserting a variant would re-read every value ever written as its
 // neighbour. An enum field inside a struct is just that text in the field's
 // value slot, which the brace-aware scanner already consumes whole.
 //
 // Deserialization is the exact inverse. It validates the leading `TypeName{`,
-// then for each field in declaration order locates `label=`, carves the value
-// with a brace-aware scan (a `,` or `}` at brace depth 0 terminates it, so a
-// nested struct's own balanced braces are consumed whole), converts by field
-// type, and steps over the delimiter. Malformed input traps deterministically
+// then for each field in declaration order locates `label:`, carves the value
+// with a brace-aware scan (a `,` or `}` at brace depth 0 terminates it, and a
+// quoted region counts as content, so a nested struct's own balanced braces
+// are consumed whole), and converts by field type: an integer tag must name
+// the field's width exactly and the digits are range-checked, so `U8(300)`
+// traps and `Int(5)` in a `U8` field is refused. Malformed input traps
+// deterministically
 // on every backend: every structural violation drives an out-of-range `charAt`
 // or an inverted `substring`, both of which the runtime turns into a hard trap.
 // A value either round-trips or the program stops — there is no partial parse.
@@ -49,37 +55,50 @@ comptime macro Serializable {
     kind { derive }
     appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
-        // A distinct type writes the representation it is, and nothing around
-        // it. Not `TabId{raw=7}`: the type is one scalar word, so wrapping it
-        // in a struct envelope would put a Kira-side nominal fact on a wire
-        // that has no place to keep it and would make every reader parse a
-        // shape that carries no information. `7` round-trips, and a reader
-        // that wanted a `TabId` asked `deserialize_TabId` for one.
+        // A distinct type writes its name around the representation it is:
+        // `TabId(Int(7))`, not `7` and not `TabId{raw=7}`. The outer tag is
+        // the nominal identity the language keeps apart from the
+        // representation, and the inner value is written exactly as it would
+        // be anywhere else — including its own tag — so one reader shape
+        // serves every position. A reader that wanted a `TabId` asked
+        // `deserialize_TabId` for one.
         if target.kind == .Distinct {
-            var overFloat: Bool = false
+            var rep: String = "Int"
             for field in target.fields {
+                for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "Float", "F32", "Bool", "String"] {
+                    if field.type == sname {
+                        rep = sname
+                    }
+                }
                 if field.type == "RawPtr" {
                     Diagnostics.error(
                         "Derive(Serializable): a distinct type over `RawPtr` has nothing to write — an opaque foreign word is an address, and it means nothing in another process or another run",
                         at: target.syntax
                     )
                 }
-                if field.type == "Float" {
-                    overFloat = true
+            }
+            var repValue: Syntax = quote { String(v.raw) }
+            if rep == "Float" {
+                repValue = quote { __kira_serde_float(v.raw) }
+            }
+            if rep == "F32" {
+                repValue = quote { __kira_serde_float32(v.raw) }
+            }
+            if rep == "String" {
+                repValue = quote { "\"" + __kira_serde_escape(v.raw) + "\"" }
+            }
+            var repIntTag: String = ""
+            for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+                if rep == sname {
+                    repIntTag = sname
                 }
             }
-            // A distinct over a float writes the bits its representation is,
-            // exactly as a float field does.
-            if overFloat {
-                return quote {
-                    function serialize_#{target.name}(v: borrow #{target.name}) -> String {
-                        return __kira_serde_float(v.raw)
-                    }
-                }
+            if repIntTag != "" {
+                repValue = quote { #{repIntTag} + "(" + String(v.raw) + ")" }
             }
             return quote {
                 function serialize_#{target.name}(v: borrow #{target.name}) -> String {
-                    return String(v.raw)
+                    return #{target.name.asString()} + "(" + #{repValue} + ")"
                 }
             }
         }
@@ -94,35 +113,48 @@ comptime macro Serializable {
                 if variant.type.asSyntax() == "" {
                     arms.append(quote { #{variant.name} -> return #{head} })
                 } else {
-                    var isNumScalar: Bool = false
-                    for sname in ["Int", "Bool", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "CBool"] {
+                    // An integer payload is tagged exactly as a field is.
+                    var intTag: String = ""
+                    for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
                         if variant.type == sname {
-                            isNumScalar = true
+                            intTag = sname
                         }
                     }
+                    if intTag != "" {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(" + #{intTag} + "(" + String(payload) + "))"
+                        })
                     // A float payload writes its bits, exactly as a float field
                     // does: a decimal rendering is a second rounding on the way
                     // back.
-                    if variant.type == "Float" {
+                    } else if variant.type == "Float" {
                         arms.append(quote {
                             #{variant.name}(payload) -> return #{head} + "(" + __kira_serde_float(payload) + ")"
                         })
-                    } else {
-                    if isNumScalar {
+                    } else if variant.type == "F32" {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(" + __kira_serde_float32(payload) + ")"
+                        })
+                    } else if variant.type == "Bool" {
                         arms.append(quote {
                             #{variant.name}(payload) -> return #{head} + "(" + String(payload) + ")"
                         })
+                    // `CBool` is a Foundation-level convention, not a compiler
+                    // type with a tagged grammar form, so it keeps the
+                    // rendering it always had: the reader takes it back through
+                    // the same `deserialize_CBool` it always did.
+                    } else if variant.type == "CBool" {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(" + String(payload) + ")"
+                        })
+                    } else if variant.type == "String" {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(\"" + __kira_serde_escape(payload) + "\")"
+                        })
                     } else {
-                        if variant.type == "String" {
-                            arms.append(quote {
-                                #{variant.name}(payload) -> return #{head} + "(\"" + __kira_serde_escape(payload) + "\")"
-                            })
-                        } else {
-                            arms.append(quote {
-                                #{variant.name}(payload) -> return #{head} + "(" + serialize_#{variant.type.asSyntax()}(payload) + ")"
-                            })
-                        }
-                    }
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return #{head} + "(" + serialize_#{variant.type.asSyntax()}(payload) + ")"
+                        })
                     }
                 }
             }
@@ -144,35 +176,41 @@ comptime macro Serializable {
                 joined = joined + id.asString()
             }
             if joined != field.type.asSyntax() {
-                Diagnostics.error("Derive(Serializable): field has an unsupported array or generic type; only Int, Float, Bool, String, or a nested @Derive(Serializable) struct field are supported", at: target.syntax)
+                Diagnostics.error("Derive(Serializable): field has an unsupported array or generic type; only an integer width, Float, F32, Bool, String, or a nested @Derive(Serializable) struct field are supported", at: target.syntax)
             }
             var sep: String = ""
             if idx != 0 {
                 sep = ","
             }
-            var isNumScalar: Bool = false
-            if field.type == "Int" {
-                isNumScalar = true
+            // An integer writes its spelling around its digits — `U8(7)`, not
+            // `7` — so the value carries its width and a reader range-checks
+            // it before building the field.
+            var intTag: String = ""
+            for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+                if field.type == sname {
+                    intTag = sname
+                }
             }
-            if field.type == "Bool" {
-                isNumScalar = true
-            }
+            if intTag != "" {
+                stmts.append(quote {
+                    out = out + #{sep} + #{field.name.asString()} + ":" + #{intTag} + "(" + String(v.#{field.name}) + ")"
+                })
             // A float writes its bits, not a rendering of them: see
             // `__kira_serde_float`.
-            if field.type == "Float" {
+            } else if field.type == "Float" {
                 stmts.append(quote {
                     out = out + #{sep} + #{field.name.asString()} + ":" + __kira_serde_float(v.#{field.name})
                 })
-            } else {
-            if isNumScalar {
+            } else if field.type == "F32" {
+                stmts.append(quote {
+                    out = out + #{sep} + #{field.name.asString()} + ":" + __kira_serde_float32(v.#{field.name})
+                })
+            } else if field.type == "Bool" {
                 stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + String(v.#{field.name}) })
+            } else if field.type == "String" {
+                stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + "\"" + __kira_serde_escape(v.#{field.name}) + "\"" })
             } else {
-                if field.type == "String" {
-                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + "\"" + __kira_serde_escape(v.#{field.name}) + "\"" })
-                } else {
-                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + serialize_#{field.type.asSyntax()}(v.#{field.name}) })
-                }
-            }
+                stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + serialize_#{field.type.asSyntax()}(v.#{field.name}) })
             }
             idx = idx + 1
         }
@@ -190,35 +228,22 @@ comptime macro Deserializable {
     kind { derive }
     appliesTo { struct enum distinct }
     expand(target: Declaration) -> Syntax {
-        // The exact inverse of the distinct writer: read the representation and
-        // build the type by calling it. `TabId(...)` rather than a brace
-        // literal, because calling it is the one way into a distinct type — and
-        // an integer literal reaches any integer width, so a representation of
-        // `U32` needs no conversion between the parse and the construction.
+        // The exact inverse of the distinct writer: validate `Name(`, read the
+        // representation as the value it is — tag, digits, and range check
+        // included — validate `)`, and build the type by calling it, which is
+        // the one way into a distinct type.
         if target.kind == .Distinct {
-            // Written as two whole function bodies rather than one body with an
-            // interpolated argument: a `#{...}` in argument position splices as
-            // a statement, which would turn `TabId(parse(s))` into a bare
-            // `TabId` and a stray call. The enum branch below carries the same
-            // rule for the same reason.
-            var body: Syntax = quote {
-                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                    return #{target.name}(__kira_deser_int(s))
-                }
-            }
+            // One whole function body per representation: a `#{...}` in
+            // argument position splices as a statement, which would turn
+            // `TabId(parse(s))` into a bare `TabId` and a stray call, so the
+            // conversion is written literally in each body. The enum branch
+            // below carries the same rule for the same reason.
+            var rep: String = "Int"
             for field in target.fields {
-                if field.type == "Float" {
-                    body = quote {
-                        function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                            return #{target.name}(__kira_deser_float(s))
-                        }
+                for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "Float", "F32", "Bool", "String"] {
+                    if field.type == sname {
+                        rep = sname
                     }
-                }
-                if field.type == "F32" {
-                    Diagnostics.error(
-                        "Derive(Deserializable): a distinct type over `F32` is not supported — there is no lossless Float parser, so derive Serializable only, or declare the type over an Int width",
-                        at: target.syntax
-                    )
                 }
                 if field.type == "RawPtr" {
                     Diagnostics.error(
@@ -226,11 +251,111 @@ comptime macro Deserializable {
                         at: target.syntax
                     )
                 }
-                if field.type == "Bool" {
-                    body = quote {
-                        function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                            return #{target.name}(__kira_deser_bool(s))
-                        }
+            }
+            // The opener: `Name(` must lead, and the value must close. A
+            // missing `(` makes `indexOf` answer -1, so the substring is
+            // inverted and traps.
+            var open: Syntax = quote {
+                var __open: Int = s.indexOf("(")
+                if s.substring(0, __open) != #{target.name.asString()} {
+                    __open = __kira_deser_trap(s)
+                }
+                if s.charAt(s.count - 1) != 41 {
+                    __open = __kira_deser_trap(s)
+                }
+                let __inner: String = s.substring(__open + 1, s.count - 1)
+            }
+            var body: Syntax = quote {
+                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                    #{open}
+                    return #{target.name}(__kira_deser_tagged_int(__inner, "Int"))
+                }
+            }
+            if rep == "I8" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(I8(__kira_deser_tagged_int(__inner, "I8")))
+                    }
+                }
+            }
+            if rep == "U8" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(U8(__kira_deser_tagged_int(__inner, "U8")))
+                    }
+                }
+            }
+            if rep == "I16" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(I16(__kira_deser_tagged_int(__inner, "I16")))
+                    }
+                }
+            }
+            if rep == "U16" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(U16(__kira_deser_tagged_int(__inner, "U16")))
+                    }
+                }
+            }
+            if rep == "I32" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(I32(__kira_deser_tagged_int(__inner, "I32")))
+                    }
+                }
+            }
+            if rep == "U32" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(U32(__kira_deser_tagged_int(__inner, "U32")))
+                    }
+                }
+            }
+            if rep == "U64" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(U64(__kira_deser_tagged_uint(__inner, "U64")))
+                    }
+                }
+            }
+            if rep == "Float" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(__kira_deser_float(__inner))
+                    }
+                }
+            }
+            if rep == "F32" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(__kira_deser_float32(__inner))
+                    }
+                }
+            }
+            if rep == "Bool" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(__kira_deser_bool(__inner))
+                    }
+                }
+            }
+            if rep == "String" {
+                body = quote {
+                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                        #{open}
+                        return #{target.name}(__kira_deser_unquote(__inner))
                     }
                 }
             }
@@ -298,42 +423,58 @@ comptime macro Deserializable {
                     // than interpolated as a prepared expression: a `#{...}` in
                     // argument position splices as a statement, which turns
                     // `.Rank(convert(x))` into a bare `.Rank` and a stray call.
-                    if variant.type == "Int" {
+                    // An integer payload is tagged and narrowed exactly as a
+                    // field is.
+                    var intTag: String = ""
+                    for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32"] {
+                        if variant.type == sname {
+                            intTag = sname
+                        }
+                    }
+                    if intTag != "" {
                         arms.append(quote {
                             if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(__kira_deser_int(__inner))
+                                return .#{variant.name}(#{variant.type.asSyntax()}(__kira_deser_tagged_int(__inner, #{intTag})))
+                            }
+                        })
+                    // The top half of the `U64` range is past what a signed
+                    // accumulation can hold, so it parses unsigned.
+                    } else if variant.type == "U64" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(U64(__kira_deser_tagged_uint(__inner, "U64")))
+                            }
+                        })
+                    } else if variant.type == "Bool" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(__kira_deser_bool(__inner))
+                            }
+                        })
+                    } else if variant.type == "String" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(__kira_deser_unquote(__inner))
+                            }
+                        })
+                    } else if variant.type == "Float" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(__kira_deser_float(__inner))
+                            }
+                        })
+                    } else if variant.type == "F32" {
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(__kira_deser_float32(__inner))
                             }
                         })
                     } else {
-                        if variant.type == "Bool" {
-                            arms.append(quote {
-                                if __name == #{variant.name.asString()} {
-                                    return .#{variant.name}(__kira_deser_bool(__inner))
-                                }
-                            })
-                        } else {
-                            if variant.type == "String" {
-                                arms.append(quote {
-                                    if __name == #{variant.name.asString()} {
-                                        return .#{variant.name}(__kira_deser_unquote(__inner))
-                                    }
-                                })
-                            } else {
-                                if variant.type == "Float" {
-                                    arms.append(quote {
-                                        if __name == #{variant.name.asString()} {
-                                            return .#{variant.name}(__kira_deser_float(__inner))
-                                        }
-                                    })
-                                } else {
-                                arms.append(quote {
-                                    if __name == #{variant.name.asString()} {
-                                        return .#{variant.name}(deserialize_#{variant.type.asSyntax()}(__inner))
-                                    }
-                                })
-                                }
+                        arms.append(quote {
+                            if __name == #{variant.name.asString()} {
+                                return .#{variant.name}(deserialize_#{variant.type.asSyntax()}(__inner))
                             }
-                        }
+                        })
                     }
                 }
             }
@@ -386,10 +527,28 @@ comptime macro Deserializable {
                 joined = joined + id.asString()
             }
             if joined != field.type.asSyntax() {
-                Diagnostics.error("Derive(Deserializable): field has an unsupported array or generic type; only Int, Bool, String, or a nested @Derive(Deserializable) struct field are supported", at: target.syntax)
+                Diagnostics.error("Derive(Deserializable): field has an unsupported array or generic type; only an integer width, Float, F32, Bool, String, or a nested @Derive(Deserializable) struct field are supported", at: target.syntax)
             }
 
-            var conv: Syntax = quote { __kira_deser_int(__val#{idx}) }
+            // The tag the writer wrote, checked exactly before the digits are
+            // read, and the narrowing conversion that range-checks them: a
+            // `U8` field reading `U8(300)` traps rather than wrapping, and one
+            // reading `Int(5)` is refused a value of another type.
+            var intTag: String = ""
+            for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+                if field.type == sname {
+                    intTag = sname
+                }
+            }
+            var conv: Syntax = quote { deserialize_#{field.type.asSyntax()}(__val#{idx}) }
+            if intTag != "" {
+                conv = quote { #{field.type.asSyntax()}(__kira_deser_tagged_int(__val#{idx}, #{intTag})) }
+            }
+            // The top half of the `U64` range is past what a signed
+            // accumulation can hold, so it parses unsigned.
+            if field.type == "U64" {
+                conv = quote { U64(__kira_deser_tagged_uint(__val#{idx}, "U64")) }
+            }
             if field.type == "Bool" {
                 conv = quote { __kira_deser_bool(__val#{idx}) }
             }
@@ -399,21 +558,8 @@ comptime macro Deserializable {
             if field.type == "Float" {
                 conv = quote { __kira_deser_float(__val#{idx}) }
             }
-            var isKnown: Bool = false
-            if field.type == "Int" {
-                isKnown = true
-            }
-            if field.type == "Bool" {
-                isKnown = true
-            }
-            if field.type == "String" {
-                isKnown = true
-            }
-            if field.type == "Float" {
-                isKnown = true
-            }
-            if isKnown == false {
-                conv = quote { deserialize_#{field.type.asSyntax()}(__val#{idx}) }
+            if field.type == "F32" {
+                conv = quote { __kira_deser_float32(__val#{idx}) }
             }
 
             stmts.append(quote {

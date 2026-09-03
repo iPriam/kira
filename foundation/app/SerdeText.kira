@@ -197,14 +197,22 @@ function __kira_deser_unescape(s: borrow String) -> String {
     return out
 }
 
-// A `Float` as the exact bits it is, written `0x` and sixteen hex digits.
+// A `Float` as the exact bits it is: `Float(0x` and sixteen hex digits.
 //
 // Not a decimal rendering: `String(0.1)` is a reading of the value, and reading
 // it back is a second rounding, so a decimal wire format loses the low bits of
 // almost every float and cannot carry a signed zero, an infinity, or a NaN
 // payload at all. The bits are the value, and they read back as themselves.
+// The tag names which width they are the bits of, so a 32-bit float is never
+// read as a 64-bit one.
 function __kira_serde_float(v: Float) -> String {
-    return "0x" + __kira_serde_hex(floatToBits(v), 16)
+    return "Float(0x" + __kira_serde_hex(floatToBits(v), 16) + ")"
+}
+
+// An `F32` the same way, in eight digits: the value narrows to 32 bits first,
+// because the same bits mean a different number at the two widths.
+function __kira_serde_float32(v: Float) -> String {
+    return "F32(0x" + __kira_serde_hex(U64(floatToBits32(v)), 8) + ")"
 }
 
 // `digits` hex digits of `bits`, most significant first, zero-padded.
@@ -221,10 +229,97 @@ function __kira_serde_hex(bits: U64, digits: Int) -> String {
     return out
 }
 
-// The `Float` a `0x`-prefixed sixteen-digit body names, trapping on anything
-// that is not exactly that.
+// The `Float` a `Float(0x`-prefixed sixteen-digit body names, trapping on
+// anything that is not exactly that: a missing tag, a wrong length, or a byte
+// that is not a hex digit is a number nothing wrote.
 function __kira_deser_float(s: borrow String) -> Float {
-    return bitsToFloat(__kira_deser_hex(s, 16))
+    if s.count != 25 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.substring(0, 8) != "Float(0x" {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.charAt(24) != 41 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    return bitsToFloat(__kira_deser_hex(s.substring(6, 24), 16))
+}
+
+// The `F32` a `F32(0x`-prefixed eight-digit body names, the same contract at
+// the other width.
+function __kira_deser_float32(s: borrow String) -> Float {
+    if s.count != 15 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.substring(0, 6) != "F32(0x" {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.charAt(14) != 41 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    return bitsToFloat32(U32(__kira_deser_hex(s.substring(4, 14), 8)))
+}
+
+// The unsigned integer a `tag(`-prefixed decimal body names: `U64(7)`.
+//
+// The unsigned path exists because the signed one cannot reach the top half of
+// the `U64` range: digits past `Int`'s maximum trap a signed accumulation, and
+// a `U64` holding such a value is still a value that must round-trip. Digits
+// only — a `-` is not an unsigned value — and the accumulation traps past the
+// maximum exactly as the signed one traps past its own.
+function __kira_deser_tagged_uint(s: borrow String, tag: borrow String) -> U64 {
+    let open: Int = tag.count + 1
+    if s.count < open + 2 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.substring(0, tag.count) != tag {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(tag.count) != 40 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(s.count - 1) != 41 {
+        return U64(__kira_deser_trap(s))
+    }
+    let body: String = s.substring(open, s.count - 1)
+    if body.count == 0 {
+        return U64(__kira_deser_trap(s))
+    }
+    var acc: U64 = U64(0)
+    var i: Int = 0
+    while i < body.count {
+        let d: Int = Int(body.charAt(i))
+        if (d < 48) || (d > 57) {
+            return U64(__kira_deser_trap(s))
+        }
+        acc = acc * U64(10) + U64(d - 48)
+        i = i + 1
+    }
+    return acc
+}
+
+// The integer a `tag(`-prefixed decimal body names: `Int(42)`, `U8(7)`.
+//
+// The tag is checked exactly, and the digits are range-checked by what the
+// caller builds from the answer: a value that does not fit the caller's width
+// traps in the narrowing conversion, so `U8(300)` never becomes a `U8`. A tag
+// naming another width is a different type's value and is refused here rather
+// than range-checked into this one.
+function __kira_deser_tagged_int(s: borrow String, tag: borrow String) -> Int {
+    let open: Int = tag.count + 1
+    if s.count < open + 2 {
+        return __kira_deser_trap(s)
+    }
+    if s.substring(0, tag.count) != tag {
+        return __kira_deser_trap(s)
+    }
+    if s.charAt(tag.count) != 40 {
+        return __kira_deser_trap(s)
+    }
+    if s.charAt(s.count - 1) != 41 {
+        return __kira_deser_trap(s)
+    }
+    return __kira_deser_int(s.substring(open, s.count - 1))
 }
 
 // The bits a `0x` body names. Traps on a missing prefix, a wrong length, or a

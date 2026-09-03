@@ -255,6 +255,22 @@ variant when the enum has one and otherwise traps before building.
 
 Harness: two constructs for escaping and two for floats, tally 1450 on VM and native.
 
+### Serde step 3: integers carry their width (2026-09-03)
+An integer is written `U8(7)`, not `7`: the tag names the width and the reader checks it exactly,
+then range-checks the digits through the narrowing conversion, so `U8(300)` traps and `Int(5)` in a
+`U8` field is refused. `F32` fields, payloads, and distincts are supported with `F32(0x` and eight
+digits. Distincts write their name around their representation — `TabId(U32(7))` — per the grammar's
+`distinct` production. A `U64` field parses unsigned, because the top half of its range is past what
+a signed accumulation and what a literal both reach.
+Harness: tagged widths, distinct tagging, payload tagging, and U64-max through text; tally 1454 on
+VM and native. Docs and the file header describe the tagged forms.
+
+Repair on the way in: the if/else brace stacks my earlier edits left behind were unmaintainable and
+hid a missing close that broke every `Deserializable` derive (which is also why `Result` and the
+rest of Foundation went unresolved with it). The three dispatch chains are flat `else if` chains
+now. That class of failure is why macro-quote lift failures must become loud diagnostics instead of
+silent fallthrough — recorded below with the other two macro-infrastructure fixes.
+
 ### Next: canonical Serde, then the derive surface
 The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
 Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only

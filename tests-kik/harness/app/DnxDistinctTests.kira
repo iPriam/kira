@@ -24,7 +24,7 @@ construct DnxSerdeRoundTrip() extends Test {
     test {
         return distinctSerdeSection()
     }
-    expect { let e: Result<Any, TestFailure> = .Ok(114) return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(133) return e }
 }
 
 construct DnxOptionOverADistinctType() extends Test {
@@ -148,4 +148,94 @@ construct DnxSerdeCarriesTheFloatsADecimalCannot() extends Test {
         return score
     }
     expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+// Integers travel tagged with their width — `U8(200)`, not `200` — so the
+// value carries the range it is checked against, and a tag naming another
+// width is refused rather than converted.
+
+@Derive(Serializable, Deserializable)
+distinct DnxTabId = U32
+
+@Derive(Serializable, Deserializable)
+struct DnxWidths {
+    var narrow: U8
+    var wide: I32
+    var big: U64
+    var small: F32
+}
+
+@Derive(Serializable, Deserializable)
+enum DnxToken {
+    Num(Int)
+    Huge(U64)
+    Small(U8)
+    Part(Float)
+    Tiny(F32)
+    Word(String)
+    Point
+}
+
+construct DnxSerdeTagsEveryIntegerWithItsWidth() extends Test {
+    test {
+        let row = DnxWidths(narrow: U8(200), wide: -5, big: U64(9223372036854775807), small: 2.5)
+        let back = deserialize_DnxWidths(serialize_DnxWidths(row))
+        var score = 0
+        if back.narrow == row.narrow { score = score + 1 }
+        if back.wide == row.wide { score = score + 10 }
+        if back.big == row.big { score = score + 100 }
+        if back.small == row.small { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeTagsADistinctAroundItsRepresentation() extends Test {
+    test {
+        var score = 0
+        if deserialize_DnxTabId("DnxTabId(U32(70000))") == DnxTabId(70000) { score = score + 1 }
+        if deserialize_DnxTabId(serialize_DnxTabId(DnxTabId(7))) == DnxTabId(7) { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct DnxSerdeTagsEnumPayloadsToo() extends Test {
+    test {
+        var score = 0
+        let small = DnxToken.Small(U8(9))
+        match deserialize_DnxToken(serialize_DnxToken(small)) {
+            Small(v) -> { if v == U8(9) { score = score + 1 } }
+            Num(v) -> { score = score + 100 }
+            Huge(v) -> { score = score + 100 }
+            Part(v) -> { score = score + 100 }
+            Tiny(v) -> { score = score + 100 }
+            Word(v) -> { score = score + 100 }
+            Point -> { score = score + 100 }
+        }
+        let huge = DnxToken.Huge(U64(9223372036854775807))
+        match deserialize_DnxToken(serialize_DnxToken(huge)) {
+            Huge(v) -> { if v == U64(9223372036854775807) { score = score + 10 } }
+            Num(v) -> { score = score + 100 }
+            Small(v) -> { score = score + 100 }
+            Part(v) -> { score = score + 100 }
+            Tiny(v) -> { score = score + 100 }
+            Word(v) -> { score = score + 100 }
+            Point -> { score = score + 100 }
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct DnxSerdeCarriesU64PastTheSignedRange() extends Test {
+    test {
+        // The top half of the `U64` range is past what a signed accumulation
+        // holds and past what a literal spells, so the text form of the
+        // maximum still reads back exactly.
+        let back = deserialize_DnxWidths("DnxWidths{narrow:U8(1),wide:I32(2),big:U64(18446744073709551615),small:F32(0x00000000)}")
+        if String(back.big) == "18446744073709551615" { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
