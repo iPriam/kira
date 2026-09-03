@@ -233,11 +233,8 @@ comptime macro Deserializable {
         // included — validate `)`, and build the type by calling it, which is
         // the one way into a distinct type.
         if target.kind == .Distinct {
-            // One whole function body per representation: a `#{...}` in
-            // argument position splices as a statement, which would turn
-            // `TabId(parse(s))` into a bare `TabId` and a stray call, so the
-            // conversion is written literally in each body. The enum branch
-            // below carries the same rule for the same reason.
+            // One body for every representation: the inner read differs and
+            // the call around it does not.
             var rep: String = "Int"
             for field in target.fields {
                 for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64", "Float", "F32", "Bool", "String"] {
@@ -265,101 +262,49 @@ comptime macro Deserializable {
                 }
                 let __inner: String = s.substring(__open + 1, s.count - 1)
             }
-            var body: Syntax = quote {
-                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                    #{open}
-                    return #{target.name}(__kira_deser_tagged_int(__inner, "Int"))
-                }
-            }
+            // One body for every representation: the inner read differs and
+            // the call around it does not, because a splice in argument
+            // position renders inline like any other splice.
+            var readInner: Syntax = quote { __kira_deser_tagged_int(__inner, "Int") }
             if rep == "I8" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(I8(__kira_deser_tagged_int(__inner, "I8")))
-                    }
-                }
+                readInner = quote { I8(__kira_deser_tagged_int(__inner, "I8")) }
             }
             if rep == "U8" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(U8(__kira_deser_tagged_int(__inner, "U8")))
-                    }
-                }
+                readInner = quote { U8(__kira_deser_tagged_int(__inner, "U8")) }
             }
             if rep == "I16" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(I16(__kira_deser_tagged_int(__inner, "I16")))
-                    }
-                }
+                readInner = quote { I16(__kira_deser_tagged_int(__inner, "I16")) }
             }
             if rep == "U16" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(U16(__kira_deser_tagged_int(__inner, "U16")))
-                    }
-                }
+                readInner = quote { U16(__kira_deser_tagged_int(__inner, "U16")) }
             }
             if rep == "I32" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(I32(__kira_deser_tagged_int(__inner, "I32")))
-                    }
-                }
+                readInner = quote { I32(__kira_deser_tagged_int(__inner, "I32")) }
             }
             if rep == "U32" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(U32(__kira_deser_tagged_int(__inner, "U32")))
-                    }
-                }
+                readInner = quote { U32(__kira_deser_tagged_int(__inner, "U32")) }
             }
             if rep == "U64" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(U64(__kira_deser_tagged_uint(__inner, "U64")))
-                    }
-                }
+                readInner = quote { U64(__kira_deser_tagged_uint(__inner, "U64")) }
             }
             if rep == "Float" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(__kira_deser_float(__inner))
-                    }
-                }
+                readInner = quote { __kira_deser_float(__inner) }
             }
             if rep == "F32" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(__kira_deser_float32(__inner))
-                    }
-                }
+                readInner = quote { __kira_deser_float32(__inner) }
             }
             if rep == "Bool" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(__kira_deser_bool(__inner))
-                    }
-                }
+                readInner = quote { __kira_deser_bool(__inner) }
             }
             if rep == "String" {
-                body = quote {
-                    function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
-                        #{open}
-                        return #{target.name}(__kira_deser_unquote(__inner))
-                    }
+                readInner = quote { __kira_deser_unquote(__inner) }
+            }
+            return quote {
+                function deserialize_#{target.name}(s: borrow String) -> #{target.name} {
+                    #{open}
+                    return #{target.name}(#{readInner})
                 }
             }
-            return body
         }
         // The inverse of the enum writer: validate `TypeName.`, read the variant
         // name up to `(` or the end, and rebuild that variant — carving the
@@ -419,63 +364,36 @@ comptime macro Deserializable {
                         }
                     })
                 } else {
-                    // The conversion is written inline per payload type rather
-                    // than interpolated as a prepared expression: a `#{...}` in
-                    // argument position splices as a statement, which turns
-                    // `.Rank(convert(x))` into a bare `.Rank` and a stray call.
-                    // An integer payload is tagged and narrowed exactly as a
-                    // field is.
+                    // One arm shape for every payload: only the conversion
+                    // differs, and a splice in argument position renders inline
+                    // like any other splice.
                     var intTag: String = ""
                     for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32"] {
                         if variant.type == sname {
                             intTag = sname
                         }
                     }
+                    var conv: Syntax = quote { deserialize_#{variant.type.asSyntax()}(__inner) }
                     if intTag != "" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(#{variant.type.asSyntax()}(__kira_deser_tagged_int(__inner, #{intTag})))
-                            }
-                        })
+                        conv = quote { #{variant.type.asSyntax()}(__kira_deser_tagged_int(__inner, #{intTag})) }
                     // The top half of the `U64` range is past what a signed
                     // accumulation can hold, so it parses unsigned.
                     } else if variant.type == "U64" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(U64(__kira_deser_tagged_uint(__inner, "U64")))
-                            }
-                        })
+                        conv = quote { U64(__kira_deser_tagged_uint(__inner, "U64")) }
                     } else if variant.type == "Bool" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(__kira_deser_bool(__inner))
-                            }
-                        })
+                        conv = quote { __kira_deser_bool(__inner) }
                     } else if variant.type == "String" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(__kira_deser_unquote(__inner))
-                            }
-                        })
+                        conv = quote { __kira_deser_unquote(__inner) }
                     } else if variant.type == "Float" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(__kira_deser_float(__inner))
-                            }
-                        })
+                        conv = quote { __kira_deser_float(__inner) }
                     } else if variant.type == "F32" {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(__kira_deser_float32(__inner))
-                            }
-                        })
-                    } else {
-                        arms.append(quote {
-                            if __name == #{variant.name.asString()} {
-                                return .#{variant.name}(deserialize_#{variant.type.asSyntax()}(__inner))
-                            }
-                        })
+                        conv = quote { __kira_deser_float32(__inner) }
                     }
+                    arms.append(quote {
+                        if __name == #{variant.name.asString()} {
+                            return .#{variant.name}(#{conv})
+                        }
+                    })
                 }
             }
             return quote {

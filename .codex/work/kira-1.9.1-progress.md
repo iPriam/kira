@@ -271,6 +271,21 @@ rest of Foundation went unresolved with it). The three dispatch chains are flat 
 now. That class of failure is why macro-quote lift failures must become loud diagnostics instead of
 silent fallthrough — recorded below with the other two macro-infrastructure fixes.
 
+### Macro infrastructure (2026-09-03)
+Three fixes from the Serde work, each proven before it was built on:
+- Argument-position splices were never broken. `TabId(#{conv})` renders inline, which a probe
+  proved, so the comments claiming otherwise were stale folklore. The distinct reader went from 12
+  whole bodies to one body plus a `readInner` fragment, the enum reader arms collapsed onto one
+  `conv`, and Hashable's distinct branch did the same. Deleted the false comments.
+- `Identifier(text)` is new surface per spec F: it builds the use-site identifier the text spells,
+  refused (KMAC013) for non-names and keywords where the text is visible. Proven by Rust tests, a
+  `MxxIdentifierNamesAConversion` harness construct (tally 1455), and e2e.
+- Unclosed quotes are loud now. `lift` used to stop at the first unmatched brace, leaving every
+  later quote raw so the parser reported each surviving `#{` far from the cause. It reports
+  (KMAC014) and continues, `compile` surfaces failures with body-relative lines, scan failures
+  blank the unscannable tail so no `#{` leaks to the parser, and the unclosed-body messages say the
+  rest of the file was skipped. E2e proves an unclosed macro reports KMAC012 with no KLEX001.
+
 ### Next: canonical Serde, then the derive surface
 The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
 Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only

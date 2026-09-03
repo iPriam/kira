@@ -43,9 +43,11 @@ An enum's variants surface through `target.fields`: `field.name` is the variant 
 
 `rewriteProperty` walks every member body with full lexical-scope tracking: a read is rewritten only where the property is not shadowed by a local binding, a parameter, a `for` binding, or a `match` binding. Assigning *through* a wrapped property (`name.x = v`, `name[i] = v`) is `KMAC027`: the proxy has no place to write through, so read the value, change the copy, and assign it back.
 
-## No String to Identifier
+## `Identifier(text)`
 
-There is deliberately **no** `String` to `Identifier` conversion. A macro can only obtain an identifier from reflection or from a quote, so it cannot fabricate a name from a string and use it to capture something at the call site.
+A macro can also build an identifier from a string: `Identifier("answer")` is the use-site identifier that text spells, splicing bare like any other `Identifier`. This is what names something that only exists as text — a conversion for a width a table names, a function for a variant a loop visits — without one branch per spelling.
+
+The text must be spellable: a letter or `_` first, then letters, digits, and `_`, and never a keyword. Anything else is `KMAC013`, refused where the text is still visible rather than where the name would have landed. In particular a keyword is refused up front, because a constructed keyword would resolve as the keyword at the landing site and no diagnostic there could attribute the confusion.
 
 The other direction is open. Half of what a macro reflects on arrives as the text it was written with, so `String(syntax)` renders that text with the original spelling and comments preserved, and `Int(syntax)` reads the same text back as an integer. Searching and joining that text is how a lint reasons about a declaration's shape without re-parsing it.
 

@@ -164,14 +164,18 @@ pub(crate) fn collect<'a>(
     let mut reporter = Reporter::default();
     for declared in collectors {
         let parameter = parameter(declared, 0);
-        let Some(body) = eval::compile(&declared.body) else {
-            reporter.error(
-                declared.source,
-                declared.span,
-                diagnostics::EXPAND_SIGNATURE,
-                format!("the `expand` body of `{}` does not parse", declared.name),
-            );
-            continue;
+        let body = match eval::compile(&declared.body) {
+            Ok(body) => body,
+            Err(error) => {
+                error.report(
+                    &mut reporter,
+                    declared.source,
+                    &declared.body,
+                    declared.body_span,
+                    &format!("the `expand` body of `{}`", declared.name),
+                );
+                continue;
+            }
         };
         let comptime = eval::Comptime {
             functions: registry.comptime_functions(),
@@ -590,14 +594,18 @@ pub(crate) fn run(
     comptime: eval::Comptime<'_>,
     reporter: &mut Reporter,
 ) -> Option<String> {
-    let Some(body) = eval::compile(&declared.body) else {
-        reporter.error(
-            declared.source,
-            declared.span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!("the `expand` body of `{}` does not parse", declared.name),
-        );
-        return None;
+    let body = match eval::compile(&declared.body) {
+        Ok(body) => body,
+        Err(error) => {
+            error.report(
+                reporter,
+                declared.source,
+                &declared.body,
+                declared.body_span,
+                &format!("the `expand` body of `{}`", declared.name),
+            );
+            return None;
+        }
     };
     // Not a collector, so not told: `Build.linting` answers which verb asked,
     // and only the macro form a verb runs for has any business asking.

@@ -27,6 +27,7 @@ mod foundation;
 mod inspect;
 mod installed_toolchain;
 mod lint_verb;
+mod macros;
 mod migration;
 mod modules;
 mod natives;

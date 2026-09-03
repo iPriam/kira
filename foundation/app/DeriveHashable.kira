@@ -58,14 +58,8 @@ comptime macro Hashable {
         // `hash_<FieldType>`, and a representation such as `U32` or `RawPtr`
         // has no such function and should not grow one.
         if target.kind == .Distinct {
-            // Two whole function bodies rather than one with an interpolated
-            // argument: a `#{...}` in argument position splices as a statement,
-            // so `fnvStep(seed, contribution)` has to be written out per case.
-            var body: Syntax = quote {
-                function hash_#{target.name}(v: borrow #{target.name}) -> Int {
-                    return fnvStep(fnvSeed(), Int(v.raw))
-                }
-            }
+            // One body for both representations: only the folded word differs.
+            var contribution: Syntax = quote { Int(v.raw) }
             for field in target.fields {
                 if field.type == "Float" {
                     Diagnostics.error(
@@ -86,14 +80,14 @@ comptime macro Hashable {
                     )
                 }
                 if field.type == "Bool" {
-                    body = quote {
-                        function hash_#{target.name}(v: borrow #{target.name}) -> Int {
-                            return fnvStep(fnvSeed(), boolHashPart(v.raw))
-                        }
-                    }
+                    contribution = quote { boolHashPart(v.raw) }
                 }
             }
-            return body
+            return quote {
+                function hash_#{target.name}(v: borrow #{target.name}) -> Int {
+                    return fnvStep(fnvSeed(), #{contribution})
+                }
+            }
         }
         var folds: [Syntax] = []
         for field in target.fields {

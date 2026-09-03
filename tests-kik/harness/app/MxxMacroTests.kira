@@ -445,3 +445,30 @@ construct MxxStringOfSyntax() extends Test {
     test { return mxMarkerTextResult() }
     expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }
+
+// --- Identifier(text): a macro names what only exists as a string ----------
+// `Identifier` builds the use-site identifier its text spells, so generated
+// code can call a conversion whose width arrives as text — one branch per
+// spelling is the alternative, and it stops scaling at two.
+
+comptime macro mxNarrowTo {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let names: [Identifier] = input.identifiers()
+        let value: Identifier = names[0]
+        let width: String = names[1].asString()
+        return quote {
+            #{Identifier(width)}(#{value})
+        }
+    }
+}
+
+construct MxxIdentifierNamesAConversion() extends Test {
+    test {
+        let wide: Int = 200
+        let narrow: U8 = mxNarrowTo!(wide, U8)
+        let back: Int = Int(narrow)
+        return back
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
+}

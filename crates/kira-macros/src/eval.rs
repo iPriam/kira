@@ -62,6 +62,64 @@ impl EvalError {
     }
 }
 
+/// Why an `expand` body never became runnable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BodyError {
+    /// A `quote { … }` or `#{ … }` that never closes, with its byte offset in
+    /// the body, what it was, and how many more follow it.
+    Lift {
+        /// The unclosed opener's byte offset in the `expand` body.
+        offset: usize,
+        /// What never closed.
+        message: String,
+        /// Further lift failures after this one.
+        further: usize,
+    },
+    /// A body that lifts but does not parse.
+    Parse,
+}
+
+impl BodyError {
+    /// Reports a body that never became runnable.
+    ///
+    /// `body_span` covers the body text in the compiled file, so a lift
+    /// failure points at the opener the author wrote; `whose` names the body,
+    /// as in "the `expand` body of `Serializable`".
+    pub(crate) fn report(
+        self,
+        reporter: &mut crate::diagnostics::Reporter,
+        source: kira_source::SourceId,
+        body: &str,
+        body_span: kira_source::Span,
+        whose: &str,
+    ) {
+        match self {
+            BodyError::Lift { offset, message, further } => {
+                let at = body_span.start as usize + offset.min(body.len());
+                let line = body[..offset.min(body.len())].matches('\n').count() + 1;
+                let and_more = match further {
+                    0 => String::new(),
+                    _ => format!(" ({further} more follow it)"),
+                };
+                reporter.error(
+                    source,
+                    kira_source::Span::from_bounds(at as u32, at as u32 + 1),
+                    crate::diagnostics::UNCLOSED_QUOTE,
+                    format!("{whose} has {message} at line {line}{and_more}"),
+                );
+            }
+            BodyError::Parse => {
+                reporter.error(
+                    source,
+                    body_span,
+                    crate::diagnostics::EXPAND_SIGNATURE,
+                    format!("{whose} does not parse"),
+                );
+            }
+        }
+    }
+}
+
 /// A parsed `expand` body, ready to run.
 pub(crate) struct Body {
     tree: SyntaxTree,
@@ -72,22 +130,29 @@ pub(crate) struct Body {
 
 /// Parses `text` as an `expand` body.
 ///
-/// `None` when the body does not parse at all, which is reported by the caller
-/// as a malformed `expand`.
-pub(crate) fn compile(text: &str) -> Option<Body> {
-    let (lifted, templates) = quote::lift(text);
+/// Lift failures name the unclosed opener; a body that lifts but does not
+/// parse is reported by the caller as a malformed `expand`.
+pub(crate) fn compile(text: &str) -> Result<Body, BodyError> {
+    let (lifted, templates, lift_errors) = quote::lift(text);
+    if let Some(first) = lift_errors.first() {
+        return Err(BodyError::Lift {
+            offset: first.offset,
+            message: first.message().to_owned(),
+            further: lift_errors.len() - 1,
+        });
+    }
     let source = format!(
         "function __kmac_expand() {{\n{}\n}}\n",
         rewrite_type_member(&lifted)
     );
     let parsed = kira_parser::parse(SourceId::new(0), &source);
     if kira_diagnostics::has_errors(&parsed.diagnostics) {
-        return None;
+        return Err(BodyError::Parse);
     }
     let Some(Item::Function(function)) = parsed.tree.items().first() else {
-        return None;
+        return Err(BodyError::Parse);
     };
-    Some(Body {
+    Ok(Body {
         block: function.body.clone(),
         tree: parsed.tree,
         interner: parsed.interner,
@@ -700,11 +765,28 @@ impl Evaluator<'_> {
                 ),
             )));
         }
-        let Some(body) = compile(&declared.body) else {
-            return Some(Err(EvalError::coded(
-                diagnostics::EXPAND_SIGNATURE,
-                format!("the body of `comptime function {callee}` does not parse"),
-            )));
+        let body = match compile(&declared.body) {
+            Ok(body) => body,
+            Err(BodyError::Lift { offset, message, further }) => {
+                let line = declared.body[..offset.min(declared.body.len())]
+                    .matches('\n')
+                    .count()
+                    + 1;
+                let and_more = match further {
+                    0 => String::new(),
+                    _ => format!(" ({further} more follow it)"),
+                };
+                return Some(Err(EvalError::coded(
+                    diagnostics::UNCLOSED_QUOTE,
+                    format!("the body of `comptime function {callee}` has {message} at line {line}{and_more}"),
+                )));
+            }
+            Err(BodyError::Parse) => {
+                return Some(Err(EvalError::coded(
+                    diagnostics::EXPAND_SIGNATURE,
+                    format!("the body of `comptime function {callee}` does not parse"),
+                )));
+            }
         };
         let bound: Vec<(String, Value)> = declared
             .parameters
@@ -784,5 +866,32 @@ mod tests {
         let error = run_body("match x {\n    Red -> return quote { }\n}\n", Vec::new())
             .expect_err("a refusal");
         assert_eq!(error.code, "KMAC020");
+    }
+
+    /// `Identifier(text)` builds the use-site identifier the text spells, so a
+    /// macro can name what only exists as a string — one branch per spelling
+    /// is the alternative, and it stops scaling at two.
+    #[test]
+    fn an_identifier_built_from_text_splices_as_a_name() {
+        let outcome = run_body(
+            "var name: Identifier = Identifier(\"answer\")\nreturn quote { #{name} }",
+            Vec::new(),
+        )
+        .expect("a result");
+        assert_eq!(outcome.syntax.trim(), "answer");
+    }
+
+    /// Text no identifier can spell is refused where the text is still
+    /// visible, not where the name would have landed.
+    #[test]
+    fn an_identifier_built_from_a_keyword_or_a_non_name_is_refused() {
+        for text in ["return", "9lives", "", "has space", "has-dash"] {
+            let error = run_body(
+                &format!("var name: Identifier = Identifier(\"{text}\")\nreturn quote {{ x }}"),
+                Vec::new(),
+            )
+            .expect_err("a refusal");
+            assert_eq!(error.code, "KMAC013", "{text}");
+        }
     }
 }

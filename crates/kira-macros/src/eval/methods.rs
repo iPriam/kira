@@ -208,6 +208,13 @@ impl Evaluator<'_> {
             ("Int", [Value::Int(n)]) => Ok(Value::Int(*n)),
             ("Int", [Value::Str(text)]) => parse_int(text),
             ("Int", [Value::Syntax(written)]) => parse_int(&written.text),
+            // An identifier built from text, resolved at the use site: the
+            // complement of writing one literally in the macro, which resolves
+            // at the definition site. What lets generated code name a type or
+            // call a conversion whose spelling only exists as a string — one
+            // branch per spelling is the alternative, and it does not scale
+            // past two.
+            ("Identifier", [Value::Str(text)]) => identifier_from_text(text),
             // A `comptime function` the program declared, which is how one
             // composes with another. Asked last, so a builtin of the same name
             // keeps its meaning.
@@ -297,14 +304,31 @@ impl Evaluator<'_> {
                 declaration.name
             )));
         };
-        let Some(compiled) = super::compile(body) else {
-            return Err(EvalError::coded(
-                diagnostics::EXPAND_SIGNATURE,
-                format!(
-                    "the body of `{}`'s `{name}` does not parse",
-                    declaration.name
-                ),
-            ));
+        let compiled = match super::compile(body) {
+            Ok(compiled) => compiled,
+            Err(super::BodyError::Lift { offset, message, further }) => {
+                let line = body[..offset.min(body.len())].matches('\n').count() + 1;
+                let and_more = match further {
+                    0 => String::new(),
+                    _ => format!(" ({further} more follow it)"),
+                };
+                return Err(EvalError::coded(
+                    diagnostics::UNCLOSED_QUOTE,
+                    format!(
+                        "the body of `{}`'s `{name}` has {message} at line {line}{and_more}",
+                        declaration.name
+                    ),
+                ));
+            }
+            Err(super::BodyError::Parse) => {
+                return Err(EvalError::coded(
+                    diagnostics::EXPAND_SIGNATURE,
+                    format!(
+                        "the body of `{}`'s `{name}` does not parse",
+                        declaration.name
+                    ),
+                ));
+            }
         };
         let comptime = super::Comptime {
             functions: self.functions,
@@ -473,4 +497,35 @@ fn parse_int(text: &str) -> Result<Value, EvalError> {
         .parse::<i64>()
         .map(Value::Int)
         .map_err(|_| EvalError::unsupported(format!("`Int(\"{text}\")`, which is not a number")))
+}
+
+/// Builds the use-site identifier `text` names, or refuses text no identifier
+/// can spell.
+///
+/// The rule is the lexer's own: an underscore or ASCII letter first, then
+/// underscores and ASCII alphanumerics, and never a keyword. A constructed
+/// keyword would resolve as the keyword where it lands, which is a confusion
+/// no diagnostic at the landing site could attribute — so it is refused here,
+/// where the text is still visible.
+fn identifier_from_text(text: &str) -> Result<Value, EvalError> {
+    let mut bytes = text.bytes();
+    let well_formed = match bytes.next() {
+        Some(first) if first == b'_' || first.is_ascii_alphabetic() => {
+            bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        }
+        _ => false,
+    };
+    if !well_formed {
+        return Err(EvalError::coded(
+            diagnostics::BAD_IDENTIFIER,
+            format!("`Identifier(\"{text}\")`, which is not an identifier: one starts with a letter or `_`, and holds letters, digits, and `_`"),
+        ));
+    }
+    if kira_syntax_model::TokenKind::keyword_from_text(text).is_some() {
+        return Err(EvalError::coded(
+            diagnostics::BAD_IDENTIFIER,
+            format!("`Identifier(\"{text}\")`, which is a keyword: keywords cannot be identifiers"),
+        ));
+    }
+    Ok(Value::Identifier(text.to_owned()))
 }

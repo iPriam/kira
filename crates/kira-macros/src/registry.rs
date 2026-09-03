@@ -110,6 +110,9 @@ pub(crate) struct ComptimeFunction {
     pub(crate) parameters: Vec<String>,
     /// The text between the braces of its body.
     pub(crate) body: String,
+    /// The span that text covers, so a failure inside the body points at the
+    /// opener the author wrote rather than at the function's name.
+    pub(crate) body_span: Span,
     /// Where it was written.
     pub(crate) source: SourceId,
     /// The span of its name.
@@ -133,6 +136,9 @@ pub(crate) struct Procedural {
     pub(crate) parameters: Vec<String>,
     /// The text between the braces of `expand(…) -> Syntax { … }`.
     pub(crate) body: String,
+    /// The span that text covers, so a failure inside the body points at the
+    /// opener the author wrote rather than at the macro's name.
+    pub(crate) body_span: Span,
     /// Where the declaration was written, for diagnostics about it.
     pub(crate) source: SourceId,
     /// The span of the declaration's name.
@@ -351,7 +357,14 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                // The definition's structure is unknowable past this point, so
+                // parsing the tail would report the raw `quote` text as broken
+                // Kira rather than anything the author wrote. Blank it: the
+                // scan error above already names the failure.
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
@@ -362,7 +375,10 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         if file.is_word(index, "macro")
@@ -376,12 +392,30 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         index += 1;
     }
     found
+}
+
+/// Blanks the file from `index` to its end, so a definition whose structure
+/// the scanner could not recover never reaches the parser as raw text.
+///
+/// Without this, an unclosed macro body leaves every later `#{` in place and
+/// each one is reported as an unexpected character, burying the scan error
+/// that names the actual failure under noise from text the author never meant
+/// as code.
+fn blank_to_end(file: &Lexed<'_>, index: usize, spans: &mut Vec<Span>) {
+    let start = file.span(index).start;
+    let end = file.text.len() as u32;
+    if start < end {
+        spans.push(Span::from_bounds(start, end));
+    }
 }
 
 /// Scans `macro Name(p: expr) { expand { … } }` starting at the `macro` word.
@@ -400,7 +434,7 @@ fn scan_declarative(
             file.source,
             file.span(open_params),
             diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `( … )` parameter list"),
+            format!("macro `{name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
         );
         return None;
     };
@@ -448,7 +482,7 @@ fn scan_declarative(
             file.source,
             file.span(open_body),
             diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `{{ … }}` body"),
+            format!("macro `{name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
         );
         return None;
     };
@@ -531,7 +565,7 @@ fn scan_comptime_function(
             file.source,
             name_span,
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `( … )` parameter list"),
+            format!("`comptime function {name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
         );
         return None;
     };
@@ -561,21 +595,21 @@ fn scan_comptime_function(
             file.source,
             name_span,
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `{{ … }}` body"),
+            format!("`comptime function {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
         );
         return None;
     };
-    let body = file
-        .slice(Span::from_bounds(
-            file.span(open_body).end(),
-            file.span(close_body).start,
-        ))
-        .to_owned();
+    let body_span = Span::from_bounds(
+        file.span(open_body).end(),
+        file.span(close_body).start,
+    );
+    let body = file.slice(body_span).to_owned();
     Some((
         ComptimeFunction {
             name,
             parameters,
             body,
+            body_span,
             source: file.source,
             span: name_span,
         },
@@ -616,7 +650,7 @@ fn scan_procedural(
             file.source,
             file.span(open_body),
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime macro {name}` has an unclosed `{{ … }}` body"),
+            format!("`comptime macro {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
         );
         return None;
     };
@@ -642,13 +676,14 @@ fn scan_procedural(
                 brace += 1;
             }
             let close_expand = file.match_close(brace)?;
-            body = Some(
-                file.slice(Span::from_bounds(
-                    file.span(brace).end(),
-                    file.span(close_expand).start,
-                ))
-                .to_owned(),
+            let body_span = Span::from_bounds(
+                file.span(brace).end(),
+                file.span(close_expand).start,
             );
+            body = Some((
+                file.slice(body_span).to_owned(),
+                body_span,
+            ));
             index = close_expand + 1;
             continue;
         }
@@ -695,7 +730,7 @@ fn scan_procedural(
         );
         return None;
     };
-    let Some(body) = body else {
+    let Some((body, body_span)) = body else {
         reporter.error(
             file.source,
             name_span,
@@ -713,6 +748,7 @@ fn scan_procedural(
         replace,
         parameters,
         body,
+        body_span,
         source: file.source,
         span: name_span,
     };
@@ -815,6 +851,45 @@ mod tests {
         (registry, reporter.into_diagnostics())
     }
 
+    /// A macro definition scans the same indented or not: the scanner reads
+    /// tokens, and tokens carry no columns.
+    #[test]
+    fn indentation_does_not_change_what_a_definition_is() {
+        let indented = "comptime macro BadName {\n    kind { function }\n    expand(input: Syntax) -> Syntax {\n        return quote { 42 }\n    }\n}\n";
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
+        for text in [indented, flat] {
+            let (registry, diagnostics) = collect_text(text);
+            assert!(diagnostics.is_empty(), "{text:?}: {diagnostics:?}");
+            assert!(registry.procedural("BadName").is_some(), "{text:?}");
+        }
+    }
+
+    /// The blanked span covers the whole definition, indented or not: what the
+    /// parser never sees cannot produce diagnostics.
+    #[test]
+    fn the_definition_span_covers_the_definition() {
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
+        assert!(reporter.into_diagnostics().is_empty());
+        assert_eq!(found.spans.len(), 1);
+        let covered = &flat[found.spans[0].start as usize..found.spans[0].end() as usize];
+        assert!(covered.contains("return quote { 42 }"), "{covered:?}");
+    }
+
+    /// …and nothing else: a span running past the definition would blank the
+    /// `@Main` below it, and the program would lose its entrypoint.
+    #[test]
+    fn the_definition_span_stops_at_the_definition() {
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n@Main\nfunction main() {\nprint(1)\nreturn\n}\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
+        assert!(reporter.into_diagnostics().is_empty());
+        assert_eq!(found.spans.len(), 1);
+        let end = found.spans[0].end() as usize;
+        assert!(flat[end..].contains("@Main"), "tail: {:?}", &flat[end..]);
+    }
+
     #[test]
     fn a_declarative_macro_registers_its_fragments_and_template() {
         let (registry, diagnostics) = collect_text(
@@ -825,6 +900,28 @@ mod tests {
         assert_eq!(declared.fragments.len(), 1);
         assert_eq!(declared.fragments[0].kind, FragmentKind::Expr);
         assert!(declared.template.contains("value * value"));
+    }
+
+    /// An unclosed macro body blanks the file from the breakage on: the
+    /// definition's raw `quote` text must never reach the parser, or every
+    /// surviving `#{` is reported as an unexpected character burying the scan
+    /// error that names the actual failure.
+    #[test]
+    fn an_unclosed_macro_body_blanks_its_tail() {
+        let text = "comptime macro Broken {\n    kind { derive }\n    expand(target: Declaration) -> Syntax {\n        return quote { x }\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter);
+        let diagnostics = reporter.into_diagnostics();
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains("unclosed")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            !found.spans.is_empty(),
+            "the unscannable tail must be blanked"
+        );
+        let last = found.spans.last().expect("a span");
+        assert_eq!(last.end() as usize, text.len());
     }
 
     #[test]

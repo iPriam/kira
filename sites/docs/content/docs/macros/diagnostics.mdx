@@ -17,6 +17,8 @@ description: Every KMAC code and the condition that fires it.
 | `KMAC010` | expansion depth limit exceeded |
 | `KMAC011` | `@Derive(X)` where `X` is not a `derive`-kind macro |
 | `KMAC012` | `comptime macro` `expand` does not match its `kind` |
+| `KMAC013` | `Identifier(text)` given text no identifier can spell |
+| `KMAC014` | a `quote { … }` or `#{ … }` in an `expand` body never closes |
 | `KMAC016` | statement-position expansion that does not parse as statements |
 | `KMAC017` | expression-position expansion that is not a single expression |
 | `KMAC020` | an `expand` body used a construct the evaluator does not support |

@@ -92,14 +92,38 @@ fn evaluate(
     comptime: eval::Comptime<'_>,
     reporter: &mut Reporter,
 ) -> Option<Value> {
-    let Some(body) = eval::compile(&format!("return {text}")) else {
-        reporter.error(
-            file.source,
-            span,
-            diagnostics::UNSUPPORTED_IN_EXPAND,
-            format!("`{text}` is not an expression the compile-time evaluator can read"),
-        );
-        return None;
+    let synthesized = format!("return {text}");
+    let body = match eval::compile(&synthesized) {
+        Ok(body) => body,
+        // The lifted text is `return ` plus the expression, so an opener's
+        // offset maps back by that prefix; the span covers the expression.
+        Err(eval::BodyError::Lift { offset, message, further }) => {
+            let at = span.start as usize + offset.saturating_sub("return ".len());
+            let line = text[..offset.saturating_sub("return ".len()).min(text.len())]
+                .matches('\n')
+                .count()
+                + 1;
+            let and_more = match further {
+                0 => String::new(),
+                _ => format!(" ({further} more follow it)"),
+            };
+            reporter.error(
+                file.source,
+                kira_source::Span::from_bounds(at as u32, at as u32 + 1),
+                diagnostics::UNCLOSED_QUOTE,
+                format!("`{text}` has {message} at line {line}{and_more}"),
+            );
+            return None;
+        }
+        Err(eval::BodyError::Parse) => {
+            reporter.error(
+                file.source,
+                span,
+                diagnostics::UNSUPPORTED_IN_EXPAND,
+                format!("`{text}` is not an expression the compile-time evaluator can read"),
+            );
+            return None;
+        }
     };
     match eval::run_value(&body, Vec::new(), comptime, false) {
         Ok((value, _)) => Some(value),
@@ -119,17 +143,18 @@ fn run_body(
     comptime: eval::Comptime<'_>,
     reporter: &mut Reporter,
 ) -> Option<Value> {
-    let Some(body) = eval::compile(&declared.body) else {
-        reporter.error(
-            declared.source,
-            declared.span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!(
-                "the body of `comptime function {}` does not parse",
-                declared.name
-            ),
-        );
-        return None;
+    let body = match eval::compile(&declared.body) {
+        Ok(body) => body,
+        Err(error) => {
+            error.report(
+                reporter,
+                declared.source,
+                &declared.body,
+                declared.body_span,
+                &format!("the body of `comptime function {}`", declared.name),
+            );
+            return None;
+        }
     };
     match eval::run_value(&body, arguments, comptime, false) {
         Ok((value, reported)) => {
