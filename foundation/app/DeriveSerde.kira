@@ -6,12 +6,12 @@
 //
 // WIRE FORMAT (v1, compact, deterministic, single line):
 //
-//   TypeName{field1=VALUE;field2=VALUE;...}
+//   TypeName{field1:VALUE,field2:VALUE,...}
 //
 // An Int or Bool field is `String(value)`; a Float is `0x` and the sixteen hex
 // digits of its exact bits; a String field is its escaped text wrapped in `"`;
 // a nested derived struct is `serialize_<FieldType>(value)` recursed inline, so
-// `from=Point{x=1;y=2}` sits inside its parent's braces.
+// `from: Point{x: 1, y: 2}` sits inside its parent's braces.
 //
 // An ENUM is written as `TypeName.Variant`, with a payload in parentheses after
 // it — `Tool.Rotate`, `Note.Rank(42)`, `Slot.At(Point{x=1;y=2})`. The variant is
@@ -22,7 +22,7 @@
 //
 // Deserialization is the exact inverse. It validates the leading `TypeName{`,
 // then for each field in declaration order locates `label=`, carves the value
-// with a brace-aware scan (a `;` or `}` at brace depth 0 terminates it, so a
+// with a brace-aware scan (a `,` or `}` at brace depth 0 terminates it, so a
 // nested struct's own balanced braces are consumed whole), converts by field
 // type, and steps over the delimiter. Malformed input traps deterministically
 // on every backend: every structural violation drives an out-of-range `charAt`
@@ -34,7 +34,7 @@
 //
 // A String value is escaped: `\"`, `\\`, `\n`, `\r`, `\t`, and `\0`. Everything
 // else is written as itself, and the scanner that carves a field out treats a
-// quoted region as content, so a value holding `;` or `}` round-trips.
+// quoted region as content, so a value holding `,` or `}` round-trips.
 //
 // LIMITATIONS (v1):
 //   * Array / generic / optional field types are refused by both, exactly as
@@ -148,7 +148,7 @@ comptime macro Serializable {
             }
             var sep: String = ""
             if idx != 0 {
-                sep = ";"
+                sep = ","
             }
             var isNumScalar: Bool = false
             if field.type == "Int" {
@@ -161,16 +161,16 @@ comptime macro Serializable {
             // `__kira_serde_float`.
             if field.type == "Float" {
                 stmts.append(quote {
-                    out = out + #{sep} + #{field.name.asString()} + "=" + __kira_serde_float(v.#{field.name})
+                    out = out + #{sep} + #{field.name.asString()} + ":" + __kira_serde_float(v.#{field.name})
                 })
             } else {
             if isNumScalar {
-                stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + "=" + String(v.#{field.name}) })
+                stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + String(v.#{field.name}) })
             } else {
                 if field.type == "String" {
-                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + "=" + "\"" + __kira_serde_escape(v.#{field.name}) + "\"" })
+                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + "\"" + __kira_serde_escape(v.#{field.name}) + "\"" })
                 } else {
-                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + "=" + serialize_#{field.type.asSyntax()}(v.#{field.name}) })
+                    stmts.append(quote { out = out + #{sep} + #{field.name.asString()} + ":" + serialize_#{field.type.asSyntax()}(v.#{field.name}) })
                 }
             }
             }
@@ -418,7 +418,7 @@ comptime macro Deserializable {
 
             stmts.append(quote {
                 let __rest#{idx}: String = s.substring(pos, s.count)
-                let __eq#{idx}: Int = __rest#{idx}.indexOf("=")
+                let __eq#{idx}: Int = __rest#{idx}.indexOf(":")
                 let __eqAt#{idx}: Int = pos + __eq#{idx}
                 if s.substring(pos, __eqAt#{idx}) != #{field.name.asString()} {
                     pos = __kira_deser_trap(s)
@@ -432,7 +432,7 @@ comptime macro Deserializable {
 
             if idx < total - 1 {
                 stmts.append(quote {
-                    if s.charAt(pos) != 59 {
+                    if s.charAt(pos) != 44 {
                         pos = __kira_deser_trap(s)
                     }
                     pos = pos + 1

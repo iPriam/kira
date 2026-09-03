@@ -25,15 +25,15 @@ function __kira_deser_trap_str(s: borrow String) -> String {
 }
 
 // Scan forward from `start` over one field VALUE and return the exclusive end
-// index — the position of the top-level `;` or `}` that terminates it.
-// Brace-aware, so a nested struct value carrying its own `;` is consumed whole;
+// index — the position of the top-level `,` or `}` that terminates it.
+// Brace-aware, so a nested struct value carrying its own `,` is consumed whole;
 // a scalar or a quoted string has no braces and stops at the first delimiter,
 // which is why one scanner serves every field type.
 function __kira_deser_scan(s: borrow String, start: Int) -> Int {
     var pos: Int = start
     var depth: Int = 0
     // Inside a quoted value every byte is content, delimiters included: a
-    // `String` holding `;` or `}` is written as itself, and a scanner that read
+    // `String` holding `,` or `}` is written as itself, and a scanner that read
     // it as structure would end the field early and parse the rest of the text
     // as fields. A `\` skips the byte after it, which is what makes a `\"`
     // inside a value stay inside it.
@@ -62,7 +62,7 @@ function __kira_deser_scan(s: borrow String, start: Int) -> Int {
                         }
                         depth = depth - 1
                     } else {
-                        if c == 59 {
+                        if c == 44 {
                             if depth == 0 {
                                 return pos
                             }

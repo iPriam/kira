@@ -105,14 +105,14 @@ to: inserting a variant in the middle reorders values already written down.
 `Serializable` and `Deserializable` build on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
 
 ```text
-TypeName{field1=VALUE;field2=VALUE;...}
+TypeName{field1:VALUE,field2:VALUE,...}
 ```
 
-An `Int` or `Bool` is `String(x)`; a `Float` is `0x` and the sixteen hex digits of its exact bits; a `String` is its escaped text wrapped in `"`; a nested derived struct is `serialize_<FieldType>(x)` recursed inline, so `from=Point{x=1;y=2}` sits inside its parent's braces.
+An `Int` or `Bool` is `String(x)`; a `Float` is `0x` and the sixteen hex digits of its exact bits; a `String` is its escaped text wrapped in `"`; a nested derived struct is `serialize_<FieldType>(x)` recursed inline, so `from:Point{x:1,y:2}` sits inside its parent's braces.
 
-Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label=`, carves the value with a brace-aware scanner (a `;` or `}` at brace depth zero terminates it, so a nested struct's own balanced braces with their internal `;` are consumed whole), converts by field type, and steps over the delimiter.
+Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label:`, carves the value with a brace-aware scanner (a `,` or `}` at brace depth zero terminates it, and a quoted region counts as content, so a nested struct's own balanced braces with their internal `,` are consumed whole), converts by field type, and steps over the delimiter.
 
-**Malformed input traps.** Any structural violation, a wrong type name, a missing `=` or `;` or `}`, truncated text, or a non-digit where an `Int` is expected, drives an out-of-range `charAt` or an inverted `substring`, both of which the runtime turns into a hard trap on every backend. There is no partial or best-effort parse: a value either round-trips or the program stops.
+**Malformed input traps.** Any structural violation, a wrong type name, a missing `:` or `,` or `}`, truncated text, or a non-digit where an `Int` is expected, drives an out-of-range `charAt` or an inverted `substring`, both of which the runtime turns into a hard trap on every backend. There is no partial or best-effort parse: a value either round-trips or the program stops.
 
 **Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise.
 
@@ -120,7 +120,7 @@ Deserialization is the exact inverse. It validates the leading `TypeName{`, then
 @Derive(Equatable, Serializable, Deserializable)
 struct Point { var x: Int var y: Int }
 
-let wire = serialize_Point(Point { x = 1, y = -2 })   // "Point{x=1;y=-2}"
+let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x:1,y:-2}"
 let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
 ```
 
