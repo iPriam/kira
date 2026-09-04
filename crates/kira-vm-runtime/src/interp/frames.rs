@@ -13,7 +13,7 @@
 //! together is what makes that reviewable.
 
 use kira_bytecode::module::{FrameRelease, Module};
-use kira_runtime_abi::{HostCapabilities, NativeArg, TaskExecutor};
+use kira_runtime_abi::{ChannelExecutor, HostCapabilities, NativeArg, TaskExecutor};
 
 use crate::debug::VmDebugObserver;
 use crate::error::VmError;
@@ -110,6 +110,7 @@ impl<'h> Vm<'h> {
             pending_capture: scratch.pending_capture,
             captured: scratch.captured,
             tasks: TaskExecutor::new(),
+            channels: ChannelExecutor::new(),
             frame_cache: scratch.frame_cache,
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,

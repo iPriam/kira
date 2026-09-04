@@ -251,7 +251,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
             walk_expr(program, *base, facts);
             walk_expr(program, *index, facts);
         }
-        IrExpr::TaskOp { operands, .. } => {
+        IrExpr::TaskOp { operands, .. } | IrExpr::ChannelOp { operands, .. } => {
             for operand in operands {
                 walk_expr(program, *operand, facts);
             }

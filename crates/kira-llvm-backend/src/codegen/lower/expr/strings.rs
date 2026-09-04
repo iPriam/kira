@@ -31,6 +31,25 @@ impl FunctionLowering<'_, '_> {
         ))
     }
 
+    /// One channel primitive: the native mirror of the VM's `ChannelOp`.
+    ///
+    /// Left-to-right operand lowering, for the reason `lower_task_op` states.
+    pub(in crate::codegen) fn lower_channel_op(
+        &mut self,
+        prim: kira_runtime_abi::ChannelPrim,
+        operands: [IrExprId; 3],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let tag = self.codegen.const_int(i64::from(prim.as_byte()));
+        let first = self.lower_expr(operands[0])?;
+        let second = self.lower_expr(operands[1])?;
+        let third = self.lower_expr(operands[2])?;
+        Ok(self.call(
+            self.codegen.runtime.channel_op,
+            &mut [tag, first, second, third],
+            c"channel",
+        ))
+    }
+
     pub(in crate::codegen) fn lower_array_len(
         &mut self,
         array: IrExprId,

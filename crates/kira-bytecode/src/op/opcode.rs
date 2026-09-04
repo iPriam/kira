@@ -279,3 +279,8 @@ pub const EQ_TYPE: u8 = 0x8c;
 pub const NE_TYPE: u8 = 0x8d;
 pub const TYPE_FIELD: u8 = 0x8e;
 pub const TYPE_CAST_RESULT: u8 = 0x8f;
+
+/// One channel-table primitive, carrying its `ChannelPrim` tag in a second
+/// byte exactly as `TASK_OP` carries its own. Appended after
+/// `TYPE_CAST_RESULT`; adding an opcode is not an ABI change.
+pub const CHANNEL_OP: u8 = 0x90;

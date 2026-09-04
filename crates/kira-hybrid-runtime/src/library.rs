@@ -155,6 +155,7 @@ const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 /// Optional, unlike the rest: an older library simply has no accounting.
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
 const TASK_RESET: &[u8] = b"kira_rt_task_reset\0";
+const CHANNEL_RESET: &[u8] = b"kira_rt_channel_reset\0";
 const MAIN_THREAD_RUN: &[u8] = b"kira_rt_main_thread_run\0";
 const MAIN_THREAD_INSTALL_DISPATCHER: &[u8] = b"kira_rt_main_thread_install_dispatcher\0";
 const MAIN_THREAD_DISPATCHER: &[u8] = b"kira_main_thread_dispatch\0";
@@ -226,6 +227,8 @@ pub struct NativeLibrary {
     heap_report: Option<HeapReportFn>,
     /// Starts and ends the native task table's per-run scope.
     task_reset: TaskResetFn,
+    /// Starts and ends the native channel table's per-run scope.
+    channel_reset: TaskResetFn,
     main_thread_run: MainThreadRunFn,
     main_thread_install_dispatcher: MainThreadInstallDispatcherFn,
     main_thread_dispatcher: Option<MainThreadDispatcherFn>,
@@ -339,6 +342,7 @@ impl NativeLibrary {
         // no such symbol, and that is not a reason to refuse to load it.
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
         let task_reset = bind(&library, path, TASK_RESET)?;
+        let channel_reset = bind(&library, path, CHANNEL_RESET)?;
         let main_thread_run = bind(&library, path, MAIN_THREAD_RUN)?;
         let main_thread_install_dispatcher = bind(&library, path, MAIN_THREAD_INSTALL_DISPATCHER)?;
         let main_thread_dispatcher = bind(&library, path, MAIN_THREAD_DISPATCHER).ok();
@@ -433,6 +437,7 @@ impl NativeLibrary {
             str_new,
             heap_report,
             task_reset,
+            channel_reset,
             main_thread_run,
             main_thread_install_dispatcher,
             main_thread_dispatcher,
@@ -506,6 +511,13 @@ impl NativeLibrary {
         // SAFETY: the symbol was bound from this library, which remains loaded
         // for as long as `self` and has no arguments or return value.
         unsafe { (self.task_reset)() };
+    }
+
+    /// Starts or ends the channel scope associated with the current host thread.
+    pub fn reset_channels(&self) {
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self` and has no arguments or return value.
+        unsafe { (self.channel_reset)() };
     }
 
     /// Installs the generated main-thread dispatcher for this native image.

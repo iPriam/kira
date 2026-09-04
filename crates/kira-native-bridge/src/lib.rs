@@ -18,6 +18,7 @@ pub mod array;
 pub mod boxes;
 pub mod cblock;
 pub mod cells;
+pub mod channels;
 pub mod dynamic_call;
 pub mod dynamic_library;
 pub mod enums;

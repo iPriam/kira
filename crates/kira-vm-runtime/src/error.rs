@@ -447,6 +447,13 @@ pub enum VmError {
     /// deciding for itself.
     #[error("task trap: {0}")]
     Task(#[from] kira_runtime_abi::TaskTrap),
+    /// A channel primitive refused: an end naming no channel, an end used in
+    /// the wrong direction, or a send to a channel whose receiver is gone.
+    ///
+    /// The trap set is the table's, defined once in `kira-runtime-abi`, for
+    /// the same reason the task set is.
+    #[error("channel trap: {0}")]
+    Channel(#[from] kira_runtime_abi::ChannelTrap),
 }
 
 /// Which callback-state instruction refused a value.

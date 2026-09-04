@@ -137,7 +137,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_expr(program, *base, found);
             walk_expr(program, *index, found);
         }
-        IrExpr::TaskOp { operands, .. } => {
+        IrExpr::TaskOp { operands, .. } | IrExpr::ChannelOp { operands, .. } => {
             for operand in operands {
                 walk_expr(program, *operand, found);
             }

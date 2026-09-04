@@ -689,3 +689,38 @@ fn noncanonical_boolean_operands_are_rejected() {
         ));
     }
 }
+
+#[test]
+fn round_trips_every_channel_primitive() {
+    let stream: Vec<Instruction> = ChannelPrim::ALL
+        .into_iter()
+        .map(Instruction::ChannelOp)
+        .collect();
+    assert_eq!(decode(&encode(&stream)).unwrap(), stream);
+}
+
+#[test]
+fn the_channel_opcode_is_appended_after_the_tried_cast() {
+    assert_eq!(opcode::CHANNEL_OP, opcode::TYPE_CAST_RESULT + 1);
+}
+
+#[test]
+fn an_unknown_channel_primitive_byte_is_rejected() {
+    // Only generated code writes this byte, so an unknown one means the module
+    // and this decoder disagree. Folding it into a neighbouring primitive would
+    // run a different program than the one that was compiled.
+    let bytes = vec![opcode::CHANNEL_OP, ChannelPrim::ALL.len() as u8];
+    assert!(matches!(
+        decode(&bytes),
+        Err(DecodeError::UnknownOpcode { .. })
+    ));
+}
+
+#[test]
+fn a_channel_opcode_without_its_primitive_is_rejected() {
+    let bytes = vec![opcode::CHANNEL_OP];
+    assert!(matches!(
+        decode(&bytes),
+        Err(DecodeError::UnexpectedEnd { .. })
+    ));
+}

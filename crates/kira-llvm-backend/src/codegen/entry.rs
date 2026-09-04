@@ -77,10 +77,11 @@ impl Codegen<'_> {
             // corrupting memory at run time.
             self.call_runtime(self.runtime.abi_marker, &mut [], c"");
             // A native archive may serve more than one hybrid run on this
-            // thread. Match the VM's per-run TaskExecutor before entering the
-            // program rather than letting handles and queued work leak across
-            // entrypoints.
+            // thread. Match the VM's per-run TaskExecutor and ChannelExecutor
+            // before entering the program rather than letting handles and
+            // queued work leak across entrypoints.
             self.call_runtime(self.runtime.task_reset, &mut [], c"");
+            self.call_runtime(self.runtime.channel_reset, &mut [], c"");
 
             // Module constants are filled before `@Main` runs — each by one
             // call of its init, in the compiler's dependency order — so the

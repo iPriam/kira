@@ -177,6 +177,12 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                 &mut [types.i64, types.i64, types.i64, types.i64],
             ),
             task_reset: declare(c"kira_rt_task_reset", types.void, &mut []),
+            channel_op: declare(
+                c"kira_rt_channel_op",
+                types.i64,
+                &mut [types.i64, types.i64, types.i64, types.i64],
+            ),
+            channel_reset: declare(c"kira_rt_channel_reset", types.void, &mut []),
             main_thread_run: declare(c"kira_rt_main_thread_run", types.i32, &mut [types.ptr]),
             main_thread_install_dispatcher: declare(
                 c"kira_rt_main_thread_install_dispatcher",

@@ -113,7 +113,7 @@ pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 14;
+pub const RUNTIME_ABI_VERSION: u32 = 15;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -145,7 +145,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_14";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_15";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -230,6 +230,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_main_thread_lifecycle_start_local",
     "kira_rt_main_thread_lifecycle_pump_local",
     "kira_rt_main_thread_lifecycle_reset_local",
+    "kira_rt_channel_reset",
 ];
 
 /// An argument the VM hands to a native function.

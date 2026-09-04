@@ -362,6 +362,31 @@ yield cannot carry both a receive status and a value, so a receive is
 yields between them, so the pair stays atomic. `perform` is the single entry
 point both engines will call. Fourteen unit tests.
 
+### Channels slice 3: the wire layer both engines carry (2026-09-04)
+`ChannelOp` is bytecode `0x90`, appended after `TYPE_CAST_RESULT`, carrying
+its `ChannelPrim` in a second byte exactly as `TASK_OP` does. `IrExpr::ChannelOp`
+mirrors `IrExpr::TaskOp` through lowering, scope, erasure, the callgraph, and
+reachability. The VM holds one `ChannelExecutor` per run beside its
+`TaskExecutor`, for the same reason: an end handle is an index. Native code
+reaches the same table through `kira_rt_channel_op` over a thread-local
+executor, reset per run by `kira_rt_channel_reset`, which the generated entry
+and the hybrid session scope both call beside the task reset.
+
+`RUNTIME_ABI_VERSION` 14 to 15, marker `kira_rt_abi_version_15`. The guard
+proved itself on the way: the LLVM foreign-integration test refused the stale
+`libkira_native_bridge.a` by name rather than linking old code under the new
+contract. Slice 7's lesson applied without being relearned.
+
+Coverage: bytecode round-trip over every primitive, opcode adjacency, unknown
+primitive byte, truncated operand; three native-symbol tests; the shared table
+tests above. Full workspace green except `kira-cli`, which is the run below.
+
+Next in this line is the Kira surface: `Channel<T>` with owned `Sender<T>` and
+`Receiver<T>` ends, `receive` as a suspension point lowering through the
+synthesized scheduler IR `await` uses, `Send` gating on both ends and the
+payload, and a closed channel yielding a typed failure through `attempt`. The
+wire layer beneath it is complete and does not change again for it.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with

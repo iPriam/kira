@@ -233,7 +233,7 @@ impl IrProgram {
             | IrExpr::NativeStateRetain { .. }
             | IrExpr::NativeStateRelease { .. } => Type::Void,
             // Every primitive answers with one machine word, spelled `Int`.
-            IrExpr::TaskOp { .. } => Type::INT,
+            IrExpr::TaskOp { .. } | IrExpr::ChannelOp { .. } => Type::INT,
         }
     }
 

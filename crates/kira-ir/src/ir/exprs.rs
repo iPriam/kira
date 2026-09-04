@@ -11,7 +11,7 @@
 
 use kira_semantics_model::hir::FieldOrder;
 use kira_runtime_abi::{
-    CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
+    ChannelPrim, CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
 };
 use kira_semantics_model::{EnumId, StructId, Type};
 
@@ -499,9 +499,9 @@ pub enum IrExpr {
         /// The identity the payload must carry.
         target: kira_semantics_model::ErasedTypeId,
         /// The result row being built.
-        result: kira_semantics_model::EnumId,
+        result: EnumId,
         /// The failure row the error variant carries.
-        failure: kira_semantics_model::EnumId,
+        failure: EnumId,
         /// The payload type read on the success path.
         payload: Type,
     },
@@ -547,6 +547,20 @@ pub enum IrExpr {
     TaskOp {
         /// Which primitive this is.
         prim: TaskPrim,
+        /// Its three operands, in order.
+        operands: [IrExprId; 3],
+    },
+    /// One channel-table primitive.
+    ///
+    /// The channel surface reaches both engines through this node on the same
+    /// terms [`IrExpr::TaskOp`] states: the ordering policy is synthesized
+    /// Kira-shaped IR, and what a backend carries is the table.
+    ///
+    /// Every primitive takes three `Int` operands and yields one. Operands a
+    /// primitive does not use are the constant `0`.
+    ChannelOp {
+        /// Which primitive this is.
+        prim: ChannelPrim,
         /// Its three operands, in order.
         operands: [IrExprId; 3],
     },

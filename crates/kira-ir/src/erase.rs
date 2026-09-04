@@ -197,7 +197,8 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::NativeUserData { .. }
         | IrExpr::NativeStateRetain { .. }
         | IrExpr::NativeStateRelease { .. }
-        | IrExpr::TaskOp { .. } => {}
+        | IrExpr::TaskOp { .. }
+        | IrExpr::ChannelOp { .. } => {}
     }
 }
 

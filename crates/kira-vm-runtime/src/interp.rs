@@ -9,8 +9,8 @@
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
 use kira_runtime_abi::{
-    HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId, NativeStateValue,
-    TaskExecutor,
+    ChannelExecutor, HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, TaskExecutor,
 };
 use std::sync::OnceLock;
 
@@ -122,6 +122,12 @@ pub(crate) struct Vm<'h> {
     /// *policy* is not here — the scheduler is generated Kira the IR
     /// synthesizes, so this only answers what each primitive means.
     tasks: TaskExecutor,
+    /// The channels this run created.
+    ///
+    /// One table per run, for the reason the task table is one per run: an end
+    /// handle is an index into it, so two runs sharing a table would let one
+    /// program's end name another's channel.
+    channels: ChannelExecutor,
     /// Returned call frames whose local-vector capacity can be reused by the
     /// next call. Recursive programs otherwise allocate one `Vec<Value>` for
     /// every invocation even when the same small set of local shapes repeats.

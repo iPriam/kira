@@ -225,6 +225,15 @@ impl FnCompiler<'_> {
                 }
                 self.code.push(Instruction::TaskOp(prim));
             }
+            IrExpr::ChannelOp { prim, operands } => {
+                let prim = *prim;
+                let operands = *operands;
+                // The same deepest-first push order `TaskOp` uses.
+                for operand in operands {
+                    self.compile_expr(operand)?;
+                }
+                self.code.push(Instruction::ChannelOp(prim));
+            }
             IrExpr::MainThreadCall {
                 operation,
                 function,

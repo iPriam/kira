@@ -342,6 +342,14 @@ impl Vm<'_> {
                 let answer = self.tasks.perform(*prim, first, second, third)?;
                 self.stack.push(Value::Int(answer));
             }
+            Instruction::ChannelOp(prim) => {
+                // The same operand order `TaskOp` uses, for the same reason.
+                let third = self.pop_int()?;
+                let second = self.pop_int()?;
+                let first = self.pop_int()?;
+                let answer = self.channels.perform(*prim, first, second, third)?;
+                self.stack.push(Value::Int(answer));
+            }
             Instruction::MainThreadCall {
                 operation,
                 function,

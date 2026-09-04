@@ -358,7 +358,7 @@ impl Scan<'_> {
                 descriptor: value, ..
             }
             | IrExpr::TypeCastResult { value, .. } => self.expr(*value, path, owners),
-            IrExpr::TaskOp { operands, .. } => {
+            IrExpr::TaskOp { operands, .. } | IrExpr::ChannelOp { operands, .. } => {
                 for operand in operands {
                     self.expr(*operand, path, owners);
                 }

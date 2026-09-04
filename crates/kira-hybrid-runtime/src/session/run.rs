@@ -491,11 +491,15 @@ fn native_result_state(value: NativeResult) -> Result<Option<NativeStateValue>, 
     })
 }
 
-/// Gives every hybrid run a fresh native task table, then clears it again.
+/// Gives every hybrid run fresh native task and channel tables, then clears
+/// them again.
 ///
-/// The VM constructs its `TaskExecutor` inside each `Vm`; native storage is
-/// thread-local because the C ABI has no context argument, so the session must
-/// provide the equivalent lifetime explicitly.
+/// The VM constructs its `TaskExecutor` and `ChannelExecutor` inside each `Vm`;
+/// native storage is thread-local because the C ABI has no context argument, so
+/// the session must provide the equivalent lifetime explicitly. Both tables
+/// share one scope because both are per-run for the same reason: a handle is an
+/// index, so storage surviving a run would let one program's handle name the
+/// next program's row.
 struct TaskScopeAtExit<'a> {
     library: &'a NativeLibrary,
 }
@@ -503,6 +507,7 @@ struct TaskScopeAtExit<'a> {
 impl<'a> TaskScopeAtExit<'a> {
     fn new(library: &'a NativeLibrary) -> Self {
         library.reset_tasks();
+        library.reset_channels();
         TaskScopeAtExit { library }
     }
 }
@@ -510,5 +515,6 @@ impl<'a> TaskScopeAtExit<'a> {
 impl Drop for TaskScopeAtExit<'_> {
     fn drop(&mut self) {
         self.library.reset_tasks();
+        self.library.reset_channels();
     }
 }

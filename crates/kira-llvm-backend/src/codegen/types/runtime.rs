@@ -94,6 +94,14 @@ pub(in crate::codegen) struct Runtime {
     pub(in crate::codegen) task_op: Callable,
     /// Resets the native task table at a process or hybrid run boundary.
     pub(in crate::codegen) task_reset: Callable,
+    /// `kira_rt_channel_op`: the whole channel surface, in one call.
+    ///
+    /// One symbol for the reason `task_op` is one: the runtime owns the
+    /// channel table, and one `(primitive, a, b, c) -> answer` shape covers
+    /// every question the generated code asks it.
+    pub(in crate::codegen) channel_op: Callable,
+    /// Resets the native channel table at a process or hybrid run boundary.
+    pub(in crate::codegen) channel_reset: Callable,
     /// Enters the helper-thread/main-thread event loop for a native entry.
     pub(in crate::codegen) main_thread_run: Callable,
     /// Installs the generated dispatcher used by main-thread requests.

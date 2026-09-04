@@ -22,6 +22,7 @@ pub use codec::{DecodeError, decode, encode, encode_one};
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
+pub use kira_runtime_abi::ChannelPrim;
 pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
 use kira_runtime_abi::{ForeignType, MainThreadOp};
 /// Which property a [`Instruction::TypeField`] reads, re-exported so an engine
@@ -467,6 +468,15 @@ pub enum Instruction {
     /// is the task *table*, not the policy. Its native mirror is
     /// `kira_rt_task_op`, called with the same four numbers.
     TaskOp(TaskPrim),
+    /// Pop three `Int` operands (last pushed is the third), carry out one
+    /// channel primitive, and push its `Int` answer.
+    ///
+    /// The channel surface reaches the VM through this one instruction, on the
+    /// same terms as [`Instruction::TaskOp`]: the interpreter implements the
+    /// channel *table*, and the ordering policy above it is generated Kira.
+    /// Its native mirror is `kira_rt_channel_op`, called with the same four
+    /// numbers.
+    ChannelOp(ChannelPrim),
     /// Pop `args` values, request `function` on the host main-thread loop, and
     /// push the operation's result or handle.
     MainThreadCall {

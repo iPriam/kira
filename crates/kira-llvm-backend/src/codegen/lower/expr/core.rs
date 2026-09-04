@@ -108,6 +108,7 @@ impl FunctionLowering<'_, '_> {
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::TaskOp { prim, operands } => self.lower_task_op(prim, operands),
+            IrExpr::ChannelOp { prim, operands } => self.lower_channel_op(prim, operands),
             IrExpr::MainThreadCall {
                 operation,
                 function,
