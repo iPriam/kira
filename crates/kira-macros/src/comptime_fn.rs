@@ -109,7 +109,7 @@ fn evaluate(
             };
             reporter.error(
                 file.source,
-                kira_source::Span::from_bounds(at as u32, at as u32 + 1),
+                Span::from_bounds(at as u32, at as u32 + 1),
                 diagnostics::UNCLOSED_QUOTE,
                 format!("`{text}` has {message} at line {line}{and_more}"),
             );

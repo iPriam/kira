@@ -370,7 +370,9 @@ impl CheckDiagnostic {
             return Err(CheckWireError::Truncated);
         }
         fields
-            .chunks_exact(DIAGNOSTIC_FIELDS)
+            .as_chunks::<DIAGNOSTIC_FIELDS>()
+            .0
+            .iter()
             .map(|chunk| {
                 let severity = CheckSeverity::from_text(&chunk[1]).ok_or_else(|| {
                     CheckWireError::UnknownTag {

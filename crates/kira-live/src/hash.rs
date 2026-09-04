@@ -72,17 +72,14 @@ fn sha256(input: &[u8]) -> [u8; HASH_LEN] {
     let mut state = H0;
 
     // Every whole 64-byte block of the input compresses directly.
-    let mut chunks = input.chunks_exact(64);
-    for chunk in &mut chunks {
-        let mut block = [0u8; 64];
-        block.copy_from_slice(chunk);
-        compress(&mut state, &block);
+    let (blocks, tail) = input.as_chunks::<64>();
+    for block in blocks {
+        compress(&mut state, block);
     }
 
     // The tail plus padding: 0x80, then zeroes, then the bit length as a big-endian
     // u64. That needs one final block, or two when the tail leaves no room for the
     // length.
-    let tail = chunks.remainder();
     let mut block = [0u8; 64];
     block[..tail.len()].copy_from_slice(tail);
     block[tail.len()] = 0x80;
@@ -95,8 +92,8 @@ fn sha256(input: &[u8]) -> [u8; HASH_LEN] {
     compress(&mut state, &block);
 
     let mut out = [0u8; HASH_LEN];
-    for (slot, word) in out.chunks_exact_mut(4).zip(state) {
-        slot.copy_from_slice(&word.to_be_bytes());
+    for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+        *slot = word.to_be_bytes();
     }
     out
 }
@@ -104,8 +101,8 @@ fn sha256(input: &[u8]) -> [u8; HASH_LEN] {
 /// Compresses one 64-byte block into `state` (FIPS 180-4 §6.2.2).
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
-    for (slot, bytes) in w[..16].iter_mut().zip(block.chunks_exact(4)) {
-        *slot = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    for (slot, bytes) in w[..16].iter_mut().zip(block.as_chunks::<4>().0) {
+        *slot = u32::from_be_bytes(*bytes);
     }
     for i in 16..64 {
         let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

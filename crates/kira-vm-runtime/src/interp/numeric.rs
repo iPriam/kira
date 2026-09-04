@@ -113,8 +113,7 @@ impl Vm<'_> {
         // float is exactly the first value past the top, so it is excluded by
         // a strict compare, while `-2^63` is exactly `i64::MIN` and included.
         let in_range = value.is_finite()
-            && value >= -9_223_372_036_854_775_808.0
-            && value < 9_223_372_036_854_775_808.0;
+            && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value);
         if !in_range {
             return Err(VmError::FloatToIntOutOfRange { value });
         }

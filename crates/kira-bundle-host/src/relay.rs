@@ -66,6 +66,17 @@ enum Work {
         /// Answered when the swap is committed, or with why it was refused.
         done: Reply,
     },
+    /// Answer as soon as the app thread has nothing else in hand.
+    ///
+    /// Carries no work. Its whole value is its *position*: the app thread takes
+    /// one request at a time, so an answer to this one cannot arrive until the
+    /// request before it has returned. That is what lets the protocol thread
+    /// wait for a started app to finish without polling a flag or holding a
+    /// second copy of the app's state.
+    Settle {
+        /// Answered when the app thread reaches it.
+        done: Reply,
+    },
 }
 
 /// One answer from the app thread, carrying the host's own words on failure.
@@ -191,6 +202,13 @@ impl RunnerHost for RelayHost {
         )
     }
 
+    fn settle(&mut self) {
+        // A gone app thread has nothing left to wait for, which is the same
+        // answer as one that finished: either way nothing further will run.
+        let (done, answered) = channel();
+        let _ = self.ask(Work::Settle { done }, &answered);
+    }
+
     fn run_once(&mut self) -> Result<(), RelayError> {
         let (entered, running) = channel();
         let (finished, returned) = channel();
@@ -281,6 +299,9 @@ impl AppThread {
                 Work::Swap { bundle, done } => {
                     let _ = done.send(host.swap(&bundle).map_err(|error| error.to_string()));
                 }
+                Work::Settle { done } => {
+                    let _ = done.send(Ok(()));
+                }
                 Work::Start { entered, finished } => {
                     // Whether the entrypoint can start at all is knowable before
                     // running it, and it has to be: this is the last moment the
@@ -357,5 +378,65 @@ mod tests {
         drop(app);
         let error = relay.link().expect_err("there is nobody to link");
         assert!(matches!(error, RelayError::AppThreadGone), "got {error:?}");
+    }
+
+    /// `settle` waits behind the work already in hand.
+    ///
+    /// The runner exits on it, and the app it started is what it is waiting
+    /// for: an answer that overtook a running entrypoint would let the process
+    /// exit mid-app and truncate its output. The app thread takes one request
+    /// at a time, so this is a claim about queue position, and it is checked by
+    /// making the request ahead of it slow.
+    #[test]
+    fn settling_waits_for_the_work_already_in_hand() {
+        let (work, requests) = channel();
+        let running = Arc::new(AtomicBool::new(false));
+        let exited: ExitSlot = Arc::new(Mutex::new(None));
+        let mut relay = RelayHost {
+            work,
+            running: Arc::clone(&running),
+            exited,
+            hotpatch_disabled: false,
+            hotpatch: VmHotPatchStatus::inactive(),
+        };
+
+        let done = Arc::new(AtomicBool::new(false));
+        let observed = Arc::new(AtomicBool::new(false));
+        let worker_done = Arc::clone(&done);
+        let worker = std::thread::spawn(move || {
+            // Stands in for the app thread's loop: one request at a time, with
+            // the first one slow.
+            while let Ok(request) = requests.recv() {
+                match request {
+                    Work::Link { done: reply } => {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        worker_done.store(true, Ordering::SeqCst);
+                        let _ = reply.send(Ok(()));
+                    }
+                    Work::Settle { done: reply } => {
+                        let _ = reply.send(Ok(()));
+                        return;
+                    }
+                    _ => return,
+                }
+            }
+        });
+
+        let (reply, answered) = channel();
+        relay
+            .work
+            .send(Work::Link { done: reply })
+            .expect("the worker is listening");
+        relay.settle();
+        observed.store(done.load(Ordering::SeqCst), Ordering::SeqCst);
+        // Drain the slow request's own answer so the channel is not dropped
+        // before it is sent.
+        let _ = answered.recv();
+        worker.join().expect("the worker thread ends");
+
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "settle answered before the work ahead of it finished"
+        );
     }
 }

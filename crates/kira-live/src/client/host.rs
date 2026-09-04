@@ -79,6 +79,18 @@ pub trait RunnerHost {
         None
     }
 
+    /// Waits until the app this host started has nothing left in hand.
+    ///
+    /// Called once, when the session is over and the runner is about to exit.
+    /// [`RunnerHost::start`] returns when the entrypoint is *running*, so a host
+    /// that runs the app somewhere else still has it running here, and a runner
+    /// that exited now would cut the app off mid-line: its last output would be
+    /// whatever happened to have reached the pipe.
+    ///
+    /// The default does nothing, which is right for a host whose entrypoint runs
+    /// on the calling thread: its return already settled the app.
+    fn settle(&mut self) {}
+
     /// Why this host cannot take a hot patch, or `None` if it can.
     ///
     /// Asked before a rebuilt bundle is downloaded, so a host that was never

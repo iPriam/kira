@@ -241,7 +241,7 @@ fn a_server_that_vanishes_after_the_app_is_up_leaves_the_runner_clean() {
     let (stdout, stderr, status) = finish(guard.take());
     assert!(
         stdout.contains(APP_OUTPUT),
-        "the app must have run. stdout: {stdout:?}\nstderr: {stderr:?}"
+        "the app must have run. stdout: {stdout:?}\nstderr: {stderr:?}\nstatus: {status:?}"
     );
     assert!(
         status.success(),

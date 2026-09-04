@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kira_bundle_host::{BundleHost, relay};
-use kira_live::{ClientError, RunnerClient};
+use kira_live::{ClientError, RunnerClient, RunnerHost};
 use kira_manifest::RunnerId;
 
 /// Exit code for a session that ran.
@@ -123,6 +123,11 @@ fn serve_session(
     cache: &RunnerCache,
 ) -> Result<(), ClientError> {
     let outcome = session(&mut client, &mut relay);
+    // The session is over; the app it started may not be. `start` returns when
+    // the entrypoint is running, so exiting here would cut the app off wherever
+    // it happened to be and truncate its output mid-line. Wait for the app
+    // thread to come back to rest first.
+    relay.settle();
     if running.load(Ordering::SeqCst) {
         let code = match &outcome {
             Ok(()) => EXIT_OK,

@@ -387,6 +387,37 @@ synthesized scheduler IR `await` uses, `Send` gating on both ends and the
 payload, and a closed channel yielding a typed failure through `attempt`. The
 wire layer beneath it is complete and does not change again for it.
 
+### The desktop runner cut its app off (2026-09-04)
+`a_server_that_vanishes_after_the_app_is_up_leaves_the_runner_clean` was
+recorded as a flake. It reproduced 50/50 once the tree was quiet, and it was
+a real defect, not timing noise.
+
+`RunnerHost::start` returns when the entrypoint is *running*, deliberately:
+`RelayHost` acks the protocol thread before handing the app thread the run,
+because that ack is the last moment the session can be told the app never
+started. So `entrypoint started` means started. When the server then vanished,
+the runner reached `std::process::exit` while the app thread was still inside
+the entrypoint, and the app's output was whatever had reached the pipe. Half
+the runs it was nothing.
+
+`RunnerHost::settle` waits for the app to come back to rest, defaulting to a
+no-op for a host whose entrypoint runs on the calling thread. `RelayHost`
+implements it as a `Work::Settle` request carrying no work: the app thread
+takes one request at a time, so an answer to it cannot arrive before the
+request ahead of it returned. No polling, no second copy of the app's state.
+The runner settles before exiting. Eight consecutive clean runs, and a unit
+test pins the queue-position claim by making the request ahead of it slow.
+
+### Workspace lints cleared (2026-09-04)
+`cargo clippy --workspace` is clean. Nineteen warnings were standing:
+`chunks_exact` with constant sizes across the two SHA-256 implementations, the
+SPIR-V word packer, and three wire decoders (`as_chunks`, which also drops a
+copy per block); five unnecessary qualifications in the macro evaluator, from
+this effort; four redundant match guards on `IntSpelling`/`FloatSpelling`
+that are patterns; a manual range check in the VM's float-to-int narrowing;
+and `Staged::VmLoaded` carrying a 248-byte `Module` inline in an enum the
+runner holds for its whole life, now boxed.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with

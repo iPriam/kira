@@ -166,7 +166,9 @@ impl ToolRequest {
             path: path.clone(),
             backend,
             environment: variables
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| ToolVariable {
                     name: pair[0].clone(),
                     value: pair[1].clone(),
@@ -265,7 +267,9 @@ impl ToolAnswer {
             return Err(ToolWireError::Truncated);
         }
         let diagnostics = records
-            .chunks_exact(TOOL_DIAGNOSTIC_FIELDS)
+            .as_chunks::<TOOL_DIAGNOSTIC_FIELDS>()
+            .0
+            .iter()
             .map(|chunk| {
                 let severity = CheckSeverity::from_text(&chunk[2]).ok_or_else(|| {
                     ToolWireError::UnknownSeverity {

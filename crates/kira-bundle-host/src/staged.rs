@@ -23,7 +23,12 @@ pub enum Staged {
     /// A VM bytecode entry, decoded but not yet validated.
     VmLoaded {
         /// The decoded entry module.
-        module: Module,
+        ///
+        /// Boxed because a decoded module is an order of magnitude larger than
+        /// every other variant's payload, and this enum is stored in the
+        /// runner for the whole of its life: inlining it would make every
+        /// state pay the loaded module's size.
+        module: Box<Module>,
         /// The parsed import-ordered direct binding paths, when imports exist.
         ///
         /// Each path is already resolved against the runner cache when it names

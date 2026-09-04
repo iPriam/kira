@@ -52,11 +52,11 @@ fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
         // A bare literal adapts to the written spelling on the other side,
         // whichever side that is: `1 + u8Value` is `U8` arithmetic exactly as
         // `u8Value + 1` is.
-        (Type::Int(a), Type::Int(_)) if a == IntSpelling::Plain => Some(rt),
-        (Type::Int(_), Type::Int(b)) if b == IntSpelling::Plain => Some(lt),
+        (Type::Int(IntSpelling::Plain), Type::Int(_)) => Some(rt),
+        (Type::Int(_), Type::Int(IntSpelling::Plain)) => Some(lt),
         (Type::Float(a), Type::Float(b)) if a == b => Some(lt),
-        (Type::Float(a), Type::Float(_)) if a == FloatSpelling::Plain => Some(rt),
-        (Type::Float(_), Type::Float(b)) if b == FloatSpelling::Plain => Some(lt),
+        (Type::Float(FloatSpelling::Plain), Type::Float(_)) => Some(rt),
+        (Type::Float(_), Type::Float(FloatSpelling::Plain)) => Some(lt),
         _ => None,
     }
 }

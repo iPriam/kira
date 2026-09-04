@@ -233,7 +233,7 @@ impl RunnerHost for BundleHost {
             .ok_or(BundleHostError::NoEntrypoint)?;
         self.staged = match entry.kind {
             PayloadKind::VmBytecode => Staged::VmLoaded {
-                module: Module::from_bytes(bundle.entry_bytes())?,
+                module: Box::new(Module::from_bytes(bundle.entry_bytes())?),
                 bindings: foreign_bindings_from_bundle(&self.cache, bundle)?,
             },
             PayloadKind::HybridManifest => Staged::HybridLoaded {
@@ -258,7 +258,7 @@ impl RunnerHost for BundleHost {
 
     fn link(&mut self) -> Result<(), BundleHostError> {
         self.staged = match std::mem::replace(&mut self.staged, Staged::Empty) {
-            Staged::VmLoaded { module, bindings } => link_vm(module, bindings)?,
+            Staged::VmLoaded { module, bindings } => link_vm(*module, bindings)?,
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
                 // Loading a hybrid session dlopens the native half and binds
                 // every symbol the manifest names, so a missing symbol fails

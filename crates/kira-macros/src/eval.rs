@@ -17,7 +17,7 @@ use crate::registry::ComptimeFunction;
 
 use kira_core::Names;
 use kira_diagnostics::Severity;
-use kira_source::{FileSpan, SourceId};
+use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, MatchArm, Stmt, StmtId};
 
@@ -87,10 +87,10 @@ impl BodyError {
     /// as in "the `expand` body of `Serializable`".
     pub(crate) fn report(
         self,
-        reporter: &mut crate::diagnostics::Reporter,
-        source: kira_source::SourceId,
+        reporter: &mut diagnostics::Reporter,
+        source: SourceId,
         body: &str,
-        body_span: kira_source::Span,
+        body_span: Span,
         whose: &str,
     ) {
         match self {
@@ -103,8 +103,8 @@ impl BodyError {
                 };
                 reporter.error(
                     source,
-                    kira_source::Span::from_bounds(at as u32, at as u32 + 1),
-                    crate::diagnostics::UNCLOSED_QUOTE,
+                    Span::from_bounds(at as u32, at as u32 + 1),
+                    diagnostics::UNCLOSED_QUOTE,
                     format!("{whose} has {message} at line {line}{and_more}"),
                 );
             }
@@ -112,7 +112,7 @@ impl BodyError {
                 reporter.error(
                     source,
                     body_span,
-                    crate::diagnostics::EXPAND_SIGNATURE,
+                    diagnostics::EXPAND_SIGNATURE,
                     format!("{whose} does not parse"),
                 );
             }
