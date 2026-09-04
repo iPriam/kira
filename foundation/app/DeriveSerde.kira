@@ -4,9 +4,7 @@
 //   @Derive(Serializable) generates both `serialize_<Type>` and
 //   `deserialize_<Type>` together: one direction without the other leaves a
 //   value that can be written and never read back, so the seven-derive surface
-//   keeps them as one macro. `@Derive(Deserializable)` remains as a deprecated
-//   alias generating only the reader, so existing code keeps compiling while it
-//   migrates.
+//   keeps them as one macro.
 //
 // WIRE FORMAT (v1, compact, deterministic, single line):
 //
@@ -606,14 +604,5 @@ comptime function __kira_serde_deserialize_fn(target: Declaration) -> Syntax {
                 }
             }
         }
-    
-}
-
-comptime macro Deserializable {
-    kind { derive }
-    appliesTo { struct enum distinct }
-    expand(target: Declaration) -> Syntax {
-        return __kira_serde_deserialize_fn(target)
-    }
 }
 

@@ -305,7 +305,10 @@ what surfaces. Any future validation-then-generate macro code must follow the sa
 
 ### Serde step 5: canonical remainder and the seven-derive surface (2026-09-04)
 `@Derive(Serializable)` generates both `serialize_T` and `deserialize_T`.
-`Deserializable` remains as a deprecated alias generating only the reader.
+`Deserializable` is gone rather than deprecated: nothing in the repository
+used it once the fold landed, and a reader-only derive that keeps compiling
+is the hedge the seven-derive surface exists to remove. Naming it is
+`KMAC011`, which points at the derive that exists.
 All harnesses, parity programs, and docs derive `Serializable` alone.
 
 The reader consumes the full input: trailing text after the closing `}`

@@ -69,3 +69,40 @@ fn an_array_of_a_generic_is_refused_with_what_it_holds() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("array elements"), "{stderr}");
 }
+
+#[test]
+fn an_array_of_a_qualified_name_is_refused_with_what_it_holds() {
+    // The element rule, not `KMAC013`. A qualified spelling reaches the array
+    // generator as text no `Identifier` can build, and refusing it there names
+    // the field rather than the identifier the macro tried to construct.
+    let output = check_program(
+        "import Foundation\n\
+         @Derive(Serializable)\n\
+         struct Boxed {\n\
+             var items: [Geo.Point]\n\
+         }\n\
+         @Main function main() { print(1) return }",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array elements"), "{stderr}");
+    assert!(!stderr.contains("KMAC013"), "{stderr}");
+}
+
+#[test]
+fn deserializable_is_no_longer_a_derive() {
+    // `Serializable` generates both directions, so the reader-only derive is
+    // gone rather than deprecated: a program naming it is told it names no
+    // derive, which points at the one that exists.
+    let output = check_program(
+        "import Foundation\n\
+         @Derive(Deserializable)\n\
+         struct Point {\n\
+             var x: Int\n\
+         }\n\
+         @Main function main() { print(1) return }",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KMAC011"), "{stderr}");
+}

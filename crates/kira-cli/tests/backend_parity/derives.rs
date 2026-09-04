@@ -105,7 +105,7 @@ function main() {
     assert_eq!(output, "0\n1\n2\n2\n0\n");
 }
 
-/// Foundation's `@Derive(Serializable)` / `@Derive(Deserializable)`: the exact
+/// Foundation's `@Derive(Serializable)`: the exact
 /// wire string, and the round-trip law asserted with `eq_`.
 #[test]
 fn the_foundation_serde_derives_agree() {
