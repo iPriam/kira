@@ -9,7 +9,7 @@ function score(tab: BrowserTab) -> Int {
 
 @Main
 function main() {
-    var tab = BrowserTab { title: "Harmony Browser" visits: 2 }
+    var tab = BrowserTab { title: "Harmony Browser", visits: 2 }
     tab.visits = tab.visits + 1
     print(tab.title)
     print(tab.visits)
