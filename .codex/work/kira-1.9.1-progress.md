@@ -341,6 +341,16 @@ change that gives it a rule to enforce.
 Harness tally stays 1458 on VM. The migrated `Dnx` and `Distincts` constructs
 prove the fold: every one derives `Serializable` alone and round-trips.
 
+### Channels slice 1: the shared channel table (2026-09-04)
+`ChannelExecutor` in `kira-runtime-abi` owns generation-tagged channel
+storage with two owned ends per channel. Sends queue FIFO, receives answer
+`Value`/`Empty`/`Closed` without blocking, sender drop closes the channel
+once the queue drains, and reclamation advances the generation so stale ends
+trap as `UnknownHandle`. No wire bytes, no `kira_rt_*` symbols, no Kira
+surface yet: the suspension policy and the language surface arrive in later
+slices above this table. Nine unit tests pin ordering, closure, wrong-direction
+use, reclamation staleness, generation advance, and the zero handle.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with

@@ -34,6 +34,7 @@ pub mod ownership;
 pub mod string_op;
 pub mod syscall;
 pub mod tasks;
+pub mod channels;
 pub mod toolchain;
 
 pub use aggregate::{
@@ -94,6 +95,7 @@ pub use syscall::{
     LINUX_SYSCALLS, LinuxSyscall, MAX_SYSCALL_ARGUMENTS, SYSCALL_OS, SyscallArch, SyscallError,
 };
 pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
+pub use channels::{ChannelExecutor, ChannelReceive, ChannelTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.
 ///
