@@ -351,6 +351,14 @@ surface yet: the suspension policy and the language surface arrive in later
 slices above this table. Nine unit tests pin ordering, closure, wrong-direction
 use, reclamation staleness, generation advance, and the zero handle.
 
+The wire contract is pinned alongside the table: `ChannelPrim` answers
+`Create`/`Send`/`Poll`/`Take`/`CloseSender`/`CloseReceiver` in that order,
+append-only like `TaskPrim`, with round-trip and unknown-byte tests. One
+yield cannot carry both a receive status and a value, so a receive is
+`Poll` (`0` empty, `1` ready, `2` closed) plus `Take`; generated code never
+yields between them, so the pair stays atomic. `perform` is the single entry
+point both engines will call. Fourteen unit tests.
+
 ## Beyond 1.9.1
 
 Section O's features are in scope for this effort, not deferred: maps and sets, iterators with

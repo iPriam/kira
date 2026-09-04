@@ -43,6 +43,87 @@ pub enum ChannelTrap {
     /// A value was taken through a sender, or sent through a receiver.
     #[error("channel end used in the wrong direction")]
     WrongDirection,
+    /// A value was taken while none was waiting.
+    #[error("channel has no waiting value to take")]
+    NotReady,
+}
+
+/// One primitive of the channel table's runtime interface.
+///
+/// The discriminants are a wire contract: they will travel in the operand
+/// byte of the channel bytecode instruction and in the first argument of the
+/// channel native call, so they are **append-only** — a new primitive takes
+/// the next free number and no existing one ever moves.
+///
+/// Every primitive takes three `Int` operands and yields one. Operands a
+/// primitive does not use are passed as zero and ignored, which is what lets
+/// one instruction and one native symbol carry the whole surface.
+///
+/// A receive is two primitives rather than one because one yield cannot carry
+/// both the status and the value: `Poll` answers `0` for an empty open
+/// channel, `1` when a value is waiting, and `2` when the channel is closed
+/// and drained, and `Take` answers the oldest waiting value. Generated code
+/// never yields between the two, so the pair is atomic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ChannelPrim {
+    /// `(_, _, _)` — create a channel, yielding the sender end.
+    ///
+    /// The receiver end shares the index and generation with the sender and
+    /// differs only in the end bit, so generated code derives it from the
+    /// yielded word and one primitive carries both ends.
+    Create = 0,
+    /// `(sender, value, _)` — queue one value behind every value waiting.
+    Send = 1,
+    /// `(receiver, _, _)` — answer `0` (empty), `1` (ready), or `2` (closed).
+    Poll = 2,
+    /// `(receiver, _, _)` — answer the oldest waiting value.
+    Take = 3,
+    /// `(sender, _, _)` — drop the sender end, closing the channel on drain.
+    CloseSender = 4,
+    /// `(receiver, _, _)` — drop the receiver end, discarding the queue.
+    CloseReceiver = 5,
+}
+
+impl ChannelPrim {
+    /// Every primitive, in wire order.
+    ///
+    /// The one place the set is written down: decoding indexes this rather than
+    /// repeating a match, so a new primitive cannot be added to the enum and
+    /// forgotten by the decoder.
+    pub const ALL: [ChannelPrim; 6] = [
+        ChannelPrim::Create,
+        ChannelPrim::Send,
+        ChannelPrim::Poll,
+        ChannelPrim::Take,
+        ChannelPrim::CloseSender,
+        ChannelPrim::CloseReceiver,
+    ];
+
+    /// The wire byte this primitive travels as.
+    pub const fn as_byte(self) -> u8 {
+        self as u8
+    }
+
+    /// Reads a wire byte, or `None` when it names no primitive.
+    ///
+    /// A decoder never guesses: an unknown byte is rejected by its caller
+    /// rather than folded into a neighbouring primitive.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        Self::ALL.get(usize::from(byte)).copied()
+    }
+
+    /// A short name for this primitive, for disassembly and diagnostics.
+    pub const fn label(self) -> &'static str {
+        match self {
+            ChannelPrim::Create => "create",
+            ChannelPrim::Send => "send",
+            ChannelPrim::Poll => "poll",
+            ChannelPrim::Take => "take",
+            ChannelPrim::CloseSender => "closeSender",
+            ChannelPrim::CloseReceiver => "closeReceiver",
+        }
+    }
 }
 
 /// What a non-blocking receive answers.
@@ -157,28 +238,10 @@ impl ChannelExecutor {
 
     /// Answers the oldest queued value without blocking.
     pub fn receive(&mut self, receiver: i64) -> Result<ChannelReceive, ChannelTrap> {
-        let (index, generation, end) = Self::parts(receiver)?;
-        if end != ChannelEnd::Receiver {
-            return Err(ChannelTrap::WrongDirection);
-        }
-        let slot = self
-            .channels
-            .get_mut(index)
-            .ok_or(ChannelTrap::UnknownHandle)?;
-        if slot.generation != generation {
-            return Err(ChannelTrap::UnknownHandle);
-        }
-        let channel = slot.channel.as_mut().ok_or(ChannelTrap::UnknownHandle)?;
-        if !channel.receiver_live {
-            return Err(ChannelTrap::UnknownHandle);
-        }
-        if let Some(value) = channel.queue.pop_front() {
-            return Ok(ChannelReceive::Value(value));
-        }
-        if channel.sender_live {
-            Ok(ChannelReceive::Empty)
-        } else {
-            Ok(ChannelReceive::Closed)
+        match self.poll(receiver)? {
+            1 => Ok(ChannelReceive::Value(self.take(receiver)?)),
+            0 => Ok(ChannelReceive::Empty),
+            _ => Ok(ChannelReceive::Closed),
         }
     }
 
@@ -229,6 +292,88 @@ impl ChannelExecutor {
             self.reclaim(index, generation)?;
         }
         Ok(())
+    }
+
+    /// Carries out one primitive.
+    ///
+    /// The single entry point both engines will call, so neither can drift
+    /// into its own reading of what a primitive means. `Create` yields the
+    /// sender end; the receiver shares its index and generation and differs
+    /// only in the end bit, so generated code derives it from the yielded
+    /// word. `Poll` yields `0` (empty), `1` (ready), or `2` (closed).
+    pub fn perform(
+        &mut self,
+        prim: ChannelPrim,
+        a: i64,
+        b: i64,
+        _c: i64,
+    ) -> Result<i64, ChannelTrap> {
+        match prim {
+            ChannelPrim::Create => {
+                let (sender, _) = self.create()?;
+                Ok(sender)
+            }
+            ChannelPrim::Send => {
+                self.send(a, b)?;
+                Ok(0)
+            }
+            ChannelPrim::Poll => self.poll(a),
+            ChannelPrim::Take => self.take(a),
+            ChannelPrim::CloseSender => {
+                self.close_sender(a)?;
+                Ok(0)
+            }
+            ChannelPrim::CloseReceiver => {
+                self.close_receiver(a)?;
+                Ok(0)
+            }
+        }
+    }
+
+    /// Answers `0` (empty), `1` (ready), or `2` (closed and drained).
+    pub fn poll(&self, receiver: i64) -> Result<i64, ChannelTrap> {
+        let (index, generation, end) = Self::parts(receiver)?;
+        if end != ChannelEnd::Receiver {
+            return Err(ChannelTrap::WrongDirection);
+        }
+        let slot = self
+            .channels
+            .get(index)
+            .ok_or(ChannelTrap::UnknownHandle)?;
+        if slot.generation != generation {
+            return Err(ChannelTrap::UnknownHandle);
+        }
+        let channel = slot.channel.as_ref().ok_or(ChannelTrap::UnknownHandle)?;
+        if !channel.receiver_live {
+            return Err(ChannelTrap::UnknownHandle);
+        }
+        if !channel.queue.is_empty() {
+            Ok(1)
+        } else if channel.sender_live {
+            Ok(0)
+        } else {
+            Ok(2)
+        }
+    }
+
+    /// Answers the oldest waiting value, trapping when none is waiting.
+    pub fn take(&mut self, receiver: i64) -> Result<i64, ChannelTrap> {
+        let (index, generation, end) = Self::parts(receiver)?;
+        if end != ChannelEnd::Receiver {
+            return Err(ChannelTrap::WrongDirection);
+        }
+        let slot = self
+            .channels
+            .get_mut(index)
+            .ok_or(ChannelTrap::UnknownHandle)?;
+        if slot.generation != generation {
+            return Err(ChannelTrap::UnknownHandle);
+        }
+        let channel = slot.channel.as_mut().ok_or(ChannelTrap::UnknownHandle)?;
+        if !channel.receiver_live {
+            return Err(ChannelTrap::UnknownHandle);
+        }
+        channel.queue.pop_front().ok_or(ChannelTrap::NotReady)
     }
 
     /// Reclaims one channel whose ends are both gone and advances its generation.
@@ -404,5 +549,73 @@ mod tests {
             Err(ChannelTrap::UnknownHandle)
         );
         assert_eq!(executor.send(0, 1), Err(ChannelTrap::UnknownHandle));
+    }
+
+    #[test]
+    fn the_primitive_wire_bytes_are_pinned() {
+        // Spelled out literally: a reorder here silently redirects every
+        // already-compiled module, so it has to fail a test instead.
+        assert_eq!(ChannelPrim::Create.as_byte(), 0);
+        assert_eq!(ChannelPrim::Send.as_byte(), 1);
+        assert_eq!(ChannelPrim::Poll.as_byte(), 2);
+        assert_eq!(ChannelPrim::Take.as_byte(), 3);
+        assert_eq!(ChannelPrim::CloseSender.as_byte(), 4);
+        assert_eq!(ChannelPrim::CloseReceiver.as_byte(), 5);
+    }
+
+    #[test]
+    fn every_primitive_round_trips_through_its_byte() {
+        for prim in ChannelPrim::ALL {
+            assert_eq!(ChannelPrim::from_byte(prim.as_byte()), Some(prim));
+        }
+    }
+
+    #[test]
+    fn an_unknown_byte_names_no_primitive() {
+        assert_eq!(ChannelPrim::from_byte(ChannelPrim::ALL.len() as u8), None);
+        assert_eq!(ChannelPrim::from_byte(u8::MAX), None);
+    }
+
+    #[test]
+    fn poll_and_take_agree_without_consuming_early() {
+        let mut executor = ChannelExecutor::new();
+        let (sender, receiver) = channel(&mut executor);
+        assert_eq!(
+            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
+            Ok(0)
+        );
+        executor
+            .perform(ChannelPrim::Send, sender, 11, 0)
+            .unwrap();
+        assert_eq!(
+            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
+            Ok(1)
+        );
+        assert_eq!(
+            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
+            Ok(1),
+            "polling twice must not consume the waiting value"
+        );
+        assert_eq!(
+            executor.perform(ChannelPrim::Take, receiver, 0, 0),
+            Ok(11)
+        );
+        assert_eq!(
+            executor.perform(ChannelPrim::Take, receiver, 0, 0),
+            Err(ChannelTrap::NotReady)
+        );
+    }
+
+    #[test]
+    fn a_closed_channel_polls_closed_once_drained() {
+        let mut executor = ChannelExecutor::new();
+        let (sender, receiver) = channel(&mut executor);
+        executor
+            .perform(ChannelPrim::CloseSender, sender, 0, 0)
+            .unwrap();
+        assert_eq!(
+            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
+            Ok(2)
+        );
     }
 }
