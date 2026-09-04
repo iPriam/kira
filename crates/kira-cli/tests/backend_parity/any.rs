@@ -879,12 +879,12 @@ fn serde_arrays_balance_on_every_backend() {
         r#"
 import Foundation
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct Record {
     var code: Int
 }
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct Batch {
     var xs: [Int]
     var matrix: [[U8]]

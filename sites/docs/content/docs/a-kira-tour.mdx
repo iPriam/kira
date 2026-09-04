@@ -154,7 +154,7 @@ No `@Native`, no glue. The package lists `ffimath` in its manifest and the same 
 ## Macros
 
 ```kira
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct Point { var x: Int var y: Int }
 
 let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x:Int(1),y:Int(-2)}"

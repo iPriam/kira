@@ -52,7 +52,7 @@ Each of these carries a `{ key: value; … }` block. [Interop and FFI](/docs/lan
 
 `@Derive(Name, …)` runs each named derive macro over the declaration below it.
 
-`Copy` is the one derive the compiler answers itself. It generates no code and is an opt-in assertion that a type is structurally copyable, checked at compile time and reported as `KIR005` when it is not. Every other derive is a macro: Foundation ships `Equatable`, `Clone`, `Serializable`, and `Deserializable`, written in Kira. See [Derives](/docs/macros/derives).
+`Copy` is the one derive the compiler answers itself. It generates no code and is an opt-in assertion that a type is structurally copyable, checked at compile time and reported as `KIR005` when it is not. Every other derive is a macro: Foundation ships `Equatable`, `Clone`, and `Serializable`, written in Kira. See [Derives](/docs/macros/derives).
 
 ## Documentation
 

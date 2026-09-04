@@ -13,7 +13,7 @@ distinct DistinctBookmarkId = U32
 distinct DistinctMillis = U64
 distinct DistinctTicks = DistinctMillis
 
-@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
 distinct DistinctPort = U32
 
 struct DistinctTab {

@@ -113,13 +113,13 @@ fn the_foundation_serde_derives_agree() {
         r#"
 import Foundation
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxPoint {
     var x: Int
     var y: Int
 }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxSegment {
     var from: DsxPoint
     var to: DsxPoint
@@ -133,7 +133,7 @@ function main() {
     let wire = serialize_DsxPoint(point)
     print(wire)
     print(eq_DsxPoint(point, deserialize_DsxPoint(wire)))
-    print(eq_DsxPoint(point, deserialize_DsxPoint("DsxPoint{x=1;y=-2}")))
+    print(eq_DsxPoint(point, deserialize_DsxPoint("DsxPoint{x:Int(1),y:Int(-2)}")))
 
     let segment = DsxSegment {
         from: point,
@@ -154,12 +154,12 @@ function main() {
     );
     assert_eq!(
         output,
-        "DsxPoint{x=1;y=-2}\n\
+        "DsxPoint{x:Int(1),y:Int(-2)}\n\
          true\n\
          true\n\
-         DsxSegment{from=DsxPoint{x=1;y=-2};to=DsxPoint{x=3;y=4};label=\"edge\";live=true}\n\
+         DsxSegment{from:DsxPoint{x:Int(1),y:Int(-2)},to:DsxPoint{x:Int(3),y:Int(4)},label:\"edge\",live:true}\n\
          true\n\
-         DsxSegment{from=DsxPoint{x=1;y=-2};to=DsxPoint{x=1;y=-2};label=\"\";live=false}\n\
+         DsxSegment{from:DsxPoint{x:Int(1),y:Int(-2)},to:DsxPoint{x:Int(1),y:Int(-2)},label:\"\",live:false}\n\
          true\n"
     );
 }
@@ -176,13 +176,13 @@ fn the_foundation_serde_derives_agree_over_enums() {
         r#"
 import Foundation
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 enum DsxTool { Select Move Rotate }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 enum DsxNote { Blank Rank(Int) Tag(String) }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxSlot {
     var tool: DsxTool
     var note: DsxNote
@@ -212,12 +212,12 @@ function main() {
         output,
         "DsxTool.Rotate\n\
          DsxNote.Blank\n\
-         DsxNote.Rank(-7)\n\
+         DsxNote.Rank(Int(-7))\n\
          DsxNote.Tag(\"edge\")\n\
          true\n\
          true\n\
          true\n\
-         DsxSlot{tool=DsxTool.Select;note=DsxNote.Tag(\"hi\");count=3}\n\
+         DsxSlot{tool:DsxTool.Select,note:DsxNote.Tag(\"hi\"),count:Int(3)}\n\
          true\n"
     );
 }
@@ -227,15 +227,18 @@ function main() {
 fn malformed_serialized_text_traps_on_every_backend() {
     for wire in [
         "garbage",
-        "DsxPoint{x=1",
-        "Other{x=1;y=2}",
-        "DsxPoint{x=n;y=2}",
+        "DsxPoint{x:Int(1)",
+        "Other{x:Int(1),y:Int(2)}",
+        "DsxPoint{x:n,y:Int(2)}",
+        "DsxPoint{x:Int(1),y:Int(2)}trailing",
+        "DsxPoint{y:Int(2),x:Int(1)}",
+        "DsxPoint{x:Int(1),x:Int(1)}",
     ] {
         let source = format!(
             r#"
 import Foundation
 
-@Derive(Deserializable)
+@Derive(Serializable)
 struct DsxPoint {{
     var x: Int
     var y: Int

@@ -55,7 +55,7 @@ This is the only escape whose meaning is *produce nothing*, and it is why a mess
 
 `charAt` and `substring` **trap** rather than clamping or returning a sentinel. An index below zero or at or past the end, a `substring` whose start is past its end, and a range that would split a multi-byte character are all failures with no answer, so a program that walks off the end of a string stops, identically on the VM, the LLVM backend, and the hybrid split, instead of producing a value only one of them agrees with.
 
-That is a usable property as well as a safe one. Foundation's `@Derive(Deserializable)` relies on it: every structural violation in a wire string drives an out-of-range `charAt` or an inverted `substring`, which is what makes malformed input a deterministic stop rather than a partial parse. See [Derives](/docs/macros/derives) for the format.
+That is a usable property as well as a safe one. Foundation's `@Derive(Serializable)` relies on it: every structural violation in a wire string drives an out-of-range `charAt` or an inverted `substring`, which is what makes malformed input a deterministic stop rather than a partial parse. See [Derives](/docs/macros/derives) for the format.
 
 ## Characters
 

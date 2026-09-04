@@ -1,3 +1,209 @@
+// Compile-time counterparts to the runtime helpers below: the macros in
+// `DeriveSerde.kira` run these while expanding, so there is one place that
+// knows how each shape travels, however deeply arrays nest.
+
+// The helpers both macros generate calls to live in `SerdeText.kira`, beside
+// this file: they are the same code for every derived type, and only the format
+// they read and write is described here.
+//
+// The five functions below are the macros' own shared logic: classifying a
+// type text, spelling an annotation for one, and writing or reading a value of
+// one. They run at compile time, take and return plain values, and recurse for
+// nested arrays — so there is one place that knows how each shape travels,
+// however deeply it nests, instead of one copy per position that names it.
+
+// The integer spelling `text` names, or `""` when it names none. The tag an
+// integer writes and the check a reader applies come from here, so the eight
+// spellings are listed once.
+comptime function __kira_serde_int_tag(text: String) -> String {
+    for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+        if text == sname {
+            return sname
+        }
+    }
+    return ""
+}
+
+// Whether a value of the type `text` reads as can be generated: scalars,
+// nested arrays of the same, and single identifiers addressed by name through
+// generated `serialize_`/`deserialize_` calls. Generics, qualified names, and
+// function types answer false — the generated code could not name what they
+// mean — and the caller reports them with the span only it has.
+comptime function __kira_serde_ok(text: String) -> Bool {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        if t.endsWith("]") == false {
+            return false
+        }
+        return __kira_serde_ok(t.substring(1, t.count - 1).trim())
+    }
+    if __kira_serde_int_tag(t) != "" {
+        return true
+    }
+    if t == "Float" {
+        return true
+    }
+    if t == "F32" {
+        return true
+    }
+    if t == "Bool" {
+        return true
+    }
+    if t == "String" {
+        return true
+    }
+    if t == "CBool" {
+        return true
+    }
+    if t.contains("<") {
+        return false
+    }
+    if t.contains("(") {
+        return false
+    }
+    if t.contains(")") {
+        return false
+    }
+    if t.contains(",") {
+        return false
+    }
+    if t.contains(":") {
+        return false
+    }
+    if t.contains(".") {
+        return false
+    }
+    if t.contains(" ") {
+        return false
+    }
+    if t.contains("[") {
+        return false
+    }
+    if t.contains("]") {
+        return false
+    }
+    if t == "" {
+        return false
+    }
+    return true
+}
+
+// The annotation syntax for the type `text` reads as: a plain name splices
+// directly, and an array nests. Only called on text `__kira_serde_ok`
+// accepted, so every name here resolves where the annotation lands.
+comptime function __kira_serde_ann(text: String) -> Syntax {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        var inner: Syntax = __kira_serde_ann(t.substring(1, t.count - 1).trim())
+        return quote { [#{inner}] }
+    }
+    return quote { #{Identifier(t)} }
+}
+
+// Statements serializing the value `value` reads as — of the type `typeText`
+// reads as — appended to the string `target` names. Scalars append one piece;
+// an array appends its brackets around one element per turn, recursing for the
+// element. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_write_into(typeText: String, value: Syntax, target: Syntax, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        return quote { #{target} = #{target} + #{tag} + "(" + String(#{value}) + ")" }
+    }
+    if t == "Float" {
+        return quote { #{target} = #{target} + __kira_serde_float(#{value}) }
+    }
+    if t == "F32" {
+        return quote { #{target} = #{target} + __kira_serde_float32(#{value}) }
+    }
+    if t == "Bool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "CBool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "String" {
+        return quote { #{target} = #{target} + "\"" + __kira_serde_escape(#{value}) + "\"" }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var wrote: Syntax = __kira_serde_write_into(inner, quote { #{Identifier("__e" + stem)} }, target, nest)
+        return quote {
+            #{target} = #{target} + "["
+            var #{Identifier("__n" + stem)}: Int = 0
+            for #{Identifier("__e" + stem)} in #{value} {
+                if #{Identifier("__n" + stem)} != 0 {
+                    #{target} = #{target} + ","
+                }
+                #{wrote}
+                #{Identifier("__n" + stem)} = #{Identifier("__n" + stem)} + 1
+            }
+            #{target} = #{target} + "]"
+        }
+    }
+    return quote { #{target} = #{target} + #{Identifier("serialize_" + t)}(#{value}) }
+}
+
+// Statements reading one value of the type `typeText` reads as out of the
+// string `source` reads as, binding it to the name `result` carries. Scalars
+// bind one conversion; an array carves its elements out of the brackets and
+// recurses for each. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_read_value(typeText: String, source: Syntax, result: String, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var ann: Syntax = __kira_serde_ann(t)
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        if t == "U64" {
+            return quote { let #{Identifier(result)}: #{ann} = U64(__kira_deser_tagged_uint(#{source}, "U64")) }
+        }
+        return quote { let #{Identifier(result)}: #{ann} = #{Identifier(t)}(__kira_deser_tagged_int(#{source}, #{tag})) }
+    }
+    if t == "Float" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float(#{source}) }
+    }
+    if t == "F32" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float32(#{source}) }
+    }
+    if t == "Bool" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_bool(#{source}) }
+    }
+    if t == "String" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_unquote(#{source}) }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var read: Syntax = __kira_serde_read_value(inner, quote { #{Identifier("__e" + stem)} }, "__v" + nest, nest)
+        return quote {
+            let #{Identifier("__a" + stem)} = #{source}
+            var #{Identifier("__o" + stem)}: #{ann} = []
+            var #{Identifier("__p" + stem)}: Int = 1
+            while #{Identifier("__p" + stem)} < #{Identifier("__a" + stem)}.count - 1 {
+                let #{Identifier("__end" + stem)}: Int = __kira_deser_scan(#{Identifier("__a" + stem)}, #{Identifier("__p" + stem)})
+                if #{Identifier("__end" + stem)} == #{Identifier("__p" + stem)} {
+                    #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                }
+                let #{Identifier("__e" + stem)}: String = #{Identifier("__a" + stem)}.substring(#{Identifier("__p" + stem)}, #{Identifier("__end" + stem)})
+                #{read}
+                #{Identifier("__o" + stem)}.append(#{Identifier("__v" + nest)})
+                #{Identifier("__p" + stem)} = #{Identifier("__end" + stem)}
+                if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 44 {
+                    #{Identifier("__p" + stem)} = #{Identifier("__p" + stem)} + 1
+                    if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 93 {
+                        #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                    }
+                }
+            }
+            if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) != 93 {
+                #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+            }
+            let #{Identifier(result)}: #{ann} = #{Identifier("__o" + stem)}
+        }
+    }
+    return quote { let #{Identifier(result)}: #{ann} = #{Identifier("deserialize_" + t)}(#{source}) }
+}
+
 // The reader and writer helpers Foundation's Serde derives generate calls to.
 //
 // Beside the macros rather than inside them: a generated function is emitted

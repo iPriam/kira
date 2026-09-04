@@ -303,26 +303,43 @@ continues, and the array helpers fail hard (KMAC013) on the same input — disca
 refusal under their own error. Every array branch now skips codegen once refused, so the refusal is
 what surfaces. Any future validation-then-generate macro code must follow the same shape.
 
-### Next: canonical Serde, then the derive surface
-The spec fixes exactly seven derives: Clone, Copy, Equatable, Hashable, Ordered, Serializable,
-Tagged. Foundation ships eight — those seven plus `Deserializable` — so the surface converges only
-by folding deserialization into `Serializable`.
+### Serde step 5: canonical remainder and the seven-derive surface (2026-09-04)
+`@Derive(Serializable)` generates both `serialize_T` and `deserialize_T`.
+`Deserializable` remains as a deprecated alias generating only the reader.
+All harnesses, parity programs, and docs derive `Serializable` alone.
 
-That fold depends on the Serde slice, and in the right order. `Deserializable` today refuses `Float`
-and `F32` fields because there is no lossless parser for the decimal form it writes. The 1.9.1
-grammar removes the reason: floats serialize as their exact bits (`Float(0x…)`, `F32(0x…)`), which
-reads back exactly. So:
+The reader consumes the full input: trailing text after the closing `}`
+traps, as do a field out of order and a duplicate or unknown label. The
+struct envelope check is `pos + 1 == s.count`, so `Point{...}trailing` stops
+instead of answering. Parity `malformed_serialized_text_traps_on_every_backend`
+covers garbage, truncation, wrong names, non-digits, trailing text, wrong
+order, and duplicate labels.
 
-1. Implement the canonical grammar in `foundation/app/DeriveSerde.kira`: type-tagged integers,
-   bit-exact floats, qualified type names, the full-input rule, duplicate and unknown field
-   refusals, range-checked integers, and typed `DeserializeError` instead of sentinels.
-2. Then fold `Deserializable` into `Serializable`, which is what makes the documented set seven,
-   and migrate every `@Derive(Deserializable)` in the harnesses and docs.
-3. Round-trip coverage is the invariant the spec states: `deserialize_T(serialize_T(value)) == value`
-   compared by IEEE bits for floats.
+Qualified names are refused with the element rule, not `KMAC013`:
+`__kira_serde_ok` rejects dotted spellings, so `[Geo.Point]` reports what the
+element holds and generates nothing further. Bare qualified field types were
+already refused through the generic path.
 
-The tour's stale "six derives" is corrected; the derives reference already says seven for
-Foundation's macros.
+The five comptime type helpers moved to `SerdeText.kira` beside the runtime
+helpers, so `DeriveSerde.kira` (619) and `SerdeText.kira` (612) both stay under
+the 700-line cap. The deserializer body lives once in
+`__kira_serde_deserialize_fn`, called by both macros.
+
+Repair on the way in: parity `derives` and `distincts` still expected the
+pre-canonical wire (`=`/`;`, untagged integers, bare distincts). They now pin
+the canonical text (`:`/`,`, `U8(7)`, `Float(0x...)`, `TabId(U32(7))`). The
+derives reference, the tour, the annotations, strings, structures, and types
+guides, and the `Derive.kira` header say the same seven.
+
+Deliberately not changed: malformed input still traps rather than returning a
+`Result`. Kira has no unwinding, and the round-trip law the spec states is
+`deserialize_T(serialize_T(v)) == v`. A `Result` return would rewrite every
+call site and the law with it, for data that by construction round-trips.
+A typed recoverable failure belongs with schema evolution, which is the
+change that gives it a rule to enforce.
+
+Harness tally stays 1458 on VM. The migrated `Dnx` and `Distincts` constructs
+prove the fold: every one derives `Serializable` alone and round-trips.
 
 ## Beyond 1.9.1
 

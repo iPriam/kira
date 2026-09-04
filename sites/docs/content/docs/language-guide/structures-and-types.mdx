@@ -249,7 +249,7 @@ The representation is an integer width, a float width, `Bool`, `RawPtr`, or anot
 `==` and `!=` between two values of one distinct type are its whole operator surface. Arithmetic, ordering, and `print` are refused, which is the point — adding two ids or printing one as a number is treating an identity as a quantity. Fold, compare, and render one through the derives, or take `.raw` and say so.
 
 ```kira
-@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
 distinct Port = U32
 ```
 

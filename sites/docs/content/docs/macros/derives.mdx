@@ -3,15 +3,14 @@ title: Derives
 description: The seven derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
 ---
 
-Foundation ships seven derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`. All seven are available as `@Derive` targets in any file with its own `import Foundation`, and the only user-facing top-level names they introduce are the macro names, so they cannot collide with user code.
+Foundation ships six derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`, plus the builtin `@Derive(Copy)` assertion. Together they are the seven derives. All seven are available as `@Derive` targets in any file with its own `import Foundation`.
 
 | Derive | Generated free function | Contract |
 | --- | --- | --- |
 | `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
 | `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
 | `Hashable` | `function hash_<Type>(v: borrow <Type>) -> Int` | deterministic FNV-1a fold of every supported field |
-| `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` | value to compact wire string |
-| `Deserializable` | `function deserialize_<Type>(s: borrow String) -> <Type>` | wire string to value, trapping on malformed input |
+| `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` and `function deserialize_<Type>(s: borrow String) -> <Type>` | value to compact wire string and back, trapping on malformed input |
 | `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
 | `Ordered` | `function compare_<Type>(a: borrow <Type>, b: borrow <Type>) -> Ordering` and `lt_<Type>` | declaration-order total order, with no position exposed |
 
@@ -21,16 +20,9 @@ The generated name is glued to the derived type's exact name (`eq_Point`,
 
 ## Field Classification
 
-`Equatable`, `Clone`, `Serializable`, and `Deserializable` share one
-classification. A builtin scalar field (`Int`, `Float`, `Bool`, `String`, and
-the sized numeric and C types) is handled directly: compared with `!=`, copied
-by field read, rendered with `String(x)`. A field whose type is another *bare*
-named type is a nested derived type and recurses through that type's own
-generated function, so `eq_Segment` calls `eq_Point` on its `from` and `to`. A
-missing `eq_X` surfaces as an ordinary unknown-call diagnostic, which is the
-right one because the fix is deriving it there.
+`Equatable`, `Clone`, and `Serializable` share one classification. A builtin scalar field (`Int`, the sized numeric widths, `Float`, `F32`, `Bool`, `String`, and the C types) is handled directly. A field whose type is another bare named type is a nested derived type and recurses through that type's own generated function. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic.
 
-An array, generic, or optional field type is refused with a `Diagnostics.error` naming the field rather than emitting broken code. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text, so `[Int]` gives `"Int"`, which is not `"[Int]"`.
+An array field holds scalars, nested arrays, or named derived types to any depth. A generic, optional, qualified, or function field type is refused with a `Diagnostics.error` naming the field. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text.
 
 ## `Hashable`
 
@@ -102,22 +94,22 @@ to: inserting a variant in the middle reorders values already written down.
 
 ## The Wire Format
 
-`Serializable` and `Deserializable` build on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
+`Serializable` builds on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
 
 ```text
 TypeName{field1:VALUE,field2:VALUE,...}
 ```
 
-An integer writes its spelling around its digits — `U8(7)`, `I32(-5)` — so the value carries its width; a `Float` is `Float(0x` and the sixteen hex digits of its exact bits, an `F32` is `F32(0x` and eight; a `String` is its escaped text wrapped in `"`; an array is its elements in brackets, `[Int(1),Int(2)]`, nested to any depth; a nested derived struct is `serialize_<FieldType>(x)` recursed inline, so `from:Point{id:TabId(U32(7))}` sits inside its parent's braces. A distinct writes its name around its representation the same way: `TabId(U32(7))`.
+An integer writes its spelling around its digits (`U8(7)`, `I32(-5)`), so the value carries its width. A `Float` is `Float(0x` and the sixteen hex digits of its exact bits, an `F32` is `F32(0x` and eight. A `String` is its escaped text wrapped in `"`. An array is its elements in brackets (`[Int(1),Int(2)]`), nested to any depth. A nested derived struct recurses inline, so `from:Point{id:TabId(U32(7))}` sits inside its parent braces. A distinct writes its name around its representation: `TabId(U32(7))`.
 
-Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label:`, carves the value with a brace-aware scanner (a `,` or `}` at brace depth zero terminates it, and a quoted region counts as content, so a nested struct's own balanced braces with their internal `,` are consumed whole), and converts by field type: the integer tag must name the field's width exactly, and the digits are range-checked by the narrowing conversion, so `U8(300)` traps rather than wrapping and `Int(5)` in a `U8` field is refused a value of another type. A `U64` field parses unsigned, because the top half of its range is past what a signed accumulation holds.
+Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label:`, carves the value with a depth-aware scanner, and converts by field type. The integer tag must name the field width exactly, and the digits are range-checked by the narrowing conversion, so `U8(300)` traps and `Int(5)` in a `U8` field is refused. A `U64` field parses unsigned, because the top half of its range is past what a signed accumulation holds.
 
-**Malformed input traps.** Any structural violation, a wrong type name, a missing `:` or `,` or `}`, truncated text, or a non-digit where an `Int` is expected, drives an out-of-range `charAt` or an inverted `substring`, both of which the runtime turns into a hard trap on every backend. There is no partial or best-effort parse: a value either round-trips or the program stops.
+**Malformed input traps.** A wrong type name, a missing `:` or `,` or `}`, truncated text, trailing text after the closing `}`, a field out of order, a duplicate or unknown label, or a non-digit where an integer is expected drives an out-of-range `charAt` or an inverted `substring`. Both turn into a hard trap on every backend. There is no partial parse: a value either round-trips or the program stops.
 
 **Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise.
 
 ```kira
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct Point { var x: Int var y: Int }
 
 let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x:Int(1),y:Int(-2)}"
@@ -129,15 +121,15 @@ let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
 An enum derives too, and writes the variant it holds by name, with a payload in parentheses after it.
 
 ```kira
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 enum Note { Blank Rank(Int) Tag(String) }
 
-serialize_Note(Note.Rank(42))                       // "Note.Rank(42)"
+serialize_Note(Note.Rank(42))                       // "Note.Rank(Int(42))"
 serialize_Note(Note.Blank)                          // "Note.Blank"
 deserialize_Note("Note.Tag(\"edge\")")              // Note.Tag("edge")
 ```
 
-The variant is **named, never numbered**: an ordinal would tie the format to declaration order, so inserting a variant would re-read every value ever written as its neighbour. An enum used as a struct field is that same text in the field's value slot, `slot=Slot{tool=Tool.Move;…}`, which the brace-aware scanner already consumes whole, and an unknown variant name traps like any other structural violation.
+The variant is named, never numbered. An enum used as a struct field is that same text in the field value slot, and an unknown variant name traps like any other structural violation.
 
 ## Two Limits
 
@@ -150,19 +142,17 @@ A `Float` is written as its bits, not as a rendering of them, so it reads back a
 A [`distinct` type](/docs/language-reference/types#distinct-types) derives too, and every derive delegates to the representation it was declared over rather than wrapping it.
 
 ```kira
-@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
 distinct Port = U32
 
-serialize_Port(Port(U32(8080)))       // "8080", not "Port{raw=8080}"
-deserialize_Port("8080")              // Port(U32(8080))
+serialize_Port(Port(U32(8080)))       // "Port(U32(8080))"
+deserialize_Port("Port(U32(8080))")   // Port(U32(8080))
 lt_Port(Port(U32(41)), Port(U32(42))) // true
 ```
 
-A distinct type has exactly one readable member, `raw`, and the derives see it as a field of that name — so the field classification above applies to it unchanged. What each derive adds for one is its *construction*: a distinct type is built by calling it, so `clone_Port` returns `Port(v.raw)` rather than a brace literal.
+A distinct type has exactly one readable member, `raw`, and the derives see it as a field of that name. A distinct is built by calling it, so `clone_Port` returns `Port(v.raw)` rather than a brace literal.
 
-`Serializable` writes the representation and nothing around it. A struct envelope would put a Kira-side nominal fact on a wire with no place to keep it, and would make every reader parse a shape carrying no information.
-
-Two representations are refused where they have no answer, each by name: `Float` and `F32` for `Hashable` and `Ordered` (equal floats can carry different bits, and neither has a total order), and `RawPtr` for `Hashable`, `Ordered`, `Serializable`, and `Deserializable` (an opaque foreign word is an address, and it means nothing in another run).
+Two representations are refused where they have no answer, each by name: `Float` and `F32` for `Hashable` and `Ordered`, and `RawPtr` for `Hashable`, `Ordered`, and `Serializable`.
 
 `Tagged` does not apply: it answers which number a *variant* is, and a distinct type has no variants. `@Derive(Copy)` is refused at the parser (`KPAR086`) — one scalar word is copyable already, so the assertion can neither add nor withhold anything.
 

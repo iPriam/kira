@@ -113,7 +113,7 @@ fn the_foundation_derives_agree_on_a_distinct_type() {
         r#"
 import Foundation
 
-@Derive(Equatable, Clone, Hashable, Serializable, Deserializable, Ordered)
+@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
 distinct DsdTabId = U32
 
 @Main
@@ -133,19 +133,20 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "true\nfalse\ntrue\nfalse\n41\ntrue\ntrue\nfalse\n");
+    assert_eq!(output, "true\nfalse\ntrue\nfalse\nDsdTabId(U32(41))\ntrue\ntrue\nfalse\n");
 }
 
-/// Serialization delegates to the representation rather than wrapping it: the
-/// wire form of a distinct type over `U32` is the number, byte for byte what
-/// the `U32` itself would have written.
+/// A distinct writes its name around its representation: `DswPort(U32(8080))`.
+/// The outer tag keeps the nominal identity the language keeps apart from the
+/// representation, and the inner value is written exactly as it would be
+/// anywhere else, so one reader shape serves every position.
 #[test]
 fn serialization_writes_the_representation_and_nothing_around_it() {
     let output = assert_parity(
         r#"
 import Foundation
 
-@Derive(Serializable, Deserializable, Equatable)
+@Derive(Serializable, Equatable)
 distinct DswPort = U32
 
 @Derive(Serializable)
@@ -157,12 +158,12 @@ struct DswEndpoint {
 function main() {
     print(serialize_DswPort(DswPort(U32(8080))))
     print(serialize_DswEndpoint(DswEndpoint { port: DswPort(U32(8080)) }))
-    print(eq_DswPort(deserialize_DswPort("8080"), DswPort(U32(8080))))
+    print(eq_DswPort(deserialize_DswPort("DswPort(U32(8080))"), DswPort(U32(8080))))
     return
 }
 "#,
     );
-    assert_eq!(output, "8080\nDswEndpoint{port=8080}\ntrue\n");
+    assert_eq!(output, "DswPort(U32(8080))\nDswEndpoint{port:DswPort(U32(8080))}\ntrue\n");
 }
 
 /// `Option<Value>` over a distinct type: an ordinary generic enum, matched the

@@ -65,7 +65,7 @@ construct DnxSiblingIdsAreSeparateTypes() extends Test {
 // back as itself. Before escaping existed the parse succeeded and answered
 // something else, which is the one failure a wire format must not have.
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct DnxAwkward {
     var title: String
     var body: String
@@ -104,13 +104,13 @@ construct DnxSerdeCarriesLineEndingsAndTabs() extends Test {
 // Floats travel as their exact bits, which is the only way a signed zero, an
 // infinity, or a NaN payload survives a round trip at all.
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct DnxReading {
     var value: Float
     var label: String
 }
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 distinct DnxRatio = Float
 
 construct DnxSerdeCarriesAFloatExactly() extends Test {
@@ -154,10 +154,10 @@ construct DnxSerdeCarriesTheFloatsADecimalCannot() extends Test {
 // value carries the range it is checked against, and a tag naming another
 // width is refused rather than converted.
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 distinct DnxTabId = U32
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct DnxWidths {
     var narrow: U8
     var wide: I32
@@ -165,7 +165,7 @@ struct DnxWidths {
     var small: F32
 }
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 enum DnxToken {
     Num(Int)
     Huge(U64)
@@ -244,12 +244,12 @@ construct DnxSerdeCarriesU64PastTheSignedRange() extends Test {
 // `[[U8(1)]]`, `[Point{x:Int(1)}]`. An empty array is `[]`, and every level
 // parses with the same tag and range checks a scalar field gets.
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct DnxInner {
     var n: Int
 }
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 struct DnxBatch {
     var xs: [Int]
     var names: [String]
@@ -257,7 +257,7 @@ struct DnxBatch {
     var inners: [DnxInner]
 }
 
-@Derive(Serializable, Deserializable)
+@Derive(Serializable)
 enum DnxLoad {
     Nums([Int])
     Word(String)
