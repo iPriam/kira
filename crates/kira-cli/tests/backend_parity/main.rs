@@ -419,6 +419,42 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 }
 
+/// [`assert_trap_parity`], plus the sentence each engine says about the trap.
+///
+/// Agreeing on *which* programs trap is half of it. A program that fails on one
+/// engine and the same program that fails on another have to fail the same way
+/// to the person reading the failure, so the trap set being shared is worth
+/// nothing if each engine dresses it in its own words.
+fn assert_trap_message_parity(source: &str, before_the_trap: &str, message: &str) {
+    let path = write_source(source);
+    for backend in BACKENDS {
+        let run = run_on(&path, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            before_the_trap,
+            "the {backend} backend printed something other than the output \
+             preceding the trap for:\n{source}",
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(1),
+            "the {backend} backend did not trap for:\n{source}\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        let reported = stderr
+            .lines()
+            .find(|line| line.contains("runtime trap:"))
+            .unwrap_or_else(|| panic!("the {backend} backend reported no trap: {stderr}"));
+        assert_eq!(
+            reported.trim(),
+            message,
+            "the {backend} backend words the trap its own way for:\n{source}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+}
+
 mod aliases;
 mod any;
 mod arithmetic;

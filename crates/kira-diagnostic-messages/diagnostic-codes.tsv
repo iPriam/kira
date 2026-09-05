@@ -394,6 +394,10 @@ KSEM364	`Channel<T>()` takes no arguments: the payload type is the type argument
 KSEM365	a channel payload with nothing to queue: a payload is an integer width, a float width, `Bool`, or a `distinct` over one, because a queued value is one machine word
 KSEM366	`send` takes exactly one value, the one crossing the channel
 KSEM367	an operation a channel end does not have, including `.raw`
+KSEM368	`RawPtr` has no member `…`: it spells `RawPtr.null`, and `rawPointerWord(p)` reads the word itself
+KSEM369	an `@FFI.Address` function answers `RawPtr`, the address of the data symbol rather than what is stored at it
+KSEM370	two declarations bind one library symbol with different signatures, and the linker gives both the same address
+KSEM371	`retains` names a parameter that holds no C storage to keep: a retained parameter is a pointer, a `CString`, or an `@FFI.Struct { layout: c }`
 KSEM900	a keyword the parser recognizes but this compiler does not support yet
 KIR005	`…` derives `Copy`, but …, so `…` moves rather than copies. Remove the derive and let it move, borrow it, or give it an explicit duplication
 KBE001	a backend was asked for a feature it does not support

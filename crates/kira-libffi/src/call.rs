@@ -4,6 +4,7 @@ use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::NonNull;
 
+use kira_runtime_abi::c_storage::{bool_from_c_byte, c_bool_byte};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature, ForeignType,
     ForeignTypeSpec,
@@ -283,7 +284,7 @@ fn write_argument(
         ForeignArg::U16(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::U32(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::U64(value) => destination.write(&value.to_ne_bytes()),
-        ForeignArg::Bool(value) => destination.write(&[u8::from(value)]),
+        ForeignArg::Bool(value) => destination.write(&[c_bool_byte(value)]),
         ForeignArg::F32(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::F64(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::RawPtr(value) => {
@@ -355,7 +356,9 @@ fn lift_result(
         ForeignTypeSpec::Scalar(ForeignType::U64) => ForeignResult::U64(u64::from_ne_bytes(
             bytes[..8].try_into().map_err(|_| malformed())?,
         )),
-        ForeignTypeSpec::Scalar(ForeignType::Bool) => ForeignResult::Bool(bytes[0] != 0),
+        ForeignTypeSpec::Scalar(ForeignType::Bool) => {
+            ForeignResult::Bool(bool_from_c_byte(bytes[0]))
+        }
         ForeignTypeSpec::Scalar(ForeignType::F32) => ForeignResult::F32(f32::from_ne_bytes(
             bytes[..4].try_into().map_err(|_| malformed())?,
         )),

@@ -20,11 +20,30 @@ function add(a: I32, b: I32) -> I32
 
 The three fields are required exactly once, and `abi` must be `c`. Repeatable `retains: <parameter>` fields mark parameters whose C callee keeps pointers after the call. A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
 
+Two declarations may name the same C symbol, which is what a generated binding beside a hand-written one produces. They must agree on the ABI, the parameters, the result, and which parameters are retained: the linker binds one address, and each call site marshals for whichever declaration it resolved, so a disagreement is two contracts for one function that nothing downstream can catch.
+
+## Taking a Symbol's Address
+
+`@FFI.Address` names a data symbol rather than a function. It takes no parameters and answers `RawPtr`: the address of the object, not what is stored at it. Reading the object is `@FFI.Pointer`'s job, through the pointer this hands back.
+
+```kira
+@FFI.Address { library: sokol, symbol: sapp_desc_default }
+function sappDescDefault() -> RawPtr
+```
+
+The block carries no `abi`, because nothing is called and there is no calling convention to name.
+
 ## The Supported Type Surface
 
 Parameters and results may be `Void`, `Int` and the narrower integers `I8`/`I16`/`I32` and `U8`/`U16`/`U32`/`U64`, `Bool`, `Float` and `F32`, and `RawPtr`.
 
 `Int` crosses as `int64_t` and `Float` as `double`. They *are* the 64-bit types, so nothing is left unsaid by writing them, and a narrower C type still names its width. A Kira `String` in a signature is refused.
+
+### `Bool`
+
+`Bool` crosses as C `_Bool`: **one byte holding `0` or `1`**, `1` byte of size and `1` of alignment wherever it sits, including as a member of a C-layout struct.
+
+Kira writes `0` or `1` and nothing else, so C may compare the object to `1`, index with it, or copy it into another `_Bool` exactly as C code would. In the other direction Kira reads **any nonzero byte as `true`**, which is what `if (b)` means in C. That matters because a `_Bool` outside `{0, 1}` is undefined in C, so a library that writes one has already left the standard: reading the low bit and reading the whole byte then answer differently, and two engines answering differently would be a wrong value rather than a refusal. Every engine reads the byte.
 
 ### `CString`
 
@@ -38,13 +57,24 @@ As a **member of a C-layout struct**, it is an owning C-block slot. The block is
 
 ### `RawPtr`
 
-`RawPtr` is an opaque target-width word. Kira may store it, return it, and pass it back to C, but never dereferences it, does arithmetic on it, or frees it: a library that allocates must expose an explicit free extern. A null pointer is just data and round-trips like any other word.
+`RawPtr` is an opaque target-width word. Kira may store it, return it, and pass it back to C, but never dereferences it, does arithmetic on it, or frees it: a library that allocates must expose an explicit free extern.
+
+`RawPtr.null` is the null pointer, and `==` and `!=` compare two pointers as the words they are. A C API answers `NULL` for "no adapter", "no window", "the chain ends here", so testing for it is ordinary work rather than a cast:
+
+```kira
+let event = ffiEventCurrent()
+if event == RawPtr.null { return 0 }
+```
+
+A named pointer type is the same word wearing a name, so an `@FFI.Pointer` type, a `distinct` over `RawPtr`, and a plain `RawPtr` all compare to `RawPtr.null` and to each other. Two `distinct` pointer types compare only to themselves, as every `distinct` does. A pointer has no ordering: C defines `<` only between two pointers into one object, and Kira has no arithmetic that could produce such a pair. A pointer does not compare to an integer either; `rawPointerWord(p)` reads the word when a program wants the number.
+
+A pointer member of a C-layout struct that a literal leaves out zero-fills to the null, so `descriptor.next == RawPtr.null` is how a program asks whether it was filled in.
 
 ## Foreign Lifetimes
 
 Foreign parameters borrow by default. Storage materialized for a `CString`, a C-layout image, or an array buffer stays live through the call and is freed when its owning value dies, so a per-frame descriptor releases its C blocks every frame.
 
-Use `retains:` only when C keeps pointers after return.
+Use `retains:` only when C keeps pointers after return. It may name only a parameter that has C storage to keep — a pointer, a `CString`, or a C-layout struct. A number or a `Bool` has no block to transfer, so `retains:` on one is refused rather than making the call site `move` a value for nothing.
 
 ```kira
 @FFI.Extern {

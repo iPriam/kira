@@ -85,18 +85,113 @@ impl Codegen<'_> {
         })
     }
 
-    /// The LLVM type a foreign type crosses the C ABI as.
+    /// The LLVM type of the C **object** a foreign scalar occupies.
+    ///
+    /// This is what an `alloca`, a load, or a store of that scalar names, so it
+    /// must have the C type's size: [`kira_runtime_abi::scalar_layout`] is the
+    /// same statement in bytes and the two are read together.
+    ///
+    /// C `_Bool` is `i8` here rather than `i1` because it is one byte of
+    /// storage, and reading it as `i1` reads the low bit alone: a byte of `2`
+    /// then loads as `false` while every other engine reads it as `true`. What a
+    /// `_Bool` looks like in a *prototype* is a different question, and
+    /// [`Self::foreign_c_prototype_type`] answers it.
     pub(super) fn foreign_c_type(&self, ft: ForeignType) -> LLVMTypeRef {
         match ft {
             ForeignType::Void => self.types.void,
-            ForeignType::I8 | ForeignType::U8 => self.types.i8,
+            ForeignType::I8 | ForeignType::U8 | ForeignType::Bool => self.types.i8,
             ForeignType::I16 | ForeignType::U16 => self.types.i16,
             ForeignType::I32 | ForeignType::U32 => self.types.i32,
             ForeignType::I64 | ForeignType::U64 => self.types.i64,
-            ForeignType::Bool => self.types.i1,
             ForeignType::F32 => self.types.f32,
             ForeignType::F64 => self.types.f64,
             ForeignType::RawPtr | ForeignType::CString => self.types.ptr,
+        }
+    }
+
+    /// The LLVM type a foreign scalar takes in a C **prototype**: a parameter
+    /// of a directly called C function, or of a C entry Kira defines.
+    ///
+    /// Only `_Bool` differs from its storage type. Clang lowers `_Bool` to `i1`
+    /// in a prototype on every target Kira builds for, so a direct call
+    /// declaring `i8` would be a different function type than the definition
+    /// clang compiled.
+    pub(super) fn foreign_c_prototype_type(&self, ft: ForeignType) -> LLVMTypeRef {
+        match ft {
+            ForeignType::Bool => self.types.i1,
+            other => self.foreign_c_type(other),
+        }
+    }
+
+    /// The C ABI extension a foreign scalar's prototype position carries, or
+    /// `None` when the target extends nothing.
+    ///
+    /// A narrow scalar is passed in a wider register and the ABI says who fills
+    /// the bits above it. Clang records that as `signext` or `zeroext` on the
+    /// declaration, and a call site missing the attribute hands the callee a
+    /// register whose top bits are its own truncation leftovers. Which targets
+    /// extend is the target's rule, not Kira's — `wasm32` extends every narrow
+    /// scalar, and this repository's aarch64-linux host extends none — so the
+    /// answer is keyed on the target rather than assumed.
+    pub(super) fn foreign_c_extension(&self, ft: ForeignType) -> Option<&'static std::ffi::CStr> {
+        if !matches!(self.target, super::plan::CodegenTarget::Wasm(_)) {
+            return None;
+        }
+        match ft {
+            ForeignType::I8 | ForeignType::I16 => Some(c"signext"),
+            ForeignType::U8 | ForeignType::U16 | ForeignType::Bool => Some(c"zeroext"),
+            _ => None,
+        }
+    }
+
+    /// Widens a value in a scalar's prototype type to the type its C object
+    /// occupies, so it can be stored or read as that object.
+    pub(super) fn c_prototype_to_storage(
+        &self,
+        value: LLVMValueRef,
+        ft: ForeignType,
+    ) -> LLVMValueRef {
+        if ft != ForeignType::Bool {
+            return value;
+        }
+        // SAFETY: a `_Bool` prototype position is an `i1` on the live block and
+        // its object is the byte this widens it to.
+        unsafe { LLVMBuildZExt(self.builder, value, self.types.i8, c"c.bool.byte".as_ptr()) }
+    }
+
+    /// Narrows a value in a scalar's C object type to the type its prototype
+    /// position takes.
+    pub(super) fn c_storage_to_prototype(
+        &self,
+        value: LLVMValueRef,
+        ft: ForeignType,
+    ) -> LLVMValueRef {
+        if ft != ForeignType::Bool {
+            return value;
+        }
+        // SAFETY: a `_Bool` object is the canonical byte on the live block and
+        // its prototype position is the `i1` this narrows it to.
+        unsafe { LLVMBuildTrunc(self.builder, value, self.types.i1, c"c.bool.bit".as_ptr()) }
+    }
+
+    /// Attaches this scalar's C ABI extension at `index` of `target`, which is
+    /// a call site or a function declaration.
+    ///
+    /// `index` follows LLVM's attribute numbering: `0` is the return position
+    /// and parameter `n` is `n + 1`.
+    pub(super) fn add_c_extension(&self, target: LLVMValueRef, index: u32, ft: ForeignType) {
+        let Some(attribute) = self.foreign_c_extension(ft) else {
+            return;
+        };
+        // SAFETY: `target` is a live call or function in this module and the
+        // attribute kind is a string LLVM copies.
+        unsafe {
+            let kind = LLVMGetEnumAttributeKindForName(
+                attribute.as_ptr(),
+                attribute.to_bytes().len(),
+            );
+            let value = LLVMCreateEnumAttribute(self.context, kind, 0);
+            LLVMAddAttributeAtIndex(target, index, value);
         }
     }
 
@@ -122,7 +217,20 @@ impl Codegen<'_> {
                     LLVMBuildTrunc(builder, payload, types.i32, c"a.i32".as_ptr())
                 }
                 ForeignType::I64 | ForeignType::U64 => payload,
-                ForeignType::Bool => LLVMBuildTrunc(builder, payload, types.i1, c"a.bool".as_ptr()),
+                // The seam's canonical `_Bool` byte, matching
+                // `kira_runtime_abi::c_storage::c_bool_byte`: nonzero is one,
+                // zero is zero, and no other byte is ever handed to C. A
+                // truncation would carry whatever the payload's low byte held.
+                ForeignType::Bool => {
+                    let flag = LLVMBuildICmp(
+                        builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                        payload,
+                        LLVMConstInt(types.i64, 0, 0),
+                        c"a.bool.set".as_ptr(),
+                    );
+                    LLVMBuildZExt(builder, flag, types.i8, c"a.bool".as_ptr())
+                }
                 ForeignType::F32 => {
                     let wide = LLVMBuildBitCast(builder, payload, types.f64, c"a.f64".as_ptr());
                     LLVMBuildFPTrunc(builder, wide, types.f32, c"a.f32".as_ptr())
@@ -290,8 +398,19 @@ impl Codegen<'_> {
                     LLVMBuildZExt(builder, value, types.i64, c"m.zext".as_ptr())
                 }
                 ForeignType::I64 | ForeignType::U64 => value,
-                // C `_Bool` is one byte; Kira's `Bool` is an `i1`.
-                ForeignType::Bool => LLVMBuildTrunc(builder, value, types.i1, c"m.bool".as_ptr()),
+                // C `_Bool` is one byte; Kira's `Bool` is an `i1`. Any nonzero
+                // byte is `true`, which is
+                // `kira_runtime_abi::c_storage::bool_from_c_byte` and what the
+                // VM and the libffi seam both answer. Truncating instead would
+                // read the low bit alone and disagree with them on a byte a
+                // library wrote outside `_Bool`'s value set.
+                ForeignType::Bool => LLVMBuildICmp(
+                    builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                    value,
+                    LLVMConstInt(types.i8, 0, 0),
+                    c"m.bool".as_ptr(),
+                ),
                 ForeignType::F32 => LLVMBuildFPExt(builder, value, types.f64, c"m.f64".as_ptr()),
                 ForeignType::F64 => value,
                 // Read back as the opaque word it is: Kira never dereferences

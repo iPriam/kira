@@ -75,6 +75,33 @@ pub unsafe fn read_bytes(address: u64, offset: u32, size: u32) -> Option<[u8; 8]
     Some(word)
 }
 
+
+/// The byte a Kira `Bool` crosses the C seam as: `1` for `true`, `0` for
+/// `false`, and no other value.
+///
+/// C `_Bool` is one byte holding exactly `0` or `1`; every other bit pattern is
+/// outside the type's value set. Kira never writes one, so a C callee reading
+/// the object as `_Bool`, comparing it to `1`, or indexing with it sees what it
+/// would have seen from C.
+#[must_use]
+pub const fn c_bool_byte(value: bool) -> u8 {
+    value as u8
+}
+
+/// The Kira `Bool` a `_Bool` byte C wrote reads back as: `true` for any nonzero
+/// byte.
+///
+/// C leaves a `_Bool` outside `{0, 1}` undefined, so a library that writes one
+/// has already left the standard. Reading the low bit and reading the whole byte
+/// then answer differently, and two Kira engines reading it two ways is silent
+/// corruption rather than a refusal. Nonzero is true, which is what `if (b)`
+/// does, and it is the one rule every engine implements: the VM here, the
+/// bundled libffi seam, and the code the native backend emits.
+#[must_use]
+pub const fn bool_from_c_byte(byte: u8) -> bool {
+    byte != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +130,19 @@ mod tests {
         // read covers bytes 4..8.
         let word = unsafe { read_bytes(storage.as_ptr() as usize as u64, 4, 4) };
         assert_eq!(word, Some([1, 2, 3, 4, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn a_bool_crosses_as_exactly_one_or_zero() {
+        assert_eq!(c_bool_byte(true), 1);
+        assert_eq!(c_bool_byte(false), 0);
+    }
+
+    #[test]
+    fn every_nonzero_byte_reads_back_as_true() {
+        assert!(!bool_from_c_byte(0));
+        for byte in 1..=u8::MAX {
+            assert!(bool_from_c_byte(byte), "byte {byte} must read as true");
+        }
     }
 }
