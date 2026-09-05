@@ -276,3 +276,33 @@ function main() {
     );
     assert_eq!(output, "42\n-1\n7\n");
 }
+
+/// A receive nothing can ever answer traps identically on every backend,
+/// rather than hanging.
+///
+/// The queue is empty, the sender is live, and no other work is runnable, so no
+/// future turn can change the answer. Waiting forever is a hang, and answering
+/// `Closed` would tell the program the sender went away when it did not.
+#[test]
+fn a_receive_nothing_can_answer_traps_on_every_backend() {
+    assert_trap_parity(
+        r#"
+import Foundation
+
+@Main
+function main() {
+    print(1)
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    attempt {
+        let value = try rx.receive()
+        print(value)
+    } handle {
+        Closed { print(77) }
+    }
+    return
+}
+"#,
+        "1\n",
+    );
+}
