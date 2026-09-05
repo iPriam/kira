@@ -444,15 +444,19 @@ pub enum VmError {
     ///
     /// The trap set is the executor's, defined once in `kira-runtime-abi`, so
     /// the VM and native code agree on *which* programs trap rather than each
-    /// deciding for itself.
-    #[error("task trap: {0}")]
+    /// deciding for itself. The message is the trap's own, unprefixed, so the
+    /// two engines also agree on *what they say* about one: native prints the
+    /// trap and nothing else, and a category word only this engine writes is a
+    /// difference a program can see.
+    #[error("{0}")]
     Task(#[from] kira_runtime_abi::TaskTrap),
     /// A channel primitive refused: an end naming no channel, an end used in
     /// the wrong direction, or a send to a channel whose receiver is gone.
     ///
     /// The trap set is the table's, defined once in `kira-runtime-abi`, for
-    /// the same reason the task set is.
-    #[error("channel trap: {0}")]
+    /// the same reason the task set is, and the message is unprefixed for the
+    /// same reason it is there.
+    #[error("{0}")]
     Channel(#[from] kira_runtime_abi::ChannelTrap),
 }
 

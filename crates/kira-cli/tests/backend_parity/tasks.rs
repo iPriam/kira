@@ -278,14 +278,14 @@ function main() {
 }
 
 /// A receive nothing can ever answer traps identically on every backend,
-/// rather than hanging.
+/// rather than hanging, and says the same sentence about it.
 ///
 /// The queue is empty, the sender is live, and no other work is runnable, so no
 /// future turn can change the answer. Waiting forever is a hang, and answering
 /// `Closed` would tell the program the sender went away when it did not.
 #[test]
 fn a_receive_nothing_can_answer_traps_on_every_backend() {
-    assert_trap_parity(
+    assert_trap_message_parity(
         r#"
 import Foundation
 
@@ -304,5 +304,6 @@ function main() {
 }
 "#,
         "1\n",
+        "kira: runtime trap: a receive is waiting for a value nothing can send",
     );
 }
