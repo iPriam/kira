@@ -142,3 +142,63 @@ construct ChxCarriesADistinctPayload() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
+
+// A receive nothing can answer is a trap, not a wait and not a closure. The
+// queue is empty, the sender is live, and nothing else is runnable, so no
+// later turn can change the answer. Reporting `Closed` would say the sender
+// went away when it did not, which is why the handler below is unreachable:
+// a passing run here is a trapping run.
+construct ChxAReceiveNothingCanAnswerTraps() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        attempt {
+            let value = try rx.receive()
+            return value
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
+}
+
+// Cancellation while blocked. The only work that could fill the channel is
+// called off before it ever runs, so the wait has no turn to hand out and the
+// receive learns its value is not coming instead of blocking on work that was
+// called off.
+construct ChxACancelledFillerLeavesTheReceiveUnanswerable() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        var filler = Task { chxFill(tx) }
+        filler.requestCancel()
+        attempt {
+            let value = try rx.receive()
+            return value
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
+}
+
+// Cancelling one filler is not cancelling the channel. The wait hands its turn
+// to whatever is still runnable, so the live filler answers and the receive
+// comes back with its value rather than trapping.
+construct ChxACancelledFillerDoesNotStopALiveOne() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        var cancelled = Task { chxFill(tx) }
+        cancelled.requestCancel()
+        var live = Task { chxFill(tx) }
+        attempt {
+            let value = try rx.receive()
+            let ran = live.await
+            return value + ran
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}

@@ -494,3 +494,43 @@ the way the task-slot rule and `KSEM312` already sit beside each other.
 Still to prove: cancellation while blocked on a receive, and ordering against a lifecycle fiber
 specifically rather than against a task.
 
+
+### Channels slice 5: the deadlock fix run, and what running it found (2026-09-05)
+The trap written in slice 4 had never been executed. It works: the hang repro traps in well under
+a second on both engines, and `a_receive_nothing_can_answer_traps_on_every_backend` covers it.
+Three things came out of actually running it.
+
+**The two engines said different sentences about the same trap.** The VM printed
+`kira: runtime trap: channel trap: a receive is waiting for a value nothing can send` and native
+printed the same trap without the category word. Every other native trap prints unprefixed, so the
+VM was the outlier; `VmError::Task` and `VmError::Channel` now render the trap and nothing else.
+`assert_trap_message_parity` pins the sentence itself across vm, llvm, and hybrid, because agreeing
+on which programs trap is worth nothing if each engine dresses it in its own words.
+
+**A lifecycle fiber could not use a channel or a task on the VM.** `Fiber::step` builds a fresh `Vm`
+per slice, and the task and channel tables lived on the `Vm`, so both were rebuilt at every
+suspension while the fiber's heap and locals survived. Native keeps them, being thread-local, so
+this was also a backend divergence. `VmExecutors` is now the fiber's, handed to the VM at the start
+of a slice and taken back on every path out including a trap, the way the heap already was. The
+lifecycle harness spawns a task and receives from a channel across 20000 iterations of the loop,
+which is many slices, so the rows have to be the same rows on both sides of every boundary.
+
+**`Send` is enforced on the payload.** It runs before the representation rule, exactly as the
+task-slot pair runs it: a function type is refused for what it kept (`KSEM312`), not for its width.
+`Void` and pointer words join `KSEM365` — a channel over `Void` carries no value, and a pointer word
+names storage this language does not read. An end written as an annotation refuses the same payloads
+under the same code instead of falling through to "`Sender` is not generic", and still falls through
+when the program declares a template of that name.
+
+Cancellation while blocked is covered: `ChxACancelledFillerLeavesTheReceiveUnanswerable` calls off
+the only work that could fill the channel, so the wait has no turn to hand out and the receive learns
+its value is not coming; `ChxACancelledFillerDoesNotStopALiveOne` proves cancelling one filler is not
+cancelling the channel.
+
+Still open: heap payloads. The shape is settled — the queue holds a `NativeStateValue` rather than a
+word, filled by the VM's `Heap::into_native_state` and native's `encode_native_state_value` and
+drained by their inverses, which means two table methods outside the `(Int, Int, Int) -> Int`
+primitive contract, two bytecode instructions, two `kira_rt_channel_*` symbols, and an ABI bump. The
+work in it is not the transport but the ownership: `send` has to consume, a closed receiver has to
+drop what it discards, and the heap-balance assertions in the parity suite are what will say whether
+it does.
