@@ -35,6 +35,7 @@ mod memberwise;
 mod mutation;
 mod native_state;
 mod operators;
+mod raw_pointers;
 mod overloads;
 mod repro_dep_enum;
 mod reuse;
