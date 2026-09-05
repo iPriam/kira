@@ -39,6 +39,7 @@ description: Which language and toolchain surfaces run on the VM, on LLVM/native
 | `Drop` bodies | Yes | Yes | Yes | Yes |
 | Ownership: `borrow`, `borrow mut`, `move`, `copy` | Yes | Yes | Yes | Yes |
 | Async tasks: spawn, await, cancel, detach, yield, virtual sleep | Yes | Yes | Yes | Yes |
+| Channels: `Channel<T>()`, two owned ends, a waiting `receive` | Yes | Yes | Yes | Yes |
 | Macros: declarative, `comptime function`, `comptime macro`, derives, property wrappers | Yes | Yes | Yes | Yes |
 
 Macro expansion is a frontend pass, so macro parity is structural: by the time a backend sees an expansion it is ordinary Kira. There is no per-backend macro work. The same holds for imports, generics, closures, construct families, and trait existentials, all of which are resolved above the IR.

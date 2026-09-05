@@ -36,6 +36,13 @@ impl<'a> Analyzer<'a> {
             any_error |= ty == Type::Error;
             resolved.push(ty);
         }
+        // `Sender<T>` and `Receiver<T>` are the compiler's own rows rather than
+        // templates a program declared, so they resolve before the template
+        // lookup: a function takes an end by writing its type, and the row it
+        // names is the one `Channel<T>()` minted.
+        if let Some(end) = self.channel_end_named(&text, &resolved) {
+            return end;
+        }
         let enum_template = self.generic_enum_named(&text);
         let aggregate_template = self.generic_aggregate_named(&text);
         let trait_template = self

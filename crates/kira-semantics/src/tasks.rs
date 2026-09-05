@@ -27,7 +27,8 @@ use kira_syntax_model::ast::{CallArg, Expr, ExprId, UnaryOp};
 use crate::analyze::{Analyzer, FnCtx};
 use crate::traits::markers::Marker;
 
-/// The scalar types a task body may take and hand back.
+/// The scalar types a task body may take and hand back, before a `distinct` is
+/// resolved to what it is.
 ///
 /// `Bool` is deliberately absent: a task's arguments and result travel through
 /// the executor as one machine word, and `Int`/`Float` are the two the compiler
@@ -41,6 +42,22 @@ fn task_scalar(ty: Type) -> Option<TaskResult> {
 }
 
 impl Analyzer<'_> {
+    /// The same answer as [`task_scalar`], with a `distinct` resolved to the
+    /// scalar it is.
+    ///
+    /// A distinct type is erased before IR exists, so one crossing a task slot
+    /// is already the word its representation is. Refusing it here would mean a
+    /// channel end could not reach the task that uses it, which is the only
+    /// place an end is ever going.
+    fn task_slot_scalar(&self, ty: Type) -> Option<TaskResult> {
+        match ty {
+            Type::Distinct(id) => {
+                task_scalar(self.program.types.distincts().representation(id)?)
+            }
+            other => task_scalar(other),
+        }
+    }
+
     /// Analyzes `Task { body }`.
     pub(crate) fn analyze_task_spawn(
         &mut self,
@@ -192,7 +209,7 @@ impl Analyzer<'_> {
         // sequencing still has to produce a value.
         let result = match return_type {
             Type::Void => Some(TaskResult::Int),
-            other => task_scalar(other),
+            other => self.task_slot_scalar(other),
         };
         let Some(result) = result else {
             for arg in args {
@@ -200,7 +217,10 @@ impl Analyzer<'_> {
             }
             return self.refuse_task_body(span);
         };
-        if params.iter().any(|param| task_scalar(*param).is_none()) {
+        if params
+            .iter()
+            .any(|param| self.task_slot_scalar(*param).is_none())
+        {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
             }

@@ -149,6 +149,16 @@ impl Analyzer<'_> {
             HirExpr::ConstantGet { constant, .. } => {
                 refs.constants.insert(*constant);
             }
+            HirExpr::ChannelCreate { .. } => {}
+            HirExpr::ChannelReceiver { sender: inner, .. }
+            | HirExpr::ChannelClose { end: inner, .. }
+            | HirExpr::ChannelReceive {
+                receiver: inner, ..
+            } => exprs.push(*inner),
+            HirExpr::ChannelSend { sender, value, .. } => {
+                exprs.push(*sender);
+                exprs.push(*value);
+            }
             HirExpr::ForeignCallbackPtr { callback } => {
                 if let Some(row) = self.program.foreign_callbacks.get(*callback as usize) {
                     refs.functions.insert(row.function());

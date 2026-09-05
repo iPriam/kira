@@ -12,7 +12,7 @@
 //! a different order would still add up the same — which is why the yielding
 //! cases also *print* from inside the bodies, where order shows.
 
-use crate::{assert_parity, assert_trap_parity};
+use crate::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
 
 /// The async bodies every case below spawns.
 const BODIES: &str = r#"
@@ -233,4 +233,46 @@ fn joining_after_a_detach_traps_on_every_engine() {
         ),
         "",
     );
+}
+
+/// A channel orders two contexts against each other identically on every
+/// backend, with the heap balanced.
+///
+/// The receive is the point: it comes back after the task that fills it has
+/// run, because an empty live channel hands the next runnable task a turn
+/// rather than spinning. That policy is one synthesized IR function both
+/// engines run, so this is the two of them agreeing by construction.
+#[test]
+fn a_channel_orders_two_contexts_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<Int>) -> Int {
+    tx.send(41)
+    tx.send(1)
+    tx.close()
+    return 7
+}
+
+@Main
+function main() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        print(first + second)
+        let past = try rx.receive()
+        print(past)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    print(pending.await)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n-1\n7\n");
 }

@@ -381,11 +381,50 @@ Coverage: bytecode round-trip over every primitive, opcode adjacency, unknown
 primitive byte, truncated operand; three native-symbol tests; the shared table
 tests above. Full workspace green except `kira-cli`, which is the run below.
 
-Next in this line is the Kira surface: `Channel<T>` with owned `Sender<T>` and
-`Receiver<T>` ends, `receive` as a suspension point lowering through the
-synthesized scheduler IR `await` uses, `Send` gating on both ends and the
-payload, and a closed channel yielding a typed failure through `attempt`. The
-wire layer beneath it is complete and does not change again for it.
+### Channels slice 4: the language surface (2026-09-04)
+`Channel<T>()` creates a channel and yields its sender; `.receiver` reads the
+matching receiver off it. `send(value)`, `receive()`, and `close()` are the
+whole surface, and anything else on an end is `KSEM367` — including `.raw`,
+which would hand a program the table index and let it forge an end.
+
+The ends are minted `distinct` rows over `Int` filed under `Kira`, following
+the `CastResult` precedent rather than adding a `Type` variant. That buys
+scalar layout, which is not a convenience but the requirement: an end is moved
+into the task that uses it, and a task argument slot is one word. `Sender<T>`
+and `Receiver<T>` are spellable as annotations, minted on first mention, so a
+function declares an end parameter before the file creating one is analyzed. A
+program may still declare its own `Sender`; the rows are owner-filed.
+
+A receive waits. While the queue is empty and the sender is live it hands the
+next runnable task a turn and asks again, so it orders the receiving context
+after the work that fills it. That policy is synthesized IR — one function per
+payload, `__kira_channel_receive_N` — so the VM and the native backend run the
+same wait, the argument `kira-ir/src/tasks.rs` makes for the scheduler made
+again for the one other place a program blocks.
+
+A drained closed channel answers `ChannelError.Closed` through `attempt`, not a
+trap: the sender being gone is an ordinary end to a conversation. Sending to a
+channel whose receiver is gone is a trap, because the value has nowhere to
+arrive and nobody to tell.
+
+Payloads are one machine word: an integer width, a float width, `Bool`, or a
+`distinct` over one (`KSEM365`). A `Float` crosses as its exact bits and is
+converted at both ends, exactly as a task argument is; a `distinct` keeps its
+identity because the row carries the declared type while the wire carries the
+representation.
+
+Repair on the way in: `task_scalar` was a free function with no type table, so
+it refused a `distinct` over `Int` in a task slot. A distinct is erased before
+IR exists, so one crossing a slot is already the word its representation is;
+refusing it meant a channel end could not reach the task that uses it, which is
+the only place an end is ever going.
+
+Coverage: `ChxChannelTests.kira`, seven constructs (tally 1465 on VM and
+native) including the ordering case, the closed case, float and distinct
+payloads, and two channels not sharing storage; parity
+`a_channel_orders_two_contexts_on_every_backend` with heap balance; ten
+semantics tests for the refusals; `KSEM364`-`KSEM367` in the registry and the
+diagnostics appendix; the concurrency guide and the feature-status table.
 
 ### The desktop runner cut its app off (2026-09-04)
 `a_server_that_vanishes_after_the_app_is_up_leaves_the_runner_clean` was
@@ -427,35 +466,31 @@ versioned hot state migration, and annotation-driven schema evolution. Each ship
 proof every 1.9.1 slice ships with: semantics tests, tests-kik coverage, and VM, LLVM, hybrid, and
 Web parity where the feature is portable.
 
-### Synchronized shared state: channels
-Section O fixes its direction, and the lifecycle harness found the hole it fills: a program cannot
-order its own work against a running lifecycle fiber's progress. Until this lands the only fix is to
-move the decision inside the ordered context, because an outsider can only enqueue.
+### Synchronized shared state: channels (landed 2026-09-04)
+Section O fixed the direction, and the lifecycle harness found the hole it fills: a program cannot
+order its own work against a running lifecycle fiber's progress. Until this landed the only fix was
+to move the decision inside the ordered context, because an outsider can only enqueue.
 
-Surface: `Channel<T>()` with two owned ends, `Sender<T>` and `Receiver<T>`, each moved into the
-context that uses it. `receive` is a suspension point that turns the ordering question into a data
-dependency.
+Built as planned: `Channel<T>()` with two ends each moved into the context that uses it; `receive`
+as a suspension point that turns the ordering question into a data dependency, lowering through the
+synthesized scheduler IR `await` uses; generation-tagged rows reclaimed like task rows, so a stale
+end traps rather than aliasing reused storage; a closed channel yielding a typed failure through
+`attempt`, never a trap and never a sentinel; no `tryReceive`, because a poll reintroduces exactly
+the timing dependence the feature removes; `kira_rt_channel_*` appended with `RUNTIME_ABI_VERSION`
+at 15.
 
-Design decisions already made:
-- `receive` lowers through the synthesized scheduler IR that `await` uses (`kira-ir/src/tasks.rs`),
-  so resumable frames and the parking path are the ones that already work.
-- It is a cancellation-observable boundary by construction, which is what section E requires of every
-  suspension point.
-- Channel rows are generation-tagged and reclaimed like task rows, so a stale end traps rather than
-  aliasing reused storage.
-- The queue carries `NativeStateValue`s, so VM, native, and hybrid share one representation. New
-  `kira_rt_channel_*` symbols are appended and `RUNTIME_ABI_VERSION` goes to 15.
-- A closed channel (its sender dropped) yields a typed failure through `attempt`. Never a trap,
-  never a sentinel.
-- No `tryReceive`. A poll reintroduces exactly the timing dependence the feature removes.
+Two deviations from the plan, both deliberate:
+- The queue carries one machine word rather than a `NativeStateValue`. Scalar layout is what lets an
+  end and its payload cross a task argument slot, and a queued pointer into the sender's heap would
+  hand the receiver storage the sender still owns. Heap payloads are the next slice and need the
+  value-tree representation the seam already has; the refusal is `KSEM365` and names the rule.
+- The ends are minted `distinct` rows rather than a new `Type` variant, following `CastResult`.
+  Nominal identity and scalar layout both come out of that with no new variant to teach 21 files.
 
-Markers: `Send` guards it and already exists (`Marker::Send`, `refuse_main_thread_value`, KSEM335) —
-the ends and the payload must be `Send`, and a non-`Send` payload is refused at the `send` site the
-way it is refused at a `MainThread` boundary today. `Sync` is deliberately *not* added: Kira has no
-way to share a borrow across threads (no cross-task mutable writeback, task parameters are owned or
-copied), so the marker would guard nothing. Add it with shared ownership, which is the change that
-gives it a rule to enforce.
+`Send` is not yet enforced on the payload. Every type the payload rule admits today is `Send`, so
+nothing unsendable can cross; the check becomes load-bearing with heap payloads and lands with them,
+the way the task-slot rule and `KSEM312` already sit beside each other.
 
-Coverage when built: a tests-kik suite proving order between the application thread and a lifecycle
-fiber, cancellation while blocked on a receive, the sender dropped while a receiver waits, and
-parity on VM, LLVM, and hybrid.
+Still to prove: cancellation while blocked on a receive, and ordering against a lifecycle fiber
+specifically rather than against a task.
+

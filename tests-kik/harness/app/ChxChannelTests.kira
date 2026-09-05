@@ -1,0 +1,144 @@
+import Foundation
+
+// Kira Test coverage for channels: `Channel<T>()`, its two ends, and the
+// ordering a receive turns into a data dependency.
+//
+// The point of a channel is that a program can order its own work against work
+// already running somewhere else. Before it, an outsider could only enqueue.
+// These pin that: a receive comes back with the value the other side sent, and
+// it comes back *after* that side ran.
+
+construct ChxSendsAndReceivesInOrder() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        tx.send(1)
+        tx.send(2)
+        tx.send(3)
+        attempt {
+            let a = try rx.receive()
+            let b = try rx.receive()
+            let c = try rx.receive()
+            return a * 100 + b * 10 + c
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(123) return e }
+}
+
+// A drained closed channel is an ordinary end to a conversation, not a trap:
+// the handler covers it the way it covers every other failure.
+construct ChxClosedIsAFailureNotATrap() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        tx.send(7)
+        tx.close()
+        attempt {
+            let first = try rx.receive()
+            let second = try rx.receive()
+            return first + second
+        } handle {
+            Closed { return 99 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(99) return e }
+}
+
+// A channel closed before anything crossed is closed at once.
+construct ChxAnEmptyClosedChannelIsClosed() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        tx.close()
+        attempt {
+            let value = try rx.receive()
+            return value
+        } handle {
+            Closed { return 5 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}
+
+// The whole reason the feature exists: the receive comes back *after* the task
+// that fills it has run. A receive on an empty live channel hands the next
+// runnable task a turn, so this orders two contexts against each other rather
+// than hoping.
+async function chxFill(tx: Sender<Int>) -> Int {
+    tx.send(41)
+    return 1
+}
+
+construct ChxReceiveWaitsForTheTaskThatFillsIt() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        var pending = Task { chxFill(tx) }
+        attempt {
+            let value = try rx.receive()
+            let ran = pending.await
+            return value + ran
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// Two channels are two channels: ends minted for one payload do not name the
+// other's storage.
+construct ChxTwoChannelsDoNotShareStorage() extends Test {
+    test {
+        let first = Channel<Int>()
+        let second = Channel<Int>()
+        first.send(10)
+        second.send(20)
+        attempt {
+            let a = try first.receiver.receive()
+            let b = try second.receiver.receive()
+            return a * 10 + b
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
+}
+
+// A float payload crosses as itself, not as a rounding of itself.
+construct ChxCarriesAFloatPayload() extends Test {
+    test {
+        let tx = Channel<Float>()
+        let rx = tx.receiver
+        tx.send(0.5)
+        attempt {
+            let value = try rx.receive()
+            if value == 0.5 { return 1 }
+            return 0
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// A `distinct` payload keeps its identity across the wire: what comes out is
+// the named type that went in, not the number underneath.
+distinct ChxTicket = U32
+
+construct ChxCarriesADistinctPayload() extends Test {
+    test {
+        let tx = Channel<ChxTicket>()
+        let rx = tx.receiver
+        tx.send(ChxTicket(7))
+        attempt {
+            let value = try rx.receive()
+            if value == ChxTicket(7) { return 1 }
+            return 0
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}

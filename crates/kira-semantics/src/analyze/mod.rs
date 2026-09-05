@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use kira_core::Names;
 use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
-use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
+use kira_semantics_model::{DistinctId, EnumId, OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{ConstantDecl, ExprId, Function, Item};
@@ -335,6 +335,18 @@ pub(crate) struct Analyzer<'a> {
     /// The result row each cast target answers with, minted on first use, for
     /// the same reason.
     pub(crate) cast_results: HashMap<Type, EnumId>,
+    /// The compiler's own channel-failure enum, minted on first use, held for
+    /// the reason [`Analyzer::cast_error`] is.
+    pub(crate) channel_error: Option<EnumId>,
+    /// The sender row for each payload type, minted on first use.
+    pub(crate) channel_senders: HashMap<Type, DistinctId>,
+    /// The receiver row for each payload type, minted on first use.
+    pub(crate) channel_receivers: HashMap<Type, DistinctId>,
+    /// The result row a receive of each payload answers with.
+    pub(crate) channel_results: HashMap<Type, EnumId>,
+    /// What each minted end row is, so a member access on one is recognized
+    /// without searching the two maps above.
+    pub(crate) channel_ends: HashMap<DistinctId, crate::typeck::channels::ChannelEnd>,
     /// Number of conformance rows already checked. Generic instances can be
     /// discovered while a body is analyzed, after the initial conformance
     /// pass; checking only the suffix keeps that late activation diagnostic-

@@ -158,6 +158,59 @@ pub enum HirExpr {
         /// The result row: `Ok(target)`, `Error(failure)`.
         ty: Type,
     },
+    /// `Channel<T>()`: a new channel, as its sender end.
+    ChannelCreate {
+        /// The sender row this yields.
+        ty: Type,
+    },
+    /// `sender.receiver`: the matching receiver end.
+    ///
+    /// A derivation, not a second creation: the two ends share an index and a
+    /// generation and differ only in one bit, so reading this twice names one
+    /// channel twice.
+    ChannelReceiver {
+        /// The sender the receiver is derived from.
+        sender: HirExprId,
+        /// The receiver row this yields.
+        ty: Type,
+    },
+    /// `sender.send(value)`: one value onto the back of the queue.
+    ChannelSend {
+        /// The sender end.
+        sender: HirExprId,
+        /// The value crossing, already checked against the payload type.
+        value: HirExprId,
+        /// The scalar the queued word is, with any `distinct` resolved.
+        ///
+        /// A queue slot is one machine word, so a `Float` crosses as its
+        /// IEEE-754 bits and is converted at both ends, exactly as a task
+        /// argument is. This says which of the two shapes the value takes.
+        wire: Type,
+    },
+    /// `receiver.receive()`: the next value, or the channel's end.
+    ///
+    /// A suspension point: while the queue is empty and the sender is live,
+    /// this hands the next runnable task a turn rather than spinning.
+    ChannelReceive {
+        /// The receiver end.
+        receiver: HirExprId,
+        /// The payload type the success variant carries.
+        payload: Type,
+        /// The scalar the queued word is, with any `distinct` resolved. See
+        /// [`HirExpr::ChannelSend::wire`].
+        wire: Type,
+        /// The failure enum the error variant carries.
+        failure: EnumId,
+        /// The result row: `Ok(payload)`, `Error(ChannelError)`.
+        ty: Type,
+    },
+    /// `end.close()`: this end is done.
+    ChannelClose {
+        /// The end being closed.
+        end: HirExprId,
+        /// Whether it is the sender end.
+        sender: bool,
+    },
     /// A property of a runtime type descriptor: `t.name`, `t.package`,
     /// `t.kind`, or `t.arguments`.
     TypeField {
@@ -818,6 +871,10 @@ impl HirExpr {
             HirExpr::TypeTest { .. } => Type::Bool,
             HirExpr::TypeOf { .. } => Type::RuntimeType,
             HirExpr::TypeField { ty, .. } | HirExpr::TypeCastResult { ty, .. } => *ty,
+            HirExpr::ChannelCreate { ty }
+            | HirExpr::ChannelReceiver { ty, .. }
+            | HirExpr::ChannelReceive { ty, .. } => *ty,
+            HirExpr::ChannelSend { .. } | HirExpr::ChannelClose { .. } => Type::Void,
             HirExpr::TypeCast { target, .. } => *target,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,

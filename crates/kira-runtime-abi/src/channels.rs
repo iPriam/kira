@@ -46,6 +46,14 @@ pub enum ChannelTrap {
     /// A value was taken while none was waiting.
     #[error("channel has no waiting value to take")]
     NotReady,
+    /// A receive is waiting for a value nothing can send.
+    ///
+    /// The queue is empty, the sender is live, and no other work is runnable,
+    /// so no future turn can change the answer. Trapping is the only honest
+    /// response: waiting forever is a hang, and answering `Closed` would tell
+    /// the program the sender went away when it did not.
+    #[error("a receive is waiting for a value nothing can send")]
+    Deadlock,
 }
 
 /// One primitive of the channel table's runtime interface.
@@ -83,6 +91,13 @@ pub enum ChannelPrim {
     CloseSender = 4,
     /// `(receiver, _, _)` — drop the receiver end, discarding the queue.
     CloseReceiver = 5,
+    /// `(_, _, _)` — a receive can never be answered; trap.
+    ///
+    /// Raised by generated code rather than detected here: whether any other
+    /// work could still run is a scheduler question, and the scheduler is
+    /// synthesized IR. The table owns what the trap *is* so both engines
+    /// report it identically.
+    Deadlock = 6,
 }
 
 impl ChannelPrim {
@@ -91,13 +106,14 @@ impl ChannelPrim {
     /// The one place the set is written down: decoding indexes this rather than
     /// repeating a match, so a new primitive cannot be added to the enum and
     /// forgotten by the decoder.
-    pub const ALL: [ChannelPrim; 6] = [
+    pub const ALL: [ChannelPrim; 7] = [
         ChannelPrim::Create,
         ChannelPrim::Send,
         ChannelPrim::Poll,
         ChannelPrim::Take,
         ChannelPrim::CloseSender,
         ChannelPrim::CloseReceiver,
+        ChannelPrim::Deadlock,
     ];
 
     /// The wire byte this primitive travels as.
@@ -122,6 +138,7 @@ impl ChannelPrim {
             ChannelPrim::Take => "take",
             ChannelPrim::CloseSender => "closeSender",
             ChannelPrim::CloseReceiver => "closeReceiver",
+            ChannelPrim::Deadlock => "deadlock",
         }
     }
 }
@@ -327,6 +344,7 @@ impl ChannelExecutor {
                 self.close_receiver(a)?;
                 Ok(0)
             }
+            ChannelPrim::Deadlock => Err(ChannelTrap::Deadlock),
         }
     }
 
@@ -561,6 +579,7 @@ mod tests {
         assert_eq!(ChannelPrim::Take.as_byte(), 3);
         assert_eq!(ChannelPrim::CloseSender.as_byte(), 4);
         assert_eq!(ChannelPrim::CloseReceiver.as_byte(), 5);
+        assert_eq!(ChannelPrim::Deadlock.as_byte(), 6);
     }
 
     #[test]
@@ -616,6 +635,15 @@ mod tests {
         assert_eq!(
             executor.perform(ChannelPrim::Poll, receiver, 0, 0),
             Ok(2)
+        );
+    }
+
+    #[test]
+    fn the_deadlock_primitive_always_traps() {
+        let mut executor = ChannelExecutor::new();
+        assert_eq!(
+            executor.perform(ChannelPrim::Deadlock, 0, 0, 0),
+            Err(ChannelTrap::Deadlock)
         );
     }
 }

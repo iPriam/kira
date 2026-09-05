@@ -224,6 +224,12 @@ impl Analyzer<'_> {
         // A task handle's three operations are matched before anything tries to
         // resolve a method on it: it is not a struct, so a field-based lookup
         // would report a missing type rather than the opaque-handle rule.
+        if let Type::Distinct(id) = receiver_ty
+            && let Some(end) = self.channel_end_of(id)
+        {
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_channel_method(ctx, receiver_hir, end, &name, args, method_span);
+        }
         if matches!(receiver_ty, Type::Task(_)) {
             let name = self.interner.resolve(method).to_owned();
             return self.analyze_task_method(ctx, receiver_hir, &name, args, method_span);

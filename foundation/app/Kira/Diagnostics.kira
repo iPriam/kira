@@ -223,6 +223,10 @@ enum KiraError {
     KSEM361
     KSEM362
     KSEM363
+    KSEM364
+    KSEM365
+    KSEM366
+    KSEM367
     KSL011
     KSL012
     KSL013

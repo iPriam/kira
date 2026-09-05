@@ -246,6 +246,13 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                if name == "Channel" {
+                    let payloads: Vec<Type> = type_args
+                        .iter()
+                        .map(|arg| self.resolve_type_ref(*arg))
+                        .collect();
+                    return self.analyze_channel_create(ctx, &payloads, &args, callee_span);
+                }
                 if let Some(intrinsic) =
                     self.analyze_native_state_intrinsic(ctx, &name, &type_args, &args, callee_span)
                 {
@@ -529,6 +536,14 @@ impl Analyzer<'_> {
                 // handle is opaque, so anything else read off one is refused
                 // here rather than falling through to a field lookup that would
                 // report the wrong thing.
+                // A channel end is opaque: `.receiver` on a sender and nothing
+                // else. Matched before the `distinct` rules so `.raw` cannot
+                // hand a program the table index and let it forge an end.
+                if let Type::Distinct(id) = base_ty
+                    && let Some(end) = self.channel_end_of(id)
+                {
+                    return self.analyze_channel_property(base_hir, end, &name, field_span);
+                }
                 if let Type::Task(result) = base_ty {
                     return self.analyze_task_property(base_hir, result, &name, field_span);
                 }

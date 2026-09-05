@@ -1,6 +1,6 @@
 ---
 title: Concurrency
-description: async functions, Task spawns, host-main-thread requests, cooperative yielding, the virtual clock, and the Send rules at both boundaries.
+description: async functions, Task spawns, channels, host-main-thread requests, cooperative yielding, the virtual clock, and the Send rules at both boundaries.
 ---
 
 `async function` marks a task entry point: a body that is *spawned* with `Task { … }` and joined for its result. It is not a function to call: a direct call is `KSEM354`, and only an `async function` may be a task target (`KSEM352`). Its parameters are taken owned or copied, never borrowed (`KSEM353`), because the task runs after the caller's places may be gone. `async` is contextual, so a local named `async` still binds.
@@ -53,6 +53,95 @@ run, even when a hybrid library stays loaded between runs.
 Handles include a slot generation. Joining, detaching, or cancelling reclaims
 the task's table storage; a later spawn may reuse that storage, but the old
 handle cannot name the new task. Runnable tasks are selected in spawn order.
+
+## Channels
+
+A channel is an ordered handoff between two contexts. It answers the question a
+program cannot otherwise ask: how its own work orders against work already
+running somewhere else. Without one, an outsider can only enqueue.
+
+`Channel<T>()` creates a channel and hands back its **sender**. The matching
+**receiver** is read off it as `.receiver`, which is a derivation rather than a
+second creation: there is one channel however many times it is read.
+
+```kira
+async function fill(tx: Sender<Int>) -> Int {
+    tx.send(41)
+    tx.send(1)
+    tx.close()
+    return 7
+}
+
+@Main function main() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        print(first + second)          // 42, after `fill` ran
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    print(pending.await)
+    return
+}
+```
+
+### The Two Ends
+
+`Sender<T>` and `Receiver<T>` are two types, and neither is the number
+underneath. Passing a receiver where a sender belongs is a type error rather
+than a direction caught at run time.
+
+| Written | On | What it does |
+| --- | --- | --- |
+| `sender.send(value)` | sender | Puts one value behind every value waiting. |
+| `sender.receiver` | sender | The matching receiver end. |
+| `receiver.receive()` | receiver | The next value, waiting for one if none is there. |
+| `end.close()` | either | This end is done. |
+
+Anything else on an end is `KSEM367`, including `.raw`: an end is opaque, and
+the handle underneath would let a program forge one.
+
+### Receiving Waits
+
+`receive()` is a suspension point. An empty channel whose sender is still live
+hands the next runnable task a turn and asks again, so a receive orders the
+receiving context after the work that fills it. A receive that did not yield
+would be a deadlock written as a loop.
+
+Because it waits and can fail, `receive()` is a fallible step written under
+`try` inside an `attempt`, like every other one.
+
+### A Closed Channel Is Not a Trap
+
+The sender being gone is an ordinary end to a conversation. A receive on a
+drained closed channel answers `ChannelError.Closed`, which the enclosing
+`handle` covers by name. Sending to a channel whose receiver is gone *is* a
+trap: the value has nowhere to arrive and nobody to tell.
+
+### What a Channel May Carry
+
+A queued value is one machine word, so a payload is an integer width, a float
+width, `Bool`, or a `distinct` over one. Anything else is `KSEM365`. A `Float`
+crosses as its exact bits and is converted at both ends, so it reads back as
+itself. A `distinct` keeps its identity: what comes out is the named type that
+went in.
+
+An end is one word, which is what a task argument slot holds, so an end is
+moved into the task that uses it the way any other scalar is.
+
+### The Wait Is Generated IR
+
+Like the scheduler, the waiting policy is synthesized IR rather than runtime
+code: one function per payload type, reaching the channel table through one
+primitive. The VM and the native backend run the same wait rather than two that
+have to be kept in step.
+
+The channel table belongs to one run, exactly as the task table does, and an
+end handle carries a slot generation. Closing both ends reclaims the storage; a
+later channel may reuse it, but the old end cannot name the new channel.
 
 ## Host Main Thread
 

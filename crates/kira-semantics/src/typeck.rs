@@ -26,6 +26,7 @@ mod labels;
 mod memberwise;
 mod native_state;
 mod cast_results;
+pub(crate) mod channels;
 mod casts;
 pub(crate) mod overloads;
 mod print;

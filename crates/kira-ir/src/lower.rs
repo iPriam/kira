@@ -19,9 +19,11 @@ use kira_semantics_model::hir::{
 
 use crate::tasks::TaskTargets;
 
+use kira_runtime_abi::ChannelPrim;
+
 use crate::ir::{
-    IrAttempt, IrAttemptStep, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
-    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrWriteback,
+    IrAttempt, IrAttemptStep, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport,
+    IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrWriteback,
 };
 
 /// Lowers an analyzed program to IR.
@@ -85,6 +87,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         aliases: std::collections::HashMap::new(),
         task_base,
         task_targets: TaskTargets::default(),
+        channel_rows: Vec::new(),
         uses_tasks: false,
     };
     let functions: Vec<IrFunction> = program
@@ -94,9 +97,17 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         .collect();
     let uses_tasks = lowerer.uses_tasks;
     let targets = std::mem::take(&mut lowerer.task_targets);
+    let channel_rows = std::mem::take(&mut lowerer.channel_rows);
     ir.functions = functions;
-    if uses_tasks {
+    // A receive yields to the task spine while it waits, so a program with a
+    // channel has the spine whether or not it wrote `Task`.
+    if uses_tasks || !channel_rows.is_empty() {
         crate::tasks::synthesize(&mut ir, task_base, &targets);
+        crate::channels::synthesize(
+            &mut ir,
+            &channel_rows,
+            task_base + crate::tasks::TaskFns::STEP,
+        );
         for function in ir.functions.iter_mut().skip(task_base as usize) {
             crate::mid::scope_releases(function, &ir.exprs, &ir.types);
         }
@@ -121,6 +132,9 @@ struct Lowerer<'a> {
     task_base: u32,
     /// The spawn targets seen so far, each holding the dispatcher arm it took.
     task_targets: TaskTargets,
+    /// The receive rows seen so far, in first-use order: one per payload type,
+    /// each the function a receive of that payload calls.
+    channel_rows: Vec<crate::channels::ReceiverRow>,
     /// Whether anything in the program reached the task spine.
     ///
     /// A program that never spawns, joins, or yields gets no synthesized
@@ -634,6 +648,59 @@ impl Lowerer<'_> {
                 return self.lower_task_spawn(target, &args, ty);
             }
             HirExpr::TaskJoin { handle, ty } => return self.lower_task_join(handle, ty),
+            HirExpr::ChannelCreate { .. } => {
+                return self.channel_op(ChannelPrim::Create, Vec::new());
+            }
+            HirExpr::ChannelReceiver { sender, .. } => {
+                // The two ends share an index and a generation and differ only
+                // in the end bit of a 1-based slot field, which makes the
+                // receiver the sender's word plus one. A derivation rather than
+                // a table call: there is one channel however many times this is
+                // read.
+                let sender = self.lower_expr(sender);
+                let step = self.ir.exprs.alloc(IrExpr::Int(
+                    kira_semantics_model::channel::RECEIVER_END_OFFSET,
+                ));
+                return self.ir.exprs.alloc(IrExpr::Binary {
+                    op: IrBinOp::AddInt,
+                    lhs: sender,
+                    rhs: step,
+                    ty: Type::INT,
+                });
+            }
+            HirExpr::ChannelSend {
+                sender,
+                value,
+                wire,
+            } => {
+                let sender = self.lower_expr(sender);
+                let value = self.lower_expr(value);
+                // One queue slot is one word, so a float crosses as its bits.
+                let value = match wire {
+                    Type::Float(_) => self.ir.exprs.alloc(IrExpr::Convert {
+                        operand: value,
+                        kind: kira_semantics_model::hir::ConvertKind::FloatToBits,
+                        ty: Type::INT,
+                    }),
+                    _ => value,
+                };
+                return self.channel_op(ChannelPrim::Send, vec![sender, value]);
+            }
+            HirExpr::ChannelReceive {
+                receiver,
+                payload,
+                wire,
+                failure,
+                ty,
+            } => return self.lower_channel_receive(receiver, payload, wire, failure, ty),
+            HirExpr::ChannelClose { end, sender } => {
+                let end = self.lower_expr(end);
+                let prim = match sender {
+                    true => ChannelPrim::CloseSender,
+                    false => ChannelPrim::CloseReceiver,
+                };
+                return self.channel_op(prim, vec![end]);
+            }
             HirExpr::TaskDetach { handle } => {
                 return self.lower_task_handle_call(handle, crate::tasks::TaskFns::DETACH);
             }
@@ -730,6 +797,67 @@ impl Lowerer<'_> {
     }
 
     /// Lowers `handle.await` to a call to the join helper.
+    /// One channel primitive, its operands zero-filled to three.
+    fn channel_op(&mut self, prim: ChannelPrim, operands: Vec<IrExprId>) -> IrExprId {
+        let mut filled = operands;
+        while filled.len() < 3 {
+            filled.push(self.ir.exprs.alloc(IrExpr::Int(0)));
+        }
+        let operands = [filled[0], filled[1], filled[2]];
+        self.ir.exprs.alloc(IrExpr::ChannelOp { prim, operands })
+    }
+
+    /// `receiver.receive()`: a call to the synthesized receiver for its payload.
+    ///
+    /// The waiting itself is not here. It is one synthesized function per
+    /// payload, so the VM and the native backend run the same wait rather than
+    /// two copies of it — the argument [`crate::tasks`] makes for the
+    /// scheduler, made again for the one other place a program blocks.
+    fn lower_channel_receive(
+        &mut self,
+        receiver: HirExprId,
+        payload: Type,
+        wire: Type,
+        failure: kira_semantics_model::EnumId,
+        ty: Type,
+    ) -> IrExprId {
+        // A receive yields while it waits, so it needs the task spine.
+        self.uses_tasks = true;
+        let Type::Enum(result) = ty else {
+            let receiver = self.lower_expr(receiver);
+            return receiver;
+        };
+        let index = match self
+            .channel_rows
+            .iter()
+            .position(|row| row.result == result)
+        {
+            Some(index) => index,
+            None => {
+                self.channel_rows.push(crate::channels::ReceiverRow {
+                    result,
+                    failure,
+                    payload,
+                    wire,
+                });
+                self.channel_rows.len() - 1
+            }
+        };
+        let receiver = self.lower_expr(receiver);
+        // The channel receivers are appended after the whole task spine and
+        // the one step helper they share.
+        let callee = self.task_base
+            + crate::tasks::TaskFns::COUNT
+            + crate::channels::STEP_HELPERS
+            + index as u32;
+        self.ir.exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(callee),
+            args: vec![receiver],
+            result: ty,
+            writebacks: Vec::new(),
+        })
+    }
+
     fn lower_task_join(&mut self, handle: HirExprId, ty: Type) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;

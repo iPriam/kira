@@ -18,6 +18,7 @@ mod erase;
 pub mod ir;
 pub mod lower;
 pub mod mid;
+mod channels;
 mod tasks;
 
 pub use ir::{

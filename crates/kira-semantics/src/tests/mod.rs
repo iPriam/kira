@@ -41,6 +41,7 @@ mod reuse;
 mod strings;
 mod specializations;
 mod syscall;
+mod channels;
 mod tasks;
 mod traits;
 mod widths;
