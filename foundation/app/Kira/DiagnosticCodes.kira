@@ -1,134 +1,146 @@
-// Diagnostic codes as values.
-//
-// `KiraError` names every code the compiler emits; this is how a code that
-// arrived as text becomes one. A test that asserts `.KSEM061` therefore
-// compares a value, and goes on comparing it after the message is reworded —
-// which is the whole reason a code exists.
+// Generated from `crates/kira-diagnostic-messages/diagnostic-codes.tsv`.
+// Run `cargo run -p kira-diagnostic-registry -- write` to refresh it.
 //
 // One `if` per code rather than a `match`: `match` selects on an enum, and the
 // question here is the other way round. Splitting the chain by code prefix was
-// measured and made no difference — the analyzer is linear in declarations, so
-// this costs what its 272 entries cost and no more.
+// measured and made no difference, so this costs what its 438 entries cost and
+// no more.
 
-// The code `text` names, or `.Unrecognized` when this enum does not list it.
+// The code `text` names, or `.Unrecognized` when `KiraError` does not list it.
 function kiraErrorFromCode(text: borrow String) -> KiraError {
-    if text == "KBE001" { return .KBE001 }
-    if text == "KBE002" { return .KBE002 }
-    if text == "KBE012" { return .KBE012 }
-    if text == "KCL001" { return .KCL001 }
-    if text == "KCL002" { return .KCL002 }
-    if text == "KCL003" { return .KCL003 }
-    if text == "KCL005" { return .KCL005 }
-    if text == "KCL006" { return .KCL006 }
-    if text == "KCL010" { return .KCL010 }
-    if text == "KCL020" { return .KCL020 }
-    if text == "KCL021" { return .KCL021 }
-    if text == "KCL022" { return .KCL022 }
-    if text == "KCL023" { return .KCL023 }
-    if text == "KCL026" { return .KCL026 }
-    if text == "KCL028" { return .KCL028 }
-    if text == "KCL029" { return .KCL029 }
-    if text == "KCL030" { return .KCL030 }
-    if text == "KCL031" { return .KCL031 }
-    if text == "KCL032" { return .KCL032 }
-    if text == "KCL033" { return .KCL033 }
-    if text == "KCL034" { return .KCL034 }
-    if text == "KCL035" { return .KCL035 }
-    if text == "KCL036" { return .KCL036 }
-    if text == "KCL037" { return .KCL037 }
-    if text == "KCL038" { return .KCL038 }
-    if text == "KCL039" { return .KCL039 }
-    if text == "KCL040" { return .KCL040 }
-    if text == "KCL041" { return .KCL041 }
-    if text == "KCL043" { return .KCL043 }
-    if text == "KCL044" { return .KCL044 }
-    if text == "KCL045" { return .KCL045 }
-    if text == "KCL046" { return .KCL046 }
-    if text == "KCL050" { return .KCL050 }
-    if text == "KCL051" { return .KCL051 }
-    if text == "KCL054" { return .KCL054 }
-    if text == "KCL058" { return .KCL058 }
-    if text == "KCL070" { return .KCL070 }
-    if text == "KCL071" { return .KCL071 }
-    if text == "KCL072" { return .KCL072 }
-    if text == "KCL074" { return .KCL074 }
-    if text == "KCL080" { return .KCL080 }
-    if text == "KCL081" { return .KCL081 }
-    if text == "KCLI020" { return .KCLI020 }
-    if text == "KIC001" { return .KIC001 }
-    if text == "KIC014" { return .KIC014 }
-    if text == "KICE001" { return .KICE001 }
-    if text == "KIR001" { return .KIR001 }
     if text == "KLEX001" { return .KLEX001 }
     if text == "KLEX002" { return .KLEX002 }
     if text == "KLEX003" { return .KLEX003 }
+    if text == "KLEX004" { return .KLEX004 }
+    if text == "KLEX005" { return .KLEX005 }
+    if text == "KLEX006" { return .KLEX006 }
     if text == "KPAR001" { return .KPAR001 }
     if text == "KPAR002" { return .KPAR002 }
     if text == "KPAR003" { return .KPAR003 }
     if text == "KPAR004" { return .KPAR004 }
     if text == "KPAR005" { return .KPAR005 }
-    if text == "KPAR013" { return .KPAR013 }
-    if text == "KPK001" { return .KPK001 }
-    if text == "KPK007" { return .KPK007 }
-    if text == "KPK010" { return .KPK010 }
-    if text == "KPK015" { return .KPK015 }
-    if text == "KPK017" { return .KPK017 }
-    if text == "KPK019" { return .KPK019 }
-    if text == "KPK020" { return .KPK020 }
-    if text == "KPK030" { return .KPK030 }
-    if text == "KPK031" { return .KPK031 }
-    if text == "KPKG001" { return .KPKG001 }
-    if text == "KPKG002" { return .KPKG002 }
-    if text == "KPKG007" { return .KPKG007 }
-    if text == "KPKG009" { return .KPKG009 }
-    if text == "KPKG010" { return .KPKG010 }
-    if text == "KPKG011" { return .KPKG011 }
-    if text == "KSEM001" { return .KSEM001 }
-    if text == "KSEM002" { return .KSEM002 }
+    if text == "KPAR006" { return .KPAR006 }
+    if text == "KPAR007" { return .KPAR007 }
+    if text == "KPAR009" { return .KPAR009 }
+    if text == "KPAR010" { return .KPAR010 }
+    if text == "KPAR011" { return .KPAR011 }
+    if text == "KPAR012" { return .KPAR012 }
+    if text == "KPAR014" { return .KPAR014 }
+    if text == "KPAR015" { return .KPAR015 }
+    if text == "KPAR016" { return .KPAR016 }
+    if text == "KPAR017" { return .KPAR017 }
+    if text == "KPAR020" { return .KPAR020 }
+    if text == "KPAR021" { return .KPAR021 }
+    if text == "KPAR022" { return .KPAR022 }
+    if text == "KPAR023" { return .KPAR023 }
+    if text == "KPAR024" { return .KPAR024 }
+    if text == "KPAR030" { return .KPAR030 }
+    if text == "KPAR031" { return .KPAR031 }
+    if text == "KPAR032" { return .KPAR032 }
+    if text == "KPAR033" { return .KPAR033 }
+    if text == "KPAR034" { return .KPAR034 }
+    if text == "KPAR035" { return .KPAR035 }
+    if text == "KPAR037" { return .KPAR037 }
+    if text == "KPAR038" { return .KPAR038 }
+    if text == "KPAR039" { return .KPAR039 }
+    if text == "KPAR040" { return .KPAR040 }
+    if text == "KPAR041" { return .KPAR041 }
+    if text == "KPAR042" { return .KPAR042 }
+    if text == "KPAR043" { return .KPAR043 }
+    if text == "KPAR044" { return .KPAR044 }
+    if text == "KPAR045" { return .KPAR045 }
+    if text == "KPAR046" { return .KPAR046 }
+    if text == "KPAR047" { return .KPAR047 }
+    if text == "KPAR048" { return .KPAR048 }
+    if text == "KPAR049" { return .KPAR049 }
+    if text == "KPAR050" { return .KPAR050 }
+    if text == "KPAR051" { return .KPAR051 }
+    if text == "KPAR052" { return .KPAR052 }
+    if text == "KPAR053" { return .KPAR053 }
+    if text == "KPAR054" { return .KPAR054 }
+    if text == "KPAR055" { return .KPAR055 }
+    if text == "KPAR056" { return .KPAR056 }
+    if text == "KPAR057" { return .KPAR057 }
+    if text == "KPAR058" { return .KPAR058 }
+    if text == "KPAR059" { return .KPAR059 }
+    if text == "KPAR060" { return .KPAR060 }
+    if text == "KPAR061" { return .KPAR061 }
+    if text == "KPAR062" { return .KPAR062 }
+    if text == "KPAR063" { return .KPAR063 }
+    if text == "KPAR064" { return .KPAR064 }
+    if text == "KPAR065" { return .KPAR065 }
+    if text == "KPAR066" { return .KPAR066 }
+    if text == "KPAR067" { return .KPAR067 }
+    if text == "KPAR068" { return .KPAR068 }
+    if text == "KPAR070" { return .KPAR070 }
+    if text == "KPAR071" { return .KPAR071 }
+    if text == "KPAR072" { return .KPAR072 }
+    if text == "KPAR073" { return .KPAR073 }
+    if text == "KPAR074" { return .KPAR074 }
+    if text == "KPAR075" { return .KPAR075 }
+    if text == "KPAR076" { return .KPAR076 }
+    if text == "KPAR077" { return .KPAR077 }
+    if text == "KPAR078" { return .KPAR078 }
+    if text == "KPAR079" { return .KPAR079 }
+    if text == "KPAR080" { return .KPAR080 }
+    if text == "KPAR081" { return .KPAR081 }
+    if text == "KPAR084" { return .KPAR084 }
+    if text == "KPAR085" { return .KPAR085 }
+    if text == "KPAR086" { return .KPAR086 }
+    if text == "KPAR087" { return .KPAR087 }
+    if text == "KMAC001" { return .KMAC001 }
+    if text == "KMAC002" { return .KMAC002 }
+    if text == "KMAC003" { return .KMAC003 }
+    if text == "KMAC004" { return .KMAC004 }
+    if text == "KMAC005" { return .KMAC005 }
+    if text == "KMAC006" { return .KMAC006 }
+    if text == "KMAC007" { return .KMAC007 }
+    if text == "KMAC008" { return .KMAC008 }
+    if text == "KMAC009" { return .KMAC009 }
+    if text == "KMAC010" { return .KMAC010 }
+    if text == "KMAC011" { return .KMAC011 }
+    if text == "KMAC012" { return .KMAC012 }
+    if text == "KMAC013" { return .KMAC013 }
+    if text == "KMAC014" { return .KMAC014 }
+    if text == "KMAC016" { return .KMAC016 }
+    if text == "KMAC017" { return .KMAC017 }
+    if text == "KMAC020" { return .KMAC020 }
+    if text == "KMAC021" { return .KMAC021 }
+    if text == "KMAC022" { return .KMAC022 }
+    if text == "KMAC023" { return .KMAC023 }
+    if text == "KMAC024" { return .KMAC024 }
+    if text == "KMAC025" { return .KMAC025 }
+    if text == "KMAC026" { return .KMAC026 }
+    if text == "KMAC027" { return .KMAC027 }
+    if text == "KMAC028" { return .KMAC028 }
+    if text == "KMAC029" { return .KMAC029 }
+    if text == "KMAC030" { return .KMAC030 }
     if text == "KSEM003" { return .KSEM003 }
     if text == "KSEM004" { return .KSEM004 }
     if text == "KSEM005" { return .KSEM005 }
+    if text == "KSEM006" { return .KSEM006 }
     if text == "KSEM007" { return .KSEM007 }
     if text == "KSEM010" { return .KSEM010 }
+    if text == "KSEM011" { return .KSEM011 }
     if text == "KSEM012" { return .KSEM012 }
-    if text == "KSEM013" { return .KSEM013 }
     if text == "KSEM020" { return .KSEM020 }
     if text == "KSEM021" { return .KSEM021 }
+    if text == "KSEM022" { return .KSEM022 }
     if text == "KSEM023" { return .KSEM023 }
     if text == "KSEM024" { return .KSEM024 }
     if text == "KSEM025" { return .KSEM025 }
-    if text == "KSEM026" { return .KSEM026 }
     if text == "KSEM027" { return .KSEM027 }
-    if text == "KSEM028" { return .KSEM028 }
-    if text == "KSEM029" { return .KSEM029 }
+    if text == "KSEM030" { return .KSEM030 }
     if text == "KSEM031" { return .KSEM031 }
     if text == "KSEM032" { return .KSEM032 }
     if text == "KSEM033" { return .KSEM033 }
-    if text == "KSEM034" { return .KSEM034 }
-    if text == "KSEM035" { return .KSEM035 }
-    if text == "KSEM036" { return .KSEM036 }
-    if text == "KSEM037" { return .KSEM037 }
-    if text == "KSEM038" { return .KSEM038 }
-    if text == "KSEM039" { return .KSEM039 }
     if text == "KSEM040" { return .KSEM040 }
     if text == "KSEM041" { return .KSEM041 }
     if text == "KSEM042" { return .KSEM042 }
     if text == "KSEM043" { return .KSEM043 }
-    if text == "KSEM044" { return .KSEM044 }
-    if text == "KSEM045" { return .KSEM045 }
-    if text == "KSEM046" { return .KSEM046 }
-    if text == "KSEM047" { return .KSEM047 }
-    if text == "KSEM048" { return .KSEM048 }
-    if text == "KSEM049" { return .KSEM049 }
     if text == "KSEM050" { return .KSEM050 }
     if text == "KSEM051" { return .KSEM051 }
     if text == "KSEM052" { return .KSEM052 }
-    if text == "KSEM053" { return .KSEM053 }
-    if text == "KSEM054" { return .KSEM054 }
-    if text == "KSEM055" { return .KSEM055 }
-    if text == "KSEM056" { return .KSEM056 }
-    if text == "KSEM057" { return .KSEM057 }
-    if text == "KSEM058" { return .KSEM058 }
     if text == "KSEM059" { return .KSEM059 }
     if text == "KSEM060" { return .KSEM060 }
     if text == "KSEM061" { return .KSEM061 }
@@ -144,21 +156,10 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM071" { return .KSEM071 }
     if text == "KSEM072" { return .KSEM072 }
     if text == "KSEM073" { return .KSEM073 }
-    if text == "KSEM075" { return .KSEM075 }
-    if text == "KSEM076" { return .KSEM076 }
-    if text == "KSEM077" { return .KSEM077 }
-    if text == "KSEM078" { return .KSEM078 }
-    if text == "KSEM079" { return .KSEM079 }
+    if text == "KSEM074" { return .KSEM074 }
     if text == "KSEM080" { return .KSEM080 }
     if text == "KSEM081" { return .KSEM081 }
     if text == "KSEM082" { return .KSEM082 }
-    if text == "KSEM083" { return .KSEM083 }
-    if text == "KSEM084" { return .KSEM084 }
-    if text == "KSEM085" { return .KSEM085 }
-    if text == "KSEM086" { return .KSEM086 }
-    if text == "KSEM087" { return .KSEM087 }
-    if text == "KSEM088" { return .KSEM088 }
-    if text == "KSEM089" { return .KSEM089 }
     if text == "KSEM090" { return .KSEM090 }
     if text == "KSEM091" { return .KSEM091 }
     if text == "KSEM092" { return .KSEM092 }
@@ -167,7 +168,6 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM095" { return .KSEM095 }
     if text == "KSEM096" { return .KSEM096 }
     if text == "KSEM097" { return .KSEM097 }
-    if text == "KSEM098" { return .KSEM098 }
     if text == "KSEM100" { return .KSEM100 }
     if text == "KSEM101" { return .KSEM101 }
     if text == "KSEM102" { return .KSEM102 }
@@ -180,7 +180,6 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM109" { return .KSEM109 }
     if text == "KSEM110" { return .KSEM110 }
     if text == "KSEM111" { return .KSEM111 }
-    if text == "KSEM112" { return .KSEM112 }
     if text == "KSEM113" { return .KSEM113 }
     if text == "KSEM114" { return .KSEM114 }
     if text == "KSEM115" { return .KSEM115 }
@@ -211,16 +210,170 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM141" { return .KSEM141 }
     if text == "KSEM142" { return .KSEM142 }
     if text == "KSEM143" { return .KSEM143 }
-    if text == "KSEM144" { return .KSEM144 }
-    if text == "KSEM145" { return .KSEM145 }
-    if text == "KSEM146" { return .KSEM146 }
-    if text == "KSEM147" { return .KSEM147 }
-    if text == "KSEM148" { return .KSEM148 }
-    if text == "KSEM149" { return .KSEM149 }
-    if text == "KSEM150" { return .KSEM150 }
-    if text == "KSEM151" { return .KSEM151 }
-    if text == "KSEM152" { return .KSEM152 }
-    if text == "KSEM153" { return .KSEM153 }
+    if text == "KSEM157" { return .KSEM157 }
+    if text == "KSEM158" { return .KSEM158 }
+    if text == "KSEM159" { return .KSEM159 }
+    if text == "KSEM160" { return .KSEM160 }
+    if text == "KSEM161" { return .KSEM161 }
+    if text == "KSEM162" { return .KSEM162 }
+    if text == "KSEM163" { return .KSEM163 }
+    if text == "KSEM164" { return .KSEM164 }
+    if text == "KSEM165" { return .KSEM165 }
+    if text == "KSEM166" { return .KSEM166 }
+    if text == "KSEM167" { return .KSEM167 }
+    if text == "KSEM168" { return .KSEM168 }
+    if text == "KSEM169" { return .KSEM169 }
+    if text == "KSEM170" { return .KSEM170 }
+    if text == "KSEM171" { return .KSEM171 }
+    if text == "KSEM172" { return .KSEM172 }
+    if text == "KSEM173" { return .KSEM173 }
+    if text == "KSEM174" { return .KSEM174 }
+    if text == "KSEM175" { return .KSEM175 }
+    if text == "KSEM176" { return .KSEM176 }
+    if text == "KSEM177" { return .KSEM177 }
+    if text == "KSEM178" { return .KSEM178 }
+    if text == "KSEM179" { return .KSEM179 }
+    if text == "KSEM180" { return .KSEM180 }
+    if text == "KSEM181" { return .KSEM181 }
+    if text == "KSEM182" { return .KSEM182 }
+    if text == "KSEM183" { return .KSEM183 }
+    if text == "KSEM184" { return .KSEM184 }
+    if text == "KSEM185" { return .KSEM185 }
+    if text == "KSEM186" { return .KSEM186 }
+    if text == "KSEM187" { return .KSEM187 }
+    if text == "KSEM188" { return .KSEM188 }
+    if text == "KSEM189" { return .KSEM189 }
+    if text == "KSEM200" { return .KSEM200 }
+    if text == "KSEM201" { return .KSEM201 }
+    if text == "KSEM202" { return .KSEM202 }
+    if text == "KSEM203" { return .KSEM203 }
+    if text == "KSEM204" { return .KSEM204 }
+    if text == "KSEM205" { return .KSEM205 }
+    if text == "KSEM206" { return .KSEM206 }
+    if text == "KSEM207" { return .KSEM207 }
+    if text == "KSEM208" { return .KSEM208 }
+    if text == "KSEM209" { return .KSEM209 }
+    if text == "KSEM210" { return .KSEM210 }
+    if text == "KSEM211" { return .KSEM211 }
+    if text == "KSEM212" { return .KSEM212 }
+    if text == "KSEM213" { return .KSEM213 }
+    if text == "KSEM214" { return .KSEM214 }
+    if text == "KSEM215" { return .KSEM215 }
+    if text == "KSEM216" { return .KSEM216 }
+    if text == "KSEM217" { return .KSEM217 }
+    if text == "KSEM218" { return .KSEM218 }
+    if text == "KSEM219" { return .KSEM219 }
+    if text == "KSEM220" { return .KSEM220 }
+    if text == "KSEM221" { return .KSEM221 }
+    if text == "KSEM222" { return .KSEM222 }
+    if text == "KSEM223" { return .KSEM223 }
+    if text == "KSEM224" { return .KSEM224 }
+    if text == "KSEM225" { return .KSEM225 }
+    if text == "KSEM226" { return .KSEM226 }
+    if text == "KSEM227" { return .KSEM227 }
+    if text == "KSEM229" { return .KSEM229 }
+    if text == "KSEM231" { return .KSEM231 }
+    if text == "KSEM232" { return .KSEM232 }
+    if text == "KSEM233" { return .KSEM233 }
+    if text == "KSEM234" { return .KSEM234 }
+    if text == "KSEM235" { return .KSEM235 }
+    if text == "KSEM237" { return .KSEM237 }
+    if text == "KSEM238" { return .KSEM238 }
+    if text == "KSEM239" { return .KSEM239 }
+    if text == "KSEM240" { return .KSEM240 }
+    if text == "KSEM241" { return .KSEM241 }
+    if text == "KSEM242" { return .KSEM242 }
+    if text == "KSEM243" { return .KSEM243 }
+    if text == "KSEM244" { return .KSEM244 }
+    if text == "KSEM245" { return .KSEM245 }
+    if text == "KSEM246" { return .KSEM246 }
+    if text == "KSEM247" { return .KSEM247 }
+    if text == "KSEM248" { return .KSEM248 }
+    if text == "KSEM249" { return .KSEM249 }
+    if text == "KSEM250" { return .KSEM250 }
+    if text == "KSEM252" { return .KSEM252 }
+    if text == "KSEM253" { return .KSEM253 }
+    if text == "KSEM254" { return .KSEM254 }
+    if text == "KSEM255" { return .KSEM255 }
+    if text == "KSEM256" { return .KSEM256 }
+    if text == "KSEM257" { return .KSEM257 }
+    if text == "KSEM258" { return .KSEM258 }
+    if text == "KSEM259" { return .KSEM259 }
+    if text == "KSEM260" { return .KSEM260 }
+    if text == "KSEM261" { return .KSEM261 }
+    if text == "KSEM262" { return .KSEM262 }
+    if text == "KSEM263" { return .KSEM263 }
+    if text == "KSEM264" { return .KSEM264 }
+    if text == "KSEM265" { return .KSEM265 }
+    if text == "KSEM266" { return .KSEM266 }
+    if text == "KSEM267" { return .KSEM267 }
+    if text == "KSEM268" { return .KSEM268 }
+    if text == "KSEM269" { return .KSEM269 }
+    if text == "KSEM270" { return .KSEM270 }
+    if text == "KSEM271" { return .KSEM271 }
+    if text == "KSEM272" { return .KSEM272 }
+    if text == "KSEM273" { return .KSEM273 }
+    if text == "KSEM274" { return .KSEM274 }
+    if text == "KSEM275" { return .KSEM275 }
+    if text == "KSEM276" { return .KSEM276 }
+    if text == "KSEM277" { return .KSEM277 }
+    if text == "KSEM278" { return .KSEM278 }
+    if text == "KSEM279" { return .KSEM279 }
+    if text == "KSEM280" { return .KSEM280 }
+    if text == "KSEM281" { return .KSEM281 }
+    if text == "KSEM282" { return .KSEM282 }
+    if text == "KSEM283" { return .KSEM283 }
+    if text == "KSEM284" { return .KSEM284 }
+    if text == "KSEM285" { return .KSEM285 }
+    if text == "KSEM286" { return .KSEM286 }
+    if text == "KSEM287" { return .KSEM287 }
+    if text == "KSEM288" { return .KSEM288 }
+    if text == "KSEM289" { return .KSEM289 }
+    if text == "KSEM290" { return .KSEM290 }
+    if text == "KSEM291" { return .KSEM291 }
+    if text == "KSEM292" { return .KSEM292 }
+    if text == "KSEM293" { return .KSEM293 }
+    if text == "KSEM294" { return .KSEM294 }
+    if text == "KSEM295" { return .KSEM295 }
+    if text == "KSEM297" { return .KSEM297 }
+    if text == "KSEM298" { return .KSEM298 }
+    if text == "KSEM299" { return .KSEM299 }
+    if text == "KSEM300" { return .KSEM300 }
+    if text == "KSEM301" { return .KSEM301 }
+    if text == "KSEM302" { return .KSEM302 }
+    if text == "KSEM303" { return .KSEM303 }
+    if text == "KSEM304" { return .KSEM304 }
+    if text == "KSEM305" { return .KSEM305 }
+    if text == "KSEM306" { return .KSEM306 }
+    if text == "KSEM307" { return .KSEM307 }
+    if text == "KSEM308" { return .KSEM308 }
+    if text == "KSEM309" { return .KSEM309 }
+    if text == "KSEM310" { return .KSEM310 }
+    if text == "KSEM311" { return .KSEM311 }
+    if text == "KSEM312" { return .KSEM312 }
+    if text == "KSEM313" { return .KSEM313 }
+    if text == "KSEM314" { return .KSEM314 }
+    if text == "KSEM315" { return .KSEM315 }
+    if text == "KSEM316" { return .KSEM316 }
+    if text == "KSEM317" { return .KSEM317 }
+    if text == "KSEM318" { return .KSEM318 }
+    if text == "KSEM330" { return .KSEM330 }
+    if text == "KSEM331" { return .KSEM331 }
+    if text == "KSEM332" { return .KSEM332 }
+    if text == "KSEM333" { return .KSEM333 }
+    if text == "KSEM334" { return .KSEM334 }
+    if text == "KSEM335" { return .KSEM335 }
+    if text == "KSEM336" { return .KSEM336 }
+    if text == "KSEM337" { return .KSEM337 }
+    if text == "KSEM338" { return .KSEM338 }
+    if text == "KSEM339" { return .KSEM339 }
+    if text == "KSEM341" { return .KSEM341 }
+    if text == "KSEM344" { return .KSEM344 }
+    if text == "KSEM345" { return .KSEM345 }
+    if text == "KSEM346" { return .KSEM346 }
+    if text == "KSEM347" { return .KSEM347 }
+    if text == "KSEM348" { return .KSEM348 }
+    if text == "KSEM349" { return .KSEM349 }
     if text == "KSEM350" { return .KSEM350 }
     if text == "KSEM352" { return .KSEM352 }
     if text == "KSEM353" { return .KSEM353 }
@@ -237,67 +390,61 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM365" { return .KSEM365 }
     if text == "KSEM366" { return .KSEM366 }
     if text == "KSEM367" { return .KSEM367 }
-    if text == "KSL011" { return .KSL011 }
-    if text == "KSL012" { return .KSL012 }
-    if text == "KSL013" { return .KSL013 }
-    if text == "KSL014" { return .KSL014 }
-    if text == "KSL015" { return .KSL015 }
-    if text == "KSL016" { return .KSL016 }
-    if text == "KSL017" { return .KSL017 }
-    if text == "KSL018" { return .KSL018 }
-    if text == "KSL019" { return .KSL019 }
-    if text == "KSL020" { return .KSL020 }
-    if text == "KSL021" { return .KSL021 }
-    if text == "KSL022" { return .KSL022 }
-    if text == "KSL023" { return .KSL023 }
-    if text == "KSL031" { return .KSL031 }
-    if text == "KSL032" { return .KSL032 }
-    if text == "KSL033" { return .KSL033 }
-    if text == "KSL034" { return .KSL034 }
-    if text == "KSL035" { return .KSL035 }
-    if text == "KSL036" { return .KSL036 }
-    if text == "KSL037" { return .KSL037 }
-    if text == "KSL041" { return .KSL041 }
-    if text == "KSL042" { return .KSL042 }
-    if text == "KSL044" { return .KSL044 }
-    if text == "KSL051" { return .KSL051 }
-    if text == "KSL052" { return .KSL052 }
-    if text == "KSL053" { return .KSL053 }
-    if text == "KSL054" { return .KSL054 }
-    if text == "KSL055" { return .KSL055 }
-    if text == "KSL056" { return .KSL056 }
-    if text == "KSL061" { return .KSL061 }
-    if text == "KSL062" { return .KSL062 }
-    if text == "KSL071" { return .KSL071 }
-    if text == "KSL081" { return .KSL081 }
-    if text == "KSL082" { return .KSL082 }
-    if text == "KSL083" { return .KSL083 }
-    if text == "KSL091" { return .KSL091 }
-    if text == "KSL101" { return .KSL101 }
-    if text == "KSL121" { return .KSL121 }
-    if text == "KSL122" { return .KSL122 }
-    if text == "KSL123" { return .KSL123 }
-    if text == "KSL124" { return .KSL124 }
-    if text == "KSL125" { return .KSL125 }
+    if text == "KSEM900" { return .KSEM900 }
+    if text == "KIR005" { return .KIR005 }
+    if text == "KBE001" { return .KBE001 }
     if text == "KSLP001" { return .KSLP001 }
     if text == "KSLP002" { return .KSLP002 }
-    if text == "KSLP010" { return .KSLP010 }
+    if text == "KSLP003" { return .KSLP003 }
+    if text == "KSLP004" { return .KSLP004 }
+    if text == "KSLP005" { return .KSLP005 }
+    if text == "KSLP006" { return .KSLP006 }
+    if text == "KSLP007" { return .KSLP007 }
+    if text == "KSLP008" { return .KSLP008 }
+    if text == "KSLP009" { return .KSLP009 }
+    if text == "KSLS001" { return .KSLS001 }
+    if text == "KSLS002" { return .KSLS002 }
+    if text == "KSLS003" { return .KSLS003 }
+    if text == "KSLS004" { return .KSLS004 }
+    if text == "KSLS005" { return .KSLS005 }
+    if text == "KSLS006" { return .KSLS006 }
+    if text == "KSLS007" { return .KSLS007 }
+    if text == "KSLS008" { return .KSLS008 }
+    if text == "KSLS009" { return .KSLS009 }
+    if text == "KSLS010" { return .KSLS010 }
+    if text == "KSLS011" { return .KSLS011 }
+    if text == "KSLS012" { return .KSLS012 }
+    if text == "KSLS013" { return .KSLS013 }
+    if text == "KSLS014" { return .KSLS014 }
+    if text == "KSLS015" { return .KSLS015 }
+    if text == "KSLS016" { return .KSLS016 }
+    if text == "KSLS017" { return .KSLS017 }
+    if text == "KSLS018" { return .KSLS018 }
+    if text == "KPK001" { return .KPK001 }
+    if text == "KPK002" { return .KPK002 }
+    if text == "KPK007" { return .KPK007 }
+    if text == "KPK010" { return .KPK010 }
+    if text == "KPK020" { return .KPK020 }
+    if text == "KPK021" { return .KPK021 }
+    if text == "KPK022" { return .KPK022 }
+    if text == "KPK023" { return .KPK023 }
+    if text == "KPK024" { return .KPK024 }
+    if text == "KPK025" { return .KPK025 }
+    if text == "KPK026" { return .KPK026 }
+    if text == "KPK027" { return .KPK027 }
+    if text == "KPK028" { return .KPK028 }
+    if text == "KPK029" { return .KPK029 }
+    if text == "KPK030" { return .KPK030 }
+    if text == "KPK031" { return .KPK031 }
+    if text == "KPK032" { return .KPK032 }
+    if text == "KPK040" { return .KPK040 }
+    if text == "KPK041" { return .KPK041 }
     if text == "KTC001" { return .KTC001 }
-    if text == "KTC003" { return .KTC003 }
-    if text == "KTC007" { return .KTC007 }
-    if text == "KTC020" { return .KTC020 }
-    if text == "KTC021" { return .KTC021 }
-    if text == "KTC022" { return .KTC022 }
-    if text == "KTC023" { return .KTC023 }
-    if text == "KTC030" { return .KTC030 }
-    if text == "KTC031" { return .KTC031 }
-    if text == "KTC040" { return .KTC040 }
-    if text == "KTC050" { return .KTC050 }
-    if text == "KTC051" { return .KTC051 }
-    if text == "KTC060" { return .KTC060 }
-    if text == "KTC070" { return .KTC070 }
-    if text == "KTC072" { return .KTC072 }
-    if text == "KTC074" { return .KTC074 }
-    if text == "KTC075" { return .KTC075 }
+    if text == "KCL001" { return .KCL001 }
+    if text == "KLINT000" { return .KLINT000 }
+    if text == "KLINT001" { return .KLINT001 }
+    if text == "KLINT002" { return .KLINT002 }
+    if text == "KLINT003" { return .KLINT003 }
+    if text == "KIC001" { return .KIC001 }
     return .Unrecognized
 }

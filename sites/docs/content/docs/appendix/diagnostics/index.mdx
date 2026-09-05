@@ -24,6 +24,8 @@ Every refusal Kira makes carries a code, and the code is the stable part. A mess
 
 A diagnostic also carries a domain tag naming the subsystem it belongs to: `cli`, `package`, `toolchain`, `backend`, `lowering`, or `compiler_internal`.
 
+[Diagnostic Codes](/docs/appendix/diagnostics/codes) lists every code the toolchain emits, by family, with what each one refuses. That page is generated from the compiler's own code table, so a code the compiler can emit is on it.
+
 ## What a Rendered Diagnostic Carries
 
 - Severity.
@@ -48,7 +50,7 @@ The bar for a diagnostic is not "emit an error". It is "emit a Kira-native error
 
 ## Codes Worth Knowing
 
-These are the ones that come up most often while learning the language. Each is explained where the rule lives.
+These come up most often while learning the language. Each is explained where the rule lives; [Diagnostic Codes](/docs/appendix/diagnostics/codes) has the rest.
 
 | Code | Means |
 | --- | --- |
@@ -99,7 +101,7 @@ These are the ones that come up most often while learning the language. Each is 
 | `KSEM279`–`KSEM284` | The `@FFI.Syscall` rules. |
 | `KSEM288`–`KSEM298` | The trait rules. |
 | `KSEM300`–`KSEM307` | The `Drop` rules. |
-| `KSEM308`–`KSEM312` | Supertraits, `Send`, `Sync`, and the task boundary. |
+| `KSEM308`–`KSEM312` | Supertraits, `Send`, `Sync`, and the task and channel boundaries. |
 | `KSEM330`–`KSEM344` | Main-thread affinity, request shape, value transfer, lifecycle signatures, task joins, and WebAssembly refusal. |
 | `KSEM345`–`KSEM349` | The `distinct` rules: a representation that owns storage, a cyclic chain, and the two crossings. |
 | `KPAR084`–`KPAR087` | A malformed or annotated `distinct` declaration. |

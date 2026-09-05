@@ -1,0 +1,537 @@
+---
+title: Diagnostic Codes
+description: Every code the Kira toolchain emits, by family, with what each one refuses.
+---
+
+{/* Generated from `crates/kira-diagnostic-messages/diagnostic-codes.tsv`. Run `cargo run -p kira-diagnostic-registry -- write` to refresh it. */}
+
+The toolchain emits 438 codes. A code is the stable part of a diagnostic: a message may be reworded, `KSEM107` will always be a use after move.
+
+## KLEX
+
+The lexer.
+
+| Code | Means |
+| --- | --- |
+| `KLEX001` | unexpected character in source: not a valid Kira token |
+| `KLEX002` | unterminated string literal: the string is not closed before end of line |
+| `KLEX003` | unknown string escape; the escapes are `\n` `\t` `\r` `\e` `\0` `\"` `\\`, and a newline, which continues the string |
+| `KLEX004` | unterminated block comment: this `/*` is never closed, and block comments nest |
+| `KLEX005` | `;` is not Kira syntax: a statement ends where its grammar ends |
+| `KLEX006` | byte-order mark inside the file: a UTF-8 byte-order mark is accepted only as the first bytes of a file |
+
+## KPAR
+
+The parser.
+
+| Code | Means |
+| --- | --- |
+| `KPAR001` | expected …, found … |
+| `KPAR002` | a stray token at top level, or two list elements with nothing between them; a comma is required and newlines do not separate them |
+| `KPAR003` | expected an annotation name after `@` |
+| `KPAR004` | expected a function name |
+| `KPAR005` | expected a parameter name |
+| `KPAR006` | expected a type name |
+| `KPAR007` | expected a struct name |
+| `KPAR009` | expected `let`, `var`, or `function` to start a struct member, found … |
+| `KPAR010` | expected a member name |
+| `KPAR011` | a binding needs an `=` initializer; definite initialization begins at the declaration |
+| `KPAR012` | expected a loop variable |
+| `KPAR014` | expected an enum variant name to start a `match` arm |
+| `KPAR015` | expected a name to bind the variant's payload to |
+| `KPAR016` | expected a module name after `import` |
+| `KPAR017` | expected a name after `as` |
+| `KPAR020` | expected an expression, found … |
+| `KPAR021` | integer literal does not fit in a 64-bit integer |
+| `KPAR022` | expected a field name after `.` in a construction override |
+| `KPAR023` | expected a field name in a struct literal, found … |
+| `KPAR024` | expected `=` after a field name in a struct literal |
+| `KPAR030` | expected an enum name |
+| `KPAR031` | expected an enum variant name, found … |
+| `KPAR032` | expected a type alias name |
+| `KPAR033` | expected a class name |
+| `KPAR034` | expected a parent type name |
+| `KPAR035` | `override` a field with `let`: the inherited field already decided whether it is mutable |
+| `KPAR037` | expected `function` or `let` after `override`, found … |
+| `KPAR038` | expected `->` in a function type |
+| `KPAR039` | expected a closure parameter name, found … |
+| `KPAR040` | a trailing closure must follow a call, a name, or a method |
+| `KPAR041` | only `@Export` may annotate a class; `@Main`, `@MainThreadLifecycle`, `@MainThread`, `@Runtime`, and `@Native` select how a *function* runs |
+| `KPAR042` | expected `function` after an annotation in a class body |
+| `KPAR043` | a struct cannot be `@Export`: an export boundary carries one tag and one word, so only a class crosses — as an opaque handle. Declare this a `class` to export it |
+| `KPAR044` | expected a type parameter name, found … |
+| `KPAR045` | expected `>` to close a type parameter list |
+| `KPAR046` | a type parameter list names at least one parameter |
+| `KPAR047` | a generic `…` member is not supported; write the concrete types out |
+| `KPAR048` | expected `{` to open the `…` block |
+| `KPAR049` | expected a field name in the `…` block |
+| `KPAR050` | expected `:` after an `…` field name |
+| `KPAR051` | expected a field value in the `…` block |
+| `KPAR052` | expected `,` between `…` fields |
+| `KPAR053` | unknown qualified annotation `@……`; the `@FFI.*` family is `Extern`, `Syscall`, `Struct`, `Pointer`, `Alias`, `Array`, and `Callback` |
+| `KPAR054` | an `…` function has no body; its declaration ends with the signature |
+| `KPAR055` | expected a function body; only an `@FFI.Extern` or `@FFI.Syscall` function is bodyless |
+| `KPAR056` | `…` annotates a foreign *function*, not a struct; a C-layout type is `@FFI.Struct` |
+| `KPAR057` | expected a construct name |
+| `KPAR058` | expected a construct family name after `extends` |
+| `KPAR059` | expected `let`, `function`, or an annotated member to start a construct member, found … |
+| `KPAR060` | `@Required` annotates a `let` or `function` member |
+| `KPAR061` | `@…` is not a construct member annotation |
+| `KPAR062` | a `@Required` member has no computed body: it is a value the backed declaration supplies |
+| `KPAR063` | `@Content` annotates a `let` child-slot member |
+| `KPAR064` | `@Consuming` annotates a `function` member |
+| `KPAR065` | a `@Required function` states a signature and has no body; a member with a body is an ordinary `function` member |
+| `KPAR066` | a `requires` section lists `function` signatures, found … |
+| `KPAR067` | an `init` writes no result type: it produces the declaration it is written in |
+| `KPAR068` | expression nests more than … levels deep |
+| `KPAR070` | float literal is out of range |
+| `KPAR071` | expected a trait name |
+| `KPAR072` | expected a trait name |
+| `KPAR073` | a trait declares `function` members; a signature with no body is a requirement and one with a body is a default, found … |
+| `KPAR074` | only a method declares a `self` receiver, and this declaration runs on no value; drop the receiver |
+| `KPAR075` | write `borrow self` or `borrow mut self`: a receiver borrows, and a bare `self` would read as a method that consumes the value it was called on |
+| `KPAR076` | an `extend` block implements one trait; write a second block for the second trait |
+| `KPAR077` | a construct with a parameter list is a declaration backed by a family, so it has to name one: write `extends <Family>`. A construct with no parameter list is the family template itself |
+| `KPAR078` | a declaration is backed by one family: its members are that family's, and a second would be a second set for one value to provide |
+| `KPAR079` | expected a trait name in a type parameter's bound |
+| `KPAR080` | expected a constant name |
+| `KPAR081` | a module-scope `let` needs an `=` initializer |
+| `KPAR084` | expected a name after `distinct` |
+| `KPAR085` | a `distinct` declaration needs `= Representation`, the type it is at run time |
+| `KPAR086` | a `distinct` type is already copyable — its representation is a scalar word — so `@Derive(Copy)` claims nothing; drop it |
+| `KPAR087` | a `distinct` declaration takes no annotation: it names a type, runs no body, and crosses the C seam as the representation it is |
+
+## KMAC
+
+Macro expansion.
+
+| Code | Means |
+| --- | --- |
+| `KMAC001` | a `name!(…)` call site names no macro |
+| `KMAC002` | a `name!(…)` call site passed the wrong number of fragments |
+| `KMAC003` | an `expr` fragment was given something that is not an expression |
+| `KMAC004` | a `place` fragment was given a non-assignable argument |
+| `KMAC005` | a statement-only macro was used in expression position |
+| `KMAC006` | a `comptime macro` has no `kind`, or names one that does not exist |
+| `KMAC007` | a macro was applied to a declaration kind not in its `appliesTo` |
+| `KMAC008` | `appliesTo` is present on a `function` macro or missing elsewhere |
+| `KMAC009` | a `#{ … }` splice of a value with no splice rule |
+| `KMAC010` | the expansion depth limit was exceeded |
+| `KMAC011` | `@Derive(X)` where `X` is not a `derive`-kind macro |
+| `KMAC012` | a `comptime macro`'s `expand` does not match its `kind` |
+| `KMAC013` | `Identifier(text)` was handed text no identifier can spell |
+| `KMAC014` | a `quote { … }` or `#{ … }` in an `expand` body never closes |
+| `KMAC016` | a statement-position expansion that does not parse as statements |
+| `KMAC017` | an expression-position expansion that is not a single expression |
+| `KMAC020` | an `expand` body used a construct the evaluator does not support |
+| `KMAC021` | a macro raised `Diagnostics.error`, `.warning`, or `.note` |
+| `KMAC022` | `Ksl.compile` could not compile the shader it names |
+| `KMAC023` | `Ksl.compile` was passed other than two arguments |
+| `KMAC024` | `Ksl.compile` was passed a path that is not a string literal |
+| `KMAC025` | `Syntax.dropField` named a field the declaration does not have |
+| `KMAC026` | unknown macro `f` |
+| `KMAC027` | unknown macro `f` |
+| `KMAC028` | unknown macro `f` |
+| `KMAC029` | unknown macro `f` |
+| `KMAC030` | unknown macro `f` |
+
+## KSEM
+
+Semantic analysis. The largest set by far.
+
+| Code | Means |
+| --- | --- |
+| `KSEM003` | `…` is already defined with these parameters |
+| `KSEM004` | class `…` is already defined |
+| `KSEM005` | struct `…` already has a field named `…` |
+| `KSEM006` | construct family type `Any …` is already defined |
+| `KSEM007` | enum `…` already has a variant named `…` |
+| `KSEM010` | a program may declare only one `@Main` entrypoint |
+| `KSEM011` | program has no `@Main` function to run |
+| `KSEM012` | an entrypoint must take no parameters |
+| `KSEM020` | binding annotated `…` cannot hold a value of type `…` |
+| `KSEM021` | cannot assign to, append to, mutate through, or mutably borrow an immutable binding; declare it with `var` |
+| `KSEM022` | cannot assign a value of type `…` to a place of type `…` |
+| `KSEM023` | cannot assign to undefined name `…` |
+| `KSEM024` | cannot assign to immutable field `…` of `…` (declare it with `var`) |
+| `KSEM025` | cannot assign to immutable binding `…` (declare it with `var`) |
+| `KSEM027` | `…` is not in scope in this file; a sibling file's `import …` does not carry over — add `import …` here |
+| `KSEM030` | function must return a value of type `…` |
+| `KSEM031` | a `Void` function cannot return a value |
+| `KSEM032` | Kira could not find a module for import `…`; expected to find it at `…kira` beside the program |
+| `KSEM033` | `…` may finish without returning a value |
+| `KSEM040` | condition must be `Bool`, found `…` |
+| `KSEM041` | `break` outside of a loop has nothing to break |
+| `KSEM042` | `break` or `continue` outside a loop has nothing to leave |
+| `KSEM043` | a `for` range bound must be `Int`, found `…` |
+| `KSEM050` | unknown generic type `…` |
+| `KSEM051` | a declaration cannot hold a type declared later in the file, or declared in a file this one does not import |
+| `KSEM052` | struct `…` cannot contain itself by value: its fields form a cycle with no finite size. Hold one of them behind an array (`[…]`) or an enum to break it |
+| `KSEM059` | this `override` restates `…` as `…`, but the inherited field is `…`; an override keeps the type it rebinds |
+| `KSEM060` | undefined name `…` |
+| `KSEM061` | call to undefined function `…` |
+| `KSEM062` | `…` takes … constructor argument(s), found … |
+| `KSEM063` | constructor argument … of `…` expects `…`, found `…` |
+| `KSEM064` | class `…` inherits from itself through its parents |
+| `KSEM065` | `…` is already a parent of this class |
+| `KSEM066` | `…` must match the signature it overrides from `…` |
+| `KSEM067` | `…` is inherited from `…`; qualify it to say which … is meant |
+| `KSEM068` | `…` is inherited from `…`; qualify it to say which … is meant |
+| `KSEM069` | `…` can only qualify a member inside a method of a class that inherits from it |
+| `KSEM070` | operator `…` cannot apply to `…` |
+| `KSEM071` | operator `…` cannot combine `…` and `…` |
+| `KSEM072` | `…` overrides no inherited field |
+| `KSEM073` | `…` overrides no inherited method |
+| `KSEM074` | `…` is already inherited; write `override let … = ...` to give it a new default |
+| `KSEM080` | `print` takes exactly one argument, found … |
+| `KSEM081` | `print` cannot format a value of type `…` |
+| `KSEM082` | a field of a construct-backed declaration has no value and no default |
+| `KSEM090` | type `…` has no fields, so it has no field `…` |
+| `KSEM091` | struct `…` has no field `…` |
+| `KSEM092` | a struct literal names a function or an unknown struct |
+| `KSEM093` | field `…` is initialized twice |
+| `KSEM094` | field `…` of `…` expects `…`, found `…` |
+| `KSEM095` | a struct literal is missing a field that declares no default |
+| `KSEM096` | type `…` has no methods, so it has no method `…` |
+| `KSEM097` | construct family `…` has no method `…` |
+| `KSEM100` | cannot index a value of type `…`; only an array can be indexed |
+| `KSEM101` | `append` is a method: write `xs.append(value)` |
+| `KSEM102` | an array index must be an `Int`, found `…` |
+| `KSEM103` | `append` takes exactly one argument, found … |
+| `KSEM104` | cannot tell what `[]` holds here; annotate the binding (`var xs: [Int] = []`) |
+| `KSEM105` | an array of `…` cannot hold an element of type `…` (Kira does not widen numbers) |
+| `KSEM106` | cannot iterate a value of type `…`; `for` takes an array (`for x in xs`) or a range (`for i in 0..n`) |
+| `KSEM107` | `…` was moved and is no longer available here |
+| `KSEM108` | Passing `…` to `…` transfers ownership |
+| `KSEM109` | Cannot mutably borrow immutable binding `…` |
+| `KSEM110` | `…` was already moved |
+| `KSEM111` | `…` is borrowed and cannot be moved by this scope |
+| `KSEM113` | Passing `…` to `…` copies a non-trivial value |
+| `KSEM114` | `…` borrows this argument, so `move` is not allowed here |
+| `KSEM115` | `…` copies this argument, so `move` is not allowed here |
+| `KSEM117` | closure captures `…`, which is declared `var` and cannot be moved into shared storage |
+| `KSEM118` | an enum payload may not be of type `…`; a payload may be `Int`, `Float`, `Bool`, `String`, `Any`, a pointer, an array, a struct, or another enum |
+| `KSEM119` | enum `…` has no variant `…` |
+| `KSEM120` | enum `…` has no variant `…` |
+| `KSEM121` | variant `…` takes no payload |
+| `KSEM122` | variant `…` takes exactly one payload value |
+| `KSEM123` | variant `…` expects a payload of `…`, found `…` |
+| `KSEM124` | variant `…` requires a payload value (no default is declared) |
+| `KSEM125` | a `match` subject must be an enum, found `…` |
+| `KSEM126` | enum `…` has no variant `…` |
+| `KSEM127` | variant `…` is already matched by an earlier arm |
+| `KSEM128` | variant `…` carries no payload to bind |
+| `KSEM129` | `match` does not cover every variant of `…`; missing … |
+| `KSEM130` | a type alias claims a name another declaration already has |
+| `KSEM131` | the condition of `? :` must be `Bool`, not `…` |
+| `KSEM132` | the branches of `? :` disagree: `…` and `…` |
+| `KSEM133` | a `? :` expression must produce a value, but both branches are `Void` |
+| `KSEM134` | a closure has no function type to check against |
+| `KSEM135` | `…` takes … parameter(s), but this closure declares … |
+| `KSEM136` | `…` is a function; a function has no members, only a call |
+| `KSEM137` | `try` is only allowed as the initializer of a `let` directly inside an `attempt` body |
+| `KSEM138` | `try` needs a `Result`-shaped value: an enum with an `Ok` variant and an `Error` variant carrying a failure enum |
+| `KSEM139` | `handle` does not cover every failure of `…`; missing … |
+| `KSEM140` | `…` is not a variant of the failure enum `…` |
+| `KSEM141` | every `try` in one `attempt` must fail with the same enum; an earlier `try` fails with `…`, this one with `…` |
+| `KSEM142` | failure `…` is already handled by an earlier arm |
+| `KSEM143` | an `attempt` body must contain a `try` |
+| `KSEM157` | type alias `…` resolves back to itself; break the cycle so every `type Name = Target` chain reaches a concrete target type |
+| `KSEM158` | a task handle is opaque: `.await`, `.requestCancel()`, and `.detach()` are its whole surface, so `…` is not available on one |
+| `KSEM159` | a `Task { … }` body is a call to a named function taking `Int`/`Float` parameters and returning `Int`, `Float`, or nothing, or a bare numeric literal |
+| `KSEM160` | an array cannot cross the export boundary yet: `…` as an export … leaves who frees the elements undesigned |
+| `KSEM161` | a struct cannot cross the export boundary by value: `…` as an export … does not fit one tag and one word. Declare it a class, mark it `@Export`, and pass a handle instead |
+| `KSEM162` | an enum cannot cross the export boundary: `…` as an export … is a tagged value, and the boundary carries one tag and one word. Pass the payload, or wrap it in an `@Export` class |
+| `KSEM163` | a function value cannot cross the export boundary: `…` as an export … has no crossing representation |
+| `KSEM164` | `…` is not an exported class, so it cannot be an export …: only an `@Export` class crosses as a handle. Mark `…` `@Export` |
+| `KSEM165` | an exported parameter may not declare `…`: the export boundary's ownership is fixed per type — scalars and handles copy, a string is lent — so a per-parameter mode would promise something the consumer's side cannot honor |
+| `KSEM166` | `@Export` takes no arguments and no block: the consumer-facing name is derived from the function's own name, and a symbol override is surface nothing needs yet |
+| `KSEM167` | `@Export` cannot annotate a method: a library exports top-level functions, and an `@Export` class only makes its instances crossable as handles. Wrap the method in an exported function |
+| `KSEM168` | two exports map to the consumer name `…`: exported names are derived by snake_casing, so `…` collides with an export declared earlier. Rename one |
+| `KSEM169` | generic enum `…` is already defined |
+| `KSEM170` | type parameter `…` of enum `…` shadows a builtin type; pick a name no type already has |
+| `KSEM171` | enum `…` already declares a type parameter `…` |
+| `KSEM172` | generic trait `…` needs its type arguments here (write `…<...>`) |
+| `KSEM173` | `…` is not generic, so it takes no type arguments |
+| `KSEM174` | a generic enum was given the wrong number of type arguments |
+| `KSEM175` | generic … instantiates itself without end (gave up at `…`) |
+| `KSEM176` | `CString` may only appear as an `@FFI.Extern` parameter: it is a borrowed C string with no owned Kira representation. Use `String` for owned text, or `RawPtr` for an opaque handle |
+| `KSEM177` | an `…` function cannot also be an entrypoint: … is called, not run as the program's lifecycle |
+| `KSEM178` | unknown `@FFI.Extern` field `…` (expected `library`, `symbol`, `abi`, or `retains`) |
+| `KSEM179` | `@FFI.Extern` field `abi` is set twice |
+| `KSEM180` | `@FFI.Extern` block is missing its required `abi` field |
+| `KSEM181` | `@FFI.Extern` supports only the C ABI (`abi: c`), not `…` |
+| `KSEM182` | `Void` cannot be a foreign parameter: it names no value to pass |
+| `KSEM183` | argument … of `…` expects `…`, found `…` |
+| `KSEM184` | `…` is already defined as a function: an `…` name shares the call namespace, so it cannot repeat one |
+| `KSEM185` | `…` function `…` is already declared |
+| `KSEM186` | `…` cannot cross the export boundary: `RawPtr` and `CString` are `@FFI.Extern` seam types for calling *into* C, not part of a library's exported surface |
+| `KSEM187` | `…` is `@…` — … This use is not supported in this position |
+| `KSEM188` | `@FFI.Alias` is missing its required `target` type |
+| `KSEM189` | C-layout `…` takes no positional arguments: write `…()` for a zeroed value or `… { field: value }` to initialize fields |
+| `KSEM200` | `…` is backed by unknown construct family `…` |
+| `KSEM201` | `…` does not provide required member `…` of construct family `…`, and does not override every family method that can consume it |
+| `KSEM202` | construct member `…` is declared more than once with these parameters |
+| `KSEM203` | … is not executable yet in a construct; the executable slice supports `@Required let`, `@Required function`, stored and computed `let` members, `body { … }`, `function`/`@Consuming function` members, and `some X` / `[some X]` child slots |
+| `KSEM204` | `…` has no construction input named `…` |
+| `KSEM205` | `…` takes … construction input(s), found more |
+| `KSEM206` | construction input `…` of `…` is set more than once |
+| `KSEM207` | construction input `…` of `…` expects `…`, found `…` |
+| `KSEM208` | construction of `…` is missing input `…` |
+| `KSEM209` | `rawPointerWord` takes a `RawPtr`, found `…` |
+| `KSEM210` | a numeric conversion to `…` takes exactly one argument, found … |
+| `KSEM211` | cannot assign to immutable binding `…` (declare it with `var`) |
+| `KSEM212` | function `…` has type `…`, which does not match expected `…` |
+| `KSEM213` | construct member defaults recursively construct each other and have no finite value |
+| `KSEM214` | `nativeState` requires a Kira-owned value, found `…` |
+| `KSEM215` | `nativeUserData` expects callback state, found `…` |
+| `KSEM216` | `nativeRecover` takes exactly one type argument, found … |
+| `KSEM217` | `nativeRecover` expects `RawPtr`, found `…` |
+| `KSEM218` | `nativeRecover<…>` cannot recover state boxed as `…` |
+| `KSEM219` | `nativeStateFree` expects callback state or `RawPtr`, found `…` |
+| `KSEM220` | `…` takes exactly one value argument, found … |
+| `KSEM221` | `…` does not take type arguments |
+| `KSEM222` | trait `…` does not take explicit type arguments |
+| `KSEM223` | `…` has … field(s), but more value(s) were given |
+| `KSEM224` | field `…` of `…` expects `…`, found `…` |
+| `KSEM225` | a construction is missing a field with no argument and no default |
+| `KSEM226` | `…` has no field named `…` |
+| `KSEM227` | field `…` of `…` is set more than once |
+| `KSEM229` | `…` declares no child slot, so it takes no trailing child content |
+| `KSEM231` | child slot `…` of `…` holds exactly one child, found … |
+| `KSEM232` | child slot `…` of `…` holds `…`, but this fill is `…` |
+| `KSEM233` | `…` is not a construct-backed declaration and declares no content parameter, so it takes no trailing child content |
+| `KSEM234` | `…` does not implement `…` required by construct family `…` |
+| `KSEM235` | `…` does not match the signature of `……` |
+| `KSEM237` | `some` requires a construct: `…` is not a declared construct family. Write `some ConstructName`, or drop `some` for a non-construct type |
+| `KSEM238` | `extend` names no construct family or class `…` |
+| `KSEM239` | modifier `…` is already a method of construct family `…` |
+| `KSEM240` | parameter defaults fill each other through the call graph and have no finite value |
+| `KSEM241` | `…` declares `…` without a result type, so a call through the family value has no type; give the requirement a result type, or call `…` on the concrete declaration |
+| `KSEM242` | child slot `…` of `…` holds exactly one child; a `For`/`if` builder fills only a list slot (`[some X]`) |
+| `KSEM243` | `…` is `@FFI.Array`, whose storage is the annotation's `element` and `count`: its body declares fields, which have no place in a C array |
+| `KSEM244` | `…` is `@FFI.Array`, whose elements live in its `…` field: index that (`value.…[i]`) |
+| `KSEM245` | `…` declares a signature that cannot cross the C seam, so `…` cannot be passed as one |
+| `KSEM246` | a function cannot be passed as the C callback type it is written as |
+| `KSEM247` | `…` mutably borrows the same storage through `…` twice in one call (parameters … and …); the two writes would land in the same place and the later one would erase the earlier |
+| `KSEM248` | cannot assign to immutable binding `…` (declare it with `var`) |
+| `KSEM249` | `…` is a declaration backed by `…`, so `…` implements a requirement rather than declaring one; write it as an ordinary `function` member with a body |
+| `KSEM250` | an ownership mode a binding cannot carry, such as a `borrow mut` binding with nowhere to write through to |
+| `KSEM252` | a call was given the wrong number of arguments |
+| `KSEM253` | argument … of `…` expects `…`, found `…` |
+| `KSEM254` | generic enum `…` needs an instantiation to construct, …; annotate the target, as in `let value: …<...> = ……(...)` |
+| `KSEM255` | a library package cannot declare an entrypoint: a library is entered by its consumer, not run |
+| `KSEM256` | `@Export` is only meaningful in a library package: an application is entered at its `@Main`, not called by a consumer. Set `let kind = .Library` in `package.kira` |
+| `KSEM257` | `…` already declares a method `…` taking these parameters |
+| `KSEM258` | an entrypoint annotation cannot decorate an `extend` modifier: a modifier is called on a family value, so there is nothing for the operating system to start |
+| `KSEM259` | `@Export` cannot annotate an `extend` modifier: a library exports free functions, and a modifier's receiver is the family value. Wrap it in an exported function |
+| `KSEM260` | `@FFI.Extern` cannot annotate an `extend` modifier: a foreign function is a C symbol with no Kira body, and a modifier is the body it was written as |
+| `KSEM261` | child slot `…` inherited from `…` must declare its element type |
+| `KSEM262` | stored construct member `…` expects `…`, found `…` |
+| `KSEM263` | a construct update override needs a non-empty field path |
+| `KSEM264` | construct update field `…` expects `…`, found `…` |
+| `KSEM265` | construct update paths `…` and `…` overlap |
+| `KSEM266` | a braced construct update needs a concrete construct-backed value |
+| `KSEM267` | construct update type `…` has no field path `…` |
+| `KSEM268` | construct update path `…` cannot descend through `…` |
+| `KSEM269` | plain struct `…` does not accept `let` construction overrides |
+| `KSEM270` | `…` is moved inside a loop and has no value again before the next iteration, which would move it a second time. Assign the binding again (`… = …`), or move it after the loop |
+| `KSEM271` | `…` on construct family `…` declares no type, so it cannot be read through `Any …`; declare it as `let …: T = …` on the family |
+| `KSEM272` | enum `…` has no variant with a finite value: every variant carries a payload that leads back into `…`, so no value of it can ever be built |
+| `KSEM273` | a `{ … }` content block fills a child slot by name, so it is not a value here |
+| `KSEM274` | child slot `…` of `…` is filled more than once |
+| `KSEM275` | this task target `…` fits … equally well |
+| `KSEM276` | an `init` takes content in its last parameter only: the children are written after every argument, so one `some X` parameter can hold them |
+| `KSEM277` | this `init` takes exactly one child, found …; a `[some X]` parameter takes a list of them |
+| `KSEM278` | `…` takes no trailing content; give it a last parameter of `some X` for one child or `[some X]` for a list of them |
+| `KSEM279` | `…` is not a system call Kira has a number for; the calls it knows are … A name is written the way `man 2` writes it, because the number it resolves to differs per architecture and the compiler supplies it |
+| `KSEM280` | `@FFI.Syscall` names a Linux system call, and this build targets `…` |
+| `KSEM281` | `@FFI.Syscall` has no lowering for architecture `…`; Kira emits the kernel entry sequence for `…` and `…` |
+| `KSEM282` | a system call takes at most … arguments, and this declaration writes …: the arguments go in registers, and there is no seventh for one to go in |
+| `KSEM283` | a system call cannot return a `CString`: the kernel answers a machine word, and nothing in that word says it addresses text or how much of it |
+| `KSEM284` | `…` does not return, so its declaration cannot name a result type; write no `->` at all |
+| `KSEM285` | `retains` names `…`, which is not a parameter of `…` |
+| `KSEM286` | `retains` names parameter `…` twice |
+| `KSEM287` | `…` retains this argument — the callee keeps its C storage past the call — so write `move …` |
+| `KSEM288` | `…` is a trait the compiler already knows, so it cannot be declared: what it means is decided by a type's own members, not by a written body |
+| `KSEM289` | `…` is not a trait, so `…` cannot conform to it |
+| `KSEM290` | `…` already conforms to `…`: one type keeps a trait's promise in exactly one way, so a second conformance would leave a call with no answer to pick |
+| `KSEM291` | `…` may conform to `…` only where one of them is declared |
+| `KSEM292` | …: the trait requires `…`. Write it in `…`'s body or in an `extend …: …` block |
+| `KSEM293` | `……` does not match what `…` requires: the trait declares `…` |
+| `KSEM294` | `…` declares no member `…`, so this block cannot implement one: an impl block carries the trait's members and nothing else |
+| `KSEM295` | `…` states something about one type's own members, so it does not classify values and has no existential form. Name the concrete type here |
+| `KSEM297` | `…` claims `Copyable`, but …, so `…` moves rather than copies. Drop the claim and let it move, borrow it, or give it an explicit duplication |
+| `KSEM298` | `…` is not a type that can conform to `…`: an impl block implements a trait for a struct, a class, or a construct-backed declaration |
+| `KSEM299` | `…` is not a method, so it has no receiver to borrow: a `self` parameter belongs to a declaration written inside a type |
+| `KSEM300` | `…drop` is run by the release, not by a call: calling it here would run the body a second time and leave the value looking alive |
+| `KSEM301` | `…` claims `Drop` but presents no `drop`: write `function drop(borrow mut self)` in its body or in an `extend …: Drop` block |
+| `KSEM302` | closure captures `…`, which is a `…` and runs a user `Drop` body |
+| `KSEM303` | `…` runs a user `Drop` body, so it cannot be an export …: a consumer holds it past every Kira frame, and the release that frees it happens where no engine is running to enter the body |
+| `KSEM304` | `nativeState` cannot box `…`, which runs a user `Drop` body |
+| `KSEM305` | `…` retains this argument, so it cannot be a `…`, which runs a user `Drop` body: a retained value is freed at teardown, after the last frame, where no engine is running to enter the body |
+| `KSEM306` | an enum payload may not be a `…`, which runs a user `Drop` body |
+| `KSEM307` | `@…` puts this body on one engine, and `…` runs a user `Drop` body, so it cannot cross to it |
+| `KSEM308` | `…` is not a trait, so `…` cannot require it: a supertrait names a trait every conforming type must also claim |
+| `KSEM309` | `…` requires itself through …: a supertrait is an obligation a conforming type discharges, and one that comes back around can never be discharged |
+| `KSEM310` | a type claims a trait whose supertrait it does not conform to |
+| `KSEM311` | a type claims a marker trait its shape cannot keep |
+| `KSEM312` | a value that cannot cross into the context that receives it, because it is not `Send` |
+| `KSEM313` | `…` cannot be used as a type: member `…` takes no `self`, so a call through a value could not reach it |
+| `KSEM314` | `…` has no member `…` |
+| `KSEM315` | a type argument does not satisfy the bound its parameter declares |
+| `KSEM316` | constant `…` collides with the function of the same name: constants and functions share one value namespace |
+| `KSEM317` | module constants form a dependency cycle: …; no member has a value to start from |
+| `KSEM318` | a module constant cannot hold `…`: its value is shared by every reader, and a `Drop` value has exactly one owner |
+| `KSEM330` | `…` is a `@MainThread` function; call it through `MainThread.invoke`, `MainThread.spawn`, or `MainThread.post` |
+| `KSEM331` | `MainThread.…` takes its call in the trailing block and no parenthesized arguments |
+| `KSEM332` | `MainThread.…` requires a direct call without a nested trailing block |
+| `KSEM333` | `MainThread.…` cannot route a call with `borrow mut` parameters because its caller storage stays on the requesting context |
+| `KSEM334` | `MainThread.spawn` targets must return an owned `Send` value or nothing |
+| `KSEM335` | a value cannot cross to the main thread |
+| `KSEM336` | a main-thread task handle is opaque: `.await` is its only operation, so `…` is not available on one |
+| `KSEM337` | an entrypoint cannot also be `@MainThread` |
+| `KSEM338` | a main-thread annotation requires an operating-system main thread and is unavailable on WebAssembly |
+| `KSEM339` | the entrypoint runs on the application thread, so it cannot also be `@MainThreadLifecycle`: declare the main-thread loop as its own function |
+| `KSEM341` | a `@MainThreadLifecycle` function must take no parameters: calling it starts an independent preserved stack and transfers no arguments |
+| `KSEM344` | a `@MainThreadLifecycle` function must return `Void`: its call starts the lifecycle and does not wait for its eventual result |
+| `KSEM345` | `…` cannot be the representation of a `distinct` type: a distinct type is one scalar word, so its representation is an integer, a float, `Bool`, `RawPtr`, or another distinct type |
+| `KSEM346` | distinct type `…` resolves back to itself; break the cycle so every `distinct Name = Representation` chain reaches a scalar |
+| `KSEM347` | `…` is a distinct type, so it is built from exactly one value of `…`, found … |
+| `KSEM348` | `…` is a distinct type over `…`, so it is built from one of those; `…` is a different type. Write `.raw` to take the representation out of a value that already has one |
+| `KSEM349` | `…` is a distinct type, so it has one member: `raw`, the `…` it is. `…` is not one of its members |
+| `KSEM350` | the literal `…` does not fit `…` |
+| `KSEM352` | `…` is not `async`, so it cannot be a task target: mark it `async function` to schedule it, or call it directly |
+| `KSEM353` | `…` borrows a parameter, so it cannot be a task target: a task takes its arguments owned or copied, never borrowed |
+| `KSEM354` | `…` is `async`, so it cannot be called directly: write `Task { …(…) }` to schedule it, and `.await` the handle for its result |
+| `KSEM356` | a parameter cannot be `copy` of a type that is not Copyable |
+| `KSEM357` | `…` takes class-typed parameters whose subclass combinations exceed the … specializations one function may have; split it, or take fewer class-typed parameters |
+| `KSEM358` | `…` asks an `Any` what it holds, and this value is a `…`, whose type is already known |
+| `KSEM359` | `…` is not a type an `Any` can hold, so `…` can never be true |
+| `KSEM360` | `nativeStateFree` is deprecated: it releases one reference, not the state |
+| `KSEM361` | `…` expects a userdata token of type `RawPtr`, found `…`. A handle releases its own reference when it goes out of scope |
+| `KSEM362` | `…` names no runtime value, so it has no `.type` |
+| `KSEM363` | a `Type` has `name`, `package`, `kind`, `arguments`, and `conformances`, and no `…`. A declaration's fields, methods, and layout are compile-time facts, not runtime ones |
+| `KSEM364` | `Channel<T>()` takes no arguments: the payload type is the type argument |
+| `KSEM365` | a channel payload with nothing to queue: a payload is an integer width, a float width, `Bool`, or a `distinct` over one, because a queued value is one machine word |
+| `KSEM366` | `send` takes exactly one value, the one crossing the channel |
+| `KSEM367` | an operation a channel end does not have, including `.raw` |
+| `KSEM900` | a keyword the parser recognizes but this compiler does not support yet |
+
+## KIR
+
+HIR and IR lowering.
+
+| Code | Means |
+| --- | --- |
+| `KIR005` | `…` derives `Copy`, but …, so `…` moves rather than copies. Remove the derive and let it move, borrow it, or give it an explicit duplication |
+
+## KBE
+
+A code-generation backend.
+
+| Code | Means |
+| --- | --- |
+| `KBE001` | a backend was asked for a feature it does not support |
+
+## KSLP
+
+The KSL parser.
+
+| Code | Means |
+| --- | --- |
+| `KSLP001` | a token appeared where the grammar allows something else |
+| `KSLP002` | a top-level position held something that is not a declaration |
+| `KSLP003` | a resource declaration is malformed |
+| `KSLP004` | a `storage` resource named an access mode that does not exist |
+| `KSLP005` | an annotation is not one KSL defines, or is malformed |
+| `KSLP006` | a stage body held something a stage cannot contain |
+| `KSLP007` | `threads` was not given exactly three extents |
+| `KSLP008` | a numeric literal does not fit the type it is written as |
+| `KSLP009` | the file interned more distinct names than the compiler can hold |
+
+## KSLS
+
+KSL semantics and the shader build seam.
+
+| Code | Means |
+| --- | --- |
+| `KSLS001` | a written type names nothing |
+| `KSLS002` | a name is not bound here |
+| `KSLS003` | two declarations claim the same name |
+| `KSLS004` | an expression has a type the position does not accept |
+| `KSLS005` | a call was given the wrong number of arguments |
+| `KSLS006` | a member does not exist on the type it was read from |
+| `KSLS007` | a `@builtin` names something, or sits somewhere, that is illegal |
+| `KSLS008` | a write to something that cannot be written |
+| `KSLS009` | a stage is missing something it needs, or has one thing twice |
+| `KSLS010` | an option's default is not a constant of its type |
+| `KSLS011` | a shader file could not be read |
+| `KSLS012` | a resource declaration is illegal for the kind it declares |
+| `KSLS013` | a file declares no shader, or more than one |
+| `KSLS014` | an operator was applied to types it does not accept |
+| `KSLS015` | a function can finish without returning its result |
+| `KSLS016` | a shader backend could not emit the output a target requested |
+| `KSLS017` | a `const` or enum variant does not fold to a value of its type |
+| `KSLS018` | two resources in one group take the same slot |
+
+## KPK
+
+Package and project discovery, and manifests.
+
+| Code | Means |
+| --- | --- |
+| `KPK001` | no project manifest was found |
+| `KPK002` | a `package.kira` declaration could not be read |
+| `KPK007` | the target entrypoint source file is missing |
+| `KPK010` | a library target has no buildable source files |
+| `KPK020` | a path dependency has no readable package manifest |
+| `KPK021` | package dependencies contain a cycle |
+| `KPK022` | a manifest declares the same dependency more than once |
+| `KPK023` | a package name resolves to conflicting identities |
+| `KPK024` | the lockfile disagrees with the resolved manifest graph |
+| `KPK025` | a `*_types.kira` source sits outside a `bind-types/` directory |
+| `KPK026` | a drifted lockfile was rewritten from the manifests |
+| `KPK027` | a drifted lockfile could not be rewritten |
+| `KPK028` | a registry dependency has no configured fetcher |
+| `KPK029` | a git dependency has no configured fetcher |
+| `KPK030` | a package manifest handed to the compiler could not be read |
+| `KPK031` | the root a check request named is in no package it listed |
+| `KPK032` | a dependency package's manifest exists but could not be read or parsed |
+| `KPK040` | a native library's headers could not be bound |
+| `KPK041` | a binding the package ships was adopted rather than generated |
+
+## KTC
+
+Toolchain discovery and activation.
+
+| Code | Means |
+| --- | --- |
+| `KTC001` | the LLVM toolchain could not be found |
+
+## KCL
+
+The command line.
+
+| Code | Means |
+| --- | --- |
+| `KCL001` | unknown CLI command |
+
+## KLINT
+
+The package's own linter, including lints written in Kira.
+
+| Code | Means |
+| --- | --- |
+| `KLINT000` | the lint runner's receipt, naming how many lints ran, so silence can be told from absence |
+| `KLINT001` | an enum variant written with the type it already belongs to |
+| `KLINT002` | a `while` counting an index by hand where a `for` says it |
+| `KLINT003` | a file past the line ceiling the package configured |
+
+## KIC
+
+An internal compiler error.
+
+| Code | Means |
+| --- | --- |
+| `KIC001` | an internal compiler error with no more specific code |
