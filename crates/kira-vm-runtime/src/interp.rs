@@ -203,9 +203,33 @@ impl NativeCallScratch {
     }
 }
 
+/// The task and channel tables of an execution that outlives one entry into
+/// the interpreter.
+///
+/// A slice boundary is not the end of anything the program wrote. A
+/// `@MainThreadLifecycle` function is suspended and resumed many times and
+/// keeps its locals across every suspension, so a task it spawned and a channel
+/// it created have to survive with them: a handle is an index, and a table
+/// rebuilt under a live handle either refuses it or, worse, hands it another
+/// row.
+///
+/// Kept apart from [`VmScratch`] because the two answer different questions. A
+/// persistent [`crate::Instance`] reuses its scratch across calls and must
+/// *not* reuse these: separate calls are separate runs, and a handle from one
+/// naming a row in the next is the aliasing this type exists to prevent.
+#[derive(Default)]
+pub(crate) struct VmExecutors {
+    /// The task table, carried between entries.
+    pub(crate) tasks: TaskExecutor,
+    /// The channel table, carried with it: a receive orders work against a task,
+    /// so one surviving a slice without the other would be half an execution.
+    pub(crate) channels: ChannelExecutor,
+}
+
 /// Reusable interpreter storage that can outlive one call on a persistent
 /// [`crate::Instance`]. The task table is intentionally absent: task handles
-/// are valid only for one run and are recreated for every entry.
+/// are valid only for one run and are recreated for every entry. An execution
+/// that *is* one run across several entries carries [`VmExecutors`] instead.
 #[derive(Default)]
 pub(crate) struct VmScratch {
     stack: Vec<Value>,

@@ -165,6 +165,27 @@ impl<'h> Vm<'h> {
         Ok(frame)
     }
 
+    /// Takes over the task and channel tables of an execution already running.
+    ///
+    /// Handing them in rather than starting fresh is what makes a suspended
+    /// execution one execution: see [`super::VmExecutors`].
+    pub(crate) fn adopt_executors(&mut self, executors: super::VmExecutors) {
+        self.tasks = executors.tasks;
+        self.channels = executors.channels;
+    }
+
+    /// Hands those tables back, leaving this VM empty ones.
+    ///
+    /// Called on every path out of a slice, including a trap: an execution that
+    /// failed still owns rows its caller has to be able to account for, exactly
+    /// as it still owns its heap.
+    pub(crate) fn take_executors(&mut self) -> super::VmExecutors {
+        super::VmExecutors {
+            tasks: std::mem::take(&mut self.tasks),
+            channels: std::mem::take(&mut self.channels),
+        }
+    }
+
     /// Returns the persistent heap and reusable non-task storage after a call.
     pub(crate) fn into_heap_and_scratch(self) -> (Heap, VmScratch) {
         let Vm {

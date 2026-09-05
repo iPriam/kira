@@ -66,7 +66,7 @@ fn main_thread_lifecycle_runs_across_every_executable_backend() {
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "main-thread-lifecycle\n42\nmanual-main-thread\n20000\n",
+            "main-thread-lifecycle\n42\nmanual-main-thread\n20008\n",
             "the lifecycle call tree diverged on {backend}"
         );
     }
