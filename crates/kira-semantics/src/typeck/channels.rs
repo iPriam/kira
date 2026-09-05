@@ -40,6 +40,7 @@ use kira_source::Span;
 use kira_syntax_model::ast::CallArg;
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::traits::markers::Marker;
 
 /// Which end of a channel a minted row is, and what it carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +94,8 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let payload = *payload;
-        if let Some(reason) = self.channel_payload_refusal(payload) {
-            self.emit(span, "KSEM365", reason);
+        if let Some((code, reason)) = self.channel_payload_refusal(payload) {
+            self.emit(span, code, reason);
             return self.program.exprs.alloc(HirExpr::Error);
         }
         let Some(sender) = self.channel_end_row(payload, Direction::Sender) else {
@@ -122,22 +123,48 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Why a value of this type cannot cross a channel, or `None` when it can.
+    /// Why a value of this type cannot cross a channel, with the code the
+    /// refusal is filed under, or `None` when it can.
     ///
-    /// The queue holds one machine word per value, so a payload is a scalar:
-    /// an integer width, a float width, `Bool`, or a `distinct` over one. A
-    /// heap value has no word to queue, and queueing a pointer into the
-    /// sender's heap would hand the receiver a reference to storage the sender
-    /// still owns, which is the one thing the ownership model does not admit.
-    fn channel_payload_refusal(&self, payload: Type) -> Option<String> {
-        if payload.is_scalar() && payload != Type::RawPtr {
+    /// Two rules in the order the task-slot pair uses them, and for the same
+    /// reason: what a value *is* is decided before what it is made of.
+    ///
+    /// `Send` first. A payload leaves the context that sent it and arrives in
+    /// one that context does not own, which is the boundary `Send` describes:
+    /// a value naming storage its own engine keeps — a capture cell, a
+    /// native-state token, a row in an executor's table — is not one to hand
+    /// across, whatever its width. This rule is not narrower than the
+    /// representation rule below; it is a different question, and the day a
+    /// heap payload is admitted it is the only one still asking it.
+    ///
+    /// The representation rule second. The queue holds one machine word per
+    /// value, so a payload is a scalar with a word of its own: an integer
+    /// width, a float width, `Bool`, or a `distinct` over one. `Void` is a
+    /// scalar with nothing in it, so a channel over it would carry no value at
+    /// all; a pointer word names storage on the far side of a seam this
+    /// language does not read, so it is not a value to hand over either.
+    fn channel_payload_refusal(&self, payload: Type) -> Option<(&'static str, String)> {
+        let name = self.program.types.type_name(payload);
+        if let Some(reason) = self.marker_reason(&name, payload, Marker::Send) {
+            return Some((
+                "KSEM312",
+                format!(
+                    "a channel cannot carry `{name}`, which cannot cross into the context that \
+                     receives it: {reason}"
+                ),
+            ));
+        }
+        if payload.is_scalar() && !matches!(payload, Type::Void | Type::RawPtr | Type::ForeignPtr(_))
+        {
             return None;
         }
-        let name = self.program.types.type_name(payload);
-        Some(format!(
-            "a channel carrying `{name}` has nothing to queue: a payload is an integer width, \
-             a float width, `Bool`, or a `distinct` over one, because a queued value is one \
-             machine word"
+        Some((
+            "KSEM365",
+            format!(
+                "a channel carrying `{name}` has nothing to queue: a payload is an integer width, \
+                 a float width, `Bool`, or a `distinct` over one, because a queued value is one \
+                 machine word"
+            ),
         ))
     }
 
@@ -187,7 +214,19 @@ impl Analyzer<'_> {
     ///
     /// Minting here rather than only at `Channel<T>()` is what lets a function
     /// declare an end parameter before the file that creates one is analyzed.
-    pub(crate) fn channel_end_named(&mut self, text: &str, args: &[Type]) -> Option<Type> {
+    ///
+    /// A payload no channel may carry is refused *here*, under the same code
+    /// `Channel<T>()` would file it under, rather than left to fall through to
+    /// the template lookup: `Sender<String>` is a channel written wrong, not a
+    /// name that is not generic. It falls through only when the program
+    /// declares a template of that name, which is the case the fall-through
+    /// exists for.
+    pub(crate) fn channel_end_named(
+        &mut self,
+        text: &str,
+        args: &[Type],
+        span: Span,
+    ) -> Option<Type> {
         let direction = match text {
             "Sender" => Direction::Sender,
             "Receiver" => Direction::Receiver,
@@ -196,11 +235,25 @@ impl Analyzer<'_> {
         let [payload] = args else {
             return None;
         };
-        if self.channel_payload_refusal(*payload).is_some() {
-            return None;
+        if let Some((code, reason)) = self.channel_payload_refusal(*payload) {
+            if self.program_declares_template(text) {
+                return None;
+            }
+            self.emit(span, code, reason);
+            return Some(Type::Error);
         }
         let id = self.channel_end_row(*payload, direction)?;
         Some(Type::Distinct(id))
+    }
+
+    /// Whether the program declares a generic template under this name.
+    ///
+    /// The compiler's rows are owner-filed, so a program is free to declare its
+    /// own `Sender`; this is what tells the two apart at a use site.
+    fn program_declares_template(&self, text: &str) -> bool {
+        self.generic_enum_named(text).is_some()
+            || self.generic_aggregate_named(text).is_some()
+            || self.traits.contains_key(text)
     }
 
     /// What a minted end row is, or `None` when this distinct type is a
