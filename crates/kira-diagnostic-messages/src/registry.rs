@@ -4,8 +4,8 @@
 //! row per code. It is data rather than Rust because three artifacts are
 //! written from it: the `KiraError` enum a Kira program reads a diagnostic
 //! with, the function that turns code text into one, and the diagnostics
-//! appendix. `build.rs` turns the rows into the constant table below, so a
-//! malformed row fails the build rather than a lookup.
+//! appendix. `build.rs` turns the rows into the table below, so a malformed
+//! row fails the build rather than a lookup.
 //!
 //! `kira-diagnostic-registry` is what makes the table authoritative. It fails
 //! when the compiler emits a code the table does not list, when the table lists
@@ -141,12 +141,11 @@ include!(concat!(env!("OUT_DIR"), "/diagnostic_codes.rs"));
 
 /// Every registered code, ordered by family and then by number.
 #[must_use]
-pub const fn all() -> &'static [RegisteredCode] {
+pub fn all() -> &'static [RegisteredCode] {
     &CODES
 }
 
 /// The registered codes of one family, in number order.
-#[must_use]
 pub fn family(family: CodeFamily) -> impl Iterator<Item = &'static RegisteredCode> {
     all().iter().filter(move |entry| entry.family == family)
 }
