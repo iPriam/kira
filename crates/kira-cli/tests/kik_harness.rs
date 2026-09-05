@@ -66,7 +66,7 @@ fn main_thread_lifecycle_runs_across_every_executable_backend() {
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "main-thread-lifecycle\n42\nmanual-main-thread\n20000\n",
+            "main-thread-lifecycle\n42\nmanual-main-thread\n20008\n",
             "the lifecycle call tree diverged on {backend}"
         );
     }
@@ -93,7 +93,7 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         "the ffi harness reported failures: {tally}"
     );
     assert_eq!(
-        tally, "276 passed, 0 failed, 0 skipped, 276 total",
+        tally, "302 passed, 0 failed, 0 skipped, 302 total",
         "the ffi harness tally changed"
     );
 }
@@ -310,7 +310,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1475 passed, 0 failed, 0 skipped, 1475 total");
+    assert_eq!(vm, "1478 passed, 0 failed, 0 skipped, 1478 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 
