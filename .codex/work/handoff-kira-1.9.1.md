@@ -144,7 +144,7 @@ A-O as ground truth. Corrected mapping:
 | 13 | FFI / ABI / target model | Not started |
 | 14 | C layout / Web shims | Not started |
 | 15 | Hot reload / ABI versions | Partial: ABI bumped to 15 with the guard proven. Migration not started |
-| 16 | KIK parity / tooling / diagnostics registry | Partial. **Registry defect still open**: ~275 codes listed vs ~370 emitted, and `KSEM364`-`367` were added by hand rather than generated |
+| 16 | KIK parity / tooling / diagnostics registry | Registry done: `diagnostic-codes.tsv` is the table, `kira-diagnostic-registry` writes `KiraError`, `kiraErrorFromCode`, and the appendix from it, and its tests fail on drift. It was 290 listed against 438 emitted, 130 in common |
 
 Section O: channels done. Not started: maps and sets, iterators with declared
 element ownership, async closures, big-endian, Wasm64, opt-in runtime
@@ -155,10 +155,13 @@ unions, versioned hot state migration, annotation-driven schema evolution.
 
 These barely share files, so they parallelize cleanly:
 
-- **Diagnostics registry generation** (step 16). Generate the `KiraError` enum
-  and `kiraErrorFromCode` from the compiler's code table. Substrate:
-  `foundation/app/Kira/`, a generator in Rust, `sites/docs/.../diagnostics/`.
-  Self-contained and closes a defect that has been open since slice 1.
+- ~~**Diagnostics registry generation** (step 16).~~ Done on
+  `agent/diagnostics-registry`. The table is
+  `crates/kira-diagnostic-messages/diagnostic-codes.tsv`;
+  `cargo run -p kira-diagnostic-registry -- write` rewrites the two Kira files
+  and `sites/docs/.../diagnostics/codes.mdx`, and `-- check` reports drift.
+  A new code needs a row in the table or `cargo test -p
+  kira-diagnostic-registry` fails naming it.
 - **FFI / ABI / target model** (step 13). Bool ABI, `RawPtr.null`, FFI
   validation. Substrate: `crates/kira-semantics/src/foreign/`,
   `crates/kira-native-bridge/`, `tests-kik/ffi-harness/`.
