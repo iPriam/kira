@@ -658,3 +658,60 @@ neither passing nor failing here.
 That is two more than the 455 recorded before diagnostics was merged, and the count is the reason
 to re-measure rather than carry a number forward: the suite grew under a merge that touched none of
 its files.
+
+### Heap payloads, step 1 of 5: the transport (2026-09-06)
+
+Heap payloads travel as a native-state token in the queue rather than through a
+second value-transport mechanism built beside the one the language already has.
+No new bytecode instruction, no new `kira_rt_channel_*` symbol, and no ABI bump:
+the token is a word, and the `(Int, Int, Int) -> Int` channel contract already
+carries words.
+
+The property the design rests on was proven before any of it was written: a
+token minted in the sending context resolves in the receiving one, across tasks
+and across a scheduling slice, on all three engines. The lifecycle harness mints
+one before a loop of 20000 iterations and recovers it after — 20021 on vm, llvm
+and hybrid. It survives because the store is on the persistent side: on the VM
+it lives in the caller's host, which every per-slice `ForwardingHost` forwards
+to rather than replacing, and on native it is a process-global. That is the
+opposite side from where the task and channel tables sat, which is why those
+needed moving and this does not.
+
+`Crossing` now states in one place what the queued word is — the value, its
+IEEE-754 bits, or a token naming it — where the two ends previously each worked
+it out from the payload type. The boxed case carries the type id rather than the
+type, and `native_state_type_id` derives that id from the type's *shape* rather
+than its table index, so the sender's box and the receiver's recovery agree by
+construction rather than by protocol.
+
+Recovery copies out of the store rather than viewing into it, so the receiver
+releases the token immediately after reading, and that release is what frees the
+storage a delivered payload travelled in.
+
+#### What is left, in the order it has to happen
+
+Nothing reaches the boxed path yet, because `KSEM365` still refuses a payload
+that owns storage. The order matters: the rule that admits heap payloads relaxes
+only after everything that carries them exists, so the tree is never in a state
+where a program compiles and then misbehaves.
+
+2. **Drain on close.** `close()` lowers to one `CloseReceiver` primitive, and
+   the table's `close_receiver` clears the queue — which would drop every
+   undelivered token on the floor, silently, and a leak surfaces as an
+   unattributed slow leak rather than a wrong answer. The fix stays inside
+   synthesized IR, the way the wait does: a `__kira_channel_close_receiver_N`
+   that drains `poll`/`take`/`release` while the poll says ready, then closes.
+   `HirExpr::ChannelClose` has to carry the `Crossing` for this — it carries
+   only the end and a direction today — and the closer rows need collecting at
+   close sites the way receiver rows are collected at receive sites, because a
+   program may close a receiver it never received from. Note the function-index
+   arithmetic: receivers sit at `task_base + TaskFns::COUNT + STEP_HELPERS +
+   index`, so closers go after all of them.
+3. **Relax `KSEM365`** to admit what the store can hold, still refusing `Void`,
+   a pointer word, and anything with no `native_state_type_id`.
+4. **Enforce `Send`.** This is the moment the handoff's "not a hole today
+   because every type the payload rule admits is `Send`" stops being true. The
+   rule relaxes; it does not disappear.
+5. **Tests and docs.** Harness constructs and parity cases on VM and native,
+   including the drained-closed-channel case, and the heap-balance assertions
+   are what say whether the ownership rules hold.
