@@ -115,3 +115,15 @@ pub enum Crossing {
     /// by construction rather than by protocol, and neither can drift.
     Boxed(kira_runtime_abi::NativeStateTypeId),
 }
+
+impl Crossing {
+    /// Whether the queued word owns the storage it names.
+    ///
+    /// The question a receiver's close has to ask: a slot holding a token owns
+    /// what the token names, so discarding the queue without releasing them
+    /// leaks every payload that was never delivered.
+    #[must_use]
+    pub fn is_boxed(self) -> bool {
+        matches!(self, Crossing::Boxed(_))
+    }
+}

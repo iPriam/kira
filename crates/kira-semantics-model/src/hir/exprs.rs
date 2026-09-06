@@ -210,6 +210,12 @@ pub enum HirExpr {
         end: HirExprId,
         /// Whether it is the sender end.
         sender: bool,
+        /// How this channel's payload crosses.
+        ///
+        /// A receiver closing discards whatever is still queued, and a boxed
+        /// payload's queue slot owns the storage its token names — so what the
+        /// close has to do about the queue depends on this.
+        wire: crate::channel::Crossing,
     },
     /// A property of a runtime type descriptor: `t.name`, `t.package`,
     /// `t.kind`, or `t.arguments`.

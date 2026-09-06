@@ -55,19 +55,31 @@ pub(crate) fn synthesize(program: &mut IrProgram, rows: &[ReceiverRow], task_ste
     if rows.is_empty() {
         return;
     }
-    // The step helper sits first, so a receiver built below can call it at a
-    // row it knows before either exists.
+    // The two helpers sit first, so anything built below can call either at an
+    // index it knows before any of them exists.
     let step_at = program.functions.len() as u32;
     let step = build_step(program, task_step);
     program.functions.push(step);
+    let closer = build_close_receiver(program);
+    program.functions.push(closer);
     for (index, row) in rows.iter().enumerate() {
         let function = build_receive(program, *row, index, step_at);
         program.functions.push(function);
     }
 }
 
-/// How many functions sit ahead of the first receiver.
-pub(crate) const STEP_HELPERS: u32 = 1;
+/// How many helpers sit ahead of the first receiver: the step, then the closer.
+///
+/// Both come first deliberately. A helper placed *after* the receivers would
+/// sit at an index that depends on how many payload types the program ends up
+/// having, which is not known while the call to it is being lowered — and a
+/// call resolving to the wrong function is a program that releases somebody
+/// else's storage, with nothing about the failure naming this arithmetic.
+/// Ahead of them, both indices are fixed before lowering starts.
+pub(crate) const STEP_HELPERS: u32 = 2;
+
+/// Where the closer sits, relative to the first channel helper.
+pub(crate) const CLOSER: u32 = 1;
 
 /// `__kira_channel_step() -> Int`: run one queued task, answering whether there
 /// was one.
@@ -277,6 +289,79 @@ fn build_receive(
         return_type: Type::Enum(row.result),
         // Inherited, so a receive runs wherever the build puts unannotated
         // code, exactly as the task spine does.
+        execution: Execution::Inherited,
+        is_main_thread: false,
+        by_reference_params: Vec::new(),
+        by_pointer_params: Vec::new(),
+        body,
+    }
+}
+
+/// `__kira_channel_close_receiver_N(receiver)`: drop what was never delivered,
+/// then close.
+///
+/// ```text
+/// while Poll(receiver) == READY {
+///     NativeStateRelease(Take(receiver))
+/// }
+/// CloseReceiver(receiver)
+/// ```
+///
+/// Only a boxed payload needs this. Its queue slot holds a token that owns the
+/// storage the value is sitting in, and the table's close discards the queue —
+/// so without this, closing a receiver with anything still in it leaks every
+/// undelivered payload, quietly, in a way that shows up as memory nobody can
+/// attribute rather than as a wrong answer.
+///
+/// One function serves every payload type. Draining is the same work whatever
+/// was queued: a slot holds a token, and releasing a token needs to know
+/// nothing about what it names.
+///
+/// It lives here rather than in the table for the same reason the wait does:
+/// the table owns storage, and what a program *means* by closing an end is
+/// generated code both engines run one copy of.
+fn build_close_receiver(program: &mut IrProgram) -> IrFunction {
+    let mut build = Build { program };
+    // Slot 0 is the receiver end; slot 1 holds the poll status across the loop.
+    let status_slot = 1;
+
+    let first_poll = build.poll(0);
+    let ready = build.status_is(status_slot, wire::POLL_READY);
+    let end = build.expr(IrExpr::Local(0));
+    let taken = build.op(ChannelPrim::Take, &[end]);
+    let release = build.expr(IrExpr::NativeStateRelease { token: taken });
+    let repoll = build.poll(0);
+    let closing = build.expr(IrExpr::Local(0));
+    let close = build.op(ChannelPrim::CloseReceiver, &[closing]);
+
+    let body = vec![
+        IrStmt::Let {
+            local: status_slot,
+            init: first_poll,
+        },
+        IrStmt::While {
+            cond: ready,
+            body: vec![
+                IrStmt::Eval { expr: release },
+                IrStmt::Assign {
+                    place: crate::ir::IrPlace {
+                        local: status_slot,
+                        path: Vec::new(),
+                    },
+                    value: repoll,
+                },
+            ],
+        },
+        IrStmt::Eval { expr: close },
+        IrStmt::Return { value: None },
+    ];
+
+    IrFunction {
+        name: "__kira_channel_close_receiver".to_owned(),
+        param_count: 1,
+        locals: vec![Type::INT, Type::INT],
+        native_state_locals: vec![None, None],
+        return_type: Type::Void,
         execution: Execution::Inherited,
         is_main_thread: false,
         by_reference_params: Vec::new(),

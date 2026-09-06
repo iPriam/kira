@@ -374,9 +374,11 @@ impl Analyzer<'_> {
             }
             ("close", _) => {
                 self.expect_no_arguments(ctx, name, args, span);
+                let wire = self.channel_wire_type(end.payload);
                 self.program.exprs.alloc(HirExpr::ChannelClose {
                     end: receiver_hir,
                     sender: end.direction == Direction::Sender,
+                    wire,
                 })
             }
             _ => {

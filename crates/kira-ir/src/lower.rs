@@ -704,8 +704,24 @@ impl Lowerer<'_> {
                 failure,
                 ty,
             } => return self.lower_channel_receive(receiver, payload, wire, failure, ty),
-            HirExpr::ChannelClose { end, sender } => {
+            HirExpr::ChannelClose { end, sender, wire } => {
                 let end = self.lower_expr(end);
+                // A receiver closing discards whatever is still queued. When
+                // those slots hold tokens they own the storage behind them, so
+                // the queue is drained and released before the end is closed
+                // rather than dropped on the floor. A sender closing discards
+                // nothing — the queue stays for the receiver to drain.
+                if !sender && wire.is_boxed() {
+                    self.uses_tasks = true;
+                    let callee =
+                        self.task_base + crate::tasks::TaskFns::COUNT + crate::channels::CLOSER;
+                    return self.ir.exprs.alloc(IrExpr::Call {
+                        callee: IrCallee::User(callee),
+                        args: vec![end],
+                        result: Type::Void,
+                        writebacks: Vec::new(),
+                    });
+                }
                 let prim = match sender {
                     true => ChannelPrim::CloseSender,
                     false => ChannelPrim::CloseReceiver,
