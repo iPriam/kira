@@ -296,6 +296,14 @@ impl ExpandedProgram {
 pub struct SourceFile<'db> {
     /// The id every span in this file is attributed to.
     pub id: SourceId,
+    /// The package that owns the file, or `None` when no package does.
+    ///
+    /// Part of the file's identity rather than something read later: what a
+    /// name declared here may collide with depends on which scope the file is
+    /// in, so two files with the same bytes in different packages are not the
+    /// same file.
+    #[returns(ref)]
+    pub owner: Option<String>,
     /// The file's full source text, as read from disk.
     #[returns(ref)]
     pub text: String,
@@ -310,7 +318,7 @@ fn file_macros<'db>(
     db: &'db dyn salsa::Database,
     file: SourceFile<'db>,
 ) -> kira_macros::FileMacros {
-    kira_macros::scan(*file.id(db), file.text(db))
+    kira_macros::scan(*file.id(db), file.owner(db).as_deref(), file.text(db))
 }
 
 /// One file's top-level declarations, for the wrapper-template pre-scan.
@@ -426,12 +434,18 @@ pub fn expanded(db: &dyn salsa::Database, source: SourceProgram) -> ExpandedProg
     let files = program.files(db);
     let context = *program.context(db);
 
-    // Scanning diagnostics first, in file order, then each file's expansion
-    // diagnostics — the order a whole-program sweep reported them in.
+    // Scanning diagnostics first, in file order, then the names declared twice
+    // in one scope, then each file's expansion diagnostics — the order a
+    // whole-program sweep reported them in. A conflict belongs to the program
+    // rather than to a file, because the second declaration is only a conflict
+    // in the company of the first.
     for &file in files {
         for diagnostic in file_macros(db, file).diagnostics() {
             DiagnosticAccumulator(diagnostic.clone()).accumulate(db);
         }
+    }
+    for diagnostic in macro_environment(db, context).conflicts() {
+        DiagnosticAccumulator(diagnostic.clone()).accumulate(db);
     }
     let mut texts = Vec::with_capacity(files.len());
     for &file in files {
@@ -570,9 +584,14 @@ fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> Pr
     let mut files: Vec<SourceFile<'db>> = modules
         .into_iter()
         .enumerate()
-        .map(|(index, module)| SourceFile::new(db, module_source_id(index), module.text))
+        .map(|(index, module)| {
+            let owner = ImportTable::owning_package(&module.module).map(str::to_owned);
+            SourceFile::new(db, module_source_id(index), owner, module.text)
+        })
         .collect();
-    files.push(SourceFile::new(db, FILE_SOURCE_ID, source.text(db)));
+    // The entry file is owned by no package: it and the modules beside it are
+    // the program's own one flat scope.
+    files.push(SourceFile::new(db, FILE_SOURCE_ID, None, source.text(db)));
 
     // A file that declares nothing is not part of the macro context, which is
     // what keeps the context — and so every dependency's expanded text — the

@@ -245,3 +245,86 @@ fn a_userland_ksl_macro_inlines_what_the_pipeline_compiled() {
     assert!(text.contains(r#"vertexEntry: "v""#), "{text}");
     assert!(!text.contains("ksl!"), "{text}");
 }
+
+/// A name declared twice inside one scope is reported rather than answered by
+/// file order.
+///
+/// Both files are the program's own, so this is one flat scope and the second
+/// `pick` is the same name declared again. Answering it by which file was read
+/// first is the failure that cannot be reproduced from the source.
+#[test]
+fn a_macro_declared_twice_in_one_scope_is_refused() {
+    let first = "macro pick(value: expr) { expand { value + 1 } }\n";
+    let second = "macro pick(value: expr) { expand { value + 100 } }\n";
+    let main = "@Main function main() {\n    print(pick!(0))\n    return\n}\n";
+    let scans = [
+        scan(SourceId::new(0), None, first),
+        scan(SourceId::new(1), None, second),
+        scan(SourceId::new(2), None, main),
+    ];
+    let borrowed: Vec<&FileMacros> = scans.iter().collect();
+    let env = environment(&borrowed, &[]);
+    assert_eq!(env.conflicts().len(), 1, "{:?}", env.conflicts());
+    assert!(
+        env.conflicts()[0].has_code("KMAC031"),
+        "{:?}",
+        env.conflicts()
+    );
+}
+
+/// The first declaration keeps the name, so what the program means does not
+/// depend on which file was read first.
+#[test]
+fn the_first_declaration_in_a_scope_keeps_the_name() {
+    let first = "macro pick(value: expr) { expand { value + 1 } }\n";
+    let second = "macro pick(value: expr) { expand { value + 100 } }\n";
+    let main = "@Main function main() {\n    print(pick!(0))\n    return\n}\n";
+    let scans = [
+        scan(SourceId::new(0), None, first),
+        scan(SourceId::new(1), None, second),
+        scan(SourceId::new(2), None, main),
+    ];
+    let borrowed: Vec<&FileMacros> = scans.iter().collect();
+    let env = environment(&borrowed, &[]);
+    let expansion = crate::expand_one(&scans[2], main, &env, None, "linux");
+    assert!(expansion.text.contains("((0) + 1)"), "{}", expansion.text);
+}
+
+/// Two packages may each declare the same macro name: that is not one scope,
+/// and the nearer one wins the way every other name in the language does.
+#[test]
+fn a_nearer_package_declares_over_a_further_one() {
+    let dependency = "macro pick(value: expr) { expand { value + 1 } }\n";
+    let own = "macro pick(value: expr) { expand { value + 100 } }\n";
+    let main = "@Main function main() {\n    print(pick!(0))\n    return\n}\n";
+    let scans = [
+        scan(SourceId::new(0), Some("Dep"), dependency),
+        scan(SourceId::new(1), None, own),
+        scan(SourceId::new(2), None, main),
+    ];
+    let borrowed: Vec<&FileMacros> = scans.iter().collect();
+    let env = environment(&borrowed, &[]);
+    assert!(env.conflicts().is_empty(), "{:?}", env.conflicts());
+    let expansion = crate::expand_one(&scans[2], main, &env, None, "linux");
+    assert!(expansion.text.contains("((0) + 100)"), "{}", expansion.text);
+}
+
+/// Two modules of the *same* dependency are one scope too, so the rule is
+/// about the scope and not about being the program's own files.
+#[test]
+fn a_dependency_declaring_one_name_twice_is_refused() {
+    let first = "macro pick(value: expr) { expand { value + 1 } }\n";
+    let second = "macro pick(value: expr) { expand { value + 100 } }\n";
+    let scans = [
+        scan(SourceId::new(0), Some("Dep"), first),
+        scan(SourceId::new(1), Some("Dep"), second),
+    ];
+    let borrowed: Vec<&FileMacros> = scans.iter().collect();
+    let env = environment(&borrowed, &[]);
+    assert_eq!(env.conflicts().len(), 1, "{:?}", env.conflicts());
+    assert!(
+        env.conflicts()[0].has_code("KMAC031"),
+        "{:?}",
+        env.conflicts()
+    );
+}

@@ -69,9 +69,27 @@ Each side moves exactly once, so this is a correct affine swap for owned values 
 
 Any identifier introduced inside `expand` that is not one of the macro's own fragment parameters is hygienic: each expansion gets a fresh compiler-generated name for it. Two separate `swap!` calls never share a `temporary`, a real variable named `temporary` at the call site is never captured, and the macro's `temporary` is never visible to the caller.
 
+Every binding form counts, not only `let` and `var`: a `for` variable, a `match` arm's payload, a `handle` arm's payload, and a closure's parameters are all names the template introduces, and all are renamed. A macro whose arm binds `reason` may still be handed a fragment that mentions the caller's own `reason`.
+
 Fragment parameters are the only names that cross the boundary, and they cross as the caller wrote them, resolved in the caller's scope.
 
 Procedural macros are deliberately **not** hygienic: they emit source, and their generated names bind in the caller's scope by design. That is what lets a derive macro generate `eq_Point` and a caller call it.
+
+## One Name, One Declaration
+
+A macro name is resolved the way every other name in the language is. A package's macros are visible throughout that package, a dependency's arrive through an `import` in the file that uses them, and a name a nearer package declares stands in front of a further one's — so a program may declare its own `pick` over a dependency's and mean its own.
+
+Inside one scope that is not an override, it is the same name declared twice, and it is `KMAC031`. Answering it by whichever file the compiler read first would make the program mean something that cannot be worked out from the source:
+
+```kira
+// Alpha.kira
+macro pick(value: expr) { expand { value + 1 } }
+
+// Beta.kira, same package
+macro pick(value: expr) { expand { value + 100 } }   // KMAC031
+```
+
+The first declaration keeps the name, so the diagnostic names the second and the program's meaning does not depend on file order. Two modules of one dependency are one scope for the same reason.
 
 ## `expand` Is a Block
 

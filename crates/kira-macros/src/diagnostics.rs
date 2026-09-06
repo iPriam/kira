@@ -157,6 +157,8 @@ pub(crate) const TWO_REPLACERS: &str = "KMAC028";
 pub(crate) const TRIGGER_WITHOUT_REPLACE: &str = "KMAC029";
 /// KMAC030 — two expansions claimed the same bytes (a bug in this crate).
 pub(crate) const CONFLICTING_REWRITE: &str = "KMAC030";
+/// KMAC031 — a macro name declared twice inside one scope.
+pub(crate) const DUPLICATE_MACRO: &str = "KMAC031";
 
 #[cfg(test)]
 mod tests {

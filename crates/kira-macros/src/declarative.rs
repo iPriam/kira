@@ -333,7 +333,11 @@ mod tests {
         let files = [Lexed::new(SourceId::new(0), program)];
         let mut reporter = Reporter::new();
         let mut registry = registry::Registry::default();
-        registry.absorb(&registry::collect_file(&files[0], &mut reporter));
+        registry.absorb(
+            None,
+            &registry::collect_file(&files[0], &mut reporter),
+            &mut Vec::new(),
+        );
         let file = &files[0];
         let mut gensym = Gensym::new();
         let mut buffer = crate::edits::EditBuffer::new();

@@ -67,6 +67,24 @@ The engines agree, so this is not a divergence either — it is agreement on the
 wrong answer, on both paths, and the finding's diagnosis of the LLVM path is
 right about the cause.
 
+### The ABI version was deliberately not bumped
+
+An ABI bump was asked for alongside this fix and was not made. That is a
+decision, not an oversight.
+
+`op/opcode.rs` states it directly, twice, beside earlier additions: *adding an
+opcode is not an ABI change.* And `RUNTIME_ABI_VERSION`'s own documentation
+scopes what the marker is for — generated native code and the runtime archive
+are built separately, and if an archive was built before *a signature changed*
+the symbols still resolve by name and the mismatch is silent. The version is
+baked into a symbol so that link fails instead.
+
+This change adds no runtime symbol and alters no signature. The VM gets an
+opcode; the native side emits inline IR that calls the `trap_float_to_int` that
+was already there. Bumping to 16 would force every archive to rebuild for a
+non-event, and spending the marker on changes it does not guard is what makes it
+easier to ignore the next time it does.
+
 ## 4. Parsing the minimum Int overflows — FIXED
 
 `foundation/app/SerdeText.kira` accumulated the positive magnitude and applied

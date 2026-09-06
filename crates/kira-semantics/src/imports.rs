@@ -198,6 +198,20 @@ impl ImportTable {
         format!("{package}{PACKAGE_MODULE_SEPARATOR}{module}")
     }
 
+    /// Which package owns the module this identity names, or `None` when no
+    /// package does.
+    ///
+    /// `None` is the program's own files — the entry file and the modules
+    /// beside it — which are one flat scope, so two of them declaring the same
+    /// name are declaring it twice. A dependency's modules answer their own
+    /// package, carrying whatever version and instance the identity was
+    /// resolved with, because two versions of one package are two packages.
+    #[must_use]
+    pub fn owning_package(identity: &str) -> Option<&str> {
+        let (package, module) = identity.split_once(PACKAGE_MODULE_SEPARATOR)?;
+        (!package.is_empty() && !module.is_empty()).then_some(package)
+    }
+
     /// The module identity of `module` inside the resolved `package`, carrying
     /// the package's version and dependency instance so the analyzer records
     /// the whole identity rather than the name alone.

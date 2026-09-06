@@ -157,7 +157,7 @@ pub fn expand_with(
 ) -> Expansion {
     let scans: Vec<FileMacros> = files
         .iter()
-        .map(|&(source, text)| scan(source, text))
+        .map(|&(source, text)| scan(source, None, text))
         .collect();
     let borrowed: Vec<&FileMacros> = scans.iter().collect();
     // Only a wrapper macro makes one file's expansion depend on another file's
@@ -265,6 +265,12 @@ pub fn collect_program(
 pub struct FileMacros {
     /// The file this describes.
     source: SourceId,
+    /// The package that owns the file, or `None` when no package does.
+    ///
+    /// `None` is the program's own files, which are one flat scope. It is what
+    /// tells a name declared twice in one scope from a name a nearer package
+    /// deliberately declares over a further one's.
+    owner: Option<String>,
     /// The macros it declares, in declaration order.
     registry: registry::FileRegistry,
     /// Everything scanning it reported.
@@ -296,12 +302,13 @@ impl FileMacros {
 /// Total, like the rest of expansion: a malformed declaration is reported and
 /// dropped, and the file is still scanned to its end.
 #[must_use]
-pub fn scan(source: SourceId, text: &str) -> FileMacros {
+pub fn scan(source: SourceId, owner: Option<&str>, text: &str) -> FileMacros {
     let file = Lexed::new(source, text);
     let mut reporter = Reporter::new();
     let registry = registry::collect_file(&file, &mut reporter);
     FileMacros {
         source,
+        owner: owner.map(str::to_owned),
         registry,
         diagnostics: reporter.into_diagnostics(),
     }
@@ -394,9 +401,21 @@ pub struct MacroEnvironment {
     registry: registry::Registry,
     /// Every struct a `kind { wrapper }` macro registered as a template.
     templates: HashMap<String, procedural::WrapperTemplate>,
+    /// Names declared twice inside one scope, reported once for the program.
+    conflicts: Vec<Diagnostic>,
 }
 
 impl MacroEnvironment {
+    /// Every name declared twice inside one scope.
+    ///
+    /// A program-wide answer rather than a per-file one, because the second
+    /// declaration is only a conflict in the company of the first. Reported
+    /// once by the caller that assembles the program.
+    #[must_use]
+    pub fn conflicts(&self) -> &[Diagnostic] {
+        &self.conflicts
+    }
+
     /// Whether the program declares no macros at all.
     ///
     /// Expansion is skipped entirely when this holds, which is what keeps a
@@ -416,8 +435,9 @@ impl MacroEnvironment {
 #[must_use]
 pub fn environment(macros: &[&FileMacros], templates: &[&FileDeclarations]) -> MacroEnvironment {
     let mut registry = registry::Registry::default();
+    let mut conflicts = Vec::new();
     for file in macros {
-        registry.absorb(&file.registry);
+        registry.absorb(file.owner.as_deref(), &file.registry, &mut conflicts);
     }
     let templates = procedural::wrapper_templates(
         templates.iter().map(|file| file.declarations.as_slice()),
@@ -426,6 +446,7 @@ pub fn environment(macros: &[&FileMacros], templates: &[&FileDeclarations]) -> M
     MacroEnvironment {
         registry,
         templates,
+        conflicts,
     }
 }
 

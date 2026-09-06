@@ -114,11 +114,12 @@ KMAC022	`Ksl.compile` could not compile the shader it names
 KMAC023	`Ksl.compile` was passed other than two arguments
 KMAC024	`Ksl.compile` was passed a path that is not a string literal
 KMAC025	`Syntax.dropField` named a field the declaration does not have
-KMAC026	unknown macro `f`
-KMAC027	unknown macro `f`
-KMAC028	unknown macro `f`
-KMAC029	unknown macro `f`
-KMAC030	unknown macro `f`
+KMAC026	a declaration-only `Syntax` method was given a value that is not a declaration
+KMAC027	an assignment writes through a property path a wrapper macro rewrote
+KMAC028	more than one replace-mode macro was applied to one declaration
+KMAC029	a `trigger { field }` macro that is not `replace { true }`
+KMAC030	two expansions claimed the same bytes
+KMAC031	a macro name declared twice inside one scope
 KSEM003	`…` is already defined with these parameters
 KSEM004	class `…` is already defined
 KSEM005	struct `…` already has a field named `…`

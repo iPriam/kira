@@ -118,6 +118,7 @@ enum KiraError {
     KMAC028
     KMAC029
     KMAC030
+    KMAC031
 
     // Semantic analysis. The largest set by far.
     KSEM003

@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+use kira_diagnostics::Diagnostic;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::TokenKind;
 
@@ -89,6 +90,10 @@ pub(crate) struct Declarative {
     pub(crate) fragments: Vec<Fragment>,
     /// The text between the braces of `expand { … }`.
     pub(crate) template: String,
+    /// Where it was written, for a diagnostic about the declaration itself.
+    pub(crate) source: SourceId,
+    /// The span of its name.
+    pub(crate) span: Span,
 }
 
 /// A `comptime function name(…) -> T { … }` declaration.
@@ -152,31 +157,111 @@ pub(crate) struct Registry {
     procedural: HashMap<String, Procedural>,
     comptime_functions: HashMap<String, ComptimeFunction>,
     enums: HashMap<String, Vec<String>>,
+    /// Which package declared the macro now holding each name.
+    ///
+    /// A name is one declaration inside one scope, and this is what says
+    /// whether the declaration about to take a name is in the same scope as
+    /// the one already holding it.
+    owners: HashMap<String, Option<String>>,
 }
 
 impl Registry {
-    /// Adds one file's declarations, a later file's name winning over an
-    /// earlier one's.
+    /// Adds one file's declarations, reporting a name its own scope already
+    /// declared and letting a nearer package's win over a further one's.
     ///
-    /// The same rule the whole-program scan followed when it inserted into one
-    /// map as it walked the files in order — merging per-file results in that
-    /// same order reproduces it exactly.
-    pub(crate) fn absorb(&mut self, file: &FileRegistry) {
+    /// Files arrive dependencies first and the program's own last, so a later
+    /// name winning is the resolution order the rest of the language uses:
+    /// the program's own package, then the packages it imports. Between two
+    /// *different* packages that is a deliberate override and silent.
+    ///
+    /// Inside one package it is not an override, it is the same name declared
+    /// twice — and answering it by file order means the program's behaviour
+    /// depends on which file was read first, which is the failure that cannot
+    /// be reproduced from the source. Reported instead, the way `KSEM004`
+    /// reports a type declared twice in one package.
+    pub(crate) fn absorb(
+        &mut self,
+        owner: Option<&str>,
+        file: &FileRegistry,
+        conflicts: &mut Vec<Diagnostic>,
+    ) {
         for declared in &file.declarative {
-            self.declarative
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.declarative
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for declared in &file.procedural {
-            self.procedural
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.procedural
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for declared in &file.comptime_functions {
-            self.comptime_functions
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.comptime_functions
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for (name, variants) in &file.enums {
             self.enums.insert(name.clone(), variants.clone());
         }
+    }
+
+    /// Records `name` as declared by `owner`, answering whether the
+    /// declaration takes the name.
+    ///
+    /// It does not when its own scope already declared that name: the first
+    /// declaration keeps it, so which file was read first cannot change what
+    /// the program means, and the second is reported.
+    fn claim(
+        &mut self,
+        name: &str,
+        owner: Option<&str>,
+        source: SourceId,
+        span: Span,
+        conflicts: &mut Vec<Diagnostic>,
+    ) -> bool {
+        if let Some(held) = self.owners.get(name)
+            && held.as_deref() == owner
+        {
+            let scope = match owner {
+                Some(package) => format!("package `{package}`"),
+                None => "this program".to_owned(),
+            };
+            conflicts.push(diagnostics::error(
+                source,
+                span,
+                diagnostics::DUPLICATE_MACRO,
+                format!(
+                    "macro `{name}` is already declared in {scope}: a macro name means exactly \
+                     one declaration, and answering a second by file order would make the \
+                     program mean whichever file was read first"
+                ),
+            ));
+            return false;
+        }
+        self.owners
+            .insert(name.to_owned(), owner.map(str::to_owned));
+        true
     }
 
     /// Whether the program declares no macros at all.
@@ -425,6 +510,7 @@ fn scan_declarative(
     reporter: &mut Reporter,
 ) -> Option<(Declarative, Span, usize)> {
     let name = file.text_at(start + 1).to_owned();
+    let name_span = file.span(start + 1);
     let open_params = start + 2;
     let Some(close_params) = file.match_close(open_params) else {
         // Reported rather than silent: a `None` here would otherwise stop the
@@ -511,6 +597,8 @@ fn scan_declarative(
             name,
             fragments,
             template,
+            source: file.source,
+            span: name_span,
         },
         file.span_of(start, close_body),
         close_body + 1,
@@ -835,13 +923,14 @@ pub(crate) fn kind_word(kind: ProceduralKind) -> &'static str {
 mod tests {
     use super::*;
 
-    fn collect_text(text: &str) -> (Registry, Vec<kira_diagnostics::Diagnostic>) {
+    fn collect_text(text: &str) -> (Registry, Vec<Diagnostic>) {
         let mut reporter = Reporter::new();
         let mut registry = Registry::default();
-        registry.absorb(&collect_file(
-            &Lexed::new(SourceId::new(0), text),
-            &mut reporter,
-        ));
+        registry.absorb(
+            None,
+            &collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter),
+            &mut Vec::new(),
+        );
         (registry, reporter.into_diagnostics())
     }
 
