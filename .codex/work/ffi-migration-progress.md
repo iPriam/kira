@@ -941,6 +941,48 @@ not compare to an integer.
 - **KSEM371** `retains:` may name only a position that carries C storage: a
   pointer, a `CString`, or a C-layout aggregate.
 
+### The two measurements behind the Bool change
+
+Neither is an argument from the language standard; both were run on the machine
+this branch was written on, against the LLVM the toolchain ships (23.1.0,
+aarch64-linux-gnu).
+
+**`load i1` does not normalize.** `llc -O2` on
+
+```llvm
+define i64 @load_i1(ptr %p) { %b = load i1, ptr %p
+                              %z = zext i1 %b to i64
+                              ret i64 %z }
+```
+
+emits `ldrb w0, [x0]` and nothing else: the byte is loaded whole and handed on
+as an `i1`, so a `_Bool` object holding `2` becomes an `i1` holding `2` and a
+later branch on it tests bit 0 and answers `false`. The `i8` form this branch
+lowers to instead —
+
+```llvm
+%b = load i8, ptr %p
+%c = icmp ne i8 %b, 0
+```
+
+— emits `ldrb` followed by `cmp w8, #0`, which is the VM's `bytes[0] != 0`
+written in machine code. That difference is the whole change; without it the two
+engines disagree about a byte while both compile and both run.
+
+**The fixture really does present that byte.** `ffi_flags_fill` writes `2` into
+a `_Bool` member through a `volatile unsigned char *`, and a C probe compiled
+with the managed clang reports
+
+```text
+byval 1 2 7 | ptr 1 2 7 | boolbyte 1 0 | none 1 | sizeof 3
+```
+
+so the non-canonical byte survives both a by-value struct return and a read
+behind a pointer, `ffi_bool_byte` sees exactly the byte an argument crossed as,
+and `struct ffi_flags` is the three bytes the Kira side lays out. A fixture that
+quietly normalized would have made the parity test pass without proving
+anything.
+
 ### Where the proof lives
 
 `crates/kira-cli/tests/backend_parity/ffi/` for anything that needs a real C
