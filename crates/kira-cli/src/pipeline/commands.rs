@@ -493,7 +493,7 @@ fn run_prebuilt_test(options: &CompileOptions) -> Option<i32> {
                 match hybrid::run_bundle(&manifest, &options.program_arguments) {
                     Ok(code) => code,
                     Err(error) => {
-                        err!("kira: {error}");
+                        error.report();
                         EXIT_FAILURE
                     }
                 },

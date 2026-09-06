@@ -86,6 +86,24 @@ pub enum HybridError {
     SanitizedChildSignal,
 }
 
+impl HybridError {
+    /// Reports this failure the way the engine that produced it would.
+    ///
+    /// A trap is the program failing, and every other engine says so in the
+    /// same words: `kira: runtime trap: …` on the VM and on native alike.
+    /// Everything else here is the *bundle* failing — a manifest that will not
+    /// decode, a native half that will not load — which is not a runtime trap
+    /// and must not read as one.
+    pub(crate) fn report(&self) {
+        match self {
+            HybridError::Runtime(kira_hybrid_runtime::HybridError::Trap(trap)) => {
+                crate::progress::err!("kira: runtime trap: {trap}");
+            }
+            other => crate::progress::err!("kira: {other}"),
+        }
+    }
+}
+
 /// Builds `program` into a hybrid bundle under `.kira-build/`.
 ///
 /// `foreign_link` are the selected C static libraries. They are linked into
@@ -300,7 +318,7 @@ pub(crate) fn run_host(args: &[String]) -> i32 {
     match run_bundle(Path::new(manifest), program_arguments) {
         Ok(code) => code,
         Err(error) => {
-            crate::progress::err!("kira: {error}");
+            error.report();
             crate::pipeline::EXIT_FAILURE
         }
     }

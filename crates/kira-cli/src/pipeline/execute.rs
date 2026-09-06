@@ -135,7 +135,7 @@ pub(super) fn run_hybrid(
     ) {
         Ok(code) => code,
         Err(error) => {
-            err!("kira: {error}");
+            error.report();
             EXIT_FAILURE
         }
     }
