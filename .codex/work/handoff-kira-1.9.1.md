@@ -248,6 +248,26 @@ class: it checks the IR, not the C API that builds it. And a test passing is
 not evidence the path is right when the failure mode is undefined behaviour —
 the one host that faulted is the only reason anybody looked.
 
+### A recurring Windows-only defect: paths built as one string
+
+Twice in one effort, and both times invisible on every other platform, so it is
+worth grepping for rather than rediscovering a third time.
+
+A path assembled as a single literal keeps the forward slash on Windows.
+`fake_llvm.join("lib/clang")` produces `...\lib/clang`, while the code that
+prints the same path joins a segment at a time and writes `...\lib\clang`, so
+a `contains` against it matches everywhere except the platform the test is
+about. Join one segment per call.
+
+The other spelling of the same mistake is a path pasted into generated *source*.
+A Windows path is mostly backslashes, and a backslash begins an escape, so
+`C:\Users\runneradmin\…` inside a Kira string literal makes `\U` and `\r`
+out of directory names and the program fails to lex — `KLEX003`, before any of
+the behaviour under test runs. Escape the path for the literal it goes into.
+
+Worth checking whenever a test builds a path and compares or embeds it:
+`grep -rn 'join("[^"]*/' crates/` finds the first kind.
+
 ### A suite that checks answers against the specification, not against the other engine
 
 `backend_parity` asks whether the VM and native agree. That is the wrong

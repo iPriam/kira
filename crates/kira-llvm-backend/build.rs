@@ -41,7 +41,23 @@ fn main() {
     // The bundle's LLVM archives are linked statically: a `kira` must run
     // without the bundle installed beside it. The system libraries LLVM
     // itself needs stay dynamic — they are the host's, not the bundle's.
-    for name in link_names(&run(&llvm_config, &["--link-static", "--libs"])) {
+    let libs = run(&llvm_config, &["--link-static", "--libs"]);
+    let names = link_names(&libs);
+    // Refused rather than emitted empty. A search path with no libraries on it
+    // links, right up until the linker reports every LLVM symbol the crate
+    // names as unresolved — hundreds of them, pointing at Kira's own functions,
+    // with nothing saying the library list was the part that came back empty.
+    // Whatever `llvm-config` answered is the answer worth reading, so it is
+    // what this prints.
+    if names.is_empty() {
+        fail(&format!(
+            "`{} --link-static --libs` named no libraries, so there is nothing to \
+             link the LLVM C API against. It answered: {:?}",
+            llvm_config.display(),
+            libs.trim(),
+        ));
+    }
+    for name in names {
         println!("cargo:rustc-link-lib=static={name}");
     }
     for name in link_names(&run(&llvm_config, &["--link-static", "--system-libs"])) {
