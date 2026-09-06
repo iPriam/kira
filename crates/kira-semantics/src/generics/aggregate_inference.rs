@@ -43,8 +43,7 @@ impl<'a> Analyzer<'a> {
             GenericAggregate::Class { decl, .. } => {
                 for parent in &decl.parents {
                     let parent_name = self.interner.resolve(parent.name);
-                    let Some(parent_template) = self.generic_aggregate_named(parent_name)
-                    else {
+                    let Some(parent_template) = self.generic_aggregate_named(parent_name) else {
                         continue;
                     };
                     if parent.type_args.len() != parent_template.type_params().len() {

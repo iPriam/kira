@@ -201,10 +201,7 @@ fn starts_a_statement(file: &Lexed<'_>, index: usize) -> bool {
     if file.newline_before(index) {
         return true;
     }
-    matches!(
-        file.kind(index - 1),
-        TokenKind::LBrace | TokenKind::RBrace
-    )
+    matches!(file.kind(index - 1), TokenKind::LBrace | TokenKind::RBrace)
 }
 
 /// The index of the first token of the statement containing the call at

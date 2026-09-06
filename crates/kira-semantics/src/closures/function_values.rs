@@ -1,6 +1,6 @@
+use super::*;
 use kira_semantics_model::hir::CallableSignature;
 use kira_semantics_model::hir::FieldOrder;
-use super::*;
 
 impl Analyzer<'_> {
     /// The type of `(params) -> result`, minting its representation struct on

@@ -121,7 +121,8 @@ impl<'a> Lexer<'a> {
             }
         }
         let span = Span::from_bounds(start as u32, self.pos as u32);
-        self.diagnostics.push(unterminated_comment(self.source, span));
+        self.diagnostics
+            .push(unterminated_comment(self.source, span));
     }
 
     fn lex_one(&mut self) {
@@ -680,7 +681,10 @@ mod tests {
     #[test]
     fn decodes_escapes() {
         assert_eq!(decode_string_literal("\"a\\nb\"").as_deref(), Ok("a\nb"));
-        assert_eq!(decode_string_literal("\"\\e[2K\"").as_deref(), Ok("\x1b[2K"));
+        assert_eq!(
+            decode_string_literal("\"\\e[2K\"").as_deref(),
+            Ok("\x1b[2K")
+        );
         assert_eq!(decode_string_literal("\"q\\\"q\"").as_deref(), Ok("q\"q"));
         assert_eq!(decode_string_literal("\"plain\"").as_deref(), Ok("plain"));
     }

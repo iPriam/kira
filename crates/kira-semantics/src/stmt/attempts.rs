@@ -115,9 +115,7 @@ impl Analyzer<'_> {
             // else it traps. Analyzed before the general path because the
             // general path is what makes it trap.
             let result = match self.tree.expr(guarded.value).clone() {
-                Expr::TypeCast { value, ty, span } => {
-                    self.analyze_try_cast(ctx, value, ty, span)
-                }
+                Expr::TypeCast { value, ty, span } => self.analyze_try_cast(ctx, value, ty, span),
                 _ => self.analyze_expr(ctx, guarded.value),
             };
             let result_ty = self.program.expr(result).type_of();

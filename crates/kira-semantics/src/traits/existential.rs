@@ -24,7 +24,9 @@ use crate::analyze::{Analyzer, FnCtx};
 use crate::constructs::ConstructVariant;
 use crate::constructs::DispatchMethod;
 use crate::place::PlacePurpose;
-use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,};
+use kira_semantics_model::hir::{
+    CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, HirWriteback,
+};
 use kira_semantics_model::{EnumId, Execution, OwnershipMode, Type};
 use kira_source::Span;
 
@@ -319,7 +321,10 @@ impl Analyzer<'_> {
                 reserved
             }
         };
-        let callable = format!("{}.{method}", self.member_owner_name(Type::Enum(existential_id)));
+        let callable = format!(
+            "{}.{method}",
+            self.member_owner_name(Type::Enum(existential_id))
+        );
         let positional = Analyzer::argument_slots(args);
         let mut values = vec![receiver];
         for (index, slot_value) in positional.iter().enumerate() {

@@ -37,9 +37,9 @@
 //! whose representation a backend stores but whose identity is what the
 //! language says the value is.
 
+use super::Type;
 use super::descriptor::{DescriptorFamily, TypeDescriptorTable};
 use super::table::TypeTable;
-use super::Type;
 
 /// The identity an erased value carries, so two of them can be compared.
 ///
@@ -191,10 +191,7 @@ mod tests {
         assert_ne!(ints_id, bools_id);
         // Interning means the same element type gives the same id back.
         let again = types.array_of(Type::Int(IntSpelling::Plain));
-        assert_eq!(
-            ints_id,
-            ErasedTypeId::of(&mut descriptors, &types, again)
-        );
+        assert_eq!(ints_id, ErasedTypeId::of(&mut descriptors, &types, again));
         assert_eq!(ints_id, ErasedTypeId::known(&descriptors, ints));
     }
 

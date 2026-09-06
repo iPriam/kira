@@ -234,9 +234,7 @@ fn introduced_names(template: &str, fragments: &[crate::registry::Fragment]) -> 
             TokenKind::Let | TokenKind::Var if file.is_ident(index + 1) => {
                 bound(file.text_at(index + 1).to_owned(), &mut names);
             }
-            TokenKind::For
-                if file.is_ident(index + 1) && file.kind(index + 2) == TokenKind::In =>
-            {
+            TokenKind::For if file.is_ident(index + 1) && file.kind(index + 2) == TokenKind::In => {
                 bound(file.text_at(index + 1).to_owned(), &mut names);
             }
             TokenKind::LParen if is_arm_payload(&file, index) => {

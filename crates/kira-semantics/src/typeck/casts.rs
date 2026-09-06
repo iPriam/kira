@@ -6,9 +6,9 @@
 //! be one a value erases *into* `Any` as — there is nothing an `Any` could
 //! hold that a `Void` or another `Any` would name.
 
-use kira_semantics_model::{ErasedTypeId, TypeField};
-use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::Type;
+use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::{ErasedTypeId, TypeField};
 use kira_source::Span;
 use kira_syntax_model::ast::{ExprId, TypeRefId};
 
@@ -27,7 +27,9 @@ impl Analyzer<'_> {
         else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        self.program.exprs.alloc(HirExpr::TypeTest { value, target })
+        self.program
+            .exprs
+            .alloc(HirExpr::TypeTest { value, target })
     }
 
     /// `value as Type`.
@@ -42,7 +44,9 @@ impl Analyzer<'_> {
         else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        self.program.exprs.alloc(HirExpr::TypeCast { value, target })
+        self.program
+            .exprs
+            .alloc(HirExpr::TypeCast { value, target })
     }
 
     /// `value.type`.
@@ -50,12 +54,7 @@ impl Analyzer<'_> {
     /// Every inhabited value answers it. `Void` does not, because it names no
     /// value and so has nothing to describe, and neither do the seam-local
     /// types a program cannot hold.
-    pub(crate) fn analyze_type_of(
-        &mut self,
-        value: HirExprId,
-        of: Type,
-        span: Span,
-    ) -> HirExprId {
+    pub(crate) fn analyze_type_of(&mut self, value: HirExprId, of: Type, span: Span) -> HirExprId {
         if of == Type::Error {
             return self.program.exprs.alloc(HirExpr::Error);
         }
@@ -105,13 +104,11 @@ impl Analyzer<'_> {
             TypeField::Conformances => self.program.types.array_of(Type::String),
             TypeField::Name | TypeField::Package | TypeField::Kind => Type::String,
         };
-        self.program
-            .exprs
-            .alloc(HirExpr::TypeField {
-                descriptor,
-                field,
-                ty,
-            })
+        self.program.exprs.alloc(HirExpr::TypeField {
+            descriptor,
+            field,
+            ty,
+        })
     }
 
     /// The analyzed `Any` operand and the resolved target of `is` or `as`, or

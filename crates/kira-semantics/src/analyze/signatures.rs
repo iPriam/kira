@@ -5,10 +5,12 @@
 //! declarations into [`FuncSig`] rows and answering questions about them —
 //! lookup by name, parameter shapes, and the declaration site a call links to.
 
+use kira_semantics_model::hir::{
+    CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity,
+};
 use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
 use kira_semantics_model::ty::StructId;
 use kira_semantics_model::{OwnershipMode, Type};
-use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity};
 use kira_source::{FileSpan, SourceId, Span};
 
 use super::{Analyzer, Callable, FieldDefault};
@@ -225,7 +227,11 @@ impl<'a> Analyzer<'a> {
                     .params
                     .iter()
                     .zip(params.iter().skip(usize::from(callable.receiver.is_some())))
-                    .zip(param_ownership.iter().skip(usize::from(callable.receiver.is_some())))
+                    .zip(
+                        param_ownership
+                            .iter()
+                            .skip(usize::from(callable.receiver.is_some())),
+                    )
                     .map(|((param, &ty), &ownership)| ParamSignature {
                         label: self.interner.resolve(param.name).to_owned(),
                         ty,
@@ -287,8 +293,10 @@ impl<'a> Analyzer<'a> {
             .collect();
         for id in overloaded {
             let params = self.sigs[id.0 as usize].params.clone();
-            let mut symbol =
-                self.qualified_symbol(self.sigs[id.0 as usize].source, &self.sigs[id.0 as usize].name);
+            let mut symbol = self.qualified_symbol(
+                self.sigs[id.0 as usize].source,
+                &self.sigs[id.0 as usize].name,
+            );
             for param in params {
                 symbol.push('$');
                 symbol.push_str(&self.program.types.identity_key(param).replace(' ', "_"));
@@ -390,7 +398,10 @@ impl<'a> Analyzer<'a> {
         receiver: StructId,
         method: &str,
     ) -> Option<(FuncId, &[Type], Type)> {
-        let qualified = format!("{}.{method}", self.member_owner_name(Type::Struct(receiver)));
+        let qualified = format!(
+            "{}.{method}",
+            self.member_owner_name(Type::Struct(receiver))
+        );
         let ids = self.sig_index.get(&qualified)?;
         let wanted = Type::Struct(receiver);
         let id = *ids

@@ -290,7 +290,9 @@ impl Analyzer<'_> {
         {
             ctx.mark_moved(local, span);
         }
-        self.program.exprs.alloc(HirExpr::NativeStateRelease { token })
+        self.program
+            .exprs
+            .alloc(HirExpr::NativeStateRelease { token })
     }
 
     fn one_intrinsic_arg(

@@ -5,7 +5,10 @@
 //! erased enum with the updated payload. The enclosing selector then writes
 //! that enum back through its own receiver place.
 
-use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId, HirWriteback, LocalId,};
+use kira_semantics_model::hir::{
+    CallableSignature, Callee, FuncId, HirExpr, HirFunction, HirPlace, HirStmt, HirStmtId,
+    HirWriteback, LocalId,
+};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 

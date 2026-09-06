@@ -289,11 +289,19 @@ mod tests {
     #[test]
     fn lift_errors_name_what_never_closed() {
         assert_eq!(
-            LiftError { offset: 0, unclosed_quote: true }.message(),
+            LiftError {
+                offset: 0,
+                unclosed_quote: true
+            }
+            .message(),
             "a `quote { … }` opened here never closes"
         );
         assert_eq!(
-            LiftError { offset: 0, unclosed_quote: false }.message(),
+            LiftError {
+                offset: 0,
+                unclosed_quote: false
+            }
+            .message(),
             "a `#{ … }` splice opened here never closes"
         );
     }

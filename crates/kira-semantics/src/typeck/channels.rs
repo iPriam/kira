@@ -154,7 +154,8 @@ impl Analyzer<'_> {
                 ),
             ));
         }
-        if payload.is_scalar() && !matches!(payload, Type::Void | Type::RawPtr | Type::ForeignPtr(_))
+        if payload.is_scalar()
+            && !matches!(payload, Type::Void | Type::RawPtr | Type::ForeignPtr(_))
         {
             return None;
         }
@@ -199,13 +200,8 @@ impl Analyzer<'_> {
             Direction::Sender => self.channel_senders.insert(payload, id),
             Direction::Receiver => self.channel_receivers.insert(payload, id),
         };
-        self.channel_ends.insert(
-            id,
-            ChannelEnd {
-                direction,
-                payload,
-            },
-        );
+        self.channel_ends
+            .insert(id, ChannelEnd { direction, payload });
         Some(id)
     }
 
@@ -358,7 +354,9 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         match (name, end.direction) {
-            ("send", Direction::Sender) => self.analyze_channel_send(ctx, receiver_hir, end, args, span),
+            ("send", Direction::Sender) => {
+                self.analyze_channel_send(ctx, receiver_hir, end, args, span)
+            }
             ("receive", Direction::Receiver) => {
                 self.expect_no_arguments(ctx, name, args, span);
                 self.analyze_channel_receive(receiver_hir, end, span)
@@ -447,13 +445,7 @@ impl Analyzer<'_> {
     }
 
     /// Analyzes and discards arguments a no-argument operation was handed.
-    fn expect_no_arguments(
-        &mut self,
-        ctx: &mut FnCtx,
-        name: &str,
-        args: &[CallArg],
-        span: Span,
-    ) {
+    fn expect_no_arguments(&mut self, ctx: &mut FnCtx, name: &str, args: &[CallArg], span: Span) {
         for arg in args {
             self.analyze_expr(ctx, arg.value);
         }

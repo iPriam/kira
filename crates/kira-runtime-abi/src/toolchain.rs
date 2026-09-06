@@ -155,9 +155,10 @@ impl ToolRequest {
         let Some(backend) = fields.get(1) else {
             return Err(ToolWireError::NoBackend);
         };
-        let backend = ToolBackend::from_text(backend).ok_or_else(|| ToolWireError::UnknownBackend {
-            backend: backend.clone(),
-        })?;
+        let backend =
+            ToolBackend::from_text(backend).ok_or_else(|| ToolWireError::UnknownBackend {
+                backend: backend.clone(),
+            })?;
         let variables = &fields[ANSWER_HEADER_FIELDS..];
         if !variables.len().is_multiple_of(2) {
             return Err(ToolWireError::Truncated);
@@ -257,11 +258,12 @@ impl ToolAnswer {
         let Some(exit_code) = fields.get(1) else {
             return Err(ToolWireError::Truncated);
         };
-        let exit_code = exit_code
-            .parse::<i64>()
-            .map_err(|_| ToolWireError::UnreadableExitCode {
-                text: exit_code.clone(),
-            })?;
+        let exit_code =
+            exit_code
+                .parse::<i64>()
+                .map_err(|_| ToolWireError::UnreadableExitCode {
+                    text: exit_code.clone(),
+                })?;
         let records = &fields[ANSWER_HEADER_FIELDS..];
         if !records.len().is_multiple_of(TOOL_DIAGNOSTIC_FIELDS) {
             return Err(ToolWireError::Truncated);

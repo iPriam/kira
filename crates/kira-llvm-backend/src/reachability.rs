@@ -273,7 +273,8 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         | IrExpr::TypeConst { value: operand, .. }
         | IrExpr::TypeOf { value: operand }
         | IrExpr::TypeField {
-            descriptor: operand, ..
+            descriptor: operand,
+            ..
         }
         | IrExpr::TypeCastResult { value: operand, .. }
         | IrExpr::NativeState { value: operand, .. }

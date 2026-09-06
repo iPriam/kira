@@ -20,7 +20,6 @@ pub mod structs;
 pub mod table;
 pub mod tasks;
 
-pub use identity::{NominalIdentity, NominalKind, PackageIdentity};
 pub use arrays::{ArrayId, ArrayTable};
 pub use cells::{CellId, CellTable};
 pub use descriptor::{
@@ -30,6 +29,7 @@ pub use distincts::{DistinctDef, DistinctId, DistinctTable};
 pub use enums::{EnumDef, EnumId, EnumTable, Instantiation, VariantDef};
 pub use erased::ErasedTypeId;
 pub use foreign_ptr::{ForeignPtrId, ForeignPtrTable};
+pub use identity::{NominalIdentity, NominalKind, PackageIdentity};
 pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructOrigin, StructTable};

@@ -482,7 +482,9 @@ fn scan_declarative(
             file.source,
             file.span(open_body),
             diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
+            format!(
+                "macro `{name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"
+            ),
         );
         return None;
     };
@@ -599,10 +601,7 @@ fn scan_comptime_function(
         );
         return None;
     };
-    let body_span = Span::from_bounds(
-        file.span(open_body).end(),
-        file.span(close_body).start,
-    );
+    let body_span = Span::from_bounds(file.span(open_body).end(), file.span(close_body).start);
     let body = file.slice(body_span).to_owned();
     Some((
         ComptimeFunction {
@@ -676,14 +675,9 @@ fn scan_procedural(
                 brace += 1;
             }
             let close_expand = file.match_close(brace)?;
-            let body_span = Span::from_bounds(
-                file.span(brace).end(),
-                file.span(close_expand).start,
-            );
-            body = Some((
-                file.slice(body_span).to_owned(),
-                body_span,
-            ));
+            let body_span =
+                Span::from_bounds(file.span(brace).end(), file.span(close_expand).start);
+            body = Some((file.slice(body_span).to_owned(), body_span));
             index = close_expand + 1;
             continue;
         }

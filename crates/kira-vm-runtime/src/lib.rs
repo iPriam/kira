@@ -393,7 +393,13 @@ mod tests {
         let (lines, outcome) = run(&module);
         assert_eq!(
             lines,
-            ["2", "-2", "7", "18446744073709552000", "18446744073709551615"]
+            [
+                "2",
+                "-2",
+                "7",
+                "18446744073709552000",
+                "18446744073709551615"
+            ]
         );
         assert_eq!(outcome.heap.current, 0);
     }
@@ -402,12 +408,21 @@ mod tests {
     /// past `i64::MAX`, and NaN.
     #[test]
     fn a_float_without_an_integer_value_traps() {
-        for value in [100_000_000_000_000_000_000.0_f64, -100_000_000_000_000_000_000.0, f64::NAN] {
+        for value in [
+            100_000_000_000_000_000_000.0_f64,
+            -100_000_000_000_000_000_000.0,
+            f64::NAN,
+        ] {
             let main = func(
                 "main",
                 0,
                 0,
-                vec![I::ConstFloat(value), I::ConvertFloatToInt, I::Pop, I::ReturnVoid],
+                vec![
+                    I::ConstFloat(value),
+                    I::ConvertFloatToInt,
+                    I::Pop,
+                    I::ReturnVoid,
+                ],
             );
             let module = Module {
                 exports: Default::default(),
@@ -439,17 +454,25 @@ mod tests {
                 |e| matches!(e, VmError::IntegerOverflow { .. }),
             ),
             (
-                vec![I::ConstInt(i64::MAX), I::ConstInt(1), I::AddInt, I::Pop, I::ConstInt(250), I::ConstInt(10), I::AddIntChecked, I::CheckInt(4)],
+                vec![
+                    I::ConstInt(i64::MAX),
+                    I::ConstInt(1),
+                    I::AddInt,
+                    I::Pop,
+                    I::ConstInt(250),
+                    I::ConstInt(10),
+                    I::AddIntChecked,
+                    I::CheckInt(4),
+                ],
                 |e| matches!(e, VmError::IntegerOverflow { spelling: "U8" }),
             ),
             (
                 vec![I::ConstInt(-1), I::ConstInt(1), I::AddUIntChecked],
                 |e| matches!(e, VmError::IntegerOverflow { spelling: "U64" }),
             ),
-            (
-                vec![I::ConstInt(i64::MIN), I::NegIntChecked],
-                |e| matches!(e, VmError::IntegerOverflow { .. }),
-            ),
+            (vec![I::ConstInt(i64::MIN), I::NegIntChecked], |e| {
+                matches!(e, VmError::IntegerOverflow { .. })
+            }),
             (
                 vec![I::ConstInt(i64::MIN), I::ConstInt(-1), I::DivIntChecked],
                 |e| matches!(e, VmError::IntegerOverflow { .. }),
@@ -460,11 +483,27 @@ mod tests {
             ),
             (
                 vec![I::ConstInt(256), I::ConvertInt { from: 0, to: 4 }],
-                |e| matches!(e, VmError::NarrowingOutOfRange { value: 256, spelling: "U8" }),
+                |e| {
+                    matches!(
+                        e,
+                        VmError::NarrowingOutOfRange {
+                            value: 256,
+                            spelling: "U8"
+                        }
+                    )
+                },
             ),
             (
                 vec![I::ConstInt(-1), I::ConvertInt { from: 7, to: 0 }],
-                |e| matches!(e, VmError::NarrowingOutOfRange { spelling: "Int", .. }),
+                |e| {
+                    matches!(
+                        e,
+                        VmError::NarrowingOutOfRange {
+                            spelling: "Int",
+                            ..
+                        }
+                    )
+                },
             ),
         ];
         for (code, matches) in cases {

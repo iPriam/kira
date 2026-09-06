@@ -10,7 +10,10 @@
 //! Split out of that module on the file-size ladder; the two share the same
 //! shape (reserve on first use, fill once at the end) and nothing else.
 
-use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,};
+use kira_semantics_model::hir::{
+    CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt,
+    HirStmtId, LocalId,
+};
 use kira_semantics_model::{EnumId, Type};
 use kira_source::Span;
 

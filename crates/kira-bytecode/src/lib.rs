@@ -57,7 +57,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
-            
+
             exprs,
         }
     }
@@ -268,7 +268,7 @@ mod tests {
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             constants: Vec::new(),
-            
+
             exprs: la_arena::Arena::new(),
         };
         let button = program

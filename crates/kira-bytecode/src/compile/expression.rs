@@ -1,9 +1,9 @@
 //! Expression and call lowering.
 
-use kira_semantics_model::hir::FieldOrder;
 use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
-use kira_semantics_model::Type;
 use kira_runtime_abi::{Execution, ForeignMember, ForeignPointerWidth, ForeignType};
+use kira_semantics_model::Type;
+use kira_semantics_model::hir::FieldOrder;
 
 use crate::op::{Instruction, WritebackTarget};
 

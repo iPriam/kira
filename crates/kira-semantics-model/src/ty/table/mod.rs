@@ -9,8 +9,8 @@ use super::cells::CellTable;
 use super::distincts::{DistinctId, DistinctTable};
 use super::enums::EnumTable;
 use super::foreign_ptr::{ForeignPtrId, ForeignPtrTable};
-use super::native_state::NativeStateTable;
 use super::identity::PackageIdentity;
+use super::native_state::NativeStateTable;
 use super::structs::{StructId, StructOrigin, StructTable};
 use super::{FloatSpelling, IntSpelling, Type};
 
@@ -42,7 +42,6 @@ impl TypeTable {
     pub fn new() -> Self {
         Self::default()
     }
-
 
     /// The type of a C pointer addressing `target`, minting it on first
     /// mention.

@@ -31,7 +31,11 @@ fn a_task_target_must_be_async() {
 fn a_task_target_may_not_borrow_a_parameter() {
     let text = "async function peek(items: borrow [Int]) -> Int { return items.count }\n\
                 @Main function main() { let xs: [Int] = [1] let t = Task { peek(xs) } print(t.await) return }";
-    assert!(codes(text).contains(&"KSEM353".to_owned()), "{:?}", codes(text));
+    assert!(
+        codes(text).contains(&"KSEM353".to_owned()),
+        "{:?}",
+        codes(text)
+    );
 }
 
 /// A task target is chosen among overloads by its arguments, as a call is.

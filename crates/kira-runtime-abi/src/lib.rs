@@ -19,6 +19,7 @@
 pub mod aggregate;
 pub mod bridge;
 pub mod c_storage;
+pub mod channels;
 pub mod compiler;
 pub mod enum_payload;
 pub mod env;
@@ -34,7 +35,6 @@ pub mod ownership;
 pub mod string_op;
 pub mod syscall;
 pub mod tasks;
-pub mod channels;
 pub mod toolchain;
 
 pub use aggregate::{
@@ -43,11 +43,11 @@ pub use aggregate::{
     scalar_layout,
 };
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
-pub use int_width::IntWidth;
 pub use compiler::{
     CheckDiagnostic, CheckFile, CheckPackage, CheckRequest, CheckSeverity, CheckWireError,
     CompilerError, CompilerOp, DIAGNOSTIC_FIELDS, PackageChecker,
 };
+pub use int_width::IntWidth;
 pub use toolchain::{
     TOOL_DIAGNOSTIC_FIELDS, ToolAnswer, ToolBackend, ToolDiagnostic, ToolRequest, ToolVariable,
     ToolVerb, ToolWireError, Toolchain, ToolchainError,
@@ -81,6 +81,7 @@ pub fn foreign_adapter_name(index: usize) -> String {
 pub fn foreign_callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
 }
+pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
 pub use main_thread::*;
 pub use math_op::MathOp;
 pub use native_state::{
@@ -95,7 +96,6 @@ pub use syscall::{
     LINUX_SYSCALLS, LinuxSyscall, MAX_SYSCALL_ARGUMENTS, SYSCALL_OS, SyscallArch, SyscallError,
 };
 pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
-pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.
 ///

@@ -14,7 +14,10 @@ use std::process::Command;
 use kira_ir::IrProgram;
 use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{CallableSignature, Builtin, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction, HirProgram, HirStmt,};
+use kira_semantics_model::hir::{
+    Builtin, CallableSignature, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction,
+    HirProgram, HirStmt,
+};
 use kira_source::Span;
 
 use kira_native_lib_definition::{

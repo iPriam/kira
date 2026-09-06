@@ -111,7 +111,10 @@ impl Analyzer<'_> {
             self.emit(
                 span,
                 "KSEM062",
-                format!("`{name}` takes 2 arguments, and this call passes {}", args.len()),
+                format!(
+                    "`{name}` takes 2 arguments, and this call passes {}",
+                    args.len()
+                ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
         };

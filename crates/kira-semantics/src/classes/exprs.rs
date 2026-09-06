@@ -435,10 +435,7 @@ impl Analyzer<'_> {
         if self.report_ambiguous_member(owner, name, span, true) {
             return Some(self.program.exprs.alloc(HirExpr::Error));
         }
-        let qualified = format!(
-            "{}.{name}",
-            self.member_owner_name(Type::Struct(owner))
-        );
+        let qualified = format!("{}.{name}", self.member_owner_name(Type::Struct(owner)));
         self.lookup_function(&qualified)?;
         let local = ctx.resolve("self")?;
         let receiver = self.program.exprs.alloc(HirExpr::Local {

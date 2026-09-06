@@ -394,7 +394,9 @@ impl<'a> Analyzer<'a> {
         for entry in declared {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
+                if !is_builtin_trait(&written_name)
+                    && self.visible_trait_key(&written_name).is_none()
+                {
                     self.source = source;
                     self.emit(
                         entry.span,

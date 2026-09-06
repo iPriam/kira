@@ -24,7 +24,6 @@ pub mod dynamic_library;
 pub mod enums;
 pub mod env;
 pub mod file_system;
-pub mod traps;
 pub mod foreign;
 pub mod hybrid;
 pub mod live;
@@ -36,6 +35,7 @@ pub mod runtime;
 pub mod state_box;
 pub mod string_ops;
 pub mod tasks;
+pub mod traps;
 pub mod values;
 
 pub use array::{KArray, KiraArray};

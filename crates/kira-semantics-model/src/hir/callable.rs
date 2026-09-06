@@ -153,7 +153,11 @@ impl CallableSignature {
                     "parameter {} {} a default where the contract {}",
                     index + 1,
                     if mine.has_default { "has" } else { "lacks" },
-                    if theirs.has_default { "has one" } else { "has none" }
+                    if theirs.has_default {
+                        "has one"
+                    } else {
+                        "has none"
+                    }
                 ));
             }
         }

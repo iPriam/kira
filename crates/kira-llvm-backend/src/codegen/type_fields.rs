@@ -13,9 +13,9 @@
 //! it can reach.
 
 use kira_semantics_model::{ErasedTypeId, Type, TypeField};
+use llvm_sys::LLVMIntPredicate;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
-use llvm_sys::LLVMIntPredicate;
 
 use super::{Callable, Codegen};
 use crate::LlvmError;

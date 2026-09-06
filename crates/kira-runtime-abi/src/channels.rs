@@ -197,7 +197,10 @@ impl ChannelExecutor {
 
     /// How many channels have live storage.
     pub fn live(&self) -> usize {
-        self.channels.iter().filter(|slot| slot.channel.is_some()).count()
+        self.channels
+            .iter()
+            .filter(|slot| slot.channel.is_some())
+            .count()
     }
 
     /// Creates a channel, answering its `(sender, receiver)` handles.
@@ -354,10 +357,7 @@ impl ChannelExecutor {
         if end != ChannelEnd::Receiver {
             return Err(ChannelTrap::WrongDirection);
         }
-        let slot = self
-            .channels
-            .get(index)
-            .ok_or(ChannelTrap::UnknownHandle)?;
+        let slot = self.channels.get(index).ok_or(ChannelTrap::UnknownHandle)?;
         if slot.generation != generation {
             return Err(ChannelTrap::UnknownHandle);
         }
@@ -420,8 +420,8 @@ impl ChannelExecutor {
             ChannelEnd::Sender => 0u32,
             ChannelEnd::Receiver => 1u32,
         };
-        let slot_field = (u32::try_from(index).map_err(|_| ChannelTrap::UnknownHandle)? << 1)
-            | end_bit;
+        let slot_field =
+            (u32::try_from(index).map_err(|_| ChannelTrap::UnknownHandle)? << 1) | end_bit;
         let slot_field = slot_field
             .checked_add(1)
             .ok_or(ChannelTrap::UnknownHandle)?;
@@ -442,8 +442,7 @@ impl ChannelExecutor {
         } else {
             ChannelEnd::Receiver
         };
-        let index =
-            usize::try_from(base >> 1).map_err(|_| ChannelTrap::UnknownHandle)?;
+        let index = usize::try_from(base >> 1).map_err(|_| ChannelTrap::UnknownHandle)?;
         Ok((index, (word >> 32) as u32, end))
     }
 }
@@ -507,24 +506,15 @@ mod tests {
         let mut executor = ChannelExecutor::new();
         let (sender, receiver) = channel(&mut executor);
         executor.close_receiver(receiver).unwrap();
-        assert_eq!(
-            executor.send(sender, 1),
-            Err(ChannelTrap::ReceiverGone)
-        );
+        assert_eq!(executor.send(sender, 1), Err(ChannelTrap::ReceiverGone));
     }
 
     #[test]
     fn an_end_used_in_the_wrong_direction_traps() {
         let mut executor = ChannelExecutor::new();
         let (sender, receiver) = channel(&mut executor);
-        assert_eq!(
-            executor.send(receiver, 1),
-            Err(ChannelTrap::WrongDirection)
-        );
-        assert_eq!(
-            executor.receive(sender),
-            Err(ChannelTrap::WrongDirection)
-        );
+        assert_eq!(executor.send(receiver, 1), Err(ChannelTrap::WrongDirection));
+        assert_eq!(executor.receive(sender), Err(ChannelTrap::WrongDirection));
     }
 
     #[test]
@@ -534,14 +524,8 @@ mod tests {
         executor.close_sender(sender).unwrap();
         executor.close_receiver(receiver).unwrap();
         assert_eq!(executor.live(), 0);
-        assert_eq!(
-            executor.send(sender, 1),
-            Err(ChannelTrap::UnknownHandle)
-        );
-        assert_eq!(
-            executor.receive(receiver),
-            Err(ChannelTrap::UnknownHandle)
-        );
+        assert_eq!(executor.send(sender, 1), Err(ChannelTrap::UnknownHandle));
+        assert_eq!(executor.receive(receiver), Err(ChannelTrap::UnknownHandle));
     }
 
     #[test]
@@ -562,10 +546,7 @@ mod tests {
     #[test]
     fn zero_names_no_channel_end() {
         let mut executor = ChannelExecutor::new();
-        assert_eq!(
-            executor.receive(0),
-            Err(ChannelTrap::UnknownHandle)
-        );
+        assert_eq!(executor.receive(0), Err(ChannelTrap::UnknownHandle));
         assert_eq!(executor.send(0, 1), Err(ChannelTrap::UnknownHandle));
     }
 
@@ -599,26 +580,15 @@ mod tests {
     fn poll_and_take_agree_without_consuming_early() {
         let mut executor = ChannelExecutor::new();
         let (sender, receiver) = channel(&mut executor);
-        assert_eq!(
-            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
-            Ok(0)
-        );
-        executor
-            .perform(ChannelPrim::Send, sender, 11, 0)
-            .unwrap();
-        assert_eq!(
-            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
-            Ok(1)
-        );
+        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(0));
+        executor.perform(ChannelPrim::Send, sender, 11, 0).unwrap();
+        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(1));
         assert_eq!(
             executor.perform(ChannelPrim::Poll, receiver, 0, 0),
             Ok(1),
             "polling twice must not consume the waiting value"
         );
-        assert_eq!(
-            executor.perform(ChannelPrim::Take, receiver, 0, 0),
-            Ok(11)
-        );
+        assert_eq!(executor.perform(ChannelPrim::Take, receiver, 0, 0), Ok(11));
         assert_eq!(
             executor.perform(ChannelPrim::Take, receiver, 0, 0),
             Err(ChannelTrap::NotReady)
@@ -632,10 +602,7 @@ mod tests {
         executor
             .perform(ChannelPrim::CloseSender, sender, 0, 0)
             .unwrap();
-        assert_eq!(
-            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
-            Ok(2)
-        );
+        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(2));
     }
 
     #[test]

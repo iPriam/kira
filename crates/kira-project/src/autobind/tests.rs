@@ -259,7 +259,10 @@ fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
         text.contains(&format!("@FFI.Array {{ element: {byte}, count: 56 }}")),
         "{text}"
     );
-    assert!(text.contains(&format!("var opaque: {byte}_array_56")), "{text}");
+    assert!(
+        text.contains(&format!("var opaque: {byte}_array_56")),
+        "{text}"
+    );
 }
 
 #[test]

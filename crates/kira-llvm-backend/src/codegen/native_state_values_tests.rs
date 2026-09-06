@@ -1,5 +1,7 @@
 use kira_runtime_abi::Execution;
-use kira_semantics_model::hir::{CallableSignature, HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
+use kira_semantics_model::hir::{
+    CallableSignature, HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId,
+};
 use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, Type};
 use kira_source::Span;
 

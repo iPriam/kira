@@ -122,8 +122,7 @@ fn a_non_identifier_field_value_is_rejected() {
 
 #[test]
 fn a_missing_field_comma_is_rejected() {
-    let result =
-        parse_text("@FFI.Extern { library: ffimath symbol: s }\nfunction add() -> I32");
+    let result = parse_text("@FFI.Extern { library: ffimath symbol: s }\nfunction add() -> I32");
     assert!(codes(&result).contains(&"KPAR052"), "{:?}", codes(&result));
 }
 
@@ -135,7 +134,11 @@ fn a_trailing_field_comma_is_allowed() {
         "@FFI.Syscall { name: write }\nfunction w() -> Int",
     ] {
         let result = parse_text(text);
-        assert!(result.diagnostics.is_empty(), "{text}: {:?}", result.diagnostics);
+        assert!(
+            result.diagnostics.is_empty(),
+            "{text}: {:?}",
+            result.diagnostics
+        );
     }
 }
 
@@ -143,8 +146,12 @@ fn a_trailing_field_comma_is_allowed() {
 /// and the parser passes over it without a second diagnostic.
 #[test]
 fn a_semicolon_in_a_block_is_a_lexer_error_only() {
-    let result = parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nfunction add() -> I32;");
-    assert_eq!(codes(&result), vec!["KLEX005", "KLEX005", "KLEX005", "KLEX005"]);
+    let result =
+        parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nfunction add() -> I32;");
+    assert_eq!(
+        codes(&result),
+        vec!["KLEX005", "KLEX005", "KLEX005", "KLEX005"]
+    );
     assert_eq!(only_function(&result).params.len(), 0);
 }
 

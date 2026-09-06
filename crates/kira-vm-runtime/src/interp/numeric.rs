@@ -35,9 +35,18 @@ impl Vm<'_> {
                 }
                 (lhs.checked_div(rhs), "Int")
             }
-            I::AddUIntChecked => ((lhs as u64).checked_add(rhs as u64).map(|v| v as i64), "U64"),
-            I::SubUIntChecked => ((lhs as u64).checked_sub(rhs as u64).map(|v| v as i64), "U64"),
-            I::MulUIntChecked => ((lhs as u64).checked_mul(rhs as u64).map(|v| v as i64), "U64"),
+            I::AddUIntChecked => (
+                (lhs as u64).checked_add(rhs as u64).map(|v| v as i64),
+                "U64",
+            ),
+            I::SubUIntChecked => (
+                (lhs as u64).checked_sub(rhs as u64).map(|v| v as i64),
+                "U64",
+            ),
+            I::MulUIntChecked => (
+                (lhs as u64).checked_mul(rhs as u64).map(|v| v as i64),
+                "U64",
+            ),
             _ => return Err(VmError::BadDispatch),
         };
         let value = value.ok_or(VmError::IntegerOverflow { spelling })?;

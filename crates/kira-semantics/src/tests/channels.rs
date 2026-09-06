@@ -100,7 +100,11 @@ fn a_receive_is_a_fallible_step_with_one_failure() {
                    let tx = Channel<Int>() let rx = tx.receiver \
                    attempt { let v = try rx.receive() print(v) } \
                    handle { Closed { print(0) } } return }";
-    assert!(diagnostics(covered).is_empty(), "{:?}", diagnostics(covered));
+    assert!(
+        diagnostics(covered).is_empty(),
+        "{:?}",
+        diagnostics(covered)
+    );
 
     // Uncovered, so the `attempt` does not handle everything it can fail with.
     let uncovered = "@Main function main() { \
@@ -160,10 +164,7 @@ fn a_channel_over_void_is_refused() {
 fn an_end_annotation_refuses_the_payloads_a_channel_refuses() {
     let text = "function take(rx: Receiver<String>) -> Int { return 0 }\n\
                 @Main function main() { print(1) return }";
-    let refusals = codes(text)
-        .iter()
-        .filter(|code| *code == "KSEM365")
-        .count();
+    let refusals = codes(text).iter().filter(|code| *code == "KSEM365").count();
     assert_eq!(refusals, 1, "{:?}", diagnostics(text));
 }
 

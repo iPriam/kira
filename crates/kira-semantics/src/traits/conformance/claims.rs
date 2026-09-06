@@ -231,7 +231,9 @@ impl<'a> Analyzer<'a> {
         for entry in claimed {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
+                if !is_builtin_trait(&written_name)
+                    && self.visible_trait_key(&written_name).is_none()
+                {
                     self.emit(
                         entry.span,
                         "KSEM289",
@@ -354,7 +356,9 @@ impl<'a> Analyzer<'a> {
         for entry in claimed {
             let written_name = self.interner.resolve(entry.name).to_owned();
             let Some(trait_name) = self.resolve_trait_ref(entry) else {
-                if !is_builtin_trait(&written_name) && self.visible_trait_key(&written_name).is_none() {
+                if !is_builtin_trait(&written_name)
+                    && self.visible_trait_key(&written_name).is_none()
+                {
                     self.emit(
                         entry.span,
                         "KSEM289",
@@ -545,9 +549,8 @@ impl<'a> Analyzer<'a> {
                 .cmp(&self.type_name(*right_ty))
                 .then_with(|| left.cmp(right))
         });
-        recorded.dedup_by(|(left_ty, left), (right_ty, right)| {
-            left_ty == right_ty && left == right
-        });
+        recorded
+            .dedup_by(|(left_ty, left), (right_ty, right)| left_ty == right_ty && left == right);
         self.program.conformances = recorded;
     }
 

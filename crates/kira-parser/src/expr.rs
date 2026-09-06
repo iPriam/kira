@@ -81,16 +81,26 @@ impl Parser<'_> {
             // `value is Type` and `value as Type` bind tighter than a
             // comparison and looser than a shift, and their right side is a
             // type, not an expression.
-            if matches!(self.current_kind(), TokenKind::Is | TokenKind::As) && TYPE_OPERATOR_BP > min_bp {
+            if matches!(self.current_kind(), TokenKind::Is | TokenKind::As)
+                && TYPE_OPERATOR_BP > min_bp
+            {
                 let is_test = self.at(TokenKind::Is);
                 self.bump(); // `is` / `as`
                 let ty = self.parse_type_ref();
                 let lhs_span = self.tree.expr(lhs).span();
                 let span = Span::from_bounds(lhs_span.start, self.previous_end());
                 lhs = self.tree.add_expr(if is_test {
-                    Expr::TypeTest { value: lhs, ty, span }
+                    Expr::TypeTest {
+                        value: lhs,
+                        ty,
+                        span,
+                    }
                 } else {
-                    Expr::TypeCast { value: lhs, ty, span }
+                    Expr::TypeCast {
+                        value: lhs,
+                        ty,
+                        span,
+                    }
                 });
                 continue;
             }

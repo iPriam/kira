@@ -173,9 +173,7 @@ impl EnumTable {
 
     /// The module `id` was declared in, or empty for a compiler-minted row.
     pub fn module_of(&self, id: EnumId) -> &str {
-        self.modules
-            .get(id.0 as usize)
-            .map_or("", String::as_str)
+        self.modules.get(id.0 as usize).map_or("", String::as_str)
     }
 
     /// The enum `name` declares in the program's own files.

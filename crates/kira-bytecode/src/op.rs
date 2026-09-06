@@ -19,10 +19,10 @@ mod codec;
 pub(crate) use codec::decode_legacy;
 pub use codec::{DecodeError, decode, encode, encode_one};
 
+pub use kira_runtime_abi::ChannelPrim;
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
-pub use kira_runtime_abi::ChannelPrim;
 pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
 use kira_runtime_abi::{ForeignType, MainThreadOp};
 /// Which property a [`Instruction::TypeField`] reads, re-exported so an engine

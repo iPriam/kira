@@ -604,7 +604,9 @@ impl<'a> Analyzer<'a> {
         let declaration_name = self
             .generic_instance_templates
             .get(&owner)
-            .map_or(owner_name.as_str(), |key| key.rsplit("::").next().unwrap_or(key));
+            .map_or(owner_name.as_str(), |key| {
+                key.rsplit("::").next().unwrap_or(key)
+            });
         let owner_package = self.program.types.structs().owner_of(owner);
         self.tree.items_with_source().find_map(|(source, item)| {
             if self.imports.package_of(source) != owner_package {

@@ -4,8 +4,8 @@
 //! Split from the declaration half because this is the only part that runs per
 //! *call site* rather than per declaration.
 
-use kira_semantics_model::hir::FieldOrder;
 use super::*;
+use kira_semantics_model::hir::FieldOrder;
 
 /// Borrowed signature context for lowering one foreign call's arguments.
 struct ForeignArgShape<'a> {

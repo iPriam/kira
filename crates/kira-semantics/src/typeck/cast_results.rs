@@ -24,8 +24,8 @@
 //! language operation: a program that imports nothing still writes one, and a
 //! failure it cannot name is a failure it cannot handle.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::cast_result::{OWNING_MODULE, RESULT_TEMPLATE, TYPE_CAST_ERROR};
+use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::{EnumDef, EnumId, Instantiation, Type, VariantDef};
 use kira_source::Span;
 use kira_syntax_model::ast::{ExprId, TypeRefId};

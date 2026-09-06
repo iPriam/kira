@@ -541,10 +541,7 @@ impl<'a> Analyzer<'a> {
         let mangled = self.mangle(text, args);
         // Filed under the template's package, as an aggregate instantiation
         // is: two packages' same-named templates mint different rows.
-        let owner = self
-            .imports
-            .package_of(template.source)
-            .map(str::to_owned);
+        let owner = self.imports.package_of(template.source).map(str::to_owned);
         if let Some(id) = self
             .program
             .types

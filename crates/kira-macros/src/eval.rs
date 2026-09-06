@@ -94,7 +94,11 @@ impl BodyError {
         whose: &str,
     ) {
         match self {
-            BodyError::Lift { offset, message, further } => {
+            BodyError::Lift {
+                offset,
+                message,
+                further,
+            } => {
                 let at = body_span.start as usize + offset.min(body.len());
                 let line = body[..offset.min(body.len())].matches('\n').count() + 1;
                 let and_more = match further {
@@ -767,7 +771,11 @@ impl Evaluator<'_> {
         }
         let body = match compile(&declared.body) {
             Ok(body) => body,
-            Err(BodyError::Lift { offset, message, further }) => {
+            Err(BodyError::Lift {
+                offset,
+                message,
+                further,
+            }) => {
                 let line = declared.body[..offset.min(declared.body.len())]
                     .matches('\n')
                     .count()
@@ -778,7 +786,9 @@ impl Evaluator<'_> {
                 };
                 return Some(Err(EvalError::coded(
                     diagnostics::UNCLOSED_QUOTE,
-                    format!("the body of `comptime function {callee}` has {message} at line {line}{and_more}"),
+                    format!(
+                        "the body of `comptime function {callee}` has {message} at line {line}{and_more}"
+                    ),
                 )));
             }
             Err(BodyError::Parse) => {

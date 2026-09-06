@@ -141,10 +141,10 @@ impl Analyzer<'_> {
         if Type::from_name(name).is_some() {
             return Some(format!("the builtin type `{name}`"));
         }
-        if self
-            .distincts
-            .contains_key(&owned_distinct_key(self.imports.package_of(self.source), name))
-        {
+        if self.distincts.contains_key(&owned_distinct_key(
+            self.imports.package_of(self.source),
+            name,
+        )) {
             return Some(format!("an earlier distinct type `{name}`"));
         }
         if self.visible_alias_key(name).is_some() {

@@ -28,9 +28,9 @@
 
 use std::collections::HashMap;
 
+use super::Type;
 use super::identity::NominalKind;
 use super::table::TypeTable;
-use super::Type;
 
 /// Which family a descriptor belongs to.
 ///

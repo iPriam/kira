@@ -1,7 +1,9 @@
 //! Calling a closure value, and finishing the desugar once analysis is done.
 
-use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirStmtId,
-    FieldOrder, HirWriteback, LocalId, TaskTarget,};
+use kira_semantics_model::hir::{
+    CallableSignature, Callee, FieldOrder, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction,
+    HirPlace, HirStmt, HirStmtId, HirWriteback, LocalId, TaskTarget,
+};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::ExprId;

@@ -520,7 +520,10 @@ fn a_program_past_the_module_limit_is_refused_rather_than_truncated() {
         .collect();
     modules.push(("main".to_owned(), imports));
     for index in 1..count {
-        modules.push((format!("m{index}"), format!("function m{index}f() {{ return }}\n")));
+        modules.push((
+            format!("m{index}"),
+            format!("function m{index}f() {{ return }}\n"),
+        ));
     }
     let borrowed: Vec<(&str, &str)> = modules
         .iter()

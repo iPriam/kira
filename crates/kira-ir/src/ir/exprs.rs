@@ -9,10 +9,10 @@
 //! deliberately — it resolves a local against the enclosing function's slot
 //! types, so it is a question about a program, not about a node.
 
-use kira_semantics_model::hir::FieldOrder;
 use kira_runtime_abi::{
     ChannelPrim, CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
 };
+use kira_semantics_model::hir::FieldOrder;
 use kira_semantics_model::{EnumId, StructId, Type};
 
 use super::{ConvertKind, IrBinOp, IrExprId, IrPlace, IrUnOp, IrWriteback};

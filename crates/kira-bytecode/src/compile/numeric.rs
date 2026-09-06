@@ -16,7 +16,11 @@ use crate::op::Instruction;
 impl FnCompiler<'_> {
     /// Emits an integer or other binary operator whose operands are already
     /// on the stack, plus the width checks the result type asks for.
-    pub(super) fn compile_int_operator(&mut self, op: IrBinOp, ty: Type) -> Result<(), CompileError> {
+    pub(super) fn compile_int_operator(
+        &mut self,
+        op: IrBinOp,
+        ty: Type,
+    ) -> Result<(), CompileError> {
         let spelling = match ty {
             Type::Int(spelling) => spelling,
             _ => {
@@ -46,7 +50,8 @@ impl FnCompiler<'_> {
             // The count is checked against the width first; a left shift then
             // discards the bits it pushed out of the width.
             IrBinOp::Shl | IrBinOp::ShrInt | IrBinOp::ShrUInt => {
-                self.code.push(Instruction::CheckShift(spelling.bits() as u8));
+                self.code
+                    .push(Instruction::CheckShift(spelling.bits() as u8));
                 self.code.push(binary_instruction(op)?);
                 if op == IrBinOp::Shl {
                     self.wrap_width(ty);

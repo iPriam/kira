@@ -51,9 +51,7 @@ impl Analyzer<'_> {
     /// place an end is ever going.
     fn task_slot_scalar(&self, ty: Type) -> Option<TaskResult> {
         match ty {
-            Type::Distinct(id) => {
-                task_scalar(self.program.types.distincts().representation(id)?)
-            }
+            Type::Distinct(id) => task_scalar(self.program.types.distincts().representation(id)?),
             other => task_scalar(other),
         }
     }

@@ -341,7 +341,9 @@ fn a_literal_that_does_not_fit_its_width_is_rejected() {
         codes("@Main function main() { let a: I8 = 128 return }"),
         vec!["KSEM350"]
     );
-    assert!(diagnostics("@Main function main() { let a: U8 = 255 let b: I8 = -128 return }").is_empty());
+    assert!(
+        diagnostics("@Main function main() { let a: U8 = 255 let b: I8 = -128 return }").is_empty()
+    );
 }
 
 /// A hexadecimal literal is a bit pattern: as a `U64` it names the unsigned
@@ -349,8 +351,10 @@ fn a_literal_that_does_not_fit_its_width_is_rejected() {
 #[test]
 fn a_hexadecimal_literal_fills_a_u64() {
     assert!(
-        diagnostics("@Main function main() { let a: U64 = 0xffffffffffffffff print(a > 1) return }")
-            .is_empty()
+        diagnostics(
+            "@Main function main() { let a: U64 = 0xffffffffffffffff print(a > 1) return }"
+        )
+        .is_empty()
     );
 }
 

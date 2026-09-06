@@ -133,17 +133,17 @@ impl Analyzer<'_> {
             .visible_family_key(&family_name)
             .and_then(|key| self.construct_families.get(&key))
             .map(|info| {
-            // A uniform `extend` modifier has one shared body and is never
-            // implemented per variant, so it is not part of the conformance
-            // surface a backed declaration must satisfy.
-            let methods = info
-                .methods
-                .iter()
-                .filter(|(_, method)| !method.uniform)
-                .map(|(name, method)| (name.clone(), method.computed))
-                .collect::<Vec<_>>();
-            (info.required.clone(), methods, info.stored_fields.clone())
-        });
+                // A uniform `extend` modifier has one shared body and is never
+                // implemented per variant, so it is not part of the conformance
+                // surface a backed declaration must satisfy.
+                let methods = info
+                    .methods
+                    .iter()
+                    .filter(|(_, method)| !method.uniform)
+                    .map(|(name, method)| (name.clone(), method.computed))
+                    .collect::<Vec<_>>();
+                (info.required.clone(), methods, info.stored_fields.clone())
+            });
         match family_surface {
             None => self.emit(
                 *family_span,

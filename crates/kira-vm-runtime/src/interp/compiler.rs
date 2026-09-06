@@ -12,9 +12,7 @@
 //! package on disk, and none for the in-memory check. Both directions are
 //! `[String]`, so everything after the decode is the same code.
 
-use kira_runtime_abi::{
-    CheckDiagnostic, CheckRequest, CompilerOp, ToolAnswer, ToolRequest,
-};
+use kira_runtime_abi::{CheckDiagnostic, CheckRequest, CompilerOp, ToolAnswer, ToolRequest};
 
 use super::Vm;
 use crate::error::VmError;

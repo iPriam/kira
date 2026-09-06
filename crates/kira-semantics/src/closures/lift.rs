@@ -1,6 +1,8 @@
 //! Minting function types, lifting closure literals, and capturing.
 
-use kira_semantics_model::hir::{CallableSignature, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, LocalId, FieldOrder};
+use kira_semantics_model::hir::{
+    CallableSignature, FieldOrder, FuncId, HirExpr, HirExprId, HirFunction, HirStmt, LocalId,
+};
 use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, ClosureParam};

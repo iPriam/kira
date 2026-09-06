@@ -11,8 +11,8 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MainThreadOp, MathOp, PathStep,
-    PlacePath, StringOp, TaskPrim, ChannelPrim, WritebackTarget, opcode as o, step_tag,
+    ChannelPrim, CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MainThreadOp, MathOp,
+    PathStep, PlacePath, StringOp, TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.

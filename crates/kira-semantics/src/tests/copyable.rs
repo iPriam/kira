@@ -159,5 +159,9 @@ fn a_copy_parameter_needs_a_copyable_type() {
                 extend Handle: Drop {\n    function drop(borrow mut self) { return }\n}\n\
                 function keep(h: copy Handle) -> Int { return h.id }\n\
                 @Main function main() { return }";
-    assert!(codes(text).contains(&"KSEM356".to_owned()), "{:?}", codes(text));
+    assert!(
+        codes(text).contains(&"KSEM356".to_owned()),
+        "{:?}",
+        codes(text)
+    );
 }

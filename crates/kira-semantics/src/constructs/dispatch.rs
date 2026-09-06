@@ -1,6 +1,9 @@
 //! Expected-type upcasts and synthesized dispatch for construct-family values.
 
-use kira_semantics_model::hir::{CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirWriteback,};
+use kira_semantics_model::hir::{
+    CallableSignature, Callee, FuncId, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt,
+    HirWriteback,
+};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId, TypeRef};
@@ -216,7 +219,11 @@ impl Analyzer<'_> {
         let Some(dispatcher) = callee else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let callable = format!("{}.{}", self.member_owner_name(Type::Enum(family_id)), method);
+        let callable = format!(
+            "{}.{}",
+            self.member_owner_name(Type::Enum(family_id)),
+            method
+        );
         // A method call binds by position, label or no label.
         let positional = Analyzer::argument_slots(args);
         let mut values = vec![receiver];

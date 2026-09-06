@@ -16,8 +16,8 @@ use kira_ir::{IrBinOp, IrProgram, IrUnOp};
 mod error;
 mod expression;
 mod function;
-mod numeric;
 mod main_thread;
+mod numeric;
 
 pub use error::CompileError;
 

@@ -206,7 +206,10 @@ fn struct_literal_fields_are_comma_separated() {
     // refused at the second one.
     let unseparated = parse_text("function f() { let p = Point {\n    x = 1\n    y = 2\n} }");
     assert!(
-        unseparated.diagnostics.iter().any(|d| d.has_code("KPAR002")),
+        unseparated
+            .diagnostics
+            .iter()
+            .any(|d| d.has_code("KPAR002")),
         "{:?}",
         unseparated.diagnostics
     );
@@ -296,7 +299,9 @@ fn parses_assignment_to_a_local_and_to_a_field_path() {
 /// looser than a shift.
 #[test]
 fn is_and_as_parse_with_a_type_on_the_right() {
-    let result = parse_text("function f() { let a: Any = 1 let b = a is Int == true let c = a as Int return }");
+    let result = parse_text(
+        "function f() { let a: Any = 1 let b = a is Int == true let c = a as Int return }",
+    );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let mut tests = 0;
     let mut casts = 0;

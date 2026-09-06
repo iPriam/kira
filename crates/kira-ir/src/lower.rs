@@ -11,11 +11,11 @@
 //! is an *error* was already decided upstream, by
 //! [`kira_semantics::BuildKind`].
 
-use kira_semantics_model::{OwnershipMode, Type, TypeDescriptorTable, TypeTable};
 use kira_semantics_model::hir::{
     Builtin, Callee, HirAttempt, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt,
     HirStmtId, TaskTarget,
 };
+use kira_semantics_model::{OwnershipMode, Type, TypeDescriptorTable, TypeTable};
 
 use crate::tasks::TaskTargets;
 
@@ -748,12 +748,7 @@ impl Lowerer<'_> {
     /// The helper takes a fixed argument list, so a body with fewer arguments
     /// pads with zeros: one generated function serves every arity, and the
     /// dispatcher reads back exactly as many slots as its target declares.
-    fn lower_task_spawn(
-        &mut self,
-        target: TaskTarget,
-        args: &[HirExprId],
-        ty: Type,
-    ) -> IrExprId {
+    fn lower_task_spawn(&mut self, target: TaskTarget, args: &[HirExprId], ty: Type) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;
         let arm = match target {

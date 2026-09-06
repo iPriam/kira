@@ -87,13 +87,13 @@ pub use build_machine::{BuildMachine, host_architecture, host_platform};
 pub use definitions::DefinitionLink;
 pub use exports::exported_name;
 pub use imports::{FileImports, ImportTable};
-pub use kira_semantics_model::PackageIdentity;
 /// The precompiled shaders a [`SourceProgram`] carries.
 ///
 /// Re-exported rather than restated: it is a field type of this crate's one
 /// salsa input, so a caller building a program should not have to name the
 /// crate that happens to define it.
 pub use kira_macros::PrecompiledShaders;
+pub use kira_semantics_model::PackageIdentity;
 
 use kira_core::Names;
 use kira_diagnostics::Diagnostic;

@@ -9,14 +9,17 @@
 //! being called, and does the argument list fit its signature — and all but two
 //! of them end up in the same argument checker.
 
-use kira_semantics_model::{IntSpelling, Type};
 use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::{IntSpelling, Type};
 use kira_syntax_model::ast::{BinaryOp, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::operators::resolve_binary;
 
 mod calls;
+mod cast_results;
+mod casts;
+pub(crate) mod channels;
 mod compiler;
 mod conditional;
 mod env;
@@ -25,9 +28,6 @@ mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
-mod cast_results;
-pub(crate) mod channels;
-mod casts;
 pub(crate) mod overloads;
 mod print;
 mod qualified;

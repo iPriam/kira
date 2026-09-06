@@ -10,7 +10,9 @@
 use std::collections::HashSet;
 
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity};
+use kira_semantics_model::hir::{
+    CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity,
+};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Function, Item};
 

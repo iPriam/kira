@@ -306,7 +306,11 @@ impl Evaluator<'_> {
         };
         let compiled = match super::compile(body) {
             Ok(compiled) => compiled,
-            Err(super::BodyError::Lift { offset, message, further }) => {
+            Err(super::BodyError::Lift {
+                offset,
+                message,
+                further,
+            }) => {
                 let line = body[..offset.min(body.len())].matches('\n').count() + 1;
                 let and_more = match further {
                     0 => String::new(),
@@ -518,7 +522,9 @@ fn identifier_from_text(text: &str) -> Result<Value, EvalError> {
     if !well_formed {
         return Err(EvalError::coded(
             diagnostics::BAD_IDENTIFIER,
-            format!("`Identifier(\"{text}\")`, which is not an identifier: one starts with a letter or `_`, and holds letters, digits, and `_`"),
+            format!(
+                "`Identifier(\"{text}\")`, which is not an identifier: one starts with a letter or `_`, and holds letters, digits, and `_`"
+            ),
         ));
     }
     if kira_syntax_model::TokenKind::keyword_from_text(text).is_some() {

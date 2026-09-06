@@ -279,9 +279,9 @@ impl Codegen<'_> {
 
 #[cfg(test)]
 mod tests {
-    use kira_semantics_model::hir::CallableSignature;
     use kira_runtime_abi::Execution;
     use kira_semantics_model::Type;
+    use kira_semantics_model::hir::CallableSignature;
     use kira_semantics_model::hir::{HirExpr, HirFunction, HirProgram, HirStmt};
     use kira_source::Span;
 

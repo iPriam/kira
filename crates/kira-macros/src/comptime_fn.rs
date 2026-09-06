@@ -97,7 +97,11 @@ fn evaluate(
         Ok(body) => body,
         // The lifted text is `return ` plus the expression, so an opener's
         // offset maps back by that prefix; the span covers the expression.
-        Err(eval::BodyError::Lift { offset, message, further }) => {
+        Err(eval::BodyError::Lift {
+            offset,
+            message,
+            further,
+        }) => {
             let at = span.start as usize + offset.saturating_sub("return ".len());
             let line = text[..offset.saturating_sub("return ".len()).min(text.len())]
                 .matches('\n')

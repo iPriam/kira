@@ -93,7 +93,6 @@ impl IntSpelling {
         self.width().code()
     }
 
-
     /// Whether this spelling selects unsigned division, remainder, and
     /// ordering.
     ///

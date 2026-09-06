@@ -212,7 +212,12 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
         param_count: 1,
         local_count: 1,
         execution: Execution::Runtime,
-        code: vec![I::TakeLocal(0), I::NativeStateRelease, I::Pop, I::ReturnVoid],
+        code: vec![
+            I::TakeLocal(0),
+            I::NativeStateRelease,
+            I::Pop,
+            I::ReturnVoid,
+        ],
         releases: kira_bytecode::FrameRelease::EveryLocal,
     };
     let module = Module {
@@ -579,7 +584,8 @@ fn a_handle_dropped_with_its_frame_releases_one_owner() {
     let token = kira_runtime_abi::NativeStateToken::from_word(word);
     assert_eq!(host.store().owners(token), Ok(1));
     assert_eq!(host.store().live(), 1);
-    host.native_state_release(token).expect("the token's owner releases");
+    host.native_state_release(token)
+        .expect("the token's owner releases");
     assert_eq!(host.store().live(), 0);
 }
 

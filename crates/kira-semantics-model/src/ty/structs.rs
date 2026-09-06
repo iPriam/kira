@@ -248,9 +248,7 @@ impl StructTable {
 
     /// The module `id` was declared in, or empty for a compiler-minted row.
     pub fn module_of(&self, id: StructId) -> &str {
-        self.modules
-            .get(id.0 as usize)
-            .map_or("", String::as_str)
+        self.modules.get(id.0 as usize).map_or("", String::as_str)
     }
 
     /// Notes what generic template `id` was minted from, and with what.

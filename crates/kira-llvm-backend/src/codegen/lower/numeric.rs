@@ -74,12 +74,8 @@ impl FunctionLowering<'_, '_> {
                 params.as_mut_ptr(),
                 params.len(),
             );
-            let callee_ty = LLVMIntrinsicGetType(
-                self.codegen.context,
-                id,
-                params.as_mut_ptr(),
-                params.len(),
-            );
+            let callee_ty =
+                LLVMIntrinsicGetType(self.codegen.context, id, params.as_mut_ptr(), params.len());
             let mut args = [left, right];
             let pair = LLVMBuildCall2(
                 self.codegen.builder,
@@ -95,7 +91,12 @@ impl FunctionLowering<'_, '_> {
             )
         };
         let mut args = [self.width_code(width)];
-        self.trap_if(overflowed, self.codegen.runtime.trap_overflow, &mut args, c"overflow")?;
+        self.trap_if(
+            overflowed,
+            self.codegen.runtime.trap_overflow,
+            &mut args,
+            c"overflow",
+        )?;
         Ok(value)
     }
 
@@ -130,10 +131,20 @@ impl FunctionLowering<'_, '_> {
                 high,
                 c"width.above".as_ptr(),
             );
-            LLVMBuildOr(self.codegen.builder, below, above, c"width.outside".as_ptr())
+            LLVMBuildOr(
+                self.codegen.builder,
+                below,
+                above,
+                c"width.outside".as_ptr(),
+            )
         };
         let mut args = [self.width_code(width)];
-        self.trap_if(outside, self.codegen.runtime.trap_overflow, &mut args, c"width.trap")?;
+        self.trap_if(
+            outside,
+            self.codegen.runtime.trap_overflow,
+            &mut args,
+            c"width.trap",
+        )?;
         Ok(value)
     }
 
@@ -177,7 +188,12 @@ impl FunctionLowering<'_, '_> {
         // SAFETY: a constant of a live type.
         let bits = unsafe { LLVMConstInt(types.i32, u64::from(width.bits()), 0) };
         let mut args = [count, bits];
-        self.trap_if(outside, self.codegen.runtime.trap_shift, &mut args, c"shift.trap")
+        self.trap_if(
+            outside,
+            self.codegen.runtime.trap_shift,
+            &mut args,
+            c"shift.trap",
+        )
     }
 
     /// Integer arithmetic and shifts at `spelling`'s width, or `None` when
@@ -276,7 +292,8 @@ impl FunctionLowering<'_, '_> {
             // SAFETY: `0 - value` through the overflow intrinsic on a live
             // block; a constant of a live type.
             let zero = unsafe { LLVMConstInt(types.i64, 0, 0) };
-            let negated = self.checked_arithmetic(c"llvm.ssub.with.overflow", zero, value, width)?;
+            let negated =
+                self.checked_arithmetic(c"llvm.ssub.with.overflow", zero, value, width)?;
             return self.check_width(negated, width);
         }
         Ok(self.lower_unary(op, value))
@@ -312,7 +329,12 @@ impl FunctionLowering<'_, '_> {
                 let types = self.codegen.types;
                 // SAFETY: `value` is an `i64` on a live block.
                 Ok(unsafe {
-                    LLVMBuildUIToFP(self.codegen.builder, value, types.f64, c"conv.uitofp".as_ptr())
+                    LLVMBuildUIToFP(
+                        self.codegen.builder,
+                        value,
+                        types.f64,
+                        c"conv.uitofp".as_ptr(),
+                    )
                 })
             }
             ConvertKind::FloatToInt => {
@@ -360,20 +382,37 @@ impl FunctionLowering<'_, '_> {
             let falsehood = LLVMConstInt(types.i1, 0, 0);
             let below = if low > from_low {
                 let bound = LLVMConstInt(types.i64, from.word_of(low) as u64, 1);
-                LLVMBuildICmp(self.codegen.builder, predicate_lt, value, bound, c"conv.below".as_ptr())
+                LLVMBuildICmp(
+                    self.codegen.builder,
+                    predicate_lt,
+                    value,
+                    bound,
+                    c"conv.below".as_ptr(),
+                )
             } else {
                 falsehood
             };
             let above = if high < from_high {
                 let bound = LLVMConstInt(types.i64, from.word_of(high) as u64, 1);
-                LLVMBuildICmp(self.codegen.builder, predicate_gt, value, bound, c"conv.above".as_ptr())
+                LLVMBuildICmp(
+                    self.codegen.builder,
+                    predicate_gt,
+                    value,
+                    bound,
+                    c"conv.above".as_ptr(),
+                )
             } else {
                 falsehood
             };
             LLVMBuildOr(self.codegen.builder, below, above, c"conv.outside".as_ptr())
         };
         let mut args = [value, self.width_code(from), self.width_code(to)];
-        self.trap_if(outside, self.codegen.runtime.trap_narrow, &mut args, c"conv.trap")
+        self.trap_if(
+            outside,
+            self.codegen.runtime.trap_narrow,
+            &mut args,
+            c"conv.trap",
+        )
     }
 
     /// Truncates a float toward zero, trapping on NaN, an infinity, or a
@@ -403,14 +442,29 @@ impl FunctionLowering<'_, '_> {
                 high,
                 c"conv.f.high".as_ptr(),
             );
-            let inside = LLVMBuildAnd(self.codegen.builder, above_low, below_high, c"conv.f.in".as_ptr());
+            let inside = LLVMBuildAnd(
+                self.codegen.builder,
+                above_low,
+                below_high,
+                c"conv.f.in".as_ptr(),
+            );
             LLVMBuildNot(self.codegen.builder, inside, c"conv.f.out".as_ptr())
         };
         let mut args = [value];
-        self.trap_if(outside, self.codegen.runtime.trap_float_to_int, &mut args, c"conv.f.trap")?;
+        self.trap_if(
+            outside,
+            self.codegen.runtime.trap_float_to_int,
+            &mut args,
+            c"conv.f.trap",
+        )?;
         // SAFETY: the value was just proven in range, so `fptosi` is defined.
         Ok(unsafe {
-            LLVMBuildFPToSI(self.codegen.builder, value, types.i64, c"conv.fptosi".as_ptr())
+            LLVMBuildFPToSI(
+                self.codegen.builder,
+                value,
+                types.i64,
+                c"conv.fptosi".as_ptr(),
+            )
         })
     }
 }

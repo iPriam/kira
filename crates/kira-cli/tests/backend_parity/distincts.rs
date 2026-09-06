@@ -133,7 +133,10 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "true\nfalse\ntrue\nfalse\nDsdTabId(U32(41))\ntrue\ntrue\nfalse\n");
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\nfalse\nDsdTabId(U32(41))\ntrue\ntrue\nfalse\n"
+    );
 }
 
 /// A distinct writes its name around its representation: `DswPort(U32(8080))`.
@@ -163,7 +166,10 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "DswPort(U32(8080))\nDswEndpoint{port:DswPort(U32(8080))}\ntrue\n");
+    assert_eq!(
+        output,
+        "DswPort(U32(8080))\nDswEndpoint{port:DswPort(U32(8080))}\ntrue\n"
+    );
 }
 
 /// `Option<Value>` over a distinct type: an ordinary generic enum, matched the

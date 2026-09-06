@@ -14,11 +14,11 @@
 //! subtree salsa-free and wasm-portable.
 
 mod borrow_alias;
+mod channels;
 mod erase;
 pub mod ir;
 pub mod lower;
 pub mod mid;
-mod channels;
 mod tasks;
 
 pub use ir::{
@@ -29,9 +29,9 @@ pub use lower::lower;
 
 #[cfg(test)]
 mod tests {
-    use kira_semantics_model::hir::CallableSignature;
     use super::*;
     use kira_semantics_model::Type;
+    use kira_semantics_model::hir::CallableSignature;
     use kira_semantics_model::hir::{
         Builtin, Callee, FuncId, HirExpr, HirFunction, HirProgram, HirStmt,
     };

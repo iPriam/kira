@@ -12,7 +12,9 @@
 //! ordinary direct call and runs byte-identically on every backend. No new IR,
 //! opcode, or serialized shape is introduced.
 
-use kira_semantics_model::hir::{CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity, FuncId, HirFunction};
+use kira_semantics_model::hir::{
+    CallableSignature, FuncId, HirFunction, ParamSignature, ReceiverSignature, ThreadAffinity,
+};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::SourceId;
 use kira_syntax_model::ast::{ExtendDecl, Function, Item};

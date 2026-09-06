@@ -338,7 +338,12 @@ impl FunctionLowering<'_, '_> {
                         u64::from(kira_runtime_abi::IntWidth::Plain.code()),
                         0,
                     );
-                    self.trap_if(is_min, self.codegen.runtime.trap_overflow, &mut [width], c"div.overflow")?;
+                    self.trap_if(
+                        is_min,
+                        self.codegen.runtime.trap_overflow,
+                        &mut [width],
+                        c"div.overflow",
+                    )?;
                     LLVMBuildNeg(self.codegen.builder, left, c"div.negated".as_ptr())
                 }
                 _ => zero,

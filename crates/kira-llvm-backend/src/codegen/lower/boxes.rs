@@ -120,9 +120,9 @@ impl FunctionLowering<'_, '_> {
         self.drop_value(boxed, value_ty)?;
         let mismatch_payload = self.codegen.enum_payload_type(failure, MISMATCH_TAG)?;
         let mismatch_tag = self.codegen.const_int(i64::from(MISMATCH_TAG));
-        let mismatch = self
-            .codegen
-            .box_new(mismatch_tag, mismatch_payload, held, c"cast.mismatch")?;
+        let mismatch =
+            self.codegen
+                .box_new(mismatch_tag, mismatch_payload, held, c"cast.mismatch")?;
         let error_payload = self.codegen.enum_payload_type(result, ERROR_TAG)?;
         let error_tag = self.codegen.const_int(i64::from(ERROR_TAG));
         let error_value =
@@ -250,7 +250,12 @@ impl FunctionLowering<'_, '_> {
             )
         };
         let mut args = [tag, expected];
-        self.trap_if(mismatch, self.codegen.runtime.trap_cast, &mut args, c"cast.trap")?;
+        self.trap_if(
+            mismatch,
+            self.codegen.runtime.trap_cast,
+            &mut args,
+            c"cast.trap",
+        )?;
         let decoded = self.codegen.read_box_payload(boxed, ty)?;
         self.drop_value(boxed, value_ty)?;
         Ok(decoded)

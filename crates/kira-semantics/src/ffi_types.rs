@@ -17,7 +17,7 @@
 //!   A matching Kira function records a callback entry and receives a generated
 //!   C thunk; unsupported signature positions are refused at the use site.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId, FieldOrder};
+use kira_semantics_model::hir::{FieldOrder, HirExpr, HirExprId};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{FfiTypeKind, StructDecl};

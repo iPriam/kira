@@ -6,8 +6,8 @@
 //! variant being added in one place and forgotten in the other.
 
 use super::ops::{Callee, HirBinaryOp, HirUnaryOp};
-pub use crate::ty::descriptor::TypeField;
 use super::{FuncId, HirPlace, HirWriteback, LocalId};
+pub use crate::ty::descriptor::TypeField;
 use crate::ty::{EnumId, StructId, Type};
 use kira_runtime_abi::{
     CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, MainThreadOp, NativeStateTypeId,
@@ -39,7 +39,11 @@ impl FieldOrder {
     /// collapsed to `Declared` when it already is the declaration order.
     #[must_use]
     pub fn from_written(written: Vec<u32>) -> Self {
-        if written.iter().enumerate().all(|(at, &slot)| at as u32 == slot) {
+        if written
+            .iter()
+            .enumerate()
+            .all(|(at, &slot)| at as u32 == slot)
+        {
             Self::Declared
         } else {
             Self::Written(written)

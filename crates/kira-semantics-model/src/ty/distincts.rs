@@ -126,9 +126,7 @@ impl DistinctTable {
 
     /// The module `id` was declared in.
     pub fn module_of(&self, id: DistinctId) -> &str {
-        self.modules
-            .get(id.0 as usize)
-            .map_or("", String::as_str)
+        self.modules.get(id.0 as usize).map_or("", String::as_str)
     }
 
     /// The row behind an id.

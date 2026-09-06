@@ -365,7 +365,9 @@ impl Analyzer<'_> {
         };
         members.into_iter().find_map(|(member, member_ty)| {
             let reason = self.copy_refusal_seen(member_ty, seen)?;
-            Some(format!("`{owner}`'s member `{member}` cannot be copied: {reason}"))
+            Some(format!(
+                "`{owner}`'s member `{member}` cannot be copied: {reason}"
+            ))
         })
     }
 }

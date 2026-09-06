@@ -41,10 +41,9 @@
 //! `Result<Int, E>`: the payload is reachable through the downcast, and the
 //! specialization is rebuilt from it.
 
+use kira_semantics_model::hir::{ConvertKind, HirExpr, HirExprId};
 use kira_semantics_model::{IntSpelling, Type};
 use kira_source::Span;
-use kira_semantics_model::hir::{
-    ConvertKind,HirExpr, HirExprId};
 
 use crate::analyze::Analyzer;
 
@@ -161,7 +160,12 @@ impl Analyzer<'_> {
     /// A literal adapts to any written width, so this is the one place a
     /// literal too large for its slot can be refused at compile time rather
     /// than trapping when the value is finally narrowed.
-    pub(crate) fn int_literal(&mut self, value: i64, span: Span, expected: Option<Type>) -> HirExprId {
+    pub(crate) fn int_literal(
+        &mut self,
+        value: i64,
+        span: Span,
+        expected: Option<Type>,
+    ) -> HirExprId {
         // A hexadecimal literal is a bit pattern, and the one way a literal
         // can be negative: written into a `U64`, it names the unsigned value
         // of those bits.
