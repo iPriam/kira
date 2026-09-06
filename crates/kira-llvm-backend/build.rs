@@ -57,6 +57,21 @@ fn main() {
             libs.trim(),
         ));
     }
+    // A healthy bundle answers with something like two hundred archives. A
+    // handful means `llvm-config` answered a shape this parser mostly did not
+    // recognise — which links, and then fails at the far end naming Kira's own
+    // functions rather than the list that came back short. `cargo:warning`
+    // rather than a refusal because the threshold is a judgement about
+    // plausibility, not a fact, and a bundle is allowed to surprise us.
+    if names.len() < 10 {
+        println!(
+            "cargo:warning=`{} --link-static --libs` named only {} librar{} ({}).              That is far fewer than an LLVM bundle carries, so the link line is              probably missing most of the C API.",
+            llvm_config.display(),
+            names.len(),
+            if names.len() == 1 { "y" } else { "ies" },
+            names.join(", "),
+        );
+    }
     for name in names {
         println!("cargo:rustc-link-lib=static={name}");
     }

@@ -251,9 +251,9 @@ fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
     );
     let text = bind(&package, &library(&["demo.h"]));
 
-    // Plain `char` takes its signedness from the target — signed on x86-64,
-    // unsigned on aarch64 — and the binding reports the target's, so the
-    // element name follows it rather than one platform's.
+    // Plain `char` takes its signedness from the target, and the binding
+    // reports the target's, so the element name follows it rather than one
+    // platform's. See `plain_char_spelling` for which targets sign it.
     let byte = plain_char_spelling();
     assert!(
         text.contains(&format!("@FFI.Array {{ element: {byte}, count: 56 }}")),
@@ -311,14 +311,22 @@ fn integer_width_is_read_from_the_target_rather_than_the_keyword() {
 /// The Kira type a plain C `char` binds to on this host.
 ///
 /// `char` is a third type beside `signed char` and `unsigned char`, and which
-/// of the two it matches is the target's choice: x86-64 signs it, aarch64 does
-/// not. The binding reports what the target says, so a test that pinned one
-/// spelling would pass on one machine and fail on the other for a binding that
-/// is right on both.
+/// of the two it matches is the target's choice. The binding reports what the
+/// target says, so a test that pinned one spelling would pass on one machine
+/// and fail on another for a binding that is right on both.
+///
+/// The rule is not the architecture alone, which is what this said before and
+/// why it failed on Apple silicon: base AAPCS leaves `char` unsigned on ARM,
+/// and both Apple and Microsoft override that to signed on every architecture
+/// they ship. So it is unsigned only on ARM somewhere that follows the base
+/// ABI — Linux and the BSDs — and signed everywhere else.
 fn plain_char_spelling() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" | "arm" => "U8",
-        _ => "I8",
+    let arm = matches!(std::env::consts::ARCH, "aarch64" | "arm");
+    let overrides_to_signed = matches!(std::env::consts::OS, "macos" | "ios" | "windows");
+    if arm && !overrides_to_signed {
+        "U8"
+    } else {
+        "I8"
     }
 }
 
