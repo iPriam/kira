@@ -604,3 +604,8 @@ Measured on the merged tree, not carried forward:
 - Harness on `--backend vm`: **1478 passed, 0 failed, 0 skipped, 1478 total**,
   with all ten `Chx` and all ten `Dgx` cases green. 1465 + 3 + 10, and now
   observed rather than added up.
+- Harness on `--backend llvm`: **1478 passed, 0 failed, 0 skipped, 1478 total**,
+  over an identical set of case names.
+- FFI harness on `--backend hybrid`: **302 passed, 0 failed, 0 skipped, 302
+  total**. The pin was written from a static count of `construct` lines; it
+  happens to be right, and is now a measurement.
