@@ -28,8 +28,8 @@ mod frames;
 mod host;
 mod instructions;
 mod main_thread;
-mod numeric;
 mod native_state;
+mod numeric;
 mod operators;
 mod place;
 mod program;
@@ -203,33 +203,9 @@ impl NativeCallScratch {
     }
 }
 
-/// The task and channel tables of an execution that outlives one entry into
-/// the interpreter.
-///
-/// A slice boundary is not the end of anything the program wrote. A
-/// `@MainThreadLifecycle` function is suspended and resumed many times and
-/// keeps its locals across every suspension, so a task it spawned and a channel
-/// it created have to survive with them: a handle is an index, and a table
-/// rebuilt under a live handle either refuses it or, worse, hands it another
-/// row.
-///
-/// Kept apart from [`VmScratch`] because the two answer different questions. A
-/// persistent [`crate::Instance`] reuses its scratch across calls and must
-/// *not* reuse these: separate calls are separate runs, and a handle from one
-/// naming a row in the next is the aliasing this type exists to prevent.
-#[derive(Default)]
-pub(crate) struct VmExecutors {
-    /// The task table, carried between entries.
-    pub(crate) tasks: TaskExecutor,
-    /// The channel table, carried with it: a receive orders work against a task,
-    /// so one surviving a slice without the other would be half an execution.
-    pub(crate) channels: ChannelExecutor,
-}
-
 /// Reusable interpreter storage that can outlive one call on a persistent
 /// [`crate::Instance`]. The task table is intentionally absent: task handles
-/// are valid only for one run and are recreated for every entry. An execution
-/// that *is* one run across several entries carries [`VmExecutors`] instead.
+/// are valid only for one run and are recreated for every entry.
 #[derive(Default)]
 pub(crate) struct VmScratch {
     stack: Vec<Value>,
@@ -920,9 +896,7 @@ fn foreign_scalar_value(ty: kira_runtime_abi::ForeignType, word: [u8; 8]) -> Val
         ForeignType::U16 => Value::Int(i64::from(raw as u16)),
         ForeignType::U32 => Value::Int(i64::from(raw as u32)),
         ForeignType::U64 => Value::Int(raw as i64),
-        ForeignType::Bool => {
-            Value::Bool(kira_runtime_abi::c_storage::bool_from_c_byte(raw as u8))
-        }
+        ForeignType::Bool => Value::Bool(kira_runtime_abi::c_storage::bool_from_c_byte(raw as u8)),
         ForeignType::F32 => Value::Float(f64::from(f32::from_bits(raw as u32))),
         ForeignType::F64 => Value::Float(f64::from_bits(raw)),
         ForeignType::RawPtr | ForeignType::CString => Value::RawPtr(raw),
