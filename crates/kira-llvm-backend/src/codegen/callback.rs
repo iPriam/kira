@@ -217,7 +217,12 @@ impl Codegen<'_> {
                         self.call_runtime(self.runtime.str_from_cstr, &mut [value], c"cb.str")
                     }
                 }
-                ForeignTypeSpec::Scalar(ty) => self.c_value_to_kira(value, ty)?,
+                // The parameter arrives in its prototype type; a `_Bool` widens
+                // to the canonical byte before the one shared read of it.
+                ForeignTypeSpec::Scalar(ty) => {
+                    let value = self.c_prototype_to_storage(value, ty);
+                    self.c_value_to_kira(value, ty)?
+                }
             });
         }
 
@@ -229,6 +234,9 @@ impl Codegen<'_> {
         };
         match produced {
             Some(value) => {
+                // `enter_*` answers this result's C object type; the entry
+                // returns its prototype type, which differs only for `_Bool`.
+                let value = self.c_storage_to_prototype(value, result);
                 // SAFETY: `value` was converted to the direct body's declared
                 // C result type by `enter_*`.
                 unsafe { LLVMBuildRet(self.builder, value) };
@@ -305,14 +313,14 @@ impl Codegen<'_> {
             .iter()
             .map(|spec| match spec {
                 ForeignTypeSpec::Aggregate(_) => self.types.ptr,
-                ForeignTypeSpec::Scalar(ty) => self.foreign_c_type(*ty),
+                ForeignTypeSpec::Scalar(ty) => self.foreign_c_prototype_type(*ty),
             })
             .collect();
         // SAFETY: every type belongs to this module's context, and the
         // parameter vector outlives the function-type call.
         let ty = unsafe {
             LLVMFunctionType(
-                self.foreign_c_type(result),
+                self.foreign_c_prototype_type(result),
                 parameters.as_mut_ptr(),
                 parameters.len() as u32,
                 0,
@@ -336,6 +344,15 @@ impl Codegen<'_> {
                 existing
             }
         };
+        // C reaches this entry through the prototype clang compiled for the
+        // caller, so every narrow position carries the same extension clang
+        // records there.
+        self.add_c_extension(value, 0, result);
+        for (position, spec) in signature.parameters().iter().enumerate() {
+            if let ForeignTypeSpec::Scalar(ty) = spec {
+                self.add_c_extension(value, position as u32 + 1, *ty);
+            }
+        }
         Ok(Callable { ty, value })
     }
 

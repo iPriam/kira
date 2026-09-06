@@ -1,0 +1,66 @@
+// The null pointer, written and compared.
+//
+// C answers `NULL` for "no window", "no adapter", "the chain ends here", so a
+// program binding C has to be able to say it and to test for it. `RawPtr.null`
+// is the value and `==` is the test; before them a program wrote `RawPtr(0)`
+// and `rawPointerWord(p) == 0`, which are two casts standing in for one
+// meaning and neither of which a reader can see is about a pointer.
+//
+// A pointer compares as the word it is, so an `@FFI.Pointer` type and a plain
+// `RawPtr` compare to each other and to the null: they are one machine value
+// wearing different names.
+
+@FFI.Struct { layout: c }
+struct Flags {
+    let set: Bool = false
+    let odd: Bool = false
+    let tag: I8 = 0
+}
+
+@FFI.Pointer { target: Flags, ownership: borrowed }
+struct FlagsPtr {}
+
+// A descriptor whose pointer member is left out, which zero-fills it. The
+// omitted member has to *be* the null, not merely print like one.
+@FFI.Struct { layout: c }
+struct Descriptor {
+    let next: FlagsPtr
+    let tag: I32 = 0
+}
+
+@FFI.Extern { library: ffifixture, symbol: ffi_make_ptr, abi: c }
+function makePtr() -> RawPtr
+
+@FFI.Extern { library: ffifixture, symbol: ffi_null_ptr, abi: c }
+function nullPtr() -> RawPtr
+
+@FFI.Extern { library: ffifixture, symbol: ffi_ptr_word, abi: c }
+function ptrWord(p: RawPtr) -> Int
+
+@FFI.Extern { library: ffifixture, symbol: ffi_flags_at, abi: c }
+function flagsAt() -> FlagsPtr
+
+@FFI.Extern { library: ffifixture, symbol: ffi_flags_none, abi: c }
+function flagsNone() -> FlagsPtr
+
+@Main function main() {
+    print(rawPointerWord(RawPtr.null))
+    print(RawPtr.null == RawPtr.null)
+    print(nullPtr() == RawPtr.null)
+    print(makePtr() == RawPtr.null)
+    print(makePtr() != RawPtr.null)
+    // Written rather than cast, and handed to C, which reads the same zero.
+    print(ptrWord(RawPtr.null))
+
+    // A named pointer type is the same word, so it compares to the null and to
+    // another pointer of its own type.
+    print(flagsNone() == RawPtr.null)
+    print(flagsAt() == RawPtr.null)
+    print(flagsAt() == flagsAt())
+    print(flagsAt() != flagsNone())
+
+    let descriptor = Descriptor { tag: 5 }
+    print(descriptor.next == RawPtr.null)
+    print(descriptor.tag)
+    return
+}

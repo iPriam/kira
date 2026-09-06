@@ -1049,3 +1049,30 @@ function f() -> Int {
           body: (block
             (return_statement
               value: (integer_literal))))))))
+
+================================================================================
+The null pointer is written and compared
+================================================================================
+
+function f(p: RawPtr) -> Bool {
+    return p == RawPtr.null
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (field_expression
+            receiver: (identifier)
+            field: (identifier)))))))

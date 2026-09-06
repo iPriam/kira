@@ -28,8 +28,8 @@ mod frames;
 mod host;
 mod instructions;
 mod main_thread;
-mod numeric;
 mod native_state;
+mod numeric;
 mod operators;
 mod place;
 mod program;
@@ -920,7 +920,7 @@ fn foreign_scalar_value(ty: kira_runtime_abi::ForeignType, word: [u8; 8]) -> Val
         ForeignType::U16 => Value::Int(i64::from(raw as u16)),
         ForeignType::U32 => Value::Int(i64::from(raw as u32)),
         ForeignType::U64 => Value::Int(raw as i64),
-        ForeignType::Bool => Value::Bool(raw != 0),
+        ForeignType::Bool => Value::Bool(kira_runtime_abi::c_storage::bool_from_c_byte(raw as u8)),
         ForeignType::F32 => Value::Float(f64::from(f32::from_bits(raw as u32))),
         ForeignType::F64 => Value::Float(f64::from_bits(raw)),
         ForeignType::RawPtr | ForeignType::CString => Value::RawPtr(raw),
@@ -944,9 +944,15 @@ fn write_seam_scalar(
         expected: "an array element the C seam can carry",
     };
     match (ty, value) {
-        (ForeignType::I8, Value::Int(n)) => out.push(n as u8),
-        (ForeignType::U8 | ForeignType::Bool, Value::Int(n)) => out.push(n as u8),
-        (ForeignType::Bool, Value::Bool(flag)) => out.push(u8::from(flag)),
+        (ForeignType::I8 | ForeignType::U8, Value::Int(n)) => out.push(n as u8),
+        // Both fills of a `Bool` element write the seam's canonical byte: the
+        // C object a `_Bool` names holds 0 or 1 and nothing else.
+        (ForeignType::Bool, Value::Int(n)) => {
+            out.push(kira_runtime_abi::c_storage::c_bool_byte(n != 0));
+        }
+        (ForeignType::Bool, Value::Bool(flag)) => {
+            out.push(kira_runtime_abi::c_storage::c_bool_byte(flag));
+        }
         (ForeignType::I16 | ForeignType::U16, Value::Int(n)) => {
             out.extend_from_slice(&(n as u16).to_le_bytes());
         }

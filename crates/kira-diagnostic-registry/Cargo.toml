@@ -1,0 +1,17 @@
+[package]
+name = "kira-diagnostic-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kira-diagnostic-registry"
+path = "src/main.rs"
+
+[dependencies]
+kira-diagnostic-messages.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

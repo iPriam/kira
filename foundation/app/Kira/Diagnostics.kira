@@ -1,124 +1,151 @@
+// Generated from `crates/kira-diagnostic-messages/diagnostic-codes.tsv`.
+// Run `cargo run -p kira-diagnostic-registry -- write` to refresh it.
+//
+// `KiraError` names every code the toolchain emits. A test asserting
+// `.KSEM061` compares a value, and goes on comparing it after the message is
+// reworded, which is the whole reason a code exists.
+
 enum KiraError {
-    KBE001
-    KBE002
-    KBE012
-    KCL001
-    KCL002
-    KCL003
-    KCL005
-    KCL006
-    KCL010
-    KCL020
-    KCL021
-    KCL022
-    KCL023
-    KCL026
-    KCL028
-    KCL029
-    KCL030
-    KCL031
-    KCL032
-    KCL033
-    KCL034
-    KCL035
-    KCL036
-    KCL037
-    KCL038
-    KCL039
-    KCL040
-    KCL041
-    KCL043
-    KCL044
-    KCL045
-    KCL046
-    KCL050
-    KCL051
-    KCL054
-    KCL058
-    KCL070
-    KCL071
-    KCL072
-    KCL074
-    KCL080
-    KCL081
-    KCLI020
-    KIC001
-    KIC014
-    KICE001
-    KIR001
+    // The lexer.
     KLEX001
     KLEX002
     KLEX003
     KLEX004
     KLEX005
     KLEX006
+
+    // The parser.
     KPAR001
     KPAR002
     KPAR003
     KPAR004
     KPAR005
-    KPAR013
-    KPK001
-    KPK007
-    KPK010
-    KPK015
-    KPK017
-    KPK019
-    KPK020
-    KPK030
-    KPK031
-    KPKG001
-    KPKG002
-    KPKG007
-    KPKG009
-    KPKG010
-    KPKG011
-    KSEM001
-    KSEM002
+    KPAR006
+    KPAR007
+    KPAR009
+    KPAR010
+    KPAR011
+    KPAR012
+    KPAR014
+    KPAR015
+    KPAR016
+    KPAR017
+    KPAR020
+    KPAR021
+    KPAR022
+    KPAR023
+    KPAR024
+    KPAR030
+    KPAR031
+    KPAR032
+    KPAR033
+    KPAR034
+    KPAR035
+    KPAR037
+    KPAR038
+    KPAR039
+    KPAR040
+    KPAR041
+    KPAR042
+    KPAR043
+    KPAR044
+    KPAR045
+    KPAR046
+    KPAR047
+    KPAR048
+    KPAR049
+    KPAR050
+    KPAR051
+    KPAR052
+    KPAR053
+    KPAR054
+    KPAR055
+    KPAR056
+    KPAR057
+    KPAR058
+    KPAR059
+    KPAR060
+    KPAR061
+    KPAR062
+    KPAR063
+    KPAR064
+    KPAR065
+    KPAR066
+    KPAR067
+    KPAR068
+    KPAR070
+    KPAR071
+    KPAR072
+    KPAR073
+    KPAR074
+    KPAR075
+    KPAR076
+    KPAR077
+    KPAR078
+    KPAR079
+    KPAR080
+    KPAR081
+    KPAR084
+    KPAR085
+    KPAR086
+    KPAR087
+
+    // Macro expansion.
+    KMAC001
+    KMAC002
+    KMAC003
+    KMAC004
+    KMAC005
+    KMAC006
+    KMAC007
+    KMAC008
+    KMAC009
+    KMAC010
+    KMAC011
+    KMAC012
+    KMAC013
+    KMAC014
+    KMAC016
+    KMAC017
+    KMAC020
+    KMAC021
+    KMAC022
+    KMAC023
+    KMAC024
+    KMAC025
+    KMAC026
+    KMAC027
+    KMAC028
+    KMAC029
+    KMAC030
+
+    // Semantic analysis. The largest set by far.
     KSEM003
     KSEM004
     KSEM005
+    KSEM006
     KSEM007
     KSEM010
+    KSEM011
     KSEM012
-    KSEM013
     KSEM020
     KSEM021
+    KSEM022
     KSEM023
     KSEM024
     KSEM025
-    KSEM026
     KSEM027
-    KSEM028
-    KSEM029
+    KSEM030
     KSEM031
     KSEM032
     KSEM033
-    KSEM034
-    KSEM035
-    KSEM036
-    KSEM037
-    KSEM038
-    KSEM039
     KSEM040
     KSEM041
     KSEM042
     KSEM043
-    KSEM044
-    KSEM045
-    KSEM046
-    KSEM047
-    KSEM048
-    KSEM049
     KSEM050
     KSEM051
     KSEM052
-    KSEM053
-    KSEM054
-    KSEM055
-    KSEM056
-    KSEM057
-    KSEM058
     KSEM059
     KSEM060
     KSEM061
@@ -134,21 +161,10 @@ enum KiraError {
     KSEM071
     KSEM072
     KSEM073
-    KSEM075
-    KSEM076
-    KSEM077
-    KSEM078
-    KSEM079
+    KSEM074
     KSEM080
     KSEM081
     KSEM082
-    KSEM083
-    KSEM084
-    KSEM085
-    KSEM086
-    KSEM087
-    KSEM088
-    KSEM089
     KSEM090
     KSEM091
     KSEM092
@@ -157,7 +173,6 @@ enum KiraError {
     KSEM095
     KSEM096
     KSEM097
-    KSEM098
     KSEM100
     KSEM101
     KSEM102
@@ -170,7 +185,6 @@ enum KiraError {
     KSEM109
     KSEM110
     KSEM111
-    KSEM112
     KSEM113
     KSEM114
     KSEM115
@@ -201,16 +215,170 @@ enum KiraError {
     KSEM141
     KSEM142
     KSEM143
-    KSEM144
-    KSEM145
-    KSEM146
-    KSEM147
-    KSEM148
-    KSEM149
-    KSEM150
-    KSEM151
-    KSEM152
-    KSEM153
+    KSEM157
+    KSEM158
+    KSEM159
+    KSEM160
+    KSEM161
+    KSEM162
+    KSEM163
+    KSEM164
+    KSEM165
+    KSEM166
+    KSEM167
+    KSEM168
+    KSEM169
+    KSEM170
+    KSEM171
+    KSEM172
+    KSEM173
+    KSEM174
+    KSEM175
+    KSEM176
+    KSEM177
+    KSEM178
+    KSEM179
+    KSEM180
+    KSEM181
+    KSEM182
+    KSEM183
+    KSEM184
+    KSEM185
+    KSEM186
+    KSEM187
+    KSEM188
+    KSEM189
+    KSEM200
+    KSEM201
+    KSEM202
+    KSEM203
+    KSEM204
+    KSEM205
+    KSEM206
+    KSEM207
+    KSEM208
+    KSEM209
+    KSEM210
+    KSEM211
+    KSEM212
+    KSEM213
+    KSEM214
+    KSEM215
+    KSEM216
+    KSEM217
+    KSEM218
+    KSEM219
+    KSEM220
+    KSEM221
+    KSEM222
+    KSEM223
+    KSEM224
+    KSEM225
+    KSEM226
+    KSEM227
+    KSEM229
+    KSEM231
+    KSEM232
+    KSEM233
+    KSEM234
+    KSEM235
+    KSEM237
+    KSEM238
+    KSEM239
+    KSEM240
+    KSEM241
+    KSEM242
+    KSEM243
+    KSEM244
+    KSEM245
+    KSEM246
+    KSEM247
+    KSEM248
+    KSEM249
+    KSEM250
+    KSEM252
+    KSEM253
+    KSEM254
+    KSEM255
+    KSEM256
+    KSEM257
+    KSEM258
+    KSEM259
+    KSEM260
+    KSEM261
+    KSEM262
+    KSEM263
+    KSEM264
+    KSEM265
+    KSEM266
+    KSEM267
+    KSEM268
+    KSEM269
+    KSEM270
+    KSEM271
+    KSEM272
+    KSEM273
+    KSEM274
+    KSEM275
+    KSEM276
+    KSEM277
+    KSEM278
+    KSEM279
+    KSEM280
+    KSEM281
+    KSEM282
+    KSEM283
+    KSEM284
+    KSEM285
+    KSEM286
+    KSEM287
+    KSEM288
+    KSEM289
+    KSEM290
+    KSEM291
+    KSEM292
+    KSEM293
+    KSEM294
+    KSEM295
+    KSEM297
+    KSEM298
+    KSEM299
+    KSEM300
+    KSEM301
+    KSEM302
+    KSEM303
+    KSEM304
+    KSEM305
+    KSEM306
+    KSEM307
+    KSEM308
+    KSEM309
+    KSEM310
+    KSEM311
+    KSEM312
+    KSEM313
+    KSEM314
+    KSEM315
+    KSEM316
+    KSEM317
+    KSEM318
+    KSEM330
+    KSEM331
+    KSEM332
+    KSEM333
+    KSEM334
+    KSEM335
+    KSEM336
+    KSEM337
+    KSEM338
+    KSEM339
+    KSEM341
+    KSEM344
+    KSEM345
+    KSEM346
+    KSEM347
+    KSEM348
+    KSEM349
     KSEM350
     KSEM352
     KSEM353
@@ -227,68 +395,81 @@ enum KiraError {
     KSEM365
     KSEM366
     KSEM367
-    KSL011
-    KSL012
-    KSL013
-    KSL014
-    KSL015
-    KSL016
-    KSL017
-    KSL018
-    KSL019
-    KSL020
-    KSL021
-    KSL022
-    KSL023
-    KSL031
-    KSL032
-    KSL033
-    KSL034
-    KSL035
-    KSL036
-    KSL037
-    KSL041
-    KSL042
-    KSL044
-    KSL051
-    KSL052
-    KSL053
-    KSL054
-    KSL055
-    KSL056
-    KSL061
-    KSL062
-    KSL071
-    KSL081
-    KSL082
-    KSL083
-    KSL091
-    KSL101
-    KSL121
-    KSL122
-    KSL123
-    KSL124
-    KSL125
+    KSEM900
+
+    // HIR and IR lowering.
+    KIR005
+
+    // A code-generation backend.
+    KBE001
+
+    // The KSL parser.
     KSLP001
     KSLP002
-    KSLP010
+    KSLP003
+    KSLP004
+    KSLP005
+    KSLP006
+    KSLP007
+    KSLP008
+    KSLP009
+
+    // KSL semantics and the shader build seam.
+    KSLS001
+    KSLS002
+    KSLS003
+    KSLS004
+    KSLS005
+    KSLS006
+    KSLS007
+    KSLS008
+    KSLS009
+    KSLS010
+    KSLS011
+    KSLS012
+    KSLS013
+    KSLS014
+    KSLS015
+    KSLS016
+    KSLS017
+    KSLS018
+
+    // Package and project discovery, and manifests.
+    KPK001
+    KPK002
+    KPK007
+    KPK010
+    KPK020
+    KPK021
+    KPK022
+    KPK023
+    KPK024
+    KPK025
+    KPK026
+    KPK027
+    KPK028
+    KPK029
+    KPK030
+    KPK031
+    KPK032
+    KPK040
+    KPK041
+
+    // Toolchain discovery and activation.
     KTC001
-    KTC003
-    KTC007
-    KTC020
-    KTC021
-    KTC022
-    KTC023
-    KTC030
-    KTC031
-    KTC040
-    KTC050
-    KTC051
-    KTC060
-    KTC070
-    KTC072
-    KTC074
-    KTC075
+
+    // The command line.
+    KCL001
+
+    // The package's own linter, including lints written in Kira.
+    KLINT000
+    KLINT001
+    KLINT002
+    KLINT003
+
+    // An internal compiler error.
+    KIC001
+
     // Not a diagnostic code: what `kiraErrorFromCode` answers for a code this
     // enum does not list, so reading a diagnostic is total.
     Unrecognized

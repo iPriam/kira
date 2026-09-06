@@ -887,3 +887,109 @@ actually reads — then implement `ShaderCompiler` where the pipeline lives, wri
 the userland `comptime macro ksl` in the engine, and delete `shader.rs`. HLSL and
 SPIR-V follow; SPIR-V is a binary emitter and is the one structurally unlike the
 rest.
+
+## Bool ABI, `RawPtr.null`, and FFI validation (step 13)
+
+Three rules the seam had left implicit, each one now stated once and proven
+where it can fail.
+
+### The `Bool` rule, and the divergence it closed
+
+Kira's `Bool` crosses as C `_Bool`: **one byte holding 0 or 1**, written by
+`kira_runtime_abi::c_storage::c_bool_byte` and read by `bool_from_c_byte`. The
+VM and the bundled libffi seam had that rule inline in four places; they now
+call it, and the native backend emits it.
+
+The native backend did not have it. `foreign_c_type(Bool)` was LLVM `i1`, which
+is the storage type of *one bit*: `load i1` off a byte lowers to `ldrb` with no
+mask, so a `_Bool` byte of 2 that a library wrote reached Kira as an `i1`
+holding 2, and a later branch on it tested bit 0 and answered `false` — where
+the VM, reading `bytes[0] != 0`, answered `true`. Both compiled, both ran, and
+they disagreed. The storage type is now `i8` and the read is `icmp ne i8 0`,
+which is the same sentence the other two engines say.
+
+`foreign_c_type` is the C **object**'s type and `foreign_c_prototype_type` is
+the type a C *prototype* takes; they differ only for `_Bool` (`i8` against
+`i1`), because clang lowers `_Bool` to `i1` in a prototype on every target here.
+The direct-call path — wasm, the one target that calls the symbol rather than
+going through libffi — now also carries the `signext`/`zeroext` attributes clang
+records there. Measured, not assumed: clang emits them on wasm32, on
+arm64-apple, and on x86_64-linux, and emits none on this host's aarch64-linux,
+so the answer is keyed on the target.
+
+### `RawPtr.null`
+
+`RawPtr.null` is the null pointer, and `==`/`!=` compare two pointer words.
+Comparison desugars to an integer comparison of the two words through the
+existing `rawPointerWord` conversion, which is the shape `typeck` already gives
+enum equality and `distinct` equality: no backend learns that pointers can be
+compared, and no opcode, wire tag, or ABI version moved. Ordering is
+deliberately absent — C defines `<` only within one object — and a pointer does
+not compare to an integer.
+
+### The declaration checks
+
+- **KSEM368** `RawPtr` has no member but `null`.
+- **KSEM369** an `@FFI.Address` result must be a pointer word. The check existed
+  in the doc comment only; the code tested that a return type was *written*, so
+  `@FFI.Address function f() -> I32` was accepted and the call site read a
+  narrower value than the backend produced.
+- **KSEM370** two declarations of one library symbol must agree on ABI,
+  parameters, result, and retained positions. Two Kira names for one C entry
+  point stay legal — a generated binding beside a hand-written one is the same
+  contract twice, and `ffi_program_distinct.kira` relies on it.
+- **KSEM371** `retains:` may name only a position that carries C storage: a
+  pointer, a `CString`, or a C-layout aggregate.
+
+### The two measurements behind the Bool change
+
+Neither is an argument from the language standard; both were run on the machine
+this branch was written on, against the LLVM the toolchain ships (23.1.0,
+aarch64-linux-gnu).
+
+**`load i1` does not normalize.** `llc -O2` on
+
+```llvm
+define i64 @load_i1(ptr %p) { %b = load i1, ptr %p
+                              %z = zext i1 %b to i64
+                              ret i64 %z }
+```
+
+emits `ldrb w0, [x0]` and nothing else: the byte is loaded whole and handed on
+as an `i1`, so a `_Bool` object holding `2` becomes an `i1` holding `2` and a
+later branch on it tests bit 0 and answers `false`. The `i8` form this branch
+lowers to instead —
+
+```llvm
+%b = load i8, ptr %p
+%c = icmp ne i8 %b, 0
+```
+
+— emits `ldrb` followed by `cmp w8, #0`, which is the VM's `bytes[0] != 0`
+written in machine code. That difference is the whole change; without it the two
+engines disagree about a byte while both compile and both run.
+
+**The fixture really does present that byte.** `ffi_flags_fill` writes `2` into
+a `_Bool` member through a `volatile unsigned char *`, and a C probe compiled
+with the managed clang reports
+
+```text
+byval 1 2 7 | ptr 1 2 7 | boolbyte 1 0 | none 1 | sizeof 3
+```
+
+so the non-canonical byte survives both a by-value struct return and a read
+behind a pointer, `ffi_bool_byte` sees exactly the byte an argument crossed as,
+and `struct ffi_flags` is the three bytes the Kira side lays out. A fixture that
+quietly normalized would have made the parity test pass without proving
+anything.
+
+### Where the proof lives
+
+`crates/kira-cli/tests/backend_parity/ffi/` for anything that needs a real C
+symbol, split there from one 985-line file into five by what crosses.
+`ffi_program_bool.kira` reads back the byte C actually received and a `_Bool`
+byte of 2 by value and through a pointer; `ffi_program_null.kira` writes,
+compares, and hands over the null. `tests-kik/ffi-harness` covers the Kira-side
+surface — `RawPtr.null`, pointer comparison, zero-filled pointer members, a
+`distinct` over a pointer, and `Bool` in C-layout storage — because that package
+links no C archive and cannot reach a C symbol.

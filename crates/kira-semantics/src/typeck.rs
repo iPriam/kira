@@ -148,6 +148,12 @@ impl Analyzer<'_> {
             return self.enum_equality(op == BinaryOp::Eq, lhs_hir, rhs_hir);
         }
 
+        // Two pointer words compare as the words they are, which is what makes
+        // `handle == RawPtr.null` a comparison rather than two casts.
+        if let Some(compared) = self.analyze_pointer_equality(op, lhs_hir, rhs_hir, lt, rt) {
+            return compared;
+        }
+
         // Two values of one distinct type compare as the scalar word they are.
         // Equality is the whole operator surface a distinct type has: an id is
         // *the same id* or it is not, while adding two of them, ordering them,

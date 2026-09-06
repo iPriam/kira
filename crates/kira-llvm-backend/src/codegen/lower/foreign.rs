@@ -464,6 +464,10 @@ impl FunctionLowering<'_, '_> {
         let builder = self.codegen.builder;
         let mut call_types = Vec::with_capacity(params.len() + 1);
         let mut call_args = Vec::with_capacity(params.len() + 1);
+        // The C ABI extension each position carries, by LLVM attribute index.
+        // Collected while the argument list is built and applied to the call
+        // once it exists, because an attribute belongs to the call instruction.
+        let mut extensions: Vec<(u32, ForeignType)> = Vec::new();
         let indirect_result = match result_spec {
             ForeignTypeSpec::Aggregate(id) => self.codegen.single_scalar_member(id)?.is_none(),
             ForeignTypeSpec::Scalar(_) => false,
@@ -492,21 +496,28 @@ impl FunctionLowering<'_, '_> {
                     // C layout, which is what is loaded back out of it.
                     let value =
                         unsafe { LLVMBuildLoad2(builder, c_type, pointer, c"ffi.direct".as_ptr()) };
-                    call_types.push(c_type);
+                    // A `_Bool` object is a byte and a `_Bool` parameter is an
+                    // `i1`; every other scalar's prototype type is its storage
+                    // type, so only this one narrows.
+                    let value = self.codegen.c_storage_to_prototype(value, ty);
+                    extensions.push((call_types.len() as u32 + 1, ty));
+                    call_types.push(self.codegen.foreign_c_prototype_type(ty));
                     call_args.push(value);
                 }
             }
         }
-        let return_type = match (indirect_result, result_spec) {
-            (true, _) | (_, ForeignTypeSpec::Scalar(ForeignType::Void)) => self.codegen.types.void,
-            (false, ForeignTypeSpec::Aggregate(id)) => {
-                let ty = self
-                    .codegen
+        let returned = match (indirect_result, result_spec) {
+            (true, _) | (_, ForeignTypeSpec::Scalar(ForeignType::Void)) => None,
+            (false, ForeignTypeSpec::Aggregate(id)) => Some(
+                self.codegen
                     .single_scalar_member(id)?
-                    .ok_or(LlvmError::internal("a direct aggregate with no scalar"))?;
-                self.codegen.foreign_c_type(ty)
-            }
-            (false, ForeignTypeSpec::Scalar(ty)) => self.codegen.foreign_c_type(ty),
+                    .ok_or(LlvmError::internal("a direct aggregate with no scalar"))?,
+            ),
+            (false, ForeignTypeSpec::Scalar(ty)) => Some(ty),
+        };
+        let return_type = match returned {
+            None => self.codegen.types.void,
+            Some(ty) => self.codegen.foreign_c_prototype_type(ty),
         };
         // SAFETY: every type belongs to this module's context and the argument
         // arrays outlive the calls below.
@@ -547,7 +558,15 @@ impl FunctionLowering<'_, '_> {
                 },
             )
         };
-        if !indirect_result && return_type != self.codegen.types.void {
+        for (index, ty) in extensions {
+            self.codegen.add_c_extension(produced, index, ty);
+        }
+        if let Some(ty) = returned {
+            self.codegen.add_c_extension(produced, 0, ty);
+            // The result comes back in its prototype type and is written into
+            // storage sized for the C object, so a `_Bool` widens from the `i1`
+            // C answered with to the canonical byte the read expects.
+            let produced = self.codegen.c_prototype_to_storage(produced, ty);
             // SAFETY: `result_storage` is the C-layout storage this result is
             // read back out of, and `produced` has the result's own C type.
             unsafe { LLVMBuildStore(builder, produced, result_storage) };

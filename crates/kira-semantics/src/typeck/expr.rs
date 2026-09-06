@@ -517,6 +517,12 @@ impl Analyzer<'_> {
                 span,
             } => {
                 let name = self.interner.resolve(field).to_owned();
+                // `RawPtr.null` names a constant of a builtin type. The base is
+                // that type's name rather than a value, so it is recognized
+                // before anything analyzes it as one.
+                if let Some(null) = self.analyze_raw_pointer_member(ctx, base, &name, span) {
+                    return null;
+                }
                 // `ClsAlpha.v` reads a parent's field through `self`; the base
                 // is a type name, not a value, so it must be recognized before
                 // anything tries to analyze it as one.

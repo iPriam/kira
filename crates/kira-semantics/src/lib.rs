@@ -72,6 +72,7 @@ mod mutation;
 mod operators;
 mod ownership;
 mod place;
+mod raw_pointers;
 pub(crate) mod stmt;
 mod strings;
 mod syscall;

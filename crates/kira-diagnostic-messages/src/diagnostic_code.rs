@@ -1,9 +1,8 @@
-//! Stable diagnostic codes (`KIC*`, `KPK*`, `KCL*`, `KTC*`, `KBE*`, ...).
+//! Typed handles for the codes `package_messages` builds diagnostics under.
 //!
-//! Codes span the KIC / KIR / KBE / KTC / KPK / KCL families (plus KSEM codes
-//! owned by semantics). A few representative entries are scaffolded here;
-//! codes are added as each phase lands, keeping the `text()` mapping
-//! exhaustive.
+//! Not the catalog. `registry` is: it lists every code the toolchain emits, and
+//! its drift check reads the strings below like any other emission site, so a
+//! variant added here without a row there fails the build.
 
 /// One stable, user-facing diagnostic code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

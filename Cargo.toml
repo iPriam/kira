@@ -70,6 +70,7 @@ kira-hybrid-main = { path = "crates/kira-hybrid-main" }
 kira-launcher = { path = "crates/kira-launcher" }
 kira-knvm = { path = "crates/kira-knvm" }
 kira-devflow = { path = "crates/kira-devflow" }
+kira-diagnostic-registry = { path = "crates/kira-diagnostic-registry" }
 kira-lsp = { path = "crates/kira-lsp" }
 kira-mcp-protocol = { path = "crates/kira-mcp-protocol" }
 

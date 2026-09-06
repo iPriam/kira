@@ -32,6 +32,12 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
+        // Every library symbol already bound, and the declaration that bound it.
+        // One symbol names one object with one C type, so a second declaration
+        // of it either agrees or the program holds two contradictory contracts
+        // for the same address.
+        let mut bound: std::collections::HashMap<(String, String), usize> =
+            std::collections::HashMap::new();
         for (source, function) in foreigns {
             self.source = source;
             let name = self.interner.resolve(function.name).to_owned();
@@ -64,10 +70,59 @@ impl<'a> Analyzer<'a> {
                 );
                 continue;
             }
+            // Last, so the row `bound` records is one that is about to exist:
+            // every refusal above drops the declaration instead of pushing it.
+            if !self.check_symbol_agreement(&mut bound, &hir_foreign, function.name_span) {
+                continue;
+            }
             let id = ForeignId(self.program.foreign.len() as u32);
             self.foreign_index.insert(name, id);
             self.program.foreign.push(hir_foreign);
         }
+    }
+
+    /// Refuses a second declaration of one library symbol that disagrees with
+    /// the first about what the symbol is.
+    ///
+    /// Two Kira names for one C function are legal and useful — a binding file
+    /// and a hand-written declaration of the same entry point are the same
+    /// contract written twice. Two names that disagree about its ABI, its
+    /// parameters, its result, or which arguments it retains are not: the linker
+    /// binds one address, and each call site marshals for whichever declaration
+    /// it resolved. Nothing downstream can catch that. The libffi path builds a
+    /// CIF per declaration and calls the one address through both, and the
+    /// direct path only notices when two prototypes reach LLVM in one module,
+    /// which reports the collision at code generation rather than at the two
+    /// declarations that caused it.
+    ///
+    /// A system call is not keyed here: it binds no symbol, and its name already
+    /// resolves to one kernel number.
+    fn check_symbol_agreement(
+        &mut self,
+        bound: &mut std::collections::HashMap<(String, String), usize>,
+        declaration: &HirForeign,
+        span: Span,
+    ) -> bool {
+        if !declaration.abi.binds_a_library_symbol() {
+            return true;
+        }
+        let key = (declaration.library.clone(), declaration.symbol.clone());
+        let Some(&first) = bound.get(&key) else {
+            bound.insert(key, self.program.foreign.len());
+            return true;
+        };
+        let previous = &self.program.foreign[first];
+        if previous.abi == declaration.abi && previous.signature == declaration.signature {
+            return true;
+        }
+        let message = format!(
+            "`{}` binds symbol `{}` in library `{}`, which `{}` already binds with a \
+             different signature: one symbol has one C type, and the linker gives both \
+             declarations the same address",
+            declaration.kira_name, declaration.symbol, declaration.library, previous.kira_name
+        );
+        self.emit(span, "KSEM370", message);
+        false
     }
 
     /// Validates one bodyless foreign declaration, returning its row when every
@@ -98,7 +153,16 @@ impl<'a> Analyzer<'a> {
             .map(|fields| self.check_retained_params(function, &fields.retains))
             .unwrap_or_default();
         let signature = self.map_foreign_signature(function);
-        match (annotations_ok, fields, signature) {
+        // The two checks the *mapped* signature answers. Both run against the
+        // seam positions rather than the written types, because both are about
+        // what crosses: an address is a pointer word whatever spelling named it,
+        // and C storage is something a position carries or does not.
+        let mut seam_ok = true;
+        if let Some(mapped) = &signature {
+            seam_ok &= self.check_address_result(function, mark, &mapped.signature);
+            seam_ok &= self.check_retained_storage(function, &retained, &mapped.signature);
+        }
+        match (annotations_ok && seam_ok, fields, signature) {
             (true, Some(fields), Some(mapped)) => Some(HirForeign {
                 kira_name: name.to_owned(),
                 library: fields.library,
@@ -324,12 +388,85 @@ impl<'a> Analyzer<'a> {
         flags
     }
 
+    /// Refuses an `@FFI.Address` whose result is not a pointer word.
+    ///
+    /// A result other than a pointer is a claim about what is AT the address
+    /// rather than what the address is: an `I32` result would read the object's
+    /// first four bytes, and a `CString` result would copy the text there. Both
+    /// are the `@FFI.Pointer` family's question, asked through the pointer this
+    /// hands back, and neither is what a data symbol's address is.
+    ///
+    /// The seam position decides rather than the written spelling, so a
+    /// `@FFI.Pointer` type and a `distinct` over one are accepted for what they
+    /// are: the pointer word this answers, wearing a name.
+    fn check_address_result(
+        &mut self,
+        function: &Function,
+        mark: &ForeignMark,
+        signature: &ForeignSignature,
+    ) -> bool {
+        if mark.kind != ForeignKind::Address || signature.result() == ForeignType::RawPtr {
+            return true;
+        }
+        self.emit(
+            function
+                .return_type
+                .map_or(function.name_span, |ty| self.tree.type_ref(ty).span()),
+            "KSEM369",
+            "an `@FFI.Address` function answers `RawPtr`: the address of the data symbol, \
+             not what is stored at it",
+        );
+        false
+    }
+
+    /// Refuses a `retains:` naming a parameter that holds no C storage.
+    ///
+    /// `retains:` transfers ownership of the blocks reachable from an argument
+    /// to the engine's retained registry, and makes the call site consume the
+    /// value with `move`. A parameter whose seam position is a number, a `Bool`,
+    /// or `Void` has no such block: nothing is transferred, and the `move` the
+    /// call site is then made to write consumes a value for no reason. The three
+    /// positions that do carry storage are a pointer word, a `CString`, and a
+    /// C-layout aggregate.
+    fn check_retained_storage(
+        &mut self,
+        function: &Function,
+        retained: &[bool],
+        signature: &ForeignSignature,
+    ) -> bool {
+        let mut ok = true;
+        for (index, kept) in retained.iter().enumerate() {
+            let Some(param) = function.params.get(index) else {
+                continue;
+            };
+            let carries = match signature.parameters().get(index) {
+                Some(spec) => matches!(
+                    spec.scalar(),
+                    None | Some(ForeignType::RawPtr | ForeignType::CString)
+                ),
+                None => continue,
+            };
+            if *kept && !carries {
+                self.emit(
+                    param.name_span,
+                    "KSEM371",
+                    format!(
+                        "`retains` names `{}`, which holds no C storage to keep: a retained \
+                         parameter is a pointer, a `CString`, or an `@FFI.Struct {{ layout: c }}`",
+                        self.interner.resolve(param.name)
+                    ),
+                );
+                ok = false;
+            }
+        }
+        ok
+    }
+
     /// An `@FFI.Address` function answers the address and takes nothing.
     ///
-    /// A parameter would be an argument to a symbol that is never called, and a
-    /// result other than `RawPtr` would be a claim about what is AT the address
-    /// rather than what the address is -- which is the `@FFI.Pointer` family's
-    /// question, asked through the pointer this hands back.
+    /// A parameter would be an argument to a symbol that is never called. What
+    /// the result must be is [`Self::check_address_result`]'s, which reads the
+    /// mapped seam position rather than the written spelling.
     pub(super) fn check_address_signature(&mut self, function: &Function) -> bool {
         let mut ok = true;
         if let Some(param) = function.params.first() {

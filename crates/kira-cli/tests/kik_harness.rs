@@ -93,7 +93,7 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         "the ffi harness reported failures: {tally}"
     );
     assert_eq!(
-        tally, "276 passed, 0 failed, 0 skipped, 276 total",
+        tally, "302 passed, 0 failed, 0 skipped, 302 total",
         "the ffi harness tally changed"
     );
 }
@@ -310,7 +310,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1468 passed, 0 failed, 0 skipped, 1468 total");
+    assert_eq!(vm, "1478 passed, 0 failed, 0 skipped, 1478 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 

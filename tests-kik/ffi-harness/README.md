@@ -4,8 +4,8 @@ A monolithic Kira suite of harness-owned `Test` declarations that stress the
 `@Native` and `@Runtime` bridge in depth. It covers struct, scalar, enum, and
 array returns and arguments, native-to-VM closures, native-to-VM-to-native
 re-entry, borrow and move across the bridge, C-layout block churn and transport,
-and allocation churn. 274 tests
-across `app/<purpose>/`:
+and allocation churn, plus the pointer-word and `Bool` seam rules a C-layout
+value carries. 302 tests across `app/<purpose>/`:
 
 - `structs/`: native struct return-by-value, struct-borrow into `@Runtime`,
   scalar round-trips, native-to-VM callback, and C-layout storage loops
@@ -17,7 +17,11 @@ across `app/<purpose>/`:
 - `closures/`: native-invoked VM closures, sandwich re-entry, loop churn
   (`fcb`/`Fcb`).
 - `scalars/`: Int/Bool/Float scalars, multi-hop N-to-R-to-N-to-R round-trips, strings
-  across the bridge (`fmx`/`Fmx`).
+  across the bridge (`fmx`/`Fmx`), and `Bool` in C-layout storage beside members
+  of other widths (`fbs`/`Fbs`).
+- `pointers/`: `RawPtr.null` written and compared, zero-filled pointer members,
+  a `distinct` over a pointer, and pointer words across the bridge
+  (`fnp`/`Fnp`).
 
 ## Commands
 
@@ -31,7 +35,7 @@ selected backend's bridge and the verdict is backend-independent:
 | LLVM | `kira test --backend llvm tests-kik/ffi-harness` |
 | Hybrid | `kira test --backend hybrid tests-kik/ffi-harness` |
 
-The driver reports 274 declared tests, with the same 274 passed and zero failed
+The driver reports 302 declared tests, with the same 302 passed and zero failed
 or skipped on all three backends.
 
 Every test reduces a bridge exercise to a scalar and asserts it with
