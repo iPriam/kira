@@ -563,3 +563,9 @@ unanswerable, and the cancelled filler that does not stop a live sibling.
 Harness on `--backend llvm`: **1468 passed, 0 failed, 0 skipped, 1468 total**,
 the same tally over an identical set of case names. The two engines collect and
 pass the same 1468 cases.
+
+Lifecycle harness on `vm`, `llvm`, and `hybrid`: identical output
+`main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 on each. The
+`20008` is the loop's own 20000 plus the 7 the channel carried and the 1 the
+task returned, so a lifecycle that lost either row at a slice boundary could
+not print it.
