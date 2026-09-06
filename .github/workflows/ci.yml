@@ -13,18 +13,28 @@ jobs:
     name: fmt + clippy + build + test (${{ matrix.os }})
     strategy:
       fail-fast: false
+      # `emscripten` says whether the Emscripten SDK exists for the host, not
+      # whether we want the Web pipeline: upstream publishes no Windows arm64
+      # build, so `emsdk install` there resolves to an x86_64 package that is
+      # not there. The day it ships one, this flag flips and nothing else here
+      # changes.
       matrix:
         include:
           - os: ubuntu-24.04
             host_key: x86_64-linux-gnu
+            emscripten: true
           - os: ubuntu-24.04-arm
             host_key: aarch64-linux-gnu
+            emscripten: true
           - os: macos-latest
             host_key: aarch64-macos
+            emscripten: true
           - os: windows-latest
             host_key: x86_64-windows-msvc
+            emscripten: true
           - os: windows-11-arm
             host_key: aarch64-windows-msvc
+            emscripten: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -87,8 +97,10 @@ jobs:
       # them in the end-to-end tests, and the bridge crate cross-builds the
       # runtime archive those links consume.
       - uses: mymindstorm/setup-emsdk@v14
+        if: matrix.emscripten
 
       - name: Build the Web runtime archive
+        if: matrix.emscripten
         run: |
           rustup target add wasm32-unknown-emscripten
           cargo build -p kira-native-bridge --target wasm32-unknown-emscripten
@@ -107,5 +119,18 @@ jobs:
       # doc-tests, and the stock runner pays for each of them anyway.
       - uses: taiki-e/install-action@nextest
 
+      # A host with no Emscripten cannot run the tests that link with `emcc`
+      # and execute under node, so they are excluded there by name. Excluding
+      # them is the honest report; letting them fail would say the Web pipeline
+      # is broken, and skipping the whole job would say this platform is
+      # untested. Everything that does not need the toolchain still runs,
+      # including the refusal that is decided before `emcc` is ever invoked.
       - name: cargo nextest
-        run: cargo nextest run --workspace
+        shell: bash
+        run: |
+          if [ "${{ matrix.emscripten }}" = "true" ]; then
+            cargo nextest run --workspace
+          else
+            cargo nextest run --workspace \
+              -E 'not (test(/^web::/) or test(/^ffi_wasm::a_wasm_build_/))'
+          fi
