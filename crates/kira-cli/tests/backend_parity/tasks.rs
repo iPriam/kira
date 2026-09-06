@@ -309,3 +309,116 @@ function main() {
         "kira: runtime trap: a receive is waiting for a value nothing can send",
     );
 }
+
+/// A payload that owns storage crosses whole, and both engines rebuild the
+/// same value from the same token.
+///
+/// A queue slot is one machine word and a `String` has no word of its own, so
+/// it travels as a token naming it in the store and the receiver takes the
+/// value out. The heap balance is the half that matters here: the token owns
+/// the storage while it is queued, and a delivered payload frees it on the way
+/// out.
+#[test]
+fn an_owned_payload_crosses_a_channel_whole() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<String>) -> Int {
+    tx.send("carried whole")
+    tx.send("and again")
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<String>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        print(first)
+        print(second)
+        print(pending.await)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "carried whole\nand again\n1\n");
+}
+
+/// A struct payload arrives as itself, fields and all.
+#[test]
+fn a_struct_payload_crosses_a_channel_whole() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+struct Note {
+    var title: String
+    var rank: Int
+}
+
+async function fill(tx: Sender<Note>) -> Int {
+    tx.send(Note(title: "boxed", rank: 41))
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<Note>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let got = try rx.receive()
+        print(got.title)
+        print(got.rank + pending.await)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "boxed\n42\n");
+}
+
+/// Closing a receiver releases what it never delivered.
+///
+/// This is the case a leak hides in. Three payloads are queued and none is
+/// received, so the close is the only thing that can free them — and without
+/// the drain the program still prints exactly this and still exits zero, while
+/// three strings stay in the store forever. The heap balance is what tells the
+/// difference, which is why this case is asserted with it rather than on its
+/// output alone.
+#[test]
+fn closing_a_receiver_releases_what_it_never_delivered() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<String>) -> Int {
+    tx.send("one")
+    tx.send("two")
+    tx.send("three")
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<String>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    print(pending.await)
+    rx.close()
+    print(2)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n");
+}

@@ -157,16 +157,40 @@ was called off.
 
 A payload must be `Send`: it leaves the context that sent it and arrives in one
 that context does not own, so a value naming storage its own engine keeps is
-refused with `KSEM312`. That covers a capture cell, a native-state handle, and
-a row in an executor's table.
+refused with `KSEM312`. That covers a capture cell, a native-state handle, a
+row in an executor's table, and a function type, which says nothing about what
+a closure of it captured.
 
-A queued value is also one machine word, so a payload is an integer width, a
-float width, `Bool`, or a `distinct` over one. Anything else is `KSEM365`,
-including `Void`, which has no value to carry, and a pointer word, which names
-storage on the far side of a seam this language does not read. A `Float`
-crosses as its exact bits and is converted at both ends, so it reads back as
-itself. A `distinct` keeps its identity: what comes out is the named type that
-went in.
+Anything `Send` may cross, including a `String`, a struct, an array and an
+enum. A queue slot is one machine word, so a scalar *is* that word and a value
+that owns storage travels as a token naming it — the sender gives the value up
+and the receiver takes it out, so what arrives is the value itself rather than
+a share of the sender's.
+
+Two things have nothing a slot can name, and both are `KSEM365`. `Void` is a
+value that is not there, so there would be nothing for `send` to take and
+nothing for `receive` to answer with. A pointer word names storage on the far
+side of a seam this language does not read, so what arrived would be an address
+whose meaning stayed behind.
+
+A `Float` crosses as its exact bits and is converted at both ends, so it reads
+back as itself. A `distinct` keeps its identity: what comes out is the named
+type that went in.
+
+```kira
+let tx = Channel<String>()
+let rx = tx.receiver
+var filler = Task { send(tx) }
+attempt {
+    print(try rx.receive())     // the string itself, not a view of it
+} handle {
+    Closed { print("done") }
+}
+```
+
+Closing a receiver discards whatever is still queued, and a queued payload that
+owns storage is released as it goes — a `close()` on a channel nobody drained
+frees every value still waiting in it.
 
 `Sender<T>` and `Receiver<T>` are the same channel written as an annotation, so
 a payload a channel may not carry is refused where the annotation is written,

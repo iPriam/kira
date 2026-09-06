@@ -202,3 +202,114 @@ construct ChxACancelledFillerDoesNotStopALiveOne() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
+
+// --- Payloads that own storage ----------------------------------------------
+// A queue slot is one machine word, and a value that owns storage has no word
+// of its own — so it crosses as a token naming it in the store, and the
+// receiver takes the value out and gives the token up. What arrives is the
+// value itself, not a share of the sender's.
+
+struct ChxNote {
+    var title: String
+    var rank: Int
+}
+
+async function chxFillText(tx: Sender<String>) -> Int {
+    tx.send("carried whole")
+    return 1
+}
+
+async function chxFillNote(tx: Sender<ChxNote>) -> Int {
+    tx.send(ChxNote(title: "boxed", rank: 41))
+    return 1
+}
+
+async function chxFillThree(tx: Sender<String>) -> Int {
+    tx.send("one")
+    tx.send("two")
+    tx.send("three")
+    return 1
+}
+
+construct ChxCarriesAStringPayload() extends Test {
+    test {
+        let tx = Channel<String>()
+        let rx = tx.receiver
+        var pending = Task { chxFillText(tx) }
+        attempt {
+            let got = try rx.receive()
+            return got.count + pending.await
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
+}
+
+construct ChxCarriesAStringPayloadAsItself() extends Test {
+    test {
+        let tx = Channel<String>()
+        let rx = tx.receiver
+        var pending = Task { chxFillText(tx) }
+        attempt {
+            let got = try rx.receive()
+            let same = got == "carried whole"
+            return same ? pending.await : 0
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct ChxCarriesAStructPayload() extends Test {
+    test {
+        let tx = Channel<ChxNote>()
+        let rx = tx.receiver
+        var pending = Task { chxFillNote(tx) }
+        attempt {
+            let got = try rx.receive()
+            return got.rank + got.title.count + pending.await
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(47) return e }
+}
+
+// Order is order, whatever the payload is: three strings arrive in the order
+// they were sent, each one whole.
+construct ChxCarriesOwnedPayloadsInOrder() extends Test {
+    test {
+        let tx = Channel<String>()
+        let rx = tx.receiver
+        var pending = Task { chxFillThree(tx) }
+        attempt {
+            let first = try rx.receive()
+            let second = try rx.receive()
+            let third = try rx.receive()
+            let ordered = first == "one" && second == "two" && third == "three"
+            return ordered ? pending.await : 0
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// A receiver closing discards whatever is still queued, and each of those
+// slots owns the storage its token names. Three values are sent and none is
+// received, so the close is what has to release all three: without the drain
+// this leaks every one of them, silently, and the program still prints the
+// right answer. The heap-balance half of this is the parity case.
+construct ChxClosingAReceiverDropsWhatItNeverDelivered() extends Test {
+    test {
+        let tx = Channel<String>()
+        let rx = tx.receiver
+        var pending = Task { chxFillThree(tx) }
+        let ran = pending.await
+        rx.close()
+        return ran
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}

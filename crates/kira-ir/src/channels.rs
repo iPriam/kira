@@ -52,11 +52,15 @@ pub(crate) struct ReceiverRow {
 /// the task spine's yield helper: they are appended after the spine, so both
 /// are known before lowering starts and an already-lowered call resolves.
 pub(crate) fn synthesize(program: &mut IrProgram, rows: &[ReceiverRow], task_step: u32) {
-    if rows.is_empty() {
-        return;
-    }
-    // The two helpers sit first, so anything built below can call either at an
-    // index it knows before any of them exists.
+    // Both helpers are built whenever the task spine is, not only when some
+    // receive needs one. A program may close a receiver it never received
+    // from — the close still has a queue to drain — and building the closer
+    // only for programs with a receiver row left that call resolving to a
+    // function nobody had made. The two helpers cost a few instructions in a
+    // program that uses neither.
+    //
+    // They sit first, so anything built below can call either at an index it
+    // knows before any of them exists.
     let step_at = program.functions.len() as u32;
     let step = build_step(program, task_step);
     program.functions.push(step);
