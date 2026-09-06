@@ -248,6 +248,30 @@ class: it checks the IR, not the C API that builds it. And a test passing is
 not evidence the path is right when the failure mode is undefined behaviour —
 the one host that faulted is the only reason anybody looked.
 
+### "Looks fine, is empty": three producers that succeeded and made nothing
+
+Three separate failures this effort, all with the same shape, and all of them
+cost more to diagnose than they should have because the thing that failed
+reported success:
+
+- A **cargo registry** unpacked short, with a valid `.cargo-ok` beside it.
+- A **libffi archive** that was present, correctly named, and could not be
+  linked into a shared object.
+- An **LLVM link line** carrying a `/LIBPATH:` and no libraries, because the
+  build script emitted the search path unconditionally and the library names
+  only if a parse produced any.
+
+Each presented as a defect somewhere downstream — a corrupt dependency, a
+broken bundle, a compiler bug — and in each case the real fault was a producer
+that finished cleanly while producing nothing usable. The consumer then failed
+far away, naming something that was not at fault.
+
+The rule worth taking from it: **a producer refuses rather than emits nothing.**
+An empty result that a later step cannot distinguish from a valid one is worse
+than a failure, because the failure names the step that failed. Where a step
+can produce nothing — a parse of a tool's output, an unpack, an archive build —
+it should assert it produced something and say what it saw instead.
+
 ### A recurring Windows-only defect: paths built as one string
 
 Twice in one effort, and both times invisible on every other platform, so it is
