@@ -13,6 +13,9 @@ here before the next one starts.
 | --- | --- |
 | `cargo test -p kira-runtime-abi` | **175 passed, 0 failed** |
 | `cargo test -p kira-semantics` | **851 passed, 0 failed** |
+| `cargo test -p kira-libffi` | **6 passed, 0 failed** |
+| `cargo test -p kira-vm-runtime` | **116 passed, 0 failed** |
+| `cargo test -p kira-llvm-backend` | **72 passed, 0 failed** |
 
 The seam's `Bool` rule is stated once in `kira_runtime_abi::c_storage` and the
 two cases that pin it both ran: `a_bool_crosses_as_exactly_one_or_zero` and
