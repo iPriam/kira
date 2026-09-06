@@ -534,3 +534,23 @@ primitive contract, two bytecode instructions, two `kira_rt_channel_*` symbols, 
 work in it is not the transport but the ownership: `send` has to consume, a closed receiver has to
 drop what it discards, and the heap-balance assertions in the parity suite are what will say whether
 it does.
+
+### The §1c gate, watched (2026-09-06)
+The deadlock fix had been written, committed, and never run. It runs. The
+handoff's repro — a receive on an empty live channel with nothing runnable —
+traps on all three engines with one sentence:
+
+```
+kira: runtime trap: a receive is waiting for a value nothing can send
+```
+
+`vm` under `timeout 10`: exit 1, under a second. `llvm`: exit 1, 2s. `hybrid`:
+exit 1, 1s. The previous behavior was exit 124 at the bound, so the bound is now
+slack rather than the thing being measured.
+
+Hybrid said it differently until this slice. Every hybrid failure went through
+one `err!("kira: {error}")` — a manifest that would not decode and the program
+trapping worded as one kind of thing — so a trap arrived as `kira: a receive is
+waiting…` with the two words that name it as a trap missing.
+`kira_hybrid_runtime` already separates the last case as `HybridError::Trap`;
+`HybridError::report` reads that distinction rather than flattening it.
