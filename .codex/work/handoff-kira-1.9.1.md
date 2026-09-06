@@ -19,18 +19,18 @@ none of its files.
 
 Measured on the merged tree, each run watched to completion:
 
-- Harness on `--backend vm` and on `--backend llvm`, run separately: **1497**
+- Harness on `--backend vm` and on `--backend llvm`, run separately: **1502**
   each, over identical case-name sets.
 - Lifecycle harness on `vm`, `llvm` and `hybrid`:
-  `main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 on each.
+  `main-thread-lifecycle / 42 / manual-main-thread / 20021`, exit 0 on each.
 - FFI harness on `--backend hybrid`: **302**.
-- `cargo test -p kira-cli --test backend_parity`: **457**, zero failures.
+- `cargo test -p kira-cli --test backend_parity`: **463**, zero failures.
 - `cargo test -p kira-diagnostic-registry`: 10 unit and 5 integration, over
   **443** codes. The drift gate was proven by making it fail, not by reading it.
 - The receive-nothing-can-answer repro traps on all three engines inside
   `timeout 10`, one sentence between them.
 
-The pins in `crates/kira-cli/tests/kik_harness.rs` are 1497, 20008 and 302, each
+The pins in `crates/kira-cli/tests/kik_harness.rs` are 1502, 20021 and 302, each
 matching what the run reports.
 
 The wasm end-to-end tests **are** runnable on the development host. Earlier
@@ -97,13 +97,19 @@ task that uses it, which is the only place an end ever goes.
 
 ### Known gaps in channels
 
-- **Heap payloads refused.** Needs the value-tree representation the seam
-  already has. `KSEM365` names the rule.
-- **`Send` not enforced on payloads.** Not a hole today because every type the
-  payload rule admits is `Send`; it becomes load-bearing with heap payloads and
-  should land with them, beside the task-slot rule and `KSEM312`.
-- **No test for cancellation while blocked**, nor for ordering against a
-  lifecycle fiber specifically rather than against a task.
+- ~~**Heap payloads refused.**~~ Done. Anything `Send` crosses; a value that
+  owns storage travels as a native-state token naming it, and a closing
+  receiver drains and releases what it never delivered. `KSEM365` still refuses
+  `Void` and a pointer word, which have nothing a queue slot can name.
+- ~~**`Send` not enforced on payloads.**~~ It was enforced all along — checked
+  first, under `KSEM312`, since the channel surface landed. What changed with
+  heap payloads is that it became *load-bearing*: it was previously applied to
+  types that were all `Send` anyway, and now that a struct can cross it is the
+  rule doing the work.
+- ~~**No test for cancellation while blocked**~~, nor for ordering against a
+  lifecycle fiber — both covered: `ChxACancelledFillerLeavesTheReceiveUnanswerable`
+  and the lifecycle harness, which now spans a channel, a task and a
+  native-state token across 20000 slices.
 
 ## 3. Status of the whole effort
 
@@ -119,7 +125,7 @@ A-O as ground truth. Corrected mapping:
 | 5 | `Any` / runtime types | Mostly: `.type`, `is`/`as`, `try … as`. Hybrid existential writeback checks open |
 | 6 | Nominal identity | Mostly: package-qualified identity, `TypeCastError`. Box Drop metadata open |
 | 7 | Generic compat / NativeState refcount | Refcount done, widening removal done. **Generic inference rewrite not started** |
-| 8 | Traits / async / tasks | Done: `CallableSignature`, contract diffs, generation-tagged handles, channels. Channel payloads are still one machine word; heap payloads open |
+| 8 | Traits / async / tasks | Done: `CallableSignature`, contract diffs, generation-tagged handles, channels including heap payloads — anything `Send` crosses, carried as a native-state token, and a closing receiver releases what it never delivered |
 | 9 | Classes | Barely started: only the `KSEM357` specialization cap |
 | 10 | Ownership / Copy / Drop | Partial: `copy` vs `@Derive(Copy)` split, drop order. All-path release open |
 | 11 | comptime / macros | Done: `Identifier()`, `KMAC014`, splices, comptime `substring`, hygiene over every binding form (`match`/`handle` payloads and closure parameters, not only `let`/`var`/`for`), and one-name-one-declaration inside a scope (`KMAC031`) |
@@ -140,9 +146,6 @@ Everything the previous handoff listed here is done and merged: the diagnostics
 registry (step 16), the FFI/ABI seam (step 13), and macro visibility and hygiene
 (step 11). What is left, roughly largest first:
 
-- **Heap payloads for channels** (section O). The rule is `KSEM365` and the
-  shape is settled — see section 2. It is the one piece of the channel feature
-  still missing, and the only remaining work that touches the runtime ABI.
 - **Classes** (step 9), barely started: only the `KSEM357` specialization cap.
 - **The generic inference rewrite** (step 7), not started.
 - **Hot state migration** (step 15), and **C layout / Web shims** (step 14).
@@ -169,8 +172,8 @@ collide with each other.
   `./emsdk install latest && ./emsdk activate latest`, then
   `source ~/emsdk/emsdk_env.sh`. Without it the wasm end-to-end tests fail
   rather than skipping, so install it before trusting a green run.
-- Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1497** for
-  the harness, 20008 for the lifecycle output, 302 for the ffi harness. The
+- Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1502** for
+  the harness, 20021 for the lifecycle output, 302 for the ffi harness. The
   harness tally is asserted whole, so adding a construct without re-measuring
   fails it — which is the point. Measure, never add up: every tally in this file
   that was arrived at by arithmetic has been wrong at least once.
@@ -291,6 +294,45 @@ the behaviour under test runs. Escape the path for the literal it goes into.
 
 Worth checking whenever a test builds a path and compares or embeds it:
 `grep -rn 'join("[^"]*/' crates/` finds the first kind.
+
+Three instances now, and the third is the one that says how to read the grep.
+`link/sanitizer.rs` built a fake runtime path with `join("lib/clang/23/lib")`,
+*created the file at it*, and then compared it against what discovery produces.
+An earlier sweep excluded that file on the grounds that the path was used to
+open something — which was true and irrelevant. Windows accepts forward slashes
+for file *access*, so opening is never the problem; the question is only whether
+the path is ever compared as a string or pasted into source, and being used to
+open a file as well does not exempt it.
+
+### Output equality is the weakest thing a test can assert here
+
+Three defects this effort were each caught by a *stronger* assertion than the
+one beside it, and each would have passed the weaker one:
+
+- **A receiver handing back a view onto storage it was about to release.** The
+  LLVM lowering materialises the value, so native printed the right answer; the
+  VM does not, so it trapped. A green LLVM run alone would have shipped it. It
+  is not "we run both engines" that caught this — it is that the two engines
+  materialise differently, and one of them accidentally did the right thing.
+- **A close that dropped every undelivered payload on the floor.** The harness
+  construct for it passes either way: the program prints the same answer and
+  exits zero whether or not the queue was released. Only the parity case
+  asserting *heap balance* failed. A leak is invisible to a test that reads
+  what was printed.
+- **Two engines agreeing on a wrong answer** (`Float` to `U64`), which the
+  parity suite cannot see at all, because agreement on a wrong answer is
+  indistinguishable from agreement on a right one.
+
+So the ladder, weakest first: output equality between engines, output equality
+against a stated expectation, and resource balance. Anything that owns storage
+needs the third, and the reason is that the first two are satisfied by a
+program that leaks.
+
+One more thing worth admitting in the record: the close bug was written down as
+a hazard in this file — "a program may close a receiver it never received from"
+— *before* the implementation that then missed exactly that case. Writing a
+hazard down does not discharge it. What discharged it was a test that could
+fail.
 
 ### A suite that checks answers against the specification, not against the other engine
 

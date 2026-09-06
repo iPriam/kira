@@ -715,3 +715,29 @@ where a program compiles and then misbehaves.
 5. **Tests and docs.** Harness constructs and parity cases on VM and native,
    including the drained-closed-channel case, and the heap-balance assertions
    are what say whether the ownership rules hold.
+
+### Heap payloads, done (2026-09-06)
+
+All five steps landed in the order that keeps the tree safe: the transport, the
+drain on close, the relaxed rule, `Send` becoming load-bearing, then the tests
+and docs. The rule was never relaxed before the thing that carries a heap
+payload existed.
+
+Two corrections to what earlier notes in this file claimed.
+
+`native_state_recover` copies out of the store, but the *instruction* does not
+call it: `NativeRecover` answers a view, so that reading one field out of a
+large state does not rebuild every string and array beside it. Right for a
+field reader, wrong for a receiver, which needs the value itself.
+`NativeStateTake` materialises and releases in one step. An appended opcode,
+which `opcode.rs` says is not an ABI change — so the design's claim of no new
+runtime symbol and no ABI bump holds, and the claim of no new instruction did
+not.
+
+And `Send` was enforced all along rather than deferred; heap payloads made it
+load-bearing rather than present.
+
+Measured on the finished tree: harness **1502** on vm and llvm over identical
+case-name sets, lifecycle **20021** on all three engines, ffi harness **302**
+on hybrid, `backend_parity` **463**, the deadlock repro trapping on all three
+inside `timeout 10`.

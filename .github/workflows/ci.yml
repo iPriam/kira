@@ -7,6 +7,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Makes `kira-llvm-backend`'s build script say which LLVM archives it asked
+  # to link. A build script can see what it emitted and not what cargo did with
+  # it, so when a link fails for want of symbols those archives define, this is
+  # what says whether they were requested at all.
+  KIRA_LLVM_LINK_TRACE: 1
 
 jobs:
   check:

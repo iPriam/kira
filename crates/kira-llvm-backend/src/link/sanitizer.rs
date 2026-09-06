@@ -172,8 +172,20 @@ mod tests {
             Self { root, installation }
         }
 
+        /// The runtime file at `relative` under this fake bundle's resource
+        /// directory, created on disk.
+        ///
+        /// Every segment is joined on its own, including the ones inside
+        /// `relative`. A path built as one string keeps its forward slashes on
+        /// Windows, and these paths are compared against what discovery
+        /// produces — which joins a segment at a time and writes a backslash —
+        /// so a single `join("lib/clang/23/lib")` matches everywhere except the
+        /// platform that spells paths differently.
         fn runtime(&self, relative: &str) -> PathBuf {
-            let path = self.root.join("lib/clang/23/lib").join(relative);
+            let mut path = self.root.join("lib").join("clang").join("23").join("lib");
+            for segment in relative.split('/') {
+                path = path.join(segment);
+            }
             std::fs::create_dir_all(path.parent().expect("runtime parent"))
                 .expect("runtime parent directory");
             std::fs::write(&path, b"runtime").expect("runtime file");

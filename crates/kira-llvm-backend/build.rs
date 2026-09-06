@@ -72,6 +72,22 @@ fn main() {
             names.join(", "),
         );
     }
+    // What was actually asked for, when something is asking. A build script
+    // can see what it emitted and not what cargo did with it, so when a link
+    // fails for want of symbols these libraries define, the first question is
+    // whether they were requested at all — and that question has no answer in
+    // any log unless this one puts it there. Off unless
+    // `KIRA_LLVM_LINK_TRACE` is set, because it is a question with one asker.
+    println!("cargo:rerun-if-env-changed=KIRA_LLVM_LINK_TRACE");
+    if std::env::var_os("KIRA_LLVM_LINK_TRACE").is_some() {
+        println!(
+            "cargo:warning=linking {} LLVM librar{} from {}: {}",
+            names.len(),
+            if names.len() == 1 { "y" } else { "ies" },
+            run(&llvm_config, &["--libdir"]).trim(),
+            names.join(" "),
+        );
+    }
     for name in names {
         println!("cargo:rustc-link-lib=static={name}");
     }
