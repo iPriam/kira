@@ -33,11 +33,15 @@ Measured on the merged tree, each run watched to completion:
 The pins in `crates/kira-cli/tests/kik_harness.rs` are 1497, 20008 and 302, each
 matching what the run reports.
 
-The wasm end-to-end tests are unrunnable on the development host: there is no
-`~/emsdk`, so nothing there can build a wasm artifact. `node` is present, so
-Emscripten is the whole of what is missing. In CI they run everywhere except
-windows-11-arm, where upstream Emscripten publishes no arm64 SDK and the Web
-pipeline is skipped by a matrix flag rather than failed.
+The wasm end-to-end tests **are** runnable on the development host. Earlier
+notes in this file said otherwise; Emscripten installs there in one step
+(`git clone emscripten-core/emsdk && ./emsdk install latest && ./emsdk activate
+latest`, then `source ./emsdk_env.sh`), `node` was already present, and the
+arm64 SDK exists. Install it: the wasm suites had been committed without ever
+being run anywhere, and running them is what found the narrow-scalar defect in
+section 7. In CI they run everywhere except windows-11-arm, where upstream
+Emscripten publishes no arm64 SDK and the Web pipeline is skipped by a matrix
+flag rather than failed.
 
 ### The one thing not green
 
@@ -152,8 +156,10 @@ collide with each other.
   kira-cli`.** After runtime-abi or native-bridge edits, build it explicitly or
   LLVM and hybrid silently run old code. The ABI-version guard catches the bad
   case by name, which it did this session on the 14→15 bump.
-- **Emscripten** is at `~/emsdk`; `source ~/emsdk/emsdk_env.sh` or seven wasm
-  end-to-end tests fail for environmental reasons only.
+- **Emscripten** installs at `~/emsdk` and works on aarch64 Linux:
+  `./emsdk install latest && ./emsdk activate latest`, then
+  `source ~/emsdk/emsdk_env.sh`. Without it the wasm end-to-end tests fail
+  rather than skipping, so install it before trusting a green run.
 - Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1497** for
   the harness, 20008 for the lifecycle output, 302 for the ffi harness. The
   harness tally is asserted whole, so adding a construct without re-measuring
@@ -182,6 +188,25 @@ blocker. Do not repeat that.
 
 Three things worth someone's attention, each found by a run rather than by
 reading, and none of them a matter of tidying.
+
+### The Web target's narrow-scalar extension, and what nearly hid it
+
+Fixed, and recorded because of how close it came to shipping. Every narrow
+scalar crossing the wasm C seam — I8, U8, I16, U16, `Bool` — segfaulted the
+compiler, because one helper attached the C ABI extension attribute for both a
+function and a call site through `LLVMAddAttributeAtIndex`, which casts to
+`Function` without checking.
+
+It crashed on aarch64 Linux and *passed* on macOS, where the same undefined
+behaviour quietly failed to attach the attribute instead of faulting. The
+attribute is what keeps a callee from reading a register whose high bits are
+the caller's leftovers, so the Web target had a live correctness hole on every
+platform with a green test suite over it.
+
+Two lessons worth keeping. The LLVM module verifier runs and cannot see this
+class: it checks the IR, not the C API that builds it. And a test passing is
+not evidence the path is right when the failure mode is undefined behaviour —
+the one host that faulted is the only reason anybody looked.
 
 ### A suite that checks answers against the specification, not against the other engine
 
@@ -220,7 +245,17 @@ The fix is span provenance: a span has to say which text it indexes, and the
 caret is in the right place — which is why it was left rather than attempted
 under a merge gate.
 
-### The static libffi archives are not position-independent
+### libffi is installed without a published checksum
+
+`knvm install libffi` prints `no checksum is published for this artifact; it
+was installed unverified`. It is not a regression — the previous tag behaved
+the same way — but libffi is linked *statically* into every Kira build, so an
+unverified download is a supply-chain hole in the one dependency a user cannot
+opt out of. The release workflow should publish digests beside the archives and
+the pin should carry them, the way `llvm-metadata.toml` already names assets
+rather than inventing them.
+
+### The static libffi archives were not position-independent — FIXED
 
 `prep_cif.o` in the x86_64 archive reaches `ffi_type_float` with a direct
 `R_X86_64_PC32`, so it cannot be linked into a shared object, and Kira's live

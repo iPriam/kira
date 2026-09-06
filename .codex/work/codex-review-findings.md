@@ -133,6 +133,38 @@ explanation and `scan_distinct` had none. Each now documents itself.
 
 No file in the repository is at or above 1000 lines.
 
+## Found by the review round, but not by the review
+
+Worth recording here because it is the most serious defect this branch has
+carried, and no reviewer raised it — a red CI job did.
+
+**Every narrow scalar crossing the wasm C seam segfaulted the compiler.** I8,
+U8, I16, U16 and `Bool`; I32, I64, F32, F64 and `RawPtr` were fine. That split
+is exactly the set `foreign_c_extension` answers `Some` for, and it answers
+`None` on every non-wasm target, which is why this was wasm-only.
+
+One helper attached the C ABI extension attribute for both a function
+declaration and a call site, through `LLVMAddAttributeAtIndex`. That entry
+point casts to `Function` without checking, so handing it the result of
+`LLVMBuildCall2` writes through a pointer to something that is not one. A call
+site takes its attributes through `LLVMAddCallSiteAttribute`. They are two
+methods now, because the caller always knows which it holds.
+
+**The crash was the lesser half.** The same undefined behaviour did not fault
+on macOS — the test passed there — which means the extension attribute was
+silently never reaching the call site. That attribute is the whole mechanism
+keeping a callee from reading a register whose bits above the value are
+whatever the caller last left in it. So the Web target had a live correctness
+hole on every platform, and every test was green about it. The crash happened
+on one host, by luck, and is the only reason it was found at all.
+
+Two things follow. The LLVM module verifier is run and did not catch this:
+it checks the IR, and this was a misuse of the C API that builds it, which is
+outside what the verifier can see. And `LLVMAddAttributeAtIndex` has exactly
+two call sites — the one above, and one in `address_sanitize` that walks the
+module's own function list and is correct — so this was the only instance,
+checked rather than assumed.
+
 ## What the review changed about how the rest was done
 
 Three of the seven findings were framed as VM/native divergences and one was.
