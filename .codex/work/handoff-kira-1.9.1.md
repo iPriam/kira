@@ -43,13 +43,22 @@ section 7. In CI they run everywhere except windows-11-arm, where upstream
 Emscripten publishes no arm64 SDK and the Web pipeline is skipped by a matrix
 flag rather than failed.
 
-### The one thing not green
+### Defects found and fixed while integrating
 
-`kira live` on x86_64 Linux cannot link its bundle: the static libffi archive is
-not position-independent. Three end-to-end tests fail on it. The diagnosis and
-the fix are in section 7 — it is a one-line change to a workflow in
-`kira-lang-com/libffi` plus a republish of the release assets, and it is not
-fixable from inside this repository.
+Four, each traced from a failing job rather than from reading the diff, and all
+fixed on `main`. Section 7 records what they say about the verification
+strategy, which is the more useful half:
+
+- The static libffi archives were not position-independent, so `kira live`
+  could not link its bundle on x86_64. Republished as `v3.5.2-kira.2` and
+  repinned.
+- Every narrow scalar crossing the wasm C seam segfaulted the compiler, and the
+  same undefined behaviour silently dropped the C ABI extension on the hosts
+  where it did not crash.
+- A native library was unmapped while its own threads still ran in it, faulting
+  about one VM run in ten.
+- A Windows path pasted raw into a Kira string literal made `\Users` an unknown
+  escape, and a timing test bounded two 10ms sleeps at 40ms.
 
 ## 2. What the channel feature is
 
@@ -189,6 +198,37 @@ blocker. Do not repeat that.
 Three things worth someone's attention, each found by a run rather than by
 reading, and none of them a matter of tidying.
 
+### Three latent defects, all found by a red CI job, none by review
+
+This is a finding about the verification strategy rather than about three bugs,
+and it is the one worth acting on.
+
+Over one integration effort, three serious defects surfaced. Every one had been
+in the tree for a while, every one had a green test suite over it, and none was
+raised by a reviewer reading the diff:
+
+- **The Web target's narrow-scalar extension.** A call site's C ABI extension
+  attribute was attached through the function-only entry point, so it was never
+  applied. It crashed on one host and passed everywhere else.
+- **The static libffi archives were not position-independent**, so the archive
+  could not be linked into a shared object — which the live path does.
+- **A native library was unmapped while its own threads still ran in it**,
+  faulting about one run in ten in the VM's networking integration.
+
+What they share is more useful than what they are. None was found by reading
+code, by a review, or by a test asserting the right thing. Each was found
+because something *happened* to fail — one host out of five, one link mode out
+of two, one run in ten — and each was then traced to a cause that had been
+silently wrong everywhere else the whole time.
+
+Two consequences. First, a green suite is weak evidence when the failure mode
+is undefined behaviour or a race: it says nothing failed this time. Second, and
+more actionable: the suite cancels on first failure, so for most of this effort
+roughly 3200 of 4080 tests were never attempted on any platform. A single
+`--no-fail-fast` pass is worth more than several ordinary runs, because it is
+the only way to learn what else is already broken rather than discovering it one
+failure per cycle.
+
 ### The Web target's narrow-scalar extension, and what nearly hid it
 
 Fixed, and recorded because of how close it came to shipping. Every narrow
@@ -244,6 +284,16 @@ The fix is span provenance: a span has to say which text it indexes, and the
 `SourceMap` has to keep both. It is cosmetic — nothing is misreported, the
 caret is in the right place — which is why it was left rather than attempted
 under a merge gate.
+
+### Module verification does not cover how the module is built
+
+`LLVMVerifyModule` runs on every native build, and it is worth knowing exactly
+what that does not buy. It checks the IR. The narrow-scalar defect above was a
+misuse of the C API that *builds* the IR — a function-only entry point handed a
+call instruction — and no amount of verifying the result can see a call that
+was made wrongly against the builder. A reader should not assume that a
+verified module means the code which produced it was used correctly; that whole
+class is unguarded, and this one was caught only because it faulted.
 
 ### libffi is installed without a published checksum
 
