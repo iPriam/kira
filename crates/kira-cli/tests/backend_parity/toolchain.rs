@@ -57,11 +57,25 @@ fn workspace() -> (PathBuf, String) {
     (root, driver.to_str().expect("utf-8 path").to_owned())
 }
 
+/// A path as the body of a Kira string literal.
+///
+/// A Windows path is full of backslashes, and a backslash begins an escape:
+/// pasting `C:\Users\runneradmin\…` in raw makes `\U` and `\r` out of the
+/// directory names, and the program fails to lex before any of this is
+/// exercised. The two characters a literal cannot hold as themselves are
+/// escaped, and nothing else is touched.
+fn kira_string_literal(path: &Path) -> String {
+    path.to_str()
+        .expect("utf-8 path")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
 /// The driver program: it checks both packages, runs the good one, and prints a
 /// line per fact a case asserts on.
 fn driver_source(good: &Path, bad: &Path) -> String {
-    let good = good.to_str().expect("utf-8 path");
-    let bad = bad.to_str().expect("utf-8 path");
+    let good = kira_string_literal(good);
+    let bad = kira_string_literal(bad);
     format!(
         r#"import Foundation
 

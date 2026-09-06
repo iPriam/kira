@@ -365,11 +365,24 @@ mod tests {
         mark("work");
         std::thread::sleep(Duration::from_millis(10));
         let report = take().expect("a recording");
-        let work = report
-            .phases
-            .iter()
-            .find(|phase| phase.name == "work")
-            .expect("the repeated phase");
-        assert!(work.elapsed < Duration::from_millis(40), "{work:?}");
+        let phase = |name: &str| {
+            report
+                .phases
+                .iter()
+                .find(|phase| phase.name == name)
+                .unwrap_or_else(|| panic!("the {name} phase: {report:?}"))
+                .elapsed
+        };
+        // Compared against the gap rather than against a millisecond count.
+        // The two runs of `work` sleep 10ms each and the gap between them 40ms,
+        // so a phase that kept to its own runs is under the gap and one that
+        // swallowed it is over — and that holds however far a loaded machine
+        // stretches every sleep, which an absolute bound does not.
+        assert!(
+            phase("work") < phase("idle"),
+            "work {:?}, idle {:?}",
+            phase("work"),
+            phase("idle")
+        );
     }
 }
