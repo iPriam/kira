@@ -578,3 +578,13 @@ and hybrid alike.
 The suite had never compiled on this branch: `assert_trap_message_parity` was
 added to the harness and called from `tasks.rs` without being imported there.
 Running it is what found that.
+
+`cargo test -p kira-cli --test kik_harness`: **8 passed, 0 failed**, 1971s. That
+is the 1468 pin asserted whole on both engines, the checksum run agreeing byte
+for byte, the lifecycle output, the ffi harness at 276, and the syscall
+harnesses. Unit suites for the crates this slice touched:
+`kira-semantics` 845, `kira-vm-runtime` 116, `kira-runtime-abi` 173, all with
+zero failures.
+
+The wasm end-to-end tests were not run: neither Emscripten nor node is present
+on this host, so they are unrunnable here rather than passing or failing.
