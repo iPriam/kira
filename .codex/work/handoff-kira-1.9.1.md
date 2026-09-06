@@ -144,7 +144,7 @@ A-O as ground truth. Corrected mapping:
 | 13 | FFI / ABI / target model | Not started |
 | 14 | C layout / Web shims | Not started |
 | 15 | Hot reload / ABI versions | Partial: ABI bumped to 15 with the guard proven. Migration not started |
-| 16 | KIK parity / tooling / diagnostics registry | Registry done: `diagnostic-codes.tsv` is the table, `kira-diagnostic-registry` writes `KiraError`, `kiraErrorFromCode`, and the appendix from it, and its tests fail on drift. It was 290 listed against 438 emitted, 130 in common |
+| 16 | KIK parity / tooling / diagnostics registry | Registry done: `diagnostic-codes.tsv` is the table, `kira-diagnostic-registry` writes `KiraError`, `kiraErrorFromCode`, and the appendix from it, and its tests fail on drift. It was 290 listed against 438 emitted, 129 in common: 309 codes a program could not name, 161 names for codes nothing emits, and 3 more (`KLEX004`-`006`) the enum listed but the lookup never answered |
 
 Section O: channels done. Not started: maps and sets, iterators with declared
 element ownership, async closures, big-endian, Wasm64, opt-in runtime
