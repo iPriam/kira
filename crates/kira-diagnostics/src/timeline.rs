@@ -115,9 +115,19 @@ impl Recorder {
 /// A process runs more than one build — a watched session rebuilds on every
 /// save — and each is timed on its own.
 pub fn start() {
+    start_at(Instant::now());
+}
+
+/// [`start`], with the instant supplied rather than read from the clock.
+///
+/// What this module computes is arithmetic over instants, so a test that wants
+/// to check the arithmetic supplies them and asserts an exact answer. Sleeping
+/// to produce them measures the scheduler instead, which is why the timing
+/// tests below take this door.
+fn start_at(now: Instant) {
     if let Ok(mut slot) = RECORDER.lock() {
         *slot = Some(Recorder {
-            started: Instant::now(),
+            started: now,
             open: HashMap::new(),
             spans: Vec::new(),
         });
@@ -130,7 +140,11 @@ pub fn start() {
 /// Called from [`progress::report`](crate::progress::report), so no reporter
 /// knows this exists.
 pub fn mark(phase: &str) {
-    let now = Instant::now();
+    mark_at(phase, Instant::now());
+}
+
+/// [`mark`], with the instant supplied rather than read from the clock.
+fn mark_at(phase: &str, now: Instant) {
     let thread = std::thread::current().id();
     let Ok(mut slot) = RECORDER.lock() else {
         return;
@@ -148,7 +162,11 @@ pub fn mark(phase: &str) {
 /// this slow" is asked in.
 #[must_use]
 pub fn take() -> Option<Report> {
-    let now = Instant::now();
+    take_at(Instant::now())
+}
+
+/// [`take`], with the instant supplied rather than read from the clock.
+fn take_at(now: Instant) -> Option<Report> {
     let mut recorder = RECORDER.lock().ok()?.take()?;
     recorder.close_all(now);
     let total = now.saturating_duration_since(recorder.started);
@@ -299,11 +317,11 @@ mod tests {
     #[test]
     fn the_longest_phase_is_reported_first() {
         let _exclusive = exclusive();
-        start();
-        mark("quick");
-        mark("slow");
-        std::thread::sleep(Duration::from_millis(20));
-        let report = take().expect("a recording");
+        let base = Instant::now();
+        start_at(base);
+        mark_at("quick", base);
+        mark_at("slow", base + Duration::from_millis(1));
+        let report = take_at(base + Duration::from_millis(21)).expect("a recording");
         assert_eq!(report.phases[0].name, "slow");
     }
 
@@ -325,64 +343,71 @@ mod tests {
     #[test]
     fn a_worker_is_credited_with_its_own_phase_and_not_another_thread_s() {
         let _exclusive = exclusive();
-        start();
-        mark("the main thread");
+        let base = Instant::now();
+        start_at(base);
+        mark_at("the main thread", base);
+        // Real threads, because whose phase a mark belongs to is the question;
+        // chosen instants, because how long it lasted is not. Each worker opens
+        // its phase at the same instant and closes it forty milliseconds later,
+        // so the four overlap exactly.
         std::thread::scope(|scope| {
             for unit in 0..4 {
                 scope.spawn(move || {
-                    mark(&format!("unit {unit}"));
-                    std::thread::sleep(Duration::from_millis(40));
+                    mark_at(&format!("unit {unit}"), base);
+                    mark_at(
+                        &format!("unit {unit} done"),
+                        base + Duration::from_millis(40),
+                    );
                 });
             }
         });
-        let report = take().expect("a recording");
+        let report = take_at(base + Duration::from_millis(40)).expect("a recording");
         for unit in 0..4 {
             let recorded = report
                 .phases
                 .iter()
                 .find(|phase| phase.name == format!("unit {unit}"))
                 .expect("every worker's phase");
-            assert!(
-                recorded.elapsed >= Duration::from_millis(30),
-                "{recorded:?}",
-            );
+            assert_eq!(recorded.elapsed, Duration::from_millis(40), "{recorded:?}");
         }
-        // Four phases of 40ms inside a scope that took about 40ms: they
-        // overlapped, and the report says so instead of hiding it.
+        // Four phases of 40ms inside a span of 40ms: they overlapped, and the
+        // report says so instead of hiding it.
         assert!(report.concurrent, "{report:?}");
-        assert!(report.total < Duration::from_millis(160), "{report:?}");
+        assert_eq!(report.total, Duration::from_millis(40));
     }
 
     /// A phase entered twice covers both runs, not the gap between them.
+    ///
+    /// Driven from instants this test chooses rather than from sleeping. What
+    /// the recorder does with a repeated phase is arithmetic over the instants
+    /// it was handed, so handing it known ones asks the question directly and
+    /// answers it exactly. Sleeping measured the scheduler instead: the earlier
+    /// spellings of this test bounded the phase first by a millisecond count
+    /// and then by the gap, and both were really assertions about how promptly
+    /// a loaded machine wakes a thread up.
     #[test]
     fn a_repeated_phase_does_not_claim_the_time_between_its_runs() {
         let _exclusive = exclusive();
-        start();
-        mark("work");
-        std::thread::sleep(Duration::from_millis(10));
-        mark("idle");
-        std::thread::sleep(Duration::from_millis(40));
-        mark("work");
-        std::thread::sleep(Duration::from_millis(10));
-        let report = take().expect("a recording");
+        let base = Instant::now();
+        let at = |ms: u64| base + Duration::from_millis(ms);
+
+        start_at(base);
+        mark_at("work", at(0));
+        mark_at("idle", at(10));
+        mark_at("work", at(50));
+        let report = take_at(at(60)).expect("a recording");
+
         let phase = |name: &str| {
             report
                 .phases
                 .iter()
                 .find(|phase| phase.name == name)
                 .unwrap_or_else(|| panic!("the {name} phase: {report:?}"))
-                .elapsed
         };
-        // Compared against the gap rather than against a millisecond count.
-        // The two runs of `work` sleep 10ms each and the gap between them 40ms,
-        // so a phase that kept to its own runs is under the gap and one that
-        // swallowed it is over — and that holds however far a loaded machine
-        // stretches every sleep, which an absolute bound does not.
-        assert!(
-            phase("work") < phase("idle"),
-            "work {:?}, idle {:?}",
-            phase("work"),
-            phase("idle")
-        );
+        // Two runs of ten milliseconds each, and not the forty between them.
+        assert_eq!(phase("work").elapsed, Duration::from_millis(20));
+        assert_eq!(phase("work").hits, 2);
+        assert_eq!(phase("idle").elapsed, Duration::from_millis(40));
+        assert_eq!(report.total, Duration::from_millis(60));
     }
 }

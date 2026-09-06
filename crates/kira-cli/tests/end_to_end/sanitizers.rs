@@ -40,8 +40,18 @@ fn address_sanitizer_never_falls_back_to_a_host_compiler_runtime() {
         "{stderr}"
     );
     assert!(stderr.contains("update the pinned LLVM bundle"), "{stderr}");
+    // Joined a segment at a time, the way the discovery that prints this
+    // builds it. `join("lib/clang")` keeps the forward slash on Windows, so the
+    // expected text would carry a separator the diagnostic never writes and the
+    // match would fail there and nowhere else.
     assert!(
-        stderr.contains(fake_llvm.join("lib/clang").to_string_lossy().as_ref()),
+        stderr.contains(
+            fake_llvm
+                .join("lib")
+                .join("clang")
+                .to_string_lossy()
+                .as_ref()
+        ),
         "{stderr}"
     );
 
