@@ -588,3 +588,19 @@ zero failures.
 
 The wasm end-to-end tests were not run: neither Emscripten nor node is present
 on this host, so they are unrunnable here rather than passing or failing.
+
+### The integrated tree (2026-09-06)
+The three substrate branches are merged onto `agent/integration`, FFI first
+because it already carried the diagnostics work, then the four diagnostics
+commits beyond it. One conflict in the whole merge, and it was the harness
+tally rather than any machinery: `interp.rs` took the channel branch's
+`VmExecutors` and the FFI branch's C-bool hunks without a conflict, being
+different functions.
+
+Measured on the merged tree, not carried forward:
+
+- The §1c repro traps on `vm`, `llvm`, and `hybrid`, each inside `timeout 10`,
+  with one sentence between them.
+- Harness on `--backend vm`: **1478 passed, 0 failed, 0 skipped, 1478 total**,
+  with all ten `Chx` and all ten `Dgx` cases green. 1465 + 3 + 10, and now
+  observed rather than added up.
