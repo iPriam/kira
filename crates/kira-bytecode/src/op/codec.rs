@@ -322,6 +322,7 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
+        Instruction::ConvertFloatToUInt => out.push(o::CONVERT_FLOAT_TO_UINT),
         Instruction::ConvertIntToRawPtr => out.push(o::CONVERT_INT_TO_RAW_PTR),
         Instruction::ConvertRawPtrToInt => out.push(o::CONVERT_RAW_PTR_TO_INT),
         Instruction::NativeUserData { shared } => {
@@ -838,6 +839,7 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::ENUM_PAYLOAD => Instruction::EnumPayload,
         o::CONVERT_INT_TO_FLOAT => Instruction::ConvertIntToFloat,
         o::CONVERT_FLOAT_TO_INT => Instruction::ConvertFloatToInt,
+        o::CONVERT_FLOAT_TO_UINT => Instruction::ConvertFloatToUInt,
         o::CONVERT_INT_TO_RAW_PTR => Instruction::ConvertIntToRawPtr,
         o::CONVERT_RAW_PTR_TO_INT => Instruction::ConvertRawPtrToInt,
         o::NATIVE_STATE_RETAIN => Instruction::NativeStateRetain,

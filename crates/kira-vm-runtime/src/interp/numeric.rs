@@ -129,4 +129,27 @@ impl Vm<'_> {
         self.stack.push(Value::Int(value as i64));
         Ok(())
     }
+
+    /// Truncates the float on top toward zero as a `U64`, trapping on NaN, an
+    /// infinity, or a value outside `0..2^64`.
+    ///
+    /// `U64` is the one integer destination whose range is not a subrange of
+    /// `Int`'s, so it has its own conversion: reading the float as signed first
+    /// would refuse every value above `2^63`, which is half of what a `U64`
+    /// holds. The word pushed is the unsigned value's bit pattern, which is how
+    /// a `U64` is carried everywhere else.
+    pub(super) fn convert_float_to_uint(&mut self) -> Result<(), VmError> {
+        let value = self.pop_float()?;
+        // `2^64` as a float is exactly the first value past the top, so the
+        // strict upper compare excludes it. The lower bound is not strict, so
+        // `-0.0` is accepted and converts to zero, while every negative
+        // magnitude — `-0.5` included, which would otherwise truncate to zero
+        // and hide a sign error — is refused before the truncation happens.
+        let in_range = value.is_finite() && (0.0..18_446_744_073_709_551_616.0).contains(&value);
+        if !in_range {
+            return Err(VmError::FloatToIntOutOfRange { value });
+        }
+        self.stack.push(Value::Int(value as u64 as i64));
+        Ok(())
+    }
 }

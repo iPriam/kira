@@ -701,6 +701,7 @@ impl Vm<'_> {
                     .push(Value::Int(i64::from((value as f32).to_bits())));
             }
             Instruction::ConvertFloatToInt => self.convert_float_to_int()?,
+            Instruction::ConvertFloatToUInt => self.convert_float_to_uint()?,
             Instruction::AddIntChecked
             | Instruction::SubIntChecked
             | Instruction::MulIntChecked

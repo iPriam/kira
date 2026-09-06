@@ -207,3 +207,65 @@ construct NwxComplementOfAPlainIntIsItsOwnInverse() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
+
+// --- Float to U64 across the whole unsigned range ---------------------------
+// `U64` is the one integer destination whose range is not a subrange of
+// `Int`'s. Reading the float as signed first refused everything above 2^63,
+// which is half of what a `U64` holds — and both engines agreed on that wrong
+// answer, so a parity case alone would never have caught it.
+
+construct NwxFloatToUnsignedLongAboveTheSignedTop() extends Test {
+    test {
+        let f: Float = 10000000000000000000.0
+        let u: U64 = U64(f)
+        return u > 9223372036854775807 ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// A value in the top half round-trips: the float names it exactly, and the
+// conversion back answers the float that went in.
+construct NwxFloatToUnsignedLongRoundTripsAboveTheSignedTop() extends Test {
+    test {
+        let f: Float = 18000000000000000000.0
+        let u: U64 = U64(f)
+        return Float(u) == f ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct NwxFloatToUnsignedLongTruncatesTowardZero() extends Test {
+    test {
+        let f: Float = 42.9
+        let u: U64 = U64(f)
+        return Int(u)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+construct NwxFloatToUnsignedLongRefusesANegative() extends Test {
+    test {
+        let f: Float = 0.0 - 1.0
+        let u: U64 = U64(f)
+        return Int(u)
+    }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
+}
+
+construct NwxFloatToUnsignedLongRefusesAFractionBelowZero() extends Test {
+    test {
+        let f: Float = 0.0 - 0.5
+        let u: U64 = U64(f)
+        return Int(u)
+    }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
+}
+
+construct NwxFloatToUnsignedLongRefusesPastTheTop() extends Test {
+    test {
+        let f: Float = 20000000000000000000.0
+        let u: U64 = U64(f)
+        return Int(u)
+    }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
+}

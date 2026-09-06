@@ -667,9 +667,19 @@ pub enum Instruction {
     /// Pop a `Float`, push it as an `Int`: truncate toward zero, saturating an
     /// out-of-range value to `i64::MIN`/`i64::MAX` and mapping NaN to zero.
     ///
-    /// Emitted for a scalar conversion `Int(floatValue)`. Never traps — the
-    /// conversion is total over every float input.
+    /// Emitted for a scalar conversion `Int(floatValue)`. Traps on NaN, on an
+    /// infinity, and on a magnitude outside `i64`'s range, rather than
+    /// saturating: a float that names no integer has no integer answer to give.
     ConvertFloatToInt,
+    /// Pop a `Float`, push it as a `U64`: truncate toward zero, trapping on
+    /// NaN, an infinity, and anything outside `0..2^64`.
+    ///
+    /// The unsigned twin of [`Instruction::ConvertFloatToInt`], and the mirror
+    /// of [`Instruction::ConvertUIntToFloat`] on the other side. `U64` is the
+    /// one integer destination whose range is not a subrange of `Int`'s, so
+    /// reading the float as signed first would refuse every value above `2^63`
+    /// — half of what a `U64` holds.
+    ConvertFloatToUInt,
     /// Pop an `Int`, push the same 64-bit word as a `RawPtr`.
     ConvertIntToRawPtr,
     /// Pop a `RawPtr`, push the same 64-bit word as an `Int`.

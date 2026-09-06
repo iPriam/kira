@@ -284,3 +284,8 @@ pub const TYPE_CAST_RESULT: u8 = 0x8f;
 /// byte exactly as `TASK_OP` carries its own. Appended after
 /// `TYPE_CAST_RESULT`; adding an opcode is not an ABI change.
 pub const CHANNEL_OP: u8 = 0x90;
+
+/// The unsigned float-to-integer conversion, for a `U64` destination whose
+/// range the signed one cannot express. Appended after `CHANNEL_OP`; adding an
+/// opcode is not an ABI change.
+pub const CONVERT_FLOAT_TO_UINT: u8 = 0x91;

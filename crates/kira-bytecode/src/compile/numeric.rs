@@ -120,6 +120,15 @@ impl FnCompiler<'_> {
             } else {
                 Instruction::ConvertIntToFloat
             }),
+            // `U64` is the one destination whose range is not a subrange of
+            // `Int`'s, so it reads the float as unsigned and needs no
+            // narrowing afterwards — the unsigned conversion already refuses
+            // everything outside `0..2^64`. Going through the signed
+            // conversion first would refuse every value above `2^63`, which
+            // is half of what a `U64` holds.
+            ConvertKind::FloatToInt if to == Type::Int(IntSpelling::U64) => {
+                self.code.push(Instruction::ConvertFloatToUInt);
+            }
             ConvertKind::FloatToInt => {
                 self.code.push(Instruction::ConvertFloatToInt);
                 if let Type::Int(to_spelling) = to

@@ -172,3 +172,52 @@ function main() {
     );
     assert_eq!(output, "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n");
 }
+
+/// `U64` is the one integer destination whose range is not a subrange of
+/// `Int`'s, so a float converts into it as unsigned.
+///
+/// Both engines used to funnel this through the signed conversion, whose
+/// accepted interval ends at `2^63`, and so both refused every value in the
+/// top half of the type — agreement on the wrong answer, which is why a parity
+/// case alone could never have found it. The trap is still the trap: NaN, an
+/// infinity, a negative, and anything at or past `2^64`.
+#[test]
+fn a_float_converts_into_the_whole_unsigned_range() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let big: Float = 10000000000000000000.0
+    print(U64(big))
+    let top: Float = 18000000000000000000.0
+    print(U64(top))
+    let small: Float = 42.9
+    print(U64(small))
+    let zero: Float = 0.0
+    print(U64(zero))
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "10000000000000000000\n18000000000000000000\n42\n0\n"
+    );
+}
+
+/// A magnitude past the unsigned range has no `U64` value, and neither does a
+/// negative one — including a fraction that would otherwise truncate to zero
+/// and hide the sign.
+#[test]
+fn float_to_unsigned_traps_outside_the_unsigned_range() {
+    assert_trap_parity(
+        r#"@Main function main() {
+            let ok: Float = 1.0
+            print(U64(ok))
+            let negative: Float = 0.0 - 0.5
+            print(U64(negative))
+            return
+        }"#,
+        "1\n",
+    );
+}

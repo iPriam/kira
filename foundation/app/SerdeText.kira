@@ -319,10 +319,16 @@ function __kira_deser_int(s: borrow String) -> Int {
                 digit = d - 48
             }
         }
-        acc = acc * 10 + digit
+        // Accumulated downward, toward the negative side. The magnitude of the
+        // most negative Int is one past the most positive one, so building the
+        // positive magnitude first cannot represent it: `-9223372036854775808`
+        // overflowed on the way in, on its own round trip. Every value of the
+        // type is reachable from this side, and a positive one too large to
+        // hold still traps — on the negation below, where it belongs.
+        acc = acc * 10 - digit
         i = i + 1
     }
-    if neg {
+    if !neg {
         acc = 0 - acc
     }
     return acc

@@ -303,3 +303,43 @@ construct DnxSerdeCarriesAnArrayPayload() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
+
+// The whole `Int` range round-trips, the most negative value included. The
+// parser used to accumulate the positive magnitude and apply the sign after,
+// and the magnitude of the most negative Int is one past the most positive
+// one — so the minimum overflowed on its own round trip.
+
+@Derive(Serializable)
+struct DnxBound {
+    var value: Int
+}
+
+construct DnxSerdeCarriesTheMostNegativeInt() extends Test {
+    test {
+        let low = DnxBound(value: 0 - 9223372036854775807 - 1)
+        let back = deserialize_DnxBound(serialize_DnxBound(low))
+        return back.value == low.value ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct DnxSerdeCarriesTheMostPositiveInt() extends Test {
+    test {
+        let high = DnxBound(value: 9223372036854775807)
+        let back = deserialize_DnxBound(serialize_DnxBound(high))
+        return back.value == high.value ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct DnxSerdeCarriesZeroAndMinusOne() extends Test {
+    test {
+        let zero = deserialize_DnxBound(serialize_DnxBound(DnxBound(value: 0)))
+        let minus = deserialize_DnxBound(serialize_DnxBound(DnxBound(value: 0 - 1)))
+        var score = 0
+        if zero.value == 0 { score = score + 1 }
+        if minus.value == 0 - 1 { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}

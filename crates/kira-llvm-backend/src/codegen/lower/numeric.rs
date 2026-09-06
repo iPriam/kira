@@ -337,6 +337,14 @@ impl FunctionLowering<'_, '_> {
                     )
                 })
             }
+            // `U64` is the one integer destination whose range is not a
+            // subrange of `Int`'s, so it reads the float as unsigned and needs
+            // no narrowing afterwards. Going through the signed conversion
+            // would refuse every value above `2^63`, which is half of what a
+            // `U64` holds.
+            ConvertKind::FloatToInt if matches!(to, Type::Int(spelling) if spelling.width() == IntWidth::U64) => {
+                self.lower_float_to_uint(value)
+            }
             ConvertKind::FloatToInt => {
                 let converted = self.lower_float_to_int(value)?;
                 if let Type::Int(to_spelling) = to
@@ -464,6 +472,63 @@ impl FunctionLowering<'_, '_> {
                 value,
                 types.i64,
                 c"conv.fptosi".as_ptr(),
+            )
+        })
+    }
+
+    /// Truncates a float toward zero into a `U64`, trapping on NaN, an
+    /// infinity, and anything outside `0..2^64`.
+    ///
+    /// The unsigned twin of [`Self::lower_float_to_int`], and it exists for the
+    /// same reason the VM has its own opcode: the signed conversion's accepted
+    /// interval ends at `2^63`, which is half of what a `U64` holds. The trap
+    /// it reports is the same one, because the failure is the same — a float
+    /// that names no value of the destination type.
+    fn lower_float_to_uint(&mut self, value: LLVMValueRef) -> Result<LLVMValueRef, LlvmError> {
+        let types = self.codegen.types;
+        // SAFETY: float compares against constants on a live block. An ordered
+        // compare is false for NaN, so `in range` is false for NaN and the trap
+        // fires; `2^64` is exactly the first float past the top and is excluded
+        // by the strict compare, while zero is included by the non-strict one.
+        let outside = unsafe {
+            let low = LLVMConstReal(types.f64, 0.0);
+            let high = LLVMConstReal(types.f64, 18_446_744_073_709_551_616.0);
+            let above_low = LLVMBuildFCmp(
+                self.codegen.builder,
+                LLVMRealPredicate::LLVMRealOGE,
+                value,
+                low,
+                c"conv.fu.low".as_ptr(),
+            );
+            let below_high = LLVMBuildFCmp(
+                self.codegen.builder,
+                LLVMRealPredicate::LLVMRealOLT,
+                value,
+                high,
+                c"conv.fu.high".as_ptr(),
+            );
+            let inside = LLVMBuildAnd(
+                self.codegen.builder,
+                above_low,
+                below_high,
+                c"conv.fu.in".as_ptr(),
+            );
+            LLVMBuildNot(self.codegen.builder, inside, c"conv.fu.out".as_ptr())
+        };
+        let mut args = [value];
+        self.trap_if(
+            outside,
+            self.codegen.runtime.trap_float_to_int,
+            &mut args,
+            c"conv.fu.trap",
+        )?;
+        // SAFETY: the value was just proven in range, so `fptoui` is defined.
+        Ok(unsafe {
+            LLVMBuildFPToUI(
+                self.codegen.builder,
+                value,
+                types.i64,
+                c"conv.fptoui".as_ptr(),
             )
         })
     }
