@@ -17,8 +17,6 @@
 
 use std::collections::VecDeque;
 
-use crate::NativeStateValue;
-
 /// What one end of a channel is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChannelEnd {
@@ -160,12 +158,7 @@ pub enum ChannelReceive {
 #[derive(Debug)]
 struct Channel {
     /// Values in arrival order.
-    ///
-    /// A value tree rather than a word, so a payload that owns storage — a
-    /// string, a struct, an array, an enum — travels whole. A scalar payload is
-    /// one `Int`, `Float` or `Bool` node, so there is one queue and one storage
-    /// rather than a word path beside a value path.
-    queue: VecDeque<NativeStateValue>,
+    queue: VecDeque<i64>,
     /// Whether the sender end is still live.
     sender_live: bool,
     /// Whether the receiver end is still live.
@@ -239,19 +232,8 @@ impl ChannelExecutor {
         ))
     }
 
-    /// Queues the word `value` behind every value already waiting.
-    ///
-    /// The scalar spelling of [`Self::send_value`]: a word is one `Int` node.
+    /// Queues `value` behind every value already waiting.
     pub fn send(&mut self, sender: i64, value: i64) -> Result<(), ChannelTrap> {
-        self.send_value(sender, NativeStateValue::Int(value))
-    }
-
-    /// Queues `value` behind every value already waiting, taking ownership.
-    ///
-    /// The sender gives the value up: what arrives at the receiver is the value
-    /// itself and not a share of it, which is what keeps a payload that owns
-    /// heap storage from being readable through both ends at once.
-    pub fn send_value(&mut self, sender: i64, value: NativeStateValue) -> Result<(), ChannelTrap> {
         let (index, generation, end) = Self::parts(sender)?;
         if end != ChannelEnd::Sender {
             return Err(ChannelTrap::WrongDirection);
@@ -394,20 +376,6 @@ impl ChannelExecutor {
 
     /// Answers the oldest waiting value, trapping when none is waiting.
     pub fn take(&mut self, receiver: i64) -> Result<i64, ChannelTrap> {
-        match self.take_value(receiver)? {
-            NativeStateValue::Int(value) => Ok(value),
-            NativeStateValue::Bool(value) => Ok(i64::from(value)),
-            NativeStateValue::Float(value) => Ok(value.to_bits() as i64),
-            NativeStateValue::RawPtr(value) => Ok(value as i64),
-            // A heap payload has no word to answer with, and a caller that
-            // asked for one is generated code that read the payload rule
-            // differently than the compiler did.
-            _ => Err(ChannelTrap::WrongDirection),
-        }
-    }
-
-    /// Answers the oldest queued value whole, without blocking.
-    pub fn take_value(&mut self, receiver: i64) -> Result<NativeStateValue, ChannelTrap> {
         let (index, generation, end) = Self::parts(receiver)?;
         if end != ChannelEnd::Receiver {
             return Err(ChannelTrap::WrongDirection);
