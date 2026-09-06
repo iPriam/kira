@@ -323,6 +323,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
         Instruction::ConvertFloatToUInt => out.push(o::CONVERT_FLOAT_TO_UINT),
+        Instruction::NativeStateTake(type_word) => {
+            out.push(o::NATIVE_STATE_TAKE);
+            out.extend_from_slice(&type_word.to_le_bytes());
+        }
         Instruction::ConvertIntToRawPtr => out.push(o::CONVERT_INT_TO_RAW_PTR),
         Instruction::ConvertRawPtrToInt => out.push(o::CONVERT_RAW_PTR_TO_INT),
         Instruction::NativeUserData { shared } => {
@@ -514,6 +518,7 @@ impl Cursor<'_> {
             o::FOREIGN_CALLBACK => Instruction::ForeignCallback(u32::from_le_bytes(self.take()?)),
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
+            o::NATIVE_STATE_TAKE => Instruction::NativeStateTake(u64::from_le_bytes(self.take()?)),
             o::NATIVE_USER_DATA => Instruction::NativeUserData {
                 shared: self.read_bool()?,
             },

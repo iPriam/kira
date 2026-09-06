@@ -346,7 +346,9 @@ impl Scan<'_> {
             }
             IrExpr::NativeState { value, .. } => self.expr(*value, path, owners),
             IrExpr::NativeUserData { state } => self.expr(*state, path, owners),
-            IrExpr::NativeRecover { raw, .. } => self.expr(*raw, path, owners),
+            IrExpr::NativeRecover { raw, .. } | IrExpr::NativeStateTake { raw, .. } => {
+                self.expr(*raw, path, owners)
+            }
             IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
                 self.expr(*token, path, owners)
             }

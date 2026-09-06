@@ -361,6 +361,12 @@ impl FnCompiler<'_> {
                 self.code
                     .push(Instruction::NativeRecover(type_id.as_word()));
             }
+            IrExpr::NativeStateTake { raw, type_id, .. } => {
+                let (raw, type_id) = (*raw, *type_id);
+                self.compile_expr(raw)?;
+                self.code
+                    .push(Instruction::NativeStateTake(type_id.as_word()));
+            }
             IrExpr::NativeStateRetain { token } => {
                 let token = *token;
                 self.compile_expr(token)?;

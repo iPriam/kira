@@ -280,6 +280,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }
+        | IrExpr::NativeStateTake { raw: operand, .. }
         | IrExpr::NativeStateRetain { token: operand }
         | IrExpr::NativeStateRelease { token: operand } => walk_expr(program, *operand, facts),
         IrExpr::ForeignCallbackPtr { .. }

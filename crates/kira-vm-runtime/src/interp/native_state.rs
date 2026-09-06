@@ -204,6 +204,37 @@ impl Vm<'_> {
         Ok(())
     }
 
+    /// Takes the whole state out as a value and gives up the token.
+    ///
+    /// [`Self::native_recover`] pushes a view and reads nothing, so that
+    /// reading one field out of a large state does not rebuild every string
+    /// and array beside it. A caller that needs the value itself — a channel
+    /// handing a payload to its receiver — needs the other answer, and needs
+    /// the token released in the same breath: it was the queue's, and the
+    /// queue no longer holds the slot it named.
+    pub(super) fn native_state_take(&mut self, type_word: u64) -> Result<(), VmError> {
+        let raw = self.pop()?;
+        let Value::RawPtr(word) = raw else {
+            self.heap.drop_value(raw);
+            return Err(VmError::NativeStateValueMismatch {
+                operation: NativeStateOperation::Recover,
+                kind: "a value that is not a callback-state token",
+            });
+        };
+        let token = kira_runtime_abi::NativeStateToken::from_word(word);
+        let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
+        let tree = self
+            .host
+            .native_state_recover(token, type_id)
+            .map_err(VmError::NativeState)?;
+        let value = self.heap.from_native_state(&tree);
+        self.host
+            .native_state_release(token)
+            .map_err(VmError::NativeState)?;
+        self.stack.push(value);
+        Ok(())
+    }
+
     pub(super) fn native_state_release(&mut self) -> Result<(), VmError> {
         let token = self.pop_state_token(NativeStateOperation::Release)?;
         self.host

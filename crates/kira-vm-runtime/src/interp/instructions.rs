@@ -175,6 +175,7 @@ impl Vm<'_> {
             Instruction::NativeState(type_word) => self.native_state_new(*type_word)?,
             Instruction::NativeUserData { shared } => self.native_user_data(*shared)?,
             Instruction::NativeRecover(type_word) => self.native_recover(*type_word)?,
+            Instruction::NativeStateTake(type_word) => self.native_state_take(*type_word)?,
             Instruction::NativeStateRetain => self.native_state_retain()?,
             Instruction::NativeStateRelease => self.native_state_release()?,
             Instruction::Print => {

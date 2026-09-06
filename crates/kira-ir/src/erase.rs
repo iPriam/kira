@@ -156,6 +156,7 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::Env { ty, .. }
         | IrExpr::NativeState { ty, .. }
         | IrExpr::NativeRecover { ty, .. }
+        | IrExpr::NativeStateTake { ty, .. }
         | IrExpr::Convert { ty, .. }
         | IrExpr::MainThreadCall { ty, .. }
         | IrExpr::MainThreadJoin { ty, .. } => erase(ty),

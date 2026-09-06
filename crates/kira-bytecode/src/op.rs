@@ -680,6 +680,16 @@ pub enum Instruction {
     /// reading the float as signed first would refuse every value above `2^63`
     /// — half of what a `U64` holds.
     ConvertFloatToUInt,
+    /// Pop a state token, push the whole state as a value, and give up the
+    /// token's ownership of it.
+    ///
+    /// [`Instruction::NativeRecover`] deliberately does not read: it pushes a
+    /// *view*, so that reading one field out of a large state does not rebuild
+    /// every string and array beside it. That is the right trade for a caller
+    /// that reads a field, and the wrong one for a caller that needs the value
+    /// itself — a channel delivering a payload, where the token is the queue's
+    /// and stops existing the moment the value is handed over.
+    NativeStateTake(u64),
     /// Pop an `Int`, push the same 64-bit word as a `RawPtr`.
     ConvertIntToRawPtr,
     /// Pop a `RawPtr`, push the same 64-bit word as an `Int`.

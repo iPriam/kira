@@ -24,12 +24,25 @@ fn a_channel_takes_its_payload_as_a_type_argument_only() {
     assert_eq!(codes(&program("let tx = Channel()")), vec!["KSEM364"]);
 }
 
-/// A queue slot is one machine word, so a payload with no word is refused by
-/// name rather than queued as a pointer into the sender's heap.
+/// A payload that owns storage crosses as a token naming it, so a `String` is
+/// a channel payload like any other.
 #[test]
-fn a_payload_with_no_machine_word_is_refused() {
+fn a_payload_that_owns_storage_is_carried() {
+    assert!(
+        diagnostics(&program("let tx = Channel<String>()")).is_empty(),
+        "{:?}",
+        diagnostics(&program("let tx = Channel<String>()"))
+    );
+}
+
+/// The representation rule relaxed; it did not disappear. What a queue slot
+/// can *name* is the question, and two things it cannot: a value that is not
+/// there, and an address whose meaning stayed on the far side of a seam.
+#[test]
+fn a_payload_the_store_cannot_hold_is_still_refused() {
+    assert_eq!(codes(&program("let tx = Channel<Void>()")), vec!["KSEM365"]);
     assert_eq!(
-        codes(&program("let tx = Channel<String>()")),
+        codes(&program("let tx = Channel<RawPtr>()")),
         vec!["KSEM365"]
     );
 }
@@ -162,7 +175,7 @@ fn a_channel_over_void_is_refused() {
 /// once.
 #[test]
 fn an_end_annotation_refuses_the_payloads_a_channel_refuses() {
-    let text = "function take(rx: Receiver<String>) -> Int { return 0 }\n\
+    let text = "function take(rx: Receiver<RawPtr>) -> Int { return 0 }\n\
                 @Main function main() { print(1) return }";
     let refusals = codes(text).iter().filter(|code| *code == "KSEM365").count();
     assert_eq!(refusals, 1, "{:?}", diagnostics(text));

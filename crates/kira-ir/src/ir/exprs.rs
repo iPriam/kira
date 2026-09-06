@@ -420,6 +420,21 @@ pub enum IrExpr {
         /// The Kira value type exposed by the mutable view.
         ty: Type,
     },
+    /// Takes a whole callback state out as a value, giving up the token.
+    ///
+    /// [`IrExpr::NativeRecover`] answers a view, which is what a reader of one
+    /// field wants and not what a caller needing the value itself wants. This
+    /// is the second: it materialises the state and releases the token in one
+    /// step, because the two always happen together — a token whose value has
+    /// been taken has nothing left to name.
+    NativeStateTake {
+        /// The opaque raw userdata token.
+        raw: IrExprId,
+        /// The stable runtime identity the take validates.
+        type_id: NativeStateTypeId,
+        /// The Kira value type taken out.
+        ty: Type,
+    },
     /// Adds one owner to the callback state a handle or userdata token names.
     NativeStateRetain {
         /// The state handle or raw token.

@@ -692,7 +692,18 @@ impl Lowerer<'_> {
                             type_id,
                             ty: Type::INT,
                         });
-                        self.ir.exprs.alloc(IrExpr::NativeUserData { state: boxed })
+                        let token = self.ir.exprs.alloc(IrExpr::NativeUserData { state: boxed });
+                        // The token is a pointer word; a queue slot is an
+                        // `Int`. The two are the same bits, and the VM is the
+                        // engine that says so out loud — it carries the value's
+                        // kind beside it and refuses one where the other
+                        // belongs, where native sees one machine word either
+                        // way.
+                        self.ir.exprs.alloc(IrExpr::Convert {
+                            operand: token,
+                            kind: kira_semantics_model::hir::ConvertKind::RawPtrToInt,
+                            ty: Type::INT,
+                        })
                     }
                 };
                 return self.channel_op(ChannelPrim::Send, vec![sender, value]);

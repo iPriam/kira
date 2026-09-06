@@ -152,6 +152,9 @@ impl FunctionLowering<'_, '_> {
             IrExpr::NativeRecover { raw, type_id, ty } => {
                 self.lower_native_recover_value(raw, type_id, ty)
             }
+            IrExpr::NativeStateTake { raw, type_id, ty } => {
+                self.lower_native_state_take(raw, type_id, ty)
+            }
             IrExpr::NativeStateRetain { token } => self.lower_native_state_retain(token),
             IrExpr::NativeStateRelease { token } => self.lower_native_state_release(token),
             IrExpr::Convert { operand, kind, ty } => {

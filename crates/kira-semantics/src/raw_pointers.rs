@@ -100,7 +100,7 @@ impl Analyzer<'_> {
 
     /// Whether a type is one machine pointer word: `RawPtr`, an `@FFI.Pointer`,
     /// or a `distinct` over either.
-    fn is_pointer_word(&self, ty: Type) -> bool {
+    pub(crate) fn is_pointer_word(&self, ty: Type) -> bool {
         match ty {
             Type::RawPtr | Type::ForeignPtr(_) => true,
             Type::Distinct(_) => matches!(

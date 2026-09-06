@@ -198,6 +198,7 @@ impl IrProgram {
             | IrExpr::EnumPayload { ty, .. }
             | IrExpr::NativeState { ty, .. }
             | IrExpr::NativeRecover { ty, .. }
+            | IrExpr::NativeStateTake { ty, .. }
             | IrExpr::Convert { ty, .. }
             | IrExpr::FileSystem { ty, .. }
             | IrExpr::Compiler { ty, .. }

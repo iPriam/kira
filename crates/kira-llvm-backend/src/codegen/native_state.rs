@@ -188,6 +188,28 @@ impl FunctionLowering<'_, '_> {
         self.materialize_native_state(token, type_id, ty)
     }
 
+    /// Takes the whole state out as a value and gives up the token.
+    ///
+    /// The token is lowered once and used twice — materialising through it and
+    /// then releasing it — so a `raw` with an effect in it happens once, which
+    /// lowering the expression twice would not guarantee.
+    pub(super) fn lower_native_state_take(
+        &mut self,
+        raw: kira_ir::IrExprId,
+        type_id: NativeStateTypeId,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let token = self.lower_expr(raw)?;
+        let value = self.materialize_native_state(token, type_id, ty)?;
+        let status = self.call(
+            self.codegen.runtime.native_state_release,
+            &mut [token],
+            c"native.state.status",
+        );
+        self.check_native_state_status(status);
+        Ok(value)
+    }
+
     /// Exports a handle's userdata token, which owns one reference.
     ///
     /// A handle a local keeps owning is read in place — an ordinary read would

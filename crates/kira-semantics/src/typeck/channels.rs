@@ -148,12 +148,16 @@ impl Analyzer<'_> {
     /// representation rule below; it is a different question, and the day a
     /// heap payload is admitted it is the only one still asking it.
     ///
-    /// The representation rule second. The queue holds one machine word per
-    /// value, so a payload is a scalar with a word of its own: an integer
-    /// width, a float width, `Bool`, or a `distinct` over one. `Void` is a
-    /// scalar with nothing in it, so a channel over it would carry no value at
-    /// all; a pointer word names storage on the far side of a seam this
-    /// language does not read, so it is not a value to hand over either.
+    /// The representation rule second, and it is about what a queue slot can
+    /// *name* rather than what fits in it. A slot is one machine word: a
+    /// scalar is that word, and a value that owns storage travels as a token
+    /// naming it in the store that outlives the sending context. So the
+    /// question is whether the store can hold the value at all.
+    ///
+    /// Two things it cannot. `Void` is a scalar with nothing in it, so a
+    /// channel over it would carry no value; and a pointer word names storage
+    /// on the far side of a seam this language does not read, so what would
+    /// arrive is an address whose meaning stayed behind.
     fn channel_payload_refusal(&self, payload: Type) -> Option<(&'static str, String)> {
         let name = self.program.types.type_name(payload);
         if let Some(reason) = self.marker_reason(&name, payload, Marker::Send) {
@@ -165,19 +169,35 @@ impl Analyzer<'_> {
                 ),
             ));
         }
-        if payload.is_scalar()
-            && !matches!(payload, Type::Void | Type::RawPtr | Type::ForeignPtr(_))
-        {
-            return None;
+        if payload == Type::Void {
+            return Some((
+                "KSEM365",
+                "a channel over `Void` carries no value: there would be nothing for `send` to \
+                 take and nothing for `receive` to answer with"
+                    .to_owned(),
+            ));
         }
-        Some((
-            "KSEM365",
-            format!(
-                "a channel carrying `{name}` has nothing to queue: a payload is an integer width, \
-                 a float width, `Bool`, or a `distinct` over one, because a queued value is one \
-                 machine word"
-            ),
-        ))
+        if self.is_pointer_word(payload) {
+            return Some((
+                "KSEM365",
+                format!(
+                    "a channel cannot carry `{name}`: a pointer word names storage on the far \
+                     side of a seam this language does not read, so what arrived would be an \
+                     address whose meaning stayed behind"
+                ),
+            ));
+        }
+        if self.program.types.native_state_type_id(payload).is_none() {
+            return Some((
+                "KSEM365",
+                format!(
+                    "a channel carrying `{name}` has nothing to queue: a queued value is one \
+                     machine word, and a value that owns storage crosses as a token naming it, \
+                     which there is no way to make for this type"
+                ),
+            ));
+        }
+        None
     }
 
     /// The row for one end of a channel over `payload`, minted on first use.

@@ -204,7 +204,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
-        IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
+        IrExpr::NativeRecover { raw, .. } | IrExpr::NativeStateTake { raw, .. } => {
+            walk_expr(program, *raw, found)
+        }
         IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
             walk_expr(program, *token, found)
         }

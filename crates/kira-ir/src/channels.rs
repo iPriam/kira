@@ -196,16 +196,19 @@ fn build_receive(
         ),
         wire::Crossing::Boxed(type_id) => {
             let token = build.expr(IrExpr::Local(token_slot));
-            let recovered = build.expr(IrExpr::NativeRecover {
+            let token = build.raw_ptr(token);
+            // Taken rather than recovered: a recovery answers a view, which is
+            // the right answer for a reader of one field and the wrong one for
+            // a receiver, which needs the value itself and needs the queue's
+            // token released in the same breath.
+            let value = build.expr(IrExpr::NativeStateTake {
                 raw: token,
                 type_id,
                 ty: row.payload,
             });
-            let token_again = build.expr(IrExpr::Local(token_slot));
-            let release = build.expr(IrExpr::NativeStateRelease { token: token_again });
-            let value = build.expr(IrExpr::Local(value_slot));
+            let bound = build.expr(IrExpr::Local(value_slot));
             (
-                value,
+                bound,
                 vec![
                     IrStmt::Let {
                         local: token_slot,
@@ -213,12 +216,8 @@ fn build_receive(
                     },
                     IrStmt::Let {
                         local: value_slot,
-                        init: recovered,
+                        init: value,
                     },
-                    // The queue's owner, given up now that the value is out.
-                    // Nothing else holds one, so this is what frees the
-                    // storage a delivered payload was travelling in.
-                    IrStmt::Eval { expr: release },
                 ],
                 2,
             )
@@ -329,6 +328,7 @@ fn build_close_receiver(program: &mut IrProgram) -> IrFunction {
     let ready = build.status_is(status_slot, wire::POLL_READY);
     let end = build.expr(IrExpr::Local(0));
     let taken = build.op(ChannelPrim::Take, &[end]);
+    let taken = build.raw_ptr(taken);
     let release = build.expr(IrExpr::NativeStateRelease { token: taken });
     let repoll = build.poll(0);
     let closing = build.expr(IrExpr::Local(0));
@@ -384,6 +384,15 @@ impl Build<'_> {
     /// The `Int` constant `value`.
     fn int(&mut self, value: i64) -> IrExprId {
         self.expr(IrExpr::Int(value))
+    }
+
+    /// An `Int` word read back as the pointer word a state token is.
+    fn raw_ptr(&mut self, word: IrExprId) -> IrExprId {
+        self.expr(IrExpr::Convert {
+            operand: word,
+            kind: kira_semantics_model::hir::ConvertKind::IntToRawPtr,
+            ty: Type::RawPtr,
+        })
     }
 
     /// A channel primitive with the operands given, zero-filled to three.

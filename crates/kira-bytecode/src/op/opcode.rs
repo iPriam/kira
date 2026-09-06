@@ -289,3 +289,8 @@ pub const CHANNEL_OP: u8 = 0x90;
 /// range the signed one cannot express. Appended after `CHANNEL_OP`; adding an
 /// opcode is not an ABI change.
 pub const CONVERT_FLOAT_TO_UINT: u8 = 0x91;
+
+/// Takes a whole callback state out as a value and gives up the token that
+/// named it. Appended after `CONVERT_FLOAT_TO_UINT`; adding an opcode is not
+/// an ABI change.
+pub const NATIVE_STATE_TAKE: u8 = 0x92;
