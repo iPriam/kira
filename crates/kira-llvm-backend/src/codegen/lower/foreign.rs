@@ -559,10 +559,10 @@ impl FunctionLowering<'_, '_> {
             )
         };
         for (index, ty) in extensions {
-            self.codegen.add_c_extension(produced, index, ty);
+            self.codegen.add_c_extension_to_call(produced, index, ty);
         }
         if let Some(ty) = returned {
-            self.codegen.add_c_extension(produced, 0, ty);
+            self.codegen.add_c_extension_to_call(produced, 0, ty);
             // The result comes back in its prototype type and is written into
             // storage sized for the C object, so a `_Bool` widens from the `i1`
             // C answered with to the canonical byte the read expects.

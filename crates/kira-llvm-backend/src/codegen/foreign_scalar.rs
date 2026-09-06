@@ -179,18 +179,46 @@ impl Codegen<'_> {
     ///
     /// `index` follows LLVM's attribute numbering: `0` is the return position
     /// and parameter `n` is `n + 1`.
-    pub(super) fn add_c_extension(&self, target: LLVMValueRef, index: u32, ft: ForeignType) {
-        let Some(attribute) = self.foreign_c_extension(ft) else {
-            return;
-        };
-        // SAFETY: `target` is a live call or function in this module and the
-        // attribute kind is a string LLVM copies.
-        unsafe {
+    ///
+    /// A function and a call site take their attributes through different
+    /// entry points, and the C API does not check which it was handed:
+    /// `LLVMAddAttributeAtIndex` casts to `Function` without asking, so
+    /// handing it a call instruction writes through a pointer to something
+    /// that is not one. That is why these are two methods rather than one that
+    /// guesses — the caller always knows which it has.
+    fn c_extension_attribute(&self, ft: ForeignType) -> Option<LLVMAttributeRef> {
+        let attribute = self.foreign_c_extension(ft)?;
+        // SAFETY: the attribute kind is a string LLVM copies, and the context
+        // is live for the length of this codegen.
+        Some(unsafe {
             let kind =
                 LLVMGetEnumAttributeKindForName(attribute.as_ptr(), attribute.to_bytes().len());
-            let value = LLVMCreateEnumAttribute(self.context, kind, 0);
-            LLVMAddAttributeAtIndex(target, index, value);
-        }
+            LLVMCreateEnumAttribute(self.context, kind, 0)
+        })
+    }
+
+    /// Attaches this scalar's C ABI extension at `index` of a **function**.
+    pub(super) fn add_c_extension(&self, function: LLVMValueRef, index: u32, ft: ForeignType) {
+        let Some(attribute) = self.c_extension_attribute(ft) else {
+            return;
+        };
+        // SAFETY: `function` is a live function in this module.
+        unsafe { LLVMAddAttributeAtIndex(function, index, attribute) };
+    }
+
+    /// Attaches this scalar's C ABI extension at `index` of a **call site**.
+    ///
+    /// The call has to carry the same extension the callee's prototype does.
+    /// Without it the callee reads a register whose bits above the value are
+    /// whatever the caller last left there, which is the bug this attribute
+    /// exists to prevent — so a direct C call needs this exactly as much as
+    /// the declaration needs the other.
+    pub(super) fn add_c_extension_to_call(&self, call: LLVMValueRef, index: u32, ft: ForeignType) {
+        let Some(attribute) = self.c_extension_attribute(ft) else {
+            return;
+        };
+        // SAFETY: `call` is a live call instruction on a block in this module.
+        unsafe { LLVMAddCallSiteAttribute(call, index, attribute) };
     }
 
     /// Converts an `i64` bridge payload to the exact C value of a non-CString
