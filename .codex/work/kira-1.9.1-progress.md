@@ -618,3 +618,38 @@ Measured on the merged tree, not carried forward:
   **1478** on `vm` and **1478** on `llvm`, identical case sets, zero failures.
 - Lifecycle harness on all three engines:
   `main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 each.
+
+### The merged tree, measured rather than asserted (2026-09-06)
+`agent/diagnostics-registry` is merged into `agent/integration`, which now carries all four
+substrate branches. The merge itself was records only: every line of code in the branch's last
+commit was already on the integration branch by another route, so the three conflicts were a test
+that had been tightened here, a doc snippet, and this log.
+
+Every number below was read off a run watched to completion on that tree. The pins were re-measured
+rather than carried forward, because the earlier ones in this file had been added up rather than
+observed.
+
+- Harness on `--backend vm`: **1478 passed, 0 failed, 0 skipped, 1478 total**, exit 0.
+- Harness on `--backend llvm`, run separately: **1478 passed, 0 failed, 0 skipped, 1478 total**,
+  exit 0. The two case-name sets are identical — 1478 names, `diff` empty — so the engines collect
+  the same suite and not merely the same count.
+- Lifecycle harness on `vm`, `llvm` and `hybrid`:
+  `main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 on each.
+- FFI harness on `--backend hybrid`: **302 passed, 0 failed, 0 skipped, 302 total**, exit 0. The pin
+  was first written from a static count of `construct` lines; it is now a measurement, and the
+  static count is 303 because `Test.kira` declares the base construct the cases extend.
+- The §1c repro under `timeout 10` on `vm`, `llvm` and `hybrid`: exit 1 on each, well inside the
+  bound, with one sentence between them —
+  `kira: runtime trap: a receive is waiting for a value nothing can send`.
+- `cargo test -p kira-diagnostic-registry`: 10 unit and 5 integration tests, zero failures, over 442
+  codes. The drift gate was proven by making it fail rather than by reading it: a byte appended to
+  `foundation/app/Kira/DiagnosticCodes.kira` and to the generated appendix fails
+  `every_generated_artifact_is_current` and names both files. `-- write` restores them
+  byte-for-byte.
+
+The three pins in `crates/kira-cli/tests/kik_harness.rs` — 1478, 20008, 302 — each already matched
+what the run reports, so none of them moved.
+
+The wasm end-to-end tests are unrunnable on this host: there is no `~/emsdk`, so nothing here can
+build a wasm artifact. `node` is present, so Emscripten is the whole of what is missing. They are
+neither passing nor failing here.
