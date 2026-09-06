@@ -34,6 +34,13 @@ function main() {
     return
 }
 
+// The storage a native-state token names. Boxed before the loop and recovered
+// after it, so the store the token resolves in has to be the same store on both
+// sides of every suspension in between.
+struct LifecycleBox {
+    var carried: Int
+}
+
 // The work a lifecycle orders itself against. Spawned before the loop and
 // joined after it, so the task table has to be the same table on both sides of
 // every suspension in between.
@@ -63,6 +70,12 @@ function counterLifecycle() {
     let tx = Channel<Int>()
     let rx = tx.receiver
     var pending = Task { lifecycleFill(tx) }
+    // A token minted before the first suspension. The value behind it lives in
+    // the host's store rather than on the VM, which is what this reads back to
+    // prove: a store rebuilt per slice would answer nothing here, exactly as a
+    // task table rebuilt per slice refused the join below.
+    let boxed = nativeState(LifecycleBox { carried: 13 })
+    let token = nativeUserData(boxed)
     var total = 0
     var index = 0
     while index < 20000 {
@@ -72,6 +85,8 @@ function counterLifecycle() {
         total = total + 1
         index = index + 1
     }
+    total = total + nativeRecover<LifecycleBox>(token).carried
+    nativeUserDataRelease(token)
     attempt {
         let sent = try rx.receive()
         total = total + sent + pending.await
