@@ -46,3 +46,26 @@ that field** rather than as an aggregate — a C handle struct passed in a
 register. There is no storage in it for a callee to keep, so it is now KSEM371
 and never reaches the rule under test. The carrier gained a second field, which
 makes it a real C-layout aggregate; the assertion is unchanged.
+
+## A defect the Bool fixture found
+
+`ffi_program_bool.kira` returns `struct ffi_flags { _Bool; _Bool; signed char }`
+by value. It is three bytes, and it is the first aggregate result in the corpus
+narrower than a pointer word: every other one is 16 bytes or more, and the
+four-byte `ffi_handle` crosses as its single `U32` field rather than as an
+aggregate.
+
+Libffi writes a whole `ffi_arg` word for a result narrower than one, so the VM
+path allocates `result_size.max(RESULT_WORD)` for it — correctly — and then
+handed the **whole widened buffer** to the lifter. A scalar survived that
+because every scalar arm reads from the front. An aggregate did not: the arm
+compares the slice's length against the declared layout and refused the call
+with
+
+```text
+kira: runtime trap: foreign call failed: foreign aggregate argument 0 carries 8 bytes, expected 3
+```
+
+The native path already truncates to the declared size before handing the value
+back (`call_prepared` copies `result_size` bytes out of the widened buffer), so
+the two paths disagreed. The VM path now truncates the same way.

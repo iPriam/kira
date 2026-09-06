@@ -162,7 +162,7 @@ impl LibffiRuntime {
                 },
             );
         }
-        lift_result(signature.result(), result.as_ref(), aggregates)
+        lift_result(signature.result(), result.as_ref(), result_size, aggregates)
     }
 
     /// Calls a function whose arguments and result already occupy C-layout
@@ -329,12 +329,20 @@ fn write_argument(
 fn lift_result(
     result_spec: ForeignTypeSpec,
     result: Option<&AlignedBytes>,
+    declared: usize,
     aggregates: &ForeignAggregates,
 ) -> Result<ForeignResult, LibffiError> {
     let Some(result) = result else {
         return Ok(ForeignResult::Void);
     };
+    // Libffi writes a whole `ffi_arg` word for a result narrower than one, so
+    // the buffer it filled is wider than the result whenever the declared type
+    // is. The value is the low `declared` bytes of it on every target Kira
+    // builds for, all of which are little-endian, and the rest is the word
+    // libffi rounded up to. Reading the whole buffer instead makes an aggregate
+    // arrive the size of the word rather than the size of the struct.
     let bytes = result.as_slice();
+    let bytes = bytes.get(..declared.min(bytes.len())).unwrap_or(bytes);
     let value = match result_spec {
         ForeignTypeSpec::Scalar(ForeignType::I8) => ForeignResult::I8(bytes[0] as i8),
         ForeignTypeSpec::Scalar(ForeignType::I16) => ForeignResult::I16(i16::from_ne_bytes(
