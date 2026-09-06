@@ -62,11 +62,26 @@ Restored and green again: 5 passed, plus 19 unit tests in
 
 ## Harness
 
-`tests-kik/harness` holds 1475 `Test` constructs at this branch, 10 of them
-`DgxDiagnosticCodeTests.kira`. `crates/kira-cli/tests/kik_harness.rs` pins that
-number.
+`kira test --backend vm tests-kik/harness`, run against this branch's Foundation
+with a compiler built from this branch:
 
-A `foundation/` edit is invisible to `kira test` until `knvm binstall --debug`,
-and the installed dev toolchain was still carrying the hand-written
-`Diagnostics.kira` when this was written. Run the binstall before believing a
-harness result.
+```
+1475 passed, 0 failed, 0 skipped, 1475 total
+```
+
+All ten `Dgx` cases ran and passed. `crates/kira-cli/tests/kik_harness.rs` pins
+1475, up from 1465.
+
+The run reaching those cases at all is the proof that the generated Foundation
+was the one in use: `DgxCodesTheHandWrittenRegistryMissed` names `.KPAR043`,
+`.KSEM255`, `.KSEM312` and five more that the hand-written `KiraError` never
+declared, so the old Foundation could not have compiled the harness.
+
+`knvm binstall --debug` cannot complete on this host. It cross-builds the
+runtime archive for `wasm32-unknown-emscripten`, that target is not installed,
+and there is no emsdk, so it fails after the host build with `E0463: can't find
+crate for std`. The harness was therefore run the way
+`crates/kira-cli/tests/kik_harness.rs` runs it, with `KIRA_FOUNDATION_HOME`
+naming the checkout's `foundation/` rather than an installed toolchain's. That
+test pins Foundation deliberately: an installed toolchain's Foundation is not
+the one under test.
