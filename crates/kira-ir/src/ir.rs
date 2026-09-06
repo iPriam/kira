@@ -182,12 +182,7 @@ impl IrProgram {
                 .get(*slot as usize)
                 .copied()
                 .unwrap_or(Type::Error),
-            IrExpr::Unary { op, ty, .. } => match op {
-                IrUnOp::NegInt => *ty,
-                IrUnOp::NegFloat => Type::FLOAT,
-                IrUnOp::Not => Type::Bool,
-                IrUnOp::BitNot => Type::INT,
-            },
+            IrExpr::Unary { op, ty, .. } => unary_result_type(*op, *ty),
             IrExpr::Binary { op, ty, .. } => match binop_result(*op) {
                 Type::INT => *ty,
                 other => other,
@@ -601,6 +596,23 @@ mod exprs;
 /// Re-exported flat: `kira_ir::ir::IrExpr` is where every consumer already
 /// names it, and which file it is written in is this crate's business.
 pub use exprs::{IrCallee, IrExpr};
+
+/// What a unary operator applied to an operand of `ty` produces.
+///
+/// Every backend has to agree on this, and the one that decides it for itself
+/// is the one that diverges: the VM used to range-check `~` at the operand's
+/// written width, which made `~U8(0)` a trap there and `-1` on native. A
+/// bitwise operator acts on the raw 64 bits and answers `Int`, so there is no
+/// narrower width for the result to leave.
+#[must_use]
+pub fn unary_result_type(op: IrUnOp, ty: Type) -> Type {
+    match op {
+        IrUnOp::NegInt => ty,
+        IrUnOp::NegFloat => Type::FLOAT,
+        IrUnOp::Not => Type::Bool,
+        IrUnOp::BitNot => Type::INT,
+    }
+}
 
 #[cfg(test)]
 mod tests {

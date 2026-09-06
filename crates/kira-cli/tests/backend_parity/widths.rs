@@ -491,3 +491,35 @@ function main() {
     );
     assert_eq!(output, "253\n253\ntrue\n");
 }
+
+/// A bitwise complement acts on the raw 64 bits and answers `Int`, whatever
+/// width it was handed.
+///
+/// The VM used to range-check the result at the *operand's* written width, so
+/// `~U8(0)` trapped there and answered `-1` on native — the two engines
+/// disagreeing about a one-token expression. The result type is the IR's, and
+/// both backends now read it from the same place.
+#[test]
+fn a_complement_answers_int_at_every_width() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let byte: U8 = 0
+    let half: U16 = 0
+    let word: U32 = 0
+    let long: U64 = 0
+    print(~byte)
+    print(~half)
+    print(~word)
+    print(~long)
+    let full: U8 = 255
+    print(~full)
+    let n: Int = 5
+    print(~(~n))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "-1\n-1\n-1\n-1\n-256\n5\n");
+}

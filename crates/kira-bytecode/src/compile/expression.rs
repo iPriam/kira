@@ -49,7 +49,10 @@ impl FnCompiler<'_> {
                 let (op, operand, ty) = (*op, *operand, *ty);
                 self.compile_expr(operand)?;
                 self.code.push(unary_instruction(op));
-                self.check_width(ty);
+                // The operator's *result* type, not its operand's: `~` answers
+                // `Int` whatever width it was handed, and checking the operand's
+                // width here is what made the VM trap where native did not.
+                self.check_width(kira_ir::unary_result_type(op, ty));
             }
             IrExpr::Binary { op, lhs, rhs, ty } => self.compile_binary(*op, *lhs, *rhs, *ty)?,
             IrExpr::Select {

@@ -153,3 +153,57 @@ construct NwxLiteralAdaptsToEitherSide() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(253005) return e }
 }
+
+// --- Bitwise complement at a written width ----------------------------------
+// `~` acts on the raw 64 bits and answers `Int`, whatever width it was handed,
+// so there is no narrower range for its result to leave. Range-checking it at
+// the operand's width is what made `~U8(0)` a trap on the VM while native
+// answered -1; nothing here may differ between engines.
+
+construct NwxComplementOfAUnsignedByteIsMinusOne() extends Test {
+    test {
+        let byte: U8 = 0
+        return ~byte
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
+}
+
+construct NwxComplementOfAUnsignedHalfIsMinusOne() extends Test {
+    test {
+        let half: U16 = 0
+        return ~half
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
+}
+
+construct NwxComplementOfAUnsignedWordIsMinusOne() extends Test {
+    test {
+        let word: U32 = 0
+        return ~word
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
+}
+
+construct NwxComplementOfAUnsignedLongIsMinusOne() extends Test {
+    test {
+        let long: U64 = 0
+        return ~long
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
+}
+
+construct NwxComplementOfAFullByteIsMinusTwoFiftySix() extends Test {
+    test {
+        let byte: U8 = 255
+        return ~byte
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 256) return e }
+}
+
+construct NwxComplementOfAPlainIntIsItsOwnInverse() extends Test {
+    test {
+        let n: Int = 5
+        return ~(~n)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}

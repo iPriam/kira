@@ -262,11 +262,14 @@ fn introduced_names(template: &str, fragments: &[crate::registry::Fragment]) -> 
 /// B` is preceded by a colon rather than by a name.
 ///
 /// The block does not, because `if ready(flag) { … }` is that shape too. What
-/// separates the arm is that it *starts a statement* — an arm is written on its
-/// own line, while the condition of an `if` or a `while` follows the keyword on
-/// the same one. Renaming a condition's argument would rewrite a name the
-/// caller owns, so the block form asks for the line break and the arrow form
-/// does not need to.
+/// separates the arm is that it *begins a statement*, and what a statement
+/// begins after is a brace — the `handle {` that opens the arm list, or the `}`
+/// that closed the arm before it — or a line break. A condition begins after
+/// `if` or `while` instead, which is neither.
+///
+/// Asking for the line break alone would miss `handle { TooBig(reason) { … } }`
+/// written on one line, which the parser accepts and a program is as likely to
+/// write as the spread-out form.
 fn is_arm_payload(file: &Lexed<'_>, open: usize) -> bool {
     if open == 0 || !file.is_ident(open - 1) {
         return false;
@@ -276,9 +279,21 @@ fn is_arm_payload(file: &Lexed<'_>, open: usize) -> bool {
     }
     match file.kind(open + 3) {
         TokenKind::Arrow => true,
-        TokenKind::LBrace => file.newline_before(open - 1),
+        TokenKind::LBrace => begins_a_statement(file, open - 1),
         _ => false,
     }
+}
+
+/// Whether the token at `index` is the first of a statement.
+///
+/// A brace on either side opens one, and so does a line break; nothing else
+/// does, which is what keeps the call in `if ready(flag) { … }` out.
+fn begins_a_statement(file: &Lexed<'_>, index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    matches!(file.kind(index - 1), TokenKind::LBrace | TokenKind::RBrace)
+        || file.newline_before(index)
 }
 
 /// The parameters of the closure opening at `open`, or nothing when the `{` is
@@ -407,6 +422,43 @@ mod tests {
             text.contains("Failed(__kmac_reason_1) { print((reason)) }"),
             "{text}"
         );
+    }
+
+    /// Handler arms are whitespace-insensitive, so the payload binds the same
+    /// way with the whole `handle` written on one line. Asking for a line break
+    /// would leave the binder unrenamed in the spelling a program is most
+    /// likely to write.
+    #[test]
+    fn a_same_line_handle_arm_payload_is_hygienic() {
+        let (text, diagnostics) = expand_all(
+            "macro orElse(fallback: expr) {\n    expand {\n\
+             attempt { let v = try read()\nprint(v) } handle { Failed(reason) { print(fallback) } }\n\
+             }\n}\n\
+             function f() {\n    let reason = 7\n    orElse!(reason)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            text.contains("Failed(__kmac_reason_1) { print((reason)) }"),
+            "{text}"
+        );
+    }
+
+    /// Two arms on one line each bind their own payload.
+    #[test]
+    fn every_arm_on_a_shared_line_binds_its_own_payload() {
+        let (text, diagnostics) = expand_all(
+            "macro pick(a: expr, b: expr) {\n    expand {\n\
+             attempt { let v = try read()\nprint(v) } handle { Small(n) { print(a) } Big(n) { print(b) } }\n\
+             }\n}\n\
+             function f() {\n    let n = 7\n    pick!(n, n)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        // The declaration itself is still in the returned text, so the check is
+        // that the *expansion* renamed both arms rather than that the original
+        // spelling is absent.
+        let expansion = text.split("function f()").nth(1).expect("the call site");
+        assert!(expansion.contains("Small(__kmac_n_1)"), "{expansion}");
+        assert!(expansion.contains("Big(__kmac_n_1)"), "{expansion}");
     }
 
     /// A closure's parameters are bindings too, so a template that writes one

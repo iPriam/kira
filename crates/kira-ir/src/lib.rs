@@ -24,6 +24,7 @@ mod tasks;
 pub use ir::{
     ConvertKind, IrAttempt, IrAttemptStep, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId,
     IrForeignImport, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp, IrWriteback,
+    unary_result_type,
 };
 pub use lower::lower;
 

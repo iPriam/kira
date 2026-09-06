@@ -551,3 +551,23 @@ construct MxxAClosureParameterDoesNotCaptureAFragment() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(31) return e }
 }
+
+// Handler arms are whitespace-insensitive: the payload binds the same way with
+// the whole `handle` on one line, which is the spelling a program is most
+// likely to write. Asking for a line break would leave this binder unrenamed.
+macro mxSameLineHandlerPayload(value: expr) {
+    expand {
+        attempt { let got = try mxReadFails()
+            answer = got } handle { Missing(reason) { answer = value } }
+    }
+}
+
+construct MxxASameLineHandlerPayloadDoesNotCaptureAFragment() extends Test {
+    test {
+        let reason = 6
+        var answer = 0
+        mxSameLineHandlerPayload!(reason)
+        return answer
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
+}
