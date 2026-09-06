@@ -554,3 +554,8 @@ trapping worded as one kind of thing — so a trap arrived as `kira: a receive i
 waiting…` with the two words that name it as a trap missing.
 `kira_hybrid_runtime` already separates the last case as `HybridError::Trap`;
 `HybridError::report` reads that distinction rather than flattening it.
+
+Harness on `--backend vm`: **1468 passed, 0 failed, 0 skipped, 1468 total**,
+which is the pin. All ten `Chx` cases pass, including the three added this
+slice: the bare deadlock, the cancelled filler that leaves the receive
+unanswerable, and the cancelled filler that does not stop a live sibling.
