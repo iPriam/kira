@@ -186,10 +186,8 @@ impl Codegen<'_> {
         // SAFETY: `target` is a live call or function in this module and the
         // attribute kind is a string LLVM copies.
         unsafe {
-            let kind = LLVMGetEnumAttributeKindForName(
-                attribute.as_ptr(),
-                attribute.to_bytes().len(),
-            );
+            let kind =
+                LLVMGetEnumAttributeKindForName(attribute.as_ptr(), attribute.to_bytes().len());
             let value = LLVMCreateEnumAttribute(self.context, kind, 0);
             LLVMAddAttributeAtIndex(target, index, value);
         }

@@ -75,7 +75,6 @@ pub unsafe fn read_bytes(address: u64, offset: u32, size: u32) -> Option<[u8; 8]
     Some(word)
 }
 
-
 /// The byte a Kira `Bool` crosses the C seam as: `1` for `true`, `0` for
 /// `false`, and no other value.
 ///

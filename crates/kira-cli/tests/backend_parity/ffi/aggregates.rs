@@ -23,7 +23,9 @@ use super::*;
 /// side out of fields Kira wrote, that the bytes arrived where C expected them.
 #[test]
 fn every_backend_agrees_on_c_layout_structs_by_value() {
-    let entry = write_ffi_package(include_str!("../../fixtures/ffi/ffi_program_aggregate.kira"));
+    let entry = write_ffi_package(include_str!(
+        "../../fixtures/ffi/ffi_program_aggregate.kira"
+    ));
 
     // rect_sum(1.5, 2.5); rect_scale by 2; quad_sum(1+2+3+4); quad_make's first
     // and last; outer_sum(3+4+5) through a nested struct; outer_make's three
@@ -195,7 +197,9 @@ fn every_backend_agrees_on_an_array_named_in_a_c_layout_member() {
 /// how many C reads.
 #[test]
 fn every_backend_agrees_on_an_item_list_behind_one_pointer() {
-    let entry = write_ffi_package(include_str!("../../fixtures/ffi/ffi_program_item_list.kira"));
+    let entry = write_ffi_package(include_str!(
+        "../../fixtures/ffi/ffi_program_item_list.kira"
+    ));
 
     // Three items by argument, one by argument, two of a four-slot extent, and
     // two named inside a descriptor whose member is an `@FFI.Pointer`.
