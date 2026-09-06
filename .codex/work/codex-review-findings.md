@@ -67,7 +67,17 @@ The engines agree, so this is not a divergence either — it is agreement on the
 wrong answer, on both paths, and the finding's diagnosis of the LLVM path is
 right about the cause.
 
-## 4. Parsing the minimum Int overflows — see below
+## 4. Parsing the minimum Int overflows — FIXED
+
+`foundation/app/SerdeText.kira` accumulated the positive magnitude and applied
+the sign afterwards. The magnitude of the most negative Int is one past the most
+positive one, so `-9223372036854775808` overflowed on the way in — on its own
+round trip, through checked arithmetic that traps.
+
+Accumulating downward instead reaches every value of the type. A positive value
+too large to hold still traps, on the negation at the end, which is where the
+overflow actually is. Three constructs in `DnxDistinctTests.kira` cover the two
+bounds and the ordinary values around zero.
 
 ## 5. Same-line handler payloads missed by the hygiene fix — FIXED
 
@@ -81,4 +91,35 @@ from `if ready(flag) { … }`, whose call follows a keyword. Two unit tests, one
 for the single-arm form and one for two arms sharing a line, and a harness
 construct for the same-line spelling specifically.
 
-## 6, 7. File-size ceiling violations — see below
+## 6, 7. File-size ceiling violations — FIXED
+
+AGENTS.md: never leave a `.rs` file at or above 1000 lines, and split into
+cohesive 300-500 line modules preserving APIs, behavior and layering.
+
+`crates/kira-vm-runtime/src/lib.rs` was 1,163 lines, of which 1,090 were one
+inline `mod tests`. The crate already keeps its test modules in their own files
+(`compiler_tests.rs`, `release_tests.rs`, and four more), so the split follows
+what was there rather than inventing a scheme: `vm_test_support.rs` for the two
+fixtures every module needs, then `debug_tests.rs`, `native_seam_tests.rs`,
+`numeric_tests.rs` and `program_tests.rs` grouped by what they exercise. The
+crate root is 90 lines and the same 116 tests pass.
+
+`crates/kira-macros/src/decl.rs` was 1,074 lines doing three jobs. Split the way
+`eval.rs` already splits: `decl/model.rs` holds what a macro is handed when it
+reflects, `decl/scan.rs` holds the locating scan, and `decl.rs` keeps the entry
+points and the tests. 143 tests pass.
+
+The split exposed a pre-existing documentation defect: `scan_distinct`'s doc
+comment sat above `starts_declaration`, so one function carried another's
+explanation and `scan_distinct` had none. Each now documents itself.
+
+No file in the repository is at or above 1000 lines.
+
+## What the review changed about how the rest was done
+
+Three of the seven findings were framed as VM/native divergences and one was.
+The other two were agreement — in finding 1 on the right answer, in finding 3 on
+a wrong one. That distinction is only visible by running both engines, and the
+parity suite cannot see finding 3 at all, because agreement on a wrong answer
+reads exactly like agreement on a right one. Each finding here was measured
+before it was accepted.
