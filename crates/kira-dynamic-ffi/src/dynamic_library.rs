@@ -59,11 +59,27 @@ pub struct DynamicLibrary {
     inner: Backend,
 }
 
+/// A library handle that is never closed.
+///
+/// A native library may start a thread — a networking library with an async
+/// runtime does it the moment it is first called — and that thread runs the
+/// library's own code. Closing the library while one is still in it unmaps the
+/// code out from under it, and the thread faults on whichever instruction it
+/// reaches next, at a moment with no relation to what the program was doing.
+/// POSIX says the same: unloading a library whose code is still executing is
+/// undefined.
+///
+/// Nothing is lost by keeping it. This process never reloads a library it
+/// closed, and the toolchain already declines to tear its own address space
+/// down on the way out for the same reason — see
+/// `kira_toolchain::process::exit`, which says so in as many words.
+type HeldLibrary = std::mem::ManuallyDrop<libloading::Library>;
+
 enum Backend {
     /// A separately loaded shared library.
-    Library(libloading::Library),
+    Library(HeldLibrary),
     /// Symbols resolved from the current process image.
-    Process(libloading::Library),
+    Process(HeldLibrary),
     /// Process-image lookup is unavailable on the current target.
     ProcessUnavailable,
 }
@@ -73,7 +89,7 @@ impl DynamicLibrary {
     pub fn open(path: &std::path::Path) -> Result<DynamicLibrary, FfiError> {
         let library = open_native(path).map_err(FfiError::NativeLibraryLoadFailed)?;
         Ok(DynamicLibrary {
-            inner: Backend::Library(library),
+            inner: Backend::Library(std::mem::ManuallyDrop::new(library)),
         })
     }
 
@@ -207,7 +223,7 @@ fn process_image() -> Result<libloading::Library, FfiError> {
 /// instead of a separate shared object.
 fn open_process_handle() -> DynamicLibrary {
     let inner = match process_image() {
-        Ok(library) => Backend::Process(library),
+        Ok(library) => Backend::Process(std::mem::ManuallyDrop::new(library)),
         Err(_) => Backend::ProcessUnavailable,
     };
     DynamicLibrary { inner }
