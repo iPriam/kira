@@ -569,3 +569,12 @@ Lifecycle harness on `vm`, `llvm`, and `hybrid`: identical output
 `20008` is the loop's own 20000 plus the 7 the channel carried and the 1 the
 task returned, so a lifecycle that lost either row at a slice boundary could
 not print it.
+
+`cargo test -p kira-cli --test backend_parity`: **455 passed, 0 failed**, 882s.
+That is the handoff's 454 plus `a_receive_nothing_can_answer_traps_on_every_backend`,
+which now asserts the trap's sentence and not only its exit status, on vm, llvm,
+and hybrid alike.
+
+The suite had never compiled on this branch: `assert_trap_message_parity` was
+added to the harness and called from `tasks.rs` without being imported there.
+Running it is what found that.
