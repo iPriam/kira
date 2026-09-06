@@ -354,6 +354,11 @@ impl Context {
         // SysV and Win64 both enter a function with RSP eight bytes off the
         // 16-byte call-site alignment. Leave one unused word above the seeded
         // return address so the synthetic `ret` establishes that shape.
+        //
+        // SAFETY: `stack_top` is the end of an allocation of at least sixteen
+        // bytes, so stepping back sixteen stays inside it; the result is
+        // 16-byte aligned because `stack_top` is, which is the alignment
+        // `usize` needs.
         let pointer = unsafe { stack_top.sub(16).cast::<usize>() };
         // SAFETY: the stack slot reserves at least sixteen writable bytes.
         unsafe { pointer.write(fiber_bootstrap as *const () as usize) };
