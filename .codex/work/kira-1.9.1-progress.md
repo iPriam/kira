@@ -609,3 +609,12 @@ Measured on the merged tree, not carried forward:
 - FFI harness on `--backend hybrid`: **302 passed, 0 failed, 0 skipped, 302
   total**. The pin was written from a static count of `construct` lines; it
   happens to be right, and is now a measurement.
+- The registry's drift test failed on the merged tree, which is what it is for:
+  the FFI substrate added `KSEM368`-`KSEM371` to the code table while the
+  generated artifacts had been written before those existed. Regenerated, 438
+  entries become 442, and the test passes. Neither branch could have caught
+  this alone.
+- Harness re-run after that regeneration, because it rewrites Foundation:
+  **1478** on `vm` and **1478** on `llvm`, identical case sets, zero failures.
+- Lifecycle harness on all three engines:
+  `main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 each.
