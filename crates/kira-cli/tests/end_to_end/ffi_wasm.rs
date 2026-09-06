@@ -17,8 +17,14 @@ use std::process::Command;
 use crate::ffi::{HOST_MANIFEST, build_host_archive, scratch};
 
 /// The scalar subset's output, line for line.
-const EXPECTED: &str =
-    "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n42\n0\n7\n";
+///
+/// The `1` and `0` after `false` are the bytes a `_Bool` argument crossed as,
+/// and the three lines before `7` are the null written rather than cast and
+/// compared. Both are the wasm half of rules the host suites prove: on wasm the
+/// backend calls the C symbol directly, so the C ABI's extension of a narrow
+/// scalar is Kira's to write rather than libffi's to apply.
+const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n1\n0\n\
+     3.75\n1.75\n42\n0\n0\ntrue\nfalse\n7\n";
 
 /// The string program's output, line for line.
 const EXPECTED_STRINGS: &str = "catdog\n6\n99\natd\n3\n42!\n5\n6\nhello from C\nround trip\n";

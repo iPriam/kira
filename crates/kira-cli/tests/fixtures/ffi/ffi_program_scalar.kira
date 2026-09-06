@@ -31,6 +31,13 @@ function idU64(x: U64) -> U64
 @FFI.Extern { library: ffifixture, symbol: ffi_not, abi: c }
 function notBool(b: Bool) -> Bool
 
+// The byte a `_Bool` argument actually crossed as, read back out of the
+// parameter object. A narrow scalar is passed in a wider register and the
+// wasm C ABI says the caller extends it, so this is where a missing
+// extension shows up as a number rather than as a flag that stayed true.
+@FFI.Extern { library: ffifixture, symbol: ffi_bool_byte, abi: c }
+function boolByte(b: Bool) -> U8
+
 @FFI.Extern { library: ffifixture, symbol: ffi_add_f32, abi: c }
 function addF32(a: F32, b: F32) -> F32
 
@@ -62,10 +69,16 @@ function loadCell() -> I32
     print(addI64(1000, 975))
     print(idU64(5000000000))
     print(notBool(true))
+    print(boolByte(true))
+    print(boolByte(false))
     print(addF32(1.5, 2.25))
     print(addF64(1.5, 0.25))
     print(ptrWord(makePtr()))
     print(ptrWord(nullPtr()))
+    // The null written rather than cast, and the comparison that reads it.
+    print(ptrWord(RawPtr.null))
+    print(nullPtr() == RawPtr.null)
+    print(makePtr() == RawPtr.null)
     storeCell(7)
     print(loadCell())
     return
