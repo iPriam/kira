@@ -513,7 +513,7 @@ fn a_bare_bundle_import_loads_every_file_in_the_bundle() {
 #[test]
 fn a_program_past_the_module_limit_is_refused_rather_than_truncated() {
     // One `main` importing every other module, so the walk reaches them all.
-    let count = crate::assembly::MAX_MODULES;
+    let count = assembly::MAX_MODULES;
     let mut modules: Vec<(String, String)> = Vec::new();
     let imports: String = (1..count)
         .map(|index| format!("import m{index}\n"))
@@ -533,7 +533,7 @@ fn a_program_past_the_module_limit_is_refused_rather_than_truncated() {
     let text = std::fs::read_to_string(&entry).expect("the entry file");
 
     // `main` plus `count - 1` imports is exactly the limit.
-    let at_limit = crate::assembly::load_program(&entry, &text).expect("a program at the limit");
+    let at_limit = load_program(&entry, &text).expect("a program at the limit");
     assert_eq!(at_limit.modules.len() + 1, count);
 
     // One more module puts the program over it.
@@ -544,12 +544,9 @@ fn a_program_past_the_module_limit_is_refused_rather_than_truncated() {
     .expect("write the extra module");
     let over_text = format!("import over\n{text}");
     std::fs::write(&entry, &over_text).expect("rewrite the entry");
-    let refused = crate::assembly::load_program(&entry, &over_text);
+    let refused = load_program(&entry, &over_text);
     assert!(
-        matches!(
-            refused,
-            Err(crate::assembly::AssemblyError::TooManyModules { .. })
-        ),
+        matches!(refused, Err(AssemblyError::TooManyModules { .. })),
         "a program past the limit must be refused"
     );
 }

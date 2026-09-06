@@ -307,8 +307,8 @@ fn is_and_as_parse_with_a_type_on_the_right() {
     let mut casts = 0;
     for (_, expr) in result.tree.exprs() {
         match expr {
-            kira_syntax_model::ast::Expr::TypeTest { .. } => tests += 1,
-            kira_syntax_model::ast::Expr::TypeCast { .. } => casts += 1,
+            Expr::TypeTest { .. } => tests += 1,
+            Expr::TypeCast { .. } => casts += 1,
             _ => {}
         }
     }

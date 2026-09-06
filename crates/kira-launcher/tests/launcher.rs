@@ -296,7 +296,7 @@ fn write_fixture_language_server(
 /// tests running at once, not about the launcher — so it is waited out rather
 /// than reported as the launcher refusing to run.
 #[cfg(unix)]
-fn run_executable(command: &mut std::process::Command) -> std::process::Output {
+fn run_executable(command: &mut std::process::Command) -> Output {
     for _ in 0..100 {
         match command.output() {
             Err(error) if error.raw_os_error() == Some(libc_etxtbsy()) => {

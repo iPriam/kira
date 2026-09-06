@@ -392,7 +392,7 @@ fn a_cast_under_try_is_handled_like_any_other_failure() {
                          return\n\
                      }";
     assert!(
-        codes(&unhandled).contains(&"KSEM139".to_owned()),
+        codes(unhandled).contains(&"KSEM139".to_owned()),
         "{:?}",
         codes(unhandled)
     );
@@ -407,7 +407,7 @@ fn a_cast_under_try_is_handled_like_any_other_failure() {
                      return\n\
                  }";
     assert!(
-        codes(&loose).contains(&"KSEM137".to_owned()),
+        codes(loose).contains(&"KSEM137".to_owned()),
         "{:?}",
         codes(loose)
     );

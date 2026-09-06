@@ -444,11 +444,14 @@ mod tests {
         }
     }
 
+    /// A program to run and the trap it must raise.
+    type TrapCase = (Vec<I>, fn(&VmError) -> bool);
+
     /// Checked arithmetic traps where the wrapping opcodes wrap, and a width
     /// check refuses a 64-bit result the written width cannot hold.
     #[test]
     fn checked_arithmetic_and_width_checks_trap() {
-        let cases: Vec<(Vec<I>, fn(&VmError) -> bool)> = vec![
+        let cases: Vec<TrapCase> = vec![
             (
                 vec![I::ConstInt(i64::MAX), I::ConstInt(1), I::AddIntChecked],
                 |e| matches!(e, VmError::IntegerOverflow { .. }),
