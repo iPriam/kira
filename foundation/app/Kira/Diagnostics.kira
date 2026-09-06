@@ -395,6 +395,10 @@ enum KiraError {
     KSEM365
     KSEM366
     KSEM367
+    KSEM368
+    KSEM369
+    KSEM370
+    KSEM371
     KSEM900
 
     // HIR and IR lowering.
