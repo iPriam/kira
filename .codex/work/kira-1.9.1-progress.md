@@ -559,3 +559,7 @@ Harness on `--backend vm`: **1468 passed, 0 failed, 0 skipped, 1468 total**,
 which is the pin. All ten `Chx` cases pass, including the three added this
 slice: the bare deadlock, the cancelled filler that leaves the receive
 unanswerable, and the cancelled filler that does not stop a live sibling.
+
+Harness on `--backend llvm`: **1468 passed, 0 failed, 0 skipped, 1468 total**,
+the same tally over an identical set of case names. The two engines collect and
+pass the same 1468 cases.
