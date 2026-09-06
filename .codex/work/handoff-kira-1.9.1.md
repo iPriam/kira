@@ -6,76 +6,46 @@ badly stale: it still listed Serde, tasks, and macros as untouched.
 Read `.codex/work/kira-1.9.1-progress.md` for the per-slice narrative. This
 file is the state of the tree and what to do next.
 
-## 1. Tree state: DIRTY, with working but unverified code
+## 1. Tree state: clean, merged, and measured
 
-Last commit: `d3dab68 Bring the live fixtures to the required-comma grammar`.
+Everything below is on `main` and pushed. The four `agent/*` branches the work
+was split across are merged and no longer used; `main` carries all of it.
 
-29 uncommitted paths. Five are new files:
+The channel surface, the deadlock trap, the FFI/ABI seam and the generated
+diagnostics registry are integrated. Every suite was re-measured on the merged
+tree rather than carried forward from the branch it was measured on, which
+mattered: `backend_parity` had moved from 455 to 457 under a merge that touched
+none of its files.
 
-- `crates/kira-semantics-model/src/channel.rs`
-- `crates/kira-semantics/src/typeck/channels.rs`
-- `crates/kira-semantics/src/tests/channels.rs`
-- `crates/kira-ir/src/channels.rs`
-- `tests-kik/harness/app/ChxChannelTests.kira`
+Measured on the merged tree, each run watched to completion:
 
-The uncommitted work is two things: the channel **language surface**, which was
-fully verified before the last edits, and a **deadlock fix** on top of it, which
-compiles but was never run.
+- Harness on `--backend vm` and on `--backend llvm`, run separately: **1497**
+  each, over identical case-name sets.
+- Lifecycle harness on `vm`, `llvm` and `hybrid`:
+  `main-thread-lifecycle / 42 / manual-main-thread / 20008`, exit 0 on each.
+- FFI harness on `--backend hybrid`: **302**.
+- `cargo test -p kira-cli --test backend_parity`: **457**, zero failures.
+- `cargo test -p kira-diagnostic-registry`: 10 unit and 5 integration, over
+  **443** codes. The drift gate was proven by making it fail, not by reading it.
+- The receive-nothing-can-answer repro traps on all three engines inside
+  `timeout 10`, one sentence between them.
 
-### 1a. The channel surface (verified, then edited)
+The pins in `crates/kira-cli/tests/kik_harness.rs` are 1497, 20008 and 302, each
+matching what the run reports.
 
-Verified green before the deadlock edit: harness 1465 on VM and LLVM, parity
-454/454, ten semantics tests, VM/LLVM/hybrid all printing identically.
+The wasm end-to-end tests are unrunnable on the development host: there is no
+`~/emsdk`, so nothing there can build a wasm artifact. `node` is present, so
+Emscripten is the whole of what is missing. In CI they run everywhere except
+windows-11-arm, where upstream Emscripten publishes no arm64 SDK and the Web
+pipeline is skipped by a matrix flag rather than failed.
 
-### 1b. The deadlock fix (compiles, UNVERIFIED)
+### The one thing not green
 
-`receive()` on an empty channel with nothing runnable **hung forever**. Proven
-with a 10s timeout: exit 124. The wait loop yielded, nothing was runnable, the
-poll stayed `EMPTY`, repeat.
-
-The fix, all written and `cargo check --workspace` clean:
-
-- `ChannelPrim::Deadlock` (wire byte 6) and `ChannelTrap::Deadlock` in
-  `crates/kira-runtime-abi/src/channels.rs`. Its unit tests pass, 15/15.
-- A synthesized `__kira_channel_step() -> Int` in `crates/kira-ir/src/channels.rs`
-  that runs one queued task and answers whether there was one.
-- The receive loop raises `Deadlock` when nothing ran and the channel is still
-  empty and open. Trap rather than hang, and deliberately not `Closed`, which
-  would tell the program the sender went away when it did not.
-- `crates/kira-ir/src/lower.rs` passes `TaskFns::STEP` instead of `YIELD` and
-  offsets receiver callees by `channels::STEP_HELPERS`.
-
-**What was never run after this edit:** the CLI build, `knvm binstall`, the hang
-repro, the harness, and parity. A background `cargo build -p kira-cli -p
-kira-native-bridge` was still compiling when the session ended.
-
-### 1c. First thing to do
-
-```
-cargo build -p kira-cli -p kira-native-bridge
-knvm binstall --debug
-```
-
-Then re-run the hang repro, which must now trap instead of hanging:
-
-```kira
-import Foundation
-@Main function main() {
-    let tx = Channel<Int>()
-    let rx = tx.receiver
-    attempt { let v = try rx.receive() print(v) }
-    handle { Closed { print(77) } }
-    return
-}
-```
-
-Expect `kira: runtime trap: a receive is waiting for a value nothing can send`.
-Bound it with `timeout 10` so a regression is a failure rather than a hang.
-
-Then: `cd tests-kik/harness && kira test --backend vm` (expect **1465**), the
-same on `--backend llvm`, then `cargo test -p kira-cli --test backend_parity`
-(expect **454**). Add a harness construct for the deadlock trap before
-committing; there is none yet, and `ChxChannelTests.kira` is where it goes.
+`kira live` on x86_64 Linux cannot link its bundle: the static libffi archive is
+not position-independent. Three end-to-end tests fail on it. The diagnosis and
+the fix are in section 7 — it is a one-line change to a workflow in
+`kira-lang-com/libffi` plus a republish of the release assets, and it is not
+fixable from inside this repository.
 
 ## 2. What the channel feature is
 
@@ -136,12 +106,12 @@ A-O as ground truth. Corrected mapping:
 | 5 | `Any` / runtime types | Mostly: `.type`, `is`/`as`, `try … as`. Hybrid existential writeback checks open |
 | 6 | Nominal identity | Mostly: package-qualified identity, `TypeCastError`. Box Drop metadata open |
 | 7 | Generic compat / NativeState refcount | Refcount done, widening removal done. **Generic inference rewrite not started** |
-| 8 | Traits / async / tasks | Done: `CallableSignature`, contract diffs, generation-tagged handles, channels |
+| 8 | Traits / async / tasks | Done: `CallableSignature`, contract diffs, generation-tagged handles, channels. Channel payloads are still one machine word; heap payloads open |
 | 9 | Classes | Barely started: only the `KSEM357` specialization cap |
 | 10 | Ownership / Copy / Drop | Partial: `copy` vs `@Derive(Copy)` split, drop order. All-path release open |
-| 11 | comptime / macros | Partial: `Identifier()`, `KMAC014`, splices, comptime `substring`. **Visibility and hygiene not started** |
+| 11 | comptime / macros | Done: `Identifier()`, `KMAC014`, splices, comptime `substring`, hygiene over every binding form (`match`/`handle` payloads and closure parameters, not only `let`/`var`/`for`), and one-name-one-declaration inside a scope (`KMAC031`) |
 | 12 | Derives / Serde grammar | Done |
-| 13 | FFI / ABI / target model | Not started |
+| 13 | FFI / ABI / target model | Done and merged: Bool ABI at the C seam, `RawPtr.null` as a member, FFI validation, and a foreign result read at its own size rather than the word libffi rounded it to. Verified on the merged tree: ffi harness 302 on hybrid |
 | 14 | C layout / Web shims | Not started |
 | 15 | Hot reload / ABI versions | Partial: ABI bumped to 15 with the guard proven. Migration not started |
 | 16 | KIK parity / tooling / diagnostics registry | Registry done: `diagnostic-codes.tsv` is the table, `kira-diagnostic-registry` writes `KiraError`, `kiraErrorFromCode`, and the appendix from it, and its tests fail on drift. It was 290 listed against 438 emitted, 129 in common: 309 codes a program could not name, 161 names for codes nothing emits, and 3 more (`KLEX004`-`006`) the enum listed but the lookup never answered |
@@ -153,23 +123,19 @@ unions, versioned hot state migration, annotation-driven schema evolution.
 
 ## 4. Suggested next work, in disjoint substrates
 
-These barely share files, so they parallelize cleanly:
+Everything the previous handoff listed here is done and merged: the diagnostics
+registry (step 16), the FFI/ABI seam (step 13), and macro visibility and hygiene
+(step 11). What is left, roughly largest first:
 
-- ~~**Diagnostics registry generation** (step 16).~~ Done on
-  `agent/diagnostics-registry`. The table is
-  `crates/kira-diagnostic-messages/diagnostic-codes.tsv`;
-  `cargo run -p kira-diagnostic-registry -- write` rewrites the two Kira files
-  and `sites/docs/.../diagnostics/codes.mdx`, and `-- check` reports drift.
-  A new code needs a row in the table or `cargo test -p
-  kira-diagnostic-registry` fails naming it.
-- **FFI / ABI / target model** (step 13). Bool ABI, `RawPtr.null`, FFI
-  validation. Substrate: `crates/kira-semantics/src/foreign/`,
-  `crates/kira-native-bridge/`, `tests-kik/ffi-harness/`.
-- **Macro visibility and hygiene** (step 11). Substrate: `crates/kira-macros/`.
+- **Heap payloads for channels** (section O). The rule is `KSEM365` and the
+  shape is settled — see section 2. It is the one piece of the channel feature
+  still missing, and the only remaining work that touches the runtime ABI.
+- **Classes** (step 9), barely started: only the `KSEM357` specialization cap.
+- **The generic inference rewrite** (step 7), not started.
+- **Hot state migration** (step 15), and **C layout / Web shims** (step 14).
 
-Classes (step 9) and the generic inference rewrite (step 7) are the other large
-untouched blocks, but both sit in `kira-semantics` and would collide with each
-other and with the FFI work.
+Classes and the generic inference rewrite both sit in `kira-semantics` and would
+collide with each other.
 
 ## 5. Environment notes learned the hard way
 
@@ -188,8 +154,17 @@ other and with the FFI work.
   case by name, which it did this session on the 14→15 bump.
 - **Emscripten** is at `~/emsdk`; `source ~/emsdk/emsdk_env.sh` or seven wasm
   end-to-end tests fail for environmental reasons only.
-- Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1465** for the
-  harness, 276 for the ffi harness.
+- Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1497** for
+  the harness, 20008 for the lifecycle output, 302 for the ffi harness. The
+  harness tally is asserted whole, so adding a construct without re-measuring
+  fails it — which is the point. Measure, never add up: every tally in this file
+  that was arrived at by arithmetic has been wrong at least once.
+- **`cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D
+  warnings` are both CI gates.** Run them before pushing; clippy in particular
+  denies warnings, so a lint anywhere fails the build.
+- **Build for the other architecture before trusting clippy.** This host is
+  aarch64, and a lint inside `#[cfg(target_arch = "x86_64")]` code is invisible
+  here. `rustup target add x86_64-unknown-linux-gnu` and clippy against it.
 
 ## 6. Standing rules that bit me
 
@@ -202,3 +177,61 @@ I repeatedly inverted this into a rule against *starting* work I might not
 finish, and cited it back at the user as if it were policy. It is the opposite:
 it forbids stopping early, and session budget is not a concrete external
 blocker. Do not repeat that.
+
+## 7. Named future work found by doing this
+
+Three things worth someone's attention, each found by a run rather than by
+reading, and none of them a matter of tidying.
+
+### A suite that checks answers against the specification, not against the other engine
+
+`backend_parity` asks whether the VM and native agree. That is the wrong
+question on its own, and the Float-to-`U64` bug is the proof: both engines
+refused `U64(10000000000000000000.0)`, a value a `U64` holds comfortably, and
+the parity suite was green throughout — agreement on a wrong answer is
+indistinguishable from agreement on a right one.
+
+Of three findings a reviewer raised as VM/native divergences, exactly one was.
+The other two were agreement: on the right answer for `-U64(1)`, and on a wrong
+one for the conversion. A parity suite can never separate those.
+
+What is missing is a suite that states the expected answer *itself* — the
+documented range of each conversion, the boundary values of each width, the
+identities each operator obeys — and checks both engines against it. The harness
+does this for whole programs, which is why the constructs added beside each fix
+carry the expected value rather than only a cross-engine comparison. The gap is
+that nothing forces a new numeric instruction to arrive with one.
+
+### Macro-declaration diagnostics render a blank source line
+
+Every `KMAC` diagnostic that points inside a macro declaration — `KMAC003`
+predates this work, `KMAC031` is new — names the right file, line and column
+and then quotes an empty line.
+
+The cause is architectural rather than a bug in any one diagnostic. Macro
+declarations are blanked with spaces before the expanded text reaches the
+parser, and the `SourceMap` deliberately holds the *expanded* text because that
+is what every parser and semantic span is an offset into. Scan-time spans are
+offsets into the *original* text. Two span spaces, one text, and the renderer
+cannot tell which one it has been handed.
+
+The fix is span provenance: a span has to say which text it indexes, and the
+`SourceMap` has to keep both. It is cosmetic — nothing is misreported, the
+caret is in the right place — which is why it was left rather than attempted
+under a merge gate.
+
+### The static libffi archives are not position-independent
+
+`prep_cif.o` in the x86_64 archive reaches `ffi_type_float` with a direct
+`R_X86_64_PC32`, so it cannot be linked into a shared object, and Kira's live
+path does exactly that. The aarch64 archive routes the same reference through
+the GOT and is fine, which is why this reads as platform-specific rather than
+as the missing `--with-pic` it is.
+
+The archives are built by `.github/workflows/_kira-artifacts.yml` in
+`kira-lang-com/libffi`, whose static configure passes `--disable-shared
+--enable-static` and inherits whatever the host compiler defaults to. On Ubuntu
+that default is `-fPIE`, which is not `-fPIC`: under PIE a global is not
+preemptible, so x86_64 gcc emits the direct reference. The fix is `--with-pic`
+on the Linux and macOS static builds, and then republishing the release assets
+the pin names.
