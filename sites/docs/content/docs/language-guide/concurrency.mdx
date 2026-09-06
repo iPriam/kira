@@ -144,7 +144,8 @@ was called off.
     var filler = Task { fill(tx) }
     filler.requestCancel()             // the only work that could send it
     attempt {
-        print(try rx.receive())        // traps: nothing can answer this
+        let value = try rx.receive()   // traps: nothing can answer this
+        print(value)
     } handle {
         Closed { print(0 - 1) }
     }
@@ -184,6 +185,10 @@ have to be kept in step.
 The channel table belongs to one run, exactly as the task table does, and an
 end handle carries a slot generation. Closing both ends reclaims the storage; a
 later channel may reuse it, but the old end cannot name the new channel.
+
+A `@MainThreadLifecycle` loop is one execution however many slices it runs in,
+so the channels and tasks it made are still its own after every suspension. An
+end taken before a slice boundary names the same channel after it.
 
 ## Host Main Thread
 

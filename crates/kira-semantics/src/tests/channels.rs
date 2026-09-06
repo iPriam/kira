@@ -152,15 +152,19 @@ fn a_channel_over_void_is_refused() {
 /// An end written as an annotation is the same channel, so a payload no
 /// channel may carry is refused there under the same code rather than falling
 /// through to "`Sender` is not generic".
+///
+/// Once, not once per pass: the annotation is one mistake, and the count is
+/// asserted because type resolution reaches a written annotation more than
+/// once.
 #[test]
 fn an_end_annotation_refuses_the_payloads_a_channel_refuses() {
     let text = "function take(rx: Receiver<String>) -> Int { return 0 }\n\
                 @Main function main() { print(1) return }";
-    assert!(
-        codes(text).contains(&"KSEM365".to_owned()),
-        "{:?}",
-        diagnostics(text)
-    );
+    let refusals = codes(text)
+        .iter()
+        .filter(|code| *code == "KSEM365")
+        .count();
+    assert_eq!(refusals, 1, "{:?}", diagnostics(text));
 }
 
 /// The fall-through the owner-filed rows exist for: a program that declares
