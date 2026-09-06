@@ -184,12 +184,8 @@ pub enum HirExpr {
         sender: HirExprId,
         /// The value crossing, already checked against the payload type.
         value: HirExprId,
-        /// The scalar the queued word is, with any `distinct` resolved.
-        ///
-        /// A queue slot is one machine word, so a `Float` crosses as its
-        /// IEEE-754 bits and is converted at both ends, exactly as a task
-        /// argument is. This says which of the two shapes the value takes.
-        wire: Type,
+        /// How the value becomes the word the queue holds.
+        wire: crate::channel::Crossing,
     },
     /// `receiver.receive()`: the next value, or the channel's end.
     ///
@@ -200,9 +196,9 @@ pub enum HirExpr {
         receiver: HirExprId,
         /// The payload type the success variant carries.
         payload: Type,
-        /// The scalar the queued word is, with any `distinct` resolved. See
+        /// How the queued word becomes the value again. See
         /// [`HirExpr::ChannelSend::wire`].
-        wire: Type,
+        wire: crate::channel::Crossing,
         /// The failure enum the error variant carries.
         failure: EnumId,
         /// The result row: `Ok(payload)`, `Error(ChannelError)`.

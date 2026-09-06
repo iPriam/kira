@@ -86,3 +86,32 @@ pub const ERROR_TAG: u32 = 1;
 pub fn result_name(payload: &str) -> String {
     format!("ReceiveResult<{payload}>")
 }
+
+/// How a payload's value becomes the one machine word a queue slot holds.
+///
+/// A queue slot is a word, and this says which of three things that word is,
+/// once, rather than leaving each of the two ends to work it out from the
+/// payload type and risk working it out differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Crossing {
+    /// The value *is* the word: an integer width, `Bool`, or a `distinct`
+    /// over one.
+    Word,
+    /// The word is the value's IEEE-754 bits, converted back on arrival, so a
+    /// `Float` reads out as itself.
+    FloatBits,
+    /// The word is a native-state token naming the value, which lives in the
+    /// store while it is queued.
+    ///
+    /// A payload that owns storage has no word of its own, so it travels as a
+    /// handle to storage that outlives the sending context. The store is the
+    /// one the callback seam already uses, and it is the right one for exactly
+    /// the reason it was built: it holds a Kira value across a boundary that
+    /// cannot carry one.
+    ///
+    /// The id is not minted. `TypeTable::native_state_type_id` derives it from
+    /// the type — fingerprinting a struct, array or enum's shape rather than
+    /// its table index — so the sender's box and the receiver's recovery agree
+    /// by construction rather than by protocol, and neither can drift.
+    Boxed(kira_runtime_abi::NativeStateTypeId),
+}

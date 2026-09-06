@@ -11,6 +11,7 @@
 //! is an *error* was already decided upstream, by
 //! [`kira_semantics::BuildKind`].
 
+use kira_semantics_model::channel::Crossing;
 use kira_semantics_model::hir::{
     Builtin, Callee, HirAttempt, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt,
     HirStmtId, TaskTarget,
@@ -675,14 +676,24 @@ impl Lowerer<'_> {
             } => {
                 let sender = self.lower_expr(sender);
                 let value = self.lower_expr(value);
-                // One queue slot is one word, so a float crosses as its bits.
+                // One queue slot is one word, so the value becomes one: a
+                // float as its bits, and a value that owns storage as a token
+                // naming it in the store that outlives this context.
                 let value = match wire {
-                    Type::Float(_) => self.ir.exprs.alloc(IrExpr::Convert {
+                    Crossing::Word => value,
+                    Crossing::FloatBits => self.ir.exprs.alloc(IrExpr::Convert {
                         operand: value,
                         kind: kira_semantics_model::hir::ConvertKind::FloatToBits,
                         ty: Type::INT,
                     }),
-                    _ => value,
+                    Crossing::Boxed(type_id) => {
+                        let boxed = self.ir.exprs.alloc(IrExpr::NativeState {
+                            value,
+                            type_id,
+                            ty: Type::INT,
+                        });
+                        self.ir.exprs.alloc(IrExpr::NativeUserData { state: boxed })
+                    }
                 };
                 return self.channel_op(ChannelPrim::Send, vec![sender, value]);
             }
@@ -812,7 +823,7 @@ impl Lowerer<'_> {
         &mut self,
         receiver: HirExprId,
         payload: Type,
-        wire: Type,
+        wire: Crossing,
         failure: kira_semantics_model::EnumId,
         ty: Type,
     ) -> IrExprId {

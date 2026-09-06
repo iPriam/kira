@@ -42,8 +42,8 @@ pub(crate) struct ReceiverRow {
     pub(crate) failure: EnumId,
     /// The payload type, which is the success variant's.
     pub(crate) payload: Type,
-    /// The scalar the queued word is, with any `distinct` resolved.
-    pub(crate) wire: Type,
+    /// How the queued word becomes the payload again.
+    pub(crate) wire: wire::Crossing,
 }
 
 /// Builds one `__kira_channel_receive_N(receiver)` per row.
@@ -162,15 +162,55 @@ fn build_receive(
 
     let end = build.expr(IrExpr::Local(0));
     let taken = build.op(ChannelPrim::Take, &[end]);
-    // A float crossed as its bits; the conversion back is the other half of
-    // the one the sender did.
-    let taken = match row.wire {
-        Type::Float(_) => build.expr(IrExpr::Convert {
-            operand: taken,
-            kind: kira_semantics_model::hir::ConvertKind::BitsToFloat,
-            ty: row.payload,
-        }),
-        _ => taken,
+    // Whatever the sender turned the value into, turned back. A float crossed
+    // as its bits; a value that owns storage crossed as a token, and reading it
+    // out is the last thing that token is needed for, so it is released here
+    // rather than left for a receiver to remember.
+    // A boxed payload needs two slots and three statements rather than one
+    // expression: the token has to outlive the recovery that reads through it
+    // and be released once it has, which is a sequence and not a conversion.
+    let token_slot = 2;
+    let value_slot = 3;
+    let (taken, unbox, extra_locals) = match row.wire {
+        wire::Crossing::Word => (taken, Vec::new(), 0),
+        wire::Crossing::FloatBits => (
+            build.expr(IrExpr::Convert {
+                operand: taken,
+                kind: kira_semantics_model::hir::ConvertKind::BitsToFloat,
+                ty: row.payload,
+            }),
+            Vec::new(),
+            0,
+        ),
+        wire::Crossing::Boxed(type_id) => {
+            let token = build.expr(IrExpr::Local(token_slot));
+            let recovered = build.expr(IrExpr::NativeRecover {
+                raw: token,
+                type_id,
+                ty: row.payload,
+            });
+            let token_again = build.expr(IrExpr::Local(token_slot));
+            let release = build.expr(IrExpr::NativeStateRelease { token: token_again });
+            let value = build.expr(IrExpr::Local(value_slot));
+            (
+                value,
+                vec![
+                    IrStmt::Let {
+                        local: token_slot,
+                        init: taken,
+                    },
+                    IrStmt::Let {
+                        local: value_slot,
+                        init: recovered,
+                    },
+                    // The queue's owner, given up now that the value is out.
+                    // Nothing else holds one, so this is what frees the
+                    // storage a delivered payload was travelling in.
+                    IrStmt::Eval { expr: release },
+                ],
+                2,
+            )
+        }
     };
     let ok = build.expr(IrExpr::EnumNew {
         enum_id: row.result,
@@ -212,7 +252,11 @@ fn build_receive(
         },
         IrStmt::If {
             cond: ready,
-            then_body: vec![IrStmt::Return { value: Some(ok) }],
+            then_body: {
+                let mut arm = unbox;
+                arm.push(IrStmt::Return { value: Some(ok) });
+                arm
+            },
             else_body: Vec::new(),
         },
         IrStmt::Return { value: Some(error) },
@@ -221,8 +265,15 @@ fn build_receive(
     IrFunction {
         name: format!("__kira_channel_receive_{index}"),
         param_count: 1,
-        locals: vec![Type::INT, Type::INT],
-        native_state_locals: vec![None, None],
+        locals: {
+            let mut locals = vec![Type::INT, Type::INT];
+            if extra_locals == 2 {
+                locals.push(Type::INT);
+                locals.push(row.payload);
+            }
+            locals
+        },
+        native_state_locals: vec![None; 2 + extra_locals],
         return_type: Type::Enum(row.result),
         // Inherited, so a receive runs wherever the build puts unannotated
         // code, exactly as the task spine does.
