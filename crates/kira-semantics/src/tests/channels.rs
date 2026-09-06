@@ -127,3 +127,49 @@ fn a_program_may_name_its_own_sender() {
                 @Main function main() { let own = Sender { n: 1 } print(own.n) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
+
+/// A payload leaves the context that sent it, which is the boundary `Send`
+/// describes. The rule runs before the representation rule, exactly as the
+/// task-slot pair runs it: what a value *is* is decided before what it is made
+/// of, so a function type is refused for what it kept and not for its width.
+#[test]
+fn a_payload_that_cannot_move_between_contexts_is_refused() {
+    let items = diagnostics(&program("let tx = Channel<() -> Void>()"));
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM312"))
+        .unwrap_or_else(|| panic!("expected a KSEM312, got {items:?}"));
+    assert!(refusal.message.contains("cannot cross"), "{refusal:?}");
+}
+
+/// A channel over nothing carries nothing: `Void` is a scalar with no value in
+/// it, so there is no `send` to write.
+#[test]
+fn a_channel_over_void_is_refused() {
+    assert_eq!(codes(&program("let tx = Channel<Void>()")), vec!["KSEM365"]);
+}
+
+/// An end written as an annotation is the same channel, so a payload no
+/// channel may carry is refused there under the same code rather than falling
+/// through to "`Sender` is not generic".
+#[test]
+fn an_end_annotation_refuses_the_payloads_a_channel_refuses() {
+    let text = "function take(rx: Receiver<String>) -> Int { return 0 }\n\
+                @Main function main() { print(1) return }";
+    assert!(
+        codes(text).contains(&"KSEM365".to_owned()),
+        "{:?}",
+        diagnostics(text)
+    );
+}
+
+/// The fall-through the owner-filed rows exist for: a program that declares
+/// its own generic `Sender` keeps it, and the compiler's payload rule has no
+/// say over a type that is not a channel end.
+#[test]
+fn a_program_may_name_its_own_generic_sender() {
+    let text = "struct Sender<T> { let value: T }\n\
+                @Main function main() { let own = Sender<String>(value: \"a\") \
+                print(own.value) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}

@@ -121,13 +121,55 @@ drained closed channel answers `ChannelError.Closed`, which the enclosing
 `handle` covers by name. Sending to a channel whose receiver is gone *is* a
 trap: the value has nowhere to arrive and nobody to tell.
 
+### A Receive Nothing Can Answer Is a Trap
+
+A receive on an empty live channel with nothing left to run traps with
+`a receive is waiting for a value nothing can send`. The queue is empty, the
+sender is still live, and no other work is runnable, so no later turn can
+change the answer.
+
+It is not reported as `Closed`. That would tell the program the sender went
+away when it did not, and a handler written for the end of a conversation would
+run for a program that never started one. It is not a wait either: waiting
+forever is a hang, and a hang is not an answer.
+
+Cancelling the task that would have filled a channel produces exactly this. The
+receive learns that its value is not coming instead of blocking on work that
+was called off.
+
+```kira
+@Main function main() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var filler = Task { fill(tx) }
+    filler.requestCancel()             // the only work that could send it
+    attempt {
+        print(try rx.receive())        // traps: nothing can answer this
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    return
+}
+```
+
 ### What a Channel May Carry
 
-A queued value is one machine word, so a payload is an integer width, a float
-width, `Bool`, or a `distinct` over one. Anything else is `KSEM365`. A `Float`
+A payload must be `Send`: it leaves the context that sent it and arrives in one
+that context does not own, so a value naming storage its own engine keeps is
+refused with `KSEM312`. That covers a capture cell, a native-state handle, and
+a row in an executor's table.
+
+A queued value is also one machine word, so a payload is an integer width, a
+float width, `Bool`, or a `distinct` over one. Anything else is `KSEM365`,
+including `Void`, which has no value to carry, and a pointer word, which names
+storage on the far side of a seam this language does not read. A `Float`
 crosses as its exact bits and is converted at both ends, so it reads back as
 itself. A `distinct` keeps its identity: what comes out is the named type that
 went in.
+
+`Sender<T>` and `Receiver<T>` are the same channel written as an annotation, so
+a payload a channel may not carry is refused where the annotation is written,
+under the same code.
 
 An end is one word, which is what a task argument slot holds, so an end is
 moved into the task that uses it the way any other scalar is.

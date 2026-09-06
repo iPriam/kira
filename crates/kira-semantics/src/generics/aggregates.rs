@@ -40,7 +40,7 @@ impl<'a> Analyzer<'a> {
         // templates a program declared, so they resolve before the template
         // lookup: a function takes an end by writing its type, and the row it
         // names is the one `Channel<T>()` minted.
-        if let Some(end) = self.channel_end_named(&text, &resolved) {
+        if let Some(end) = self.channel_end_named(&text, &resolved, span) {
             return end;
         }
         let enum_template = self.generic_enum_named(&text);

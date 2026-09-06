@@ -34,10 +34,23 @@ function main() {
     return
 }
 
+// The work a lifecycle orders itself against. Spawned before the loop and
+// joined after it, so the task table has to be the same table on both sides of
+// every suspension in between.
+async function lifecycleFill(tx: Sender<Int>) -> Int {
+    tx.send(7)
+    return 1
+}
+
 // Runs far past one scheduling slice, so the loop is suspended and resumed
 // many times. The printed total is the proof its locals survived every
 // suspension: a lifecycle restarted from scratch each turn could never reach
 // this count.
+//
+// The channel and the task are the same proof for the rows a lifecycle owns.
+// A slice boundary is not a boundary the program wrote, so a handle taken
+// before one still names its row after it; a table rebuilt per slice would
+// refuse the receive and the join alike.
 //
 // The posted work is queued from inside the loop rather than from the
 // application thread, which is what makes the printed order a scheduler
@@ -47,6 +60,9 @@ function main() {
 // application thread would only order the two when that thread happened to win.
 @MainThreadLifecycle
 function counterLifecycle() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var pending = Task { lifecycleFill(tx) }
     var total = 0
     var index = 0
     while index < 20000 {
@@ -55,6 +71,12 @@ function counterLifecycle() {
         }
         total = total + 1
         index = index + 1
+    }
+    attempt {
+        let sent = try rx.receive()
+        total = total + sent + pending.await
+    } handle {
+        Closed { total = 0 - 1 }
     }
     print(total)
     return

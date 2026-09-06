@@ -11,7 +11,7 @@ use kira_bytecode::module::Module;
 use kira_runtime_abi::HostCapabilities;
 
 use crate::error::VmError;
-use crate::interp::{Dispatched, Vm, VmScratch};
+use crate::interp::{Dispatched, Vm, VmExecutors, VmScratch};
 use crate::value::Heap;
 
 /// How far a fiber got in one slice.
@@ -33,6 +33,13 @@ pub struct Fiber {
     heap: Heap,
     /// The operand stack, frame stack, and constants between slices.
     scratch: VmScratch,
+    /// The task and channel tables between slices.
+    ///
+    /// A lifecycle is one execution however many slices it takes, so the rows
+    /// it created are its own for as long as it runs. Rebuilding them per slice
+    /// would break every handle the loop still holds at the boundary the
+    /// scheduler chose, which is not a boundary the program can see.
+    executors: VmExecutors,
     /// Whether the entry frame has been pushed.
     started: bool,
     /// Whether the function has returned.
@@ -47,6 +54,7 @@ impl Fiber {
             function,
             heap: Heap::new(),
             scratch: VmScratch::default(),
+            executors: VmExecutors::default(),
             started: false,
             finished: false,
         }
@@ -73,6 +81,7 @@ impl Fiber {
         }
         let scratch = std::mem::take(&mut self.scratch);
         let mut vm = Vm::new_with_scratch(host, std::mem::take(&mut self.heap), scratch);
+        vm.adopt_executors(std::mem::take(&mut self.executors));
         vm.set_slice_budget(Some(budget));
         let outcome = if self.started {
             vm.resume_sliced(module)
@@ -86,6 +95,7 @@ impl Fiber {
         if finished {
             vm.release_constants();
         }
+        self.executors = vm.take_executors();
         let (heap, scratch) = vm.into_heap_and_scratch();
         self.heap = heap;
         self.scratch = scratch;
