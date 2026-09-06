@@ -62,15 +62,16 @@ Restored and green again: 5 passed, plus 19 unit tests in
 
 ## Harness
 
-`kira test --backend vm tests-kik/harness`, run against this branch's Foundation
-with a compiler built from this branch:
+`kira test tests-kik/harness`, run against this branch's Foundation with a
+compiler built from this branch:
 
-```
-1475 passed, 0 failed, 0 skipped, 1475 total
-```
+| Backend | Tally |
+|---|---|
+| `vm` | 1475 passed, 0 failed, 0 skipped, 1475 total |
+| `llvm` | 1475 passed, 0 failed, 0 skipped, 1475 total |
 
-All ten `Dgx` cases ran and passed. `crates/kira-cli/tests/kik_harness.rs` pins
-1475, up from 1465.
+All ten `Dgx` cases ran and passed on both. `crates/kira-cli/tests/kik_harness.rs`
+pins 1475, up from 1465, and asserts the two backends agree.
 
 The run reaching those cases at all is the proof that the generated Foundation
 was the one in use: `DgxCodesTheHandWrittenRegistryMissed` names `.KPAR043`,
