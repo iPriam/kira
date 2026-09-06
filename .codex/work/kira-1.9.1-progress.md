@@ -653,3 +653,8 @@ what the run reports, so none of them moved.
 The wasm end-to-end tests are unrunnable on this host: there is no `~/emsdk`, so nothing here can
 build a wasm artifact. `node` is present, so Emscripten is the whole of what is missing. They are
 neither passing nor failing here.
+
+`cargo test -p kira-cli --test backend_parity` on the merged tree: **457 passed, 0 failed**, 130s.
+That is two more than the 455 recorded before diagnostics was merged, and the count is the reason
+to re-measure rather than carry a number forward: the suite grew under a merge that touched none of
+its files.
