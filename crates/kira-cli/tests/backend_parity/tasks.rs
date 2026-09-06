@@ -12,7 +12,9 @@
 //! a different order would still add up the same — which is why the yielding
 //! cases also *print* from inside the bodies, where order shows.
 
-use crate::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
+use crate::{
+    assert_parity, assert_parity_with_heap_balance, assert_trap_message_parity, assert_trap_parity,
+};
 
 /// The async bodies every case below spawns.
 const BODIES: &str = r#"
