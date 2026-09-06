@@ -212,30 +212,100 @@ fn evaluates_once_when_repeated(argument: &str) -> bool {
 
 /// The names a template binds that are not fragment parameters.
 ///
-/// `let`, `var`, and a `for` loop variable are the ways a template introduces a
-/// name; each one found here is renamed to a fresh symbol, which is the whole
-/// of hygiene.
+/// Every binding form the language has, because hygiene is only worth as much
+/// as its least-covered one: a form left out is a name the caller can collide
+/// with, and the collision is silent. `let`, `var` and a `for` variable are the
+/// statement binders; a `match` arm and a `handle` arm each bind a payload; a
+/// closure binds its parameters. Each name found here is renamed to a fresh
+/// symbol.
 fn introduced_names(template: &str, fragments: &[crate::registry::Fragment]) -> Vec<String> {
     let file = Lexed::new(kira_source::SourceId::new(0), template);
     let mut names = Vec::new();
-    for index in 0..file.len() {
-        let binds = match file.kind(index) {
-            TokenKind::Let | TokenKind::Var => file.is_ident(index + 1),
-            TokenKind::For => file.is_ident(index + 1) && file.kind(index + 2) == TokenKind::In,
-            _ => false,
-        };
-        if !binds {
-            continue;
-        }
-        let name = file.text_at(index + 1).to_owned();
+    let bound = |name: String, names: &mut Vec<String>| {
         if fragments.iter().any(|fragment| fragment.name == name) {
-            continue;
+            return;
         }
         if !names.contains(&name) {
             names.push(name);
         }
+    };
+    for index in 0..file.len() {
+        match file.kind(index) {
+            TokenKind::Let | TokenKind::Var if file.is_ident(index + 1) => {
+                bound(file.text_at(index + 1).to_owned(), &mut names);
+            }
+            TokenKind::For
+                if file.is_ident(index + 1) && file.kind(index + 2) == TokenKind::In =>
+            {
+                bound(file.text_at(index + 1).to_owned(), &mut names);
+            }
+            TokenKind::LParen if is_arm_payload(&file, index) => {
+                bound(file.text_at(index + 1).to_owned(), &mut names);
+            }
+            TokenKind::LBrace => {
+                for parameter in closure_parameters(&file, index) {
+                    bound(parameter, &mut names);
+                }
+            }
+            _ => {}
+        }
     }
     names
+}
+
+/// Whether the `(` at `open` is an arm's payload binding rather than a call.
+///
+/// A `match` arm is `Variant(name) ->` and a `handle` arm is `Variant(name) {`;
+/// both bind `name` for the arm's body alone, and both are spelled exactly like
+/// a one-argument call.
+///
+/// The arrow tells them apart on its own: nothing else in the language puts an
+/// arrow after a parenthesized single identifier, and a function type's `(A) ->
+/// B` is preceded by a colon rather than by a name.
+///
+/// The block does not, because `if ready(flag) { … }` is that shape too. What
+/// separates the arm is that it *starts a statement* — an arm is written on its
+/// own line, while the condition of an `if` or a `while` follows the keyword on
+/// the same one. Renaming a condition's argument would rewrite a name the
+/// caller owns, so the block form asks for the line break and the arrow form
+/// does not need to.
+fn is_arm_payload(file: &Lexed<'_>, open: usize) -> bool {
+    if open == 0 || !file.is_ident(open - 1) {
+        return false;
+    }
+    if !file.is_ident(open + 1) || file.kind(open + 2) != TokenKind::RParen {
+        return false;
+    }
+    match file.kind(open + 3) {
+        TokenKind::Arrow => true,
+        TokenKind::LBrace => file.newline_before(open - 1),
+        _ => false,
+    }
+}
+
+/// The parameters of the closure opening at `open`, or nothing when the `{` is
+/// an ordinary block.
+///
+/// A closure is `{ a, b in … }`, so the parameters are the identifiers between
+/// the brace and an `in` that no other token interrupts. Stopping at the first
+/// token that is neither an identifier nor a comma is what keeps a block whose
+/// first statement happens to mention `in` — a `for` loop — from being read as
+/// a parameter list.
+fn closure_parameters(file: &Lexed<'_>, open: usize) -> Vec<String> {
+    let mut parameters = Vec::new();
+    let mut index = open + 1;
+    loop {
+        if !file.is_ident(index) {
+            return Vec::new();
+        }
+        parameters.push(file.text_at(index).to_owned());
+        index += 1;
+        match file.kind(index) {
+            TokenKind::In => return parameters,
+            TokenKind::Comma => index += 1,
+            _ => return Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +374,86 @@ mod tests {
         assert!(text.contains("x = y"), "{text}");
         assert!(text.contains("y = __kmac_temporary_0"), "{text}");
         assert!(text.contains("let temporary = 3"), "{text}");
+    }
+
+    /// A `match` arm binds its payload, so a template's arm may not capture a
+    /// fragment that mentions the same name. Without this the caller's `text`
+    /// would read the arm's binding instead of the caller's own.
+    #[test]
+    fn a_match_arm_payload_is_hygienic() {
+        let (text, diagnostics) = expand_all(
+            "macro describe(value: expr) {\n    expand {\n        match note {\n\
+             Tag(text) -> print(value)\n            Blank -> print(0)\n        }\n    }\n}\n\
+             function f() {\n    let text = 5\n    describe!(text)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            text.contains("Tag(__kmac_text_0) -> print((text))"),
+            "{text}"
+        );
+        assert!(text.contains("let text = 5"), "{text}");
+    }
+
+    /// A `handle` arm binds its payload the same way, and is written with a
+    /// block rather than an arrow.
+    #[test]
+    fn a_handle_arm_payload_is_hygienic() {
+        let (text, diagnostics) = expand_all(
+            "macro orElse(fallback: expr) {\n    expand {\n        attempt {\n\
+             let v = try read()\n            print(v)\n        } handle {\n\
+             Failed(reason) { print(fallback) }\n        }\n    }\n}\n\
+             function f() {\n    let reason = 7\n    orElse!(reason)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            text.contains("Failed(__kmac_reason_1) { print((reason)) }"),
+            "{text}"
+        );
+    }
+
+    /// A closure's parameters are bindings too, so a template that writes one
+    /// may not capture a fragment naming the same thing.
+    #[test]
+    fn a_closure_parameter_is_hygienic() {
+        let (text, diagnostics) = expand_all(
+            "macro applyTwice(seed: expr) {\n    expand {\n\
+             let step: (Int) -> Int = { n in n + seed }\n        print(step(1))\n    }\n}\n\
+             function f() {\n    let n = 3\n    applyTwice!(n)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            text.contains("{ __kmac_n_1 in __kmac_n_1 + (n) }"),
+            "{text}"
+        );
+    }
+
+    /// The condition of an `if` is a call, not an arm, even though it is
+    /// spelled the same. Renaming its argument would rewrite a name the caller
+    /// owns and the expansion would stop compiling.
+    #[test]
+    fn an_if_condition_is_not_mistaken_for_an_arm() {
+        let (text, diagnostics) = expand_all(
+            "macro guard(flag: expr) {\n    expand {\n        if ready(flag) {\n\
+             print(1)\n        }\n    }\n}\n\
+             function f() {\n    let flag = true\n    guard!(flag)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(text.contains("if ready(flag)"), "{text}");
+        assert!(!text.contains("__kmac_flag"), "{text}");
+    }
+
+    /// A block whose first statement is a `for` loop is a block, not a closure
+    /// whose parameters happen to be followed by `in`.
+    #[test]
+    fn a_for_loop_block_is_not_a_closure_parameter_list() {
+        let (text, diagnostics) = expand_all(
+            "macro total(items: expr) {\n    expand {\n        var sum = 0\n\
+             for entry in items {\n            sum = sum + entry\n        }\n\
+             print(sum)\n    }\n}\n\
+             function f() {\n    let entry = 1\n    total!(entry)\n    return\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(text.contains("for __kmac_entry_1 in (entry)"), "{text}");
     }
 
     #[test]

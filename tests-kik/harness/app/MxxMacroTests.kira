@@ -472,3 +472,82 @@ construct MxxIdentifierNamesAConversion() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
+
+// --- Hygiene over every binding form ----------------------------------------
+// A `let`, a `var` and a `for` variable are not the only names a template
+// introduces. A `match` arm and a `handle` arm each bind a payload, and a
+// closure binds its parameters; a template that writes one of those must not
+// capture a fragment that mentions the same name. Each case below passes the
+// caller's own binding in as the fragment and reads it back through the arm, so
+// an unrenamed binder would answer with the payload instead.
+
+enum MxNote {
+    Tag(Int)
+    Blank
+}
+
+enum MxReadFailure {
+    Missing(Int)
+}
+
+function mxReadFails() -> Result<Int, MxReadFailure> {
+    return .Error(.Missing(99))
+}
+
+macro mxArmPayload(subject: expr, value: expr) {
+    expand {
+        match subject {
+            Tag(text) -> { answer = value }
+            Blank -> { answer = 0 }
+        }
+    }
+}
+
+macro mxHandlerPayload(value: expr) {
+    expand {
+        attempt {
+            let got = try mxReadFails()
+            answer = got
+        } handle {
+            Missing(reason) { answer = value }
+        }
+    }
+}
+
+macro mxClosureParameter(seed: expr) {
+    expand {
+        let step: (Int) -> Int = { n in return n + seed }
+        answer = step(1)
+    }
+}
+
+construct MxxAMatchArmPayloadDoesNotCaptureAFragment() extends Test {
+    test {
+        let text = 5
+        var answer = 0
+        let note: MxNote = .Tag(9)
+        mxArmPayload!(note, text)
+        return answer
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}
+
+construct MxxAHandlerPayloadDoesNotCaptureAFragment() extends Test {
+    test {
+        let reason = 4
+        var answer = 0
+        mxHandlerPayload!(reason)
+        return answer
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+construct MxxAClosureParameterDoesNotCaptureAFragment() extends Test {
+    test {
+        let n = 30
+        var answer = 0
+        mxClosureParameter!(n)
+        return answer
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(31) return e }
+}
