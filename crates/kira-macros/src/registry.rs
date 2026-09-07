@@ -13,7 +13,7 @@
 //! order. Splitting it that way is what lets the frontend memoize the scan of a
 //! dependency that has not changed instead of redoing it every compilation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kira_diagnostics::Diagnostic;
 use kira_source::{SourceId, Span};
@@ -259,9 +259,47 @@ impl Registry {
             ));
             return false;
         }
-        self.owners
-            .insert(name.to_owned(), owner.map(str::to_owned));
+        // A name is one declaration, so the one being shadowed leaves every
+        // kind and not just the one the new declaration happens to be. A
+        // declarative `Name` taking the name from a dependency's attribute
+        // macro otherwise leaves that attribute reachable as `@Name`: the
+        // lookups are by kind, and only the kind map that was written to would
+        // have been corrected.
+        if self
+            .owners
+            .insert(name.to_owned(), owner.map(str::to_owned))
+            .is_some()
+        {
+            self.declarative.remove(name);
+            self.procedural.remove(name);
+            self.comptime_functions.remove(name);
+        }
         true
+    }
+
+    /// This registry with only the declarations `visible` names left in it.
+    ///
+    /// A macro is a name a file writes, so it is gated exactly as every other
+    /// name a file writes is: the program's own flat scope, the file's own
+    /// package, and the packages the file imports — and nothing further,
+    /// because visibility does not compose. Merging every package's macros
+    /// into one environment made a dependency's dependency's macros callable
+    /// from an application that never imported it.
+    ///
+    /// Enum cases are not filtered. They are not macro names: they are what an
+    /// evaluator needs to read `Backend.Glsl` in a template that is already
+    /// visible, and the template's own visibility is what decides whether it
+    /// runs at all.
+    pub(crate) fn visible_to(&self, visible: &HashSet<SourceId>) -> Registry {
+        Registry {
+            declarative: retain_visible(&self.declarative, visible, |item| item.source),
+            procedural: retain_visible(&self.procedural, visible, |item| item.source),
+            comptime_functions: retain_visible(&self.comptime_functions, visible, |item| {
+                item.source
+            }),
+            enums: self.enums.clone(),
+            owners: self.owners.clone(),
+        }
     }
 
     /// Whether the program declares no macros at all.
@@ -909,6 +947,19 @@ fn validate_shape(declared: &Procedural, reporter: &mut Reporter) {
 }
 
 /// The `kind { … }` word a [`ProceduralKind`] is written with.
+/// The entries of `declarations` declared in a file `visible` names.
+fn retain_visible<T: Clone>(
+    declarations: &HashMap<String, T>,
+    visible: &HashSet<SourceId>,
+    source_of: impl Fn(&T) -> SourceId,
+) -> HashMap<String, T> {
+    declarations
+        .iter()
+        .filter(|(_, declared)| visible.contains(&source_of(declared)))
+        .map(|(name, declared)| (name.clone(), declared.clone()))
+        .collect()
+}
+
 pub(crate) fn kind_word(kind: ProceduralKind) -> &'static str {
     match kind {
         ProceduralKind::Function => "function",
@@ -932,6 +983,47 @@ mod tests {
             &mut Vec::new(),
         );
         (registry, reporter.into_diagnostics())
+    }
+
+    /// A name a nearer package takes over leaves every kind, not just its own.
+    ///
+    /// The three kinds are three maps and the lookups are by kind, so a claim
+    /// that only wrote the map its own kind lives in left the shadowed
+    /// declaration reachable through a lookup of a different one: an
+    /// application's declarative `Name` would take the name while `@Name`
+    /// still ran a dependency's attribute macro.
+    #[test]
+    fn a_shadowed_declaration_leaves_every_kind() {
+        let dependency = "comptime macro Name {\n                          kind { attribute }\n                          appliesTo { struct }\n                          replace { true }\n                          expand(declaration, arguments) { return declaration }\n                          }";
+        let application = "macro Name(value: expr) {\n    expand {\n        value\n    }\n}";
+        let mut reporter = Reporter::new();
+        let mut registry = Registry::default();
+        registry.absorb(
+            Some("Dependency"),
+            &collect_file(&Lexed::new(SourceId::new(0), dependency), &mut reporter),
+            &mut Vec::new(),
+        );
+        assert!(
+            registry.procedural("Name").is_some(),
+            "the dependency's attribute macro is what is being shadowed"
+        );
+        registry.absorb(
+            None,
+            &collect_file(&Lexed::new(SourceId::new(1), application), &mut reporter),
+            &mut Vec::new(),
+        );
+        assert!(
+            registry.declarative("Name").is_some(),
+            "the application's declaration takes the name"
+        );
+        assert!(
+            registry.procedural("Name").is_none(),
+            "the shadowed attribute macro must not still answer `@Name`"
+        );
+        assert!(
+            registry.of_kind(ProceduralKind::Attribute).is_empty(),
+            "nor be found by a sweep of its kind"
+        );
     }
 
     /// A macro definition scans the same indented or not: the scanner reads
