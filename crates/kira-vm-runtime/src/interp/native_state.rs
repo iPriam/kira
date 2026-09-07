@@ -15,7 +15,7 @@
 //! read; and anything that would *edit* a snapshot rebuilds it as objects first
 //! ([`crate::value::Heap::own`]), so nothing is ever written through one.
 
-use kira_runtime_abi::{NativeStatePathStep, NativeStateValue};
+use kira_runtime_abi::{NativeStatePathStep, NativeStateToken, NativeStateValue};
 
 use super::Vm;
 use crate::error::{NativeStateOperation, VmError};
@@ -167,11 +167,11 @@ impl Vm<'_> {
     fn pop_state_token(
         &mut self,
         operation: NativeStateOperation,
-    ) -> Result<kira_runtime_abi::NativeStateToken, VmError> {
+    ) -> Result<NativeStateToken, VmError> {
         let value = self.pop()?;
         match value {
             Value::NativeState(token) => Ok(token),
-            Value::RawPtr(word) => Ok(kira_runtime_abi::NativeStateToken::from_word(word)),
+            Value::RawPtr(word) => Ok(NativeStateToken::from_word(word)),
             other => {
                 self.heap.drop_value(other);
                 Err(VmError::NativeStateValueMismatch {
@@ -191,7 +191,7 @@ impl Vm<'_> {
                 kind: "a value that is not a callback-state token",
             });
         };
-        let token = kira_runtime_abi::NativeStateToken::from_word(word);
+        let token = NativeStateToken::from_word(word);
         let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
         // Check the token and type, and read nothing: what goes on the stack is
         // a handle. This used to recover the state — a deep copy of everything
@@ -221,7 +221,7 @@ impl Vm<'_> {
                 kind: "a value that is not a callback-state token",
             });
         };
-        let token = kira_runtime_abi::NativeStateToken::from_word(word);
+        let token = NativeStateToken::from_word(word);
         let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
         let tree = self
             .host
@@ -233,6 +233,25 @@ impl Vm<'_> {
             .map_err(VmError::NativeState)?;
         self.stack.push(value);
         Ok(())
+    }
+
+    /// Releases the storage every undelivered channel payload still names.
+    ///
+    /// A run can end with values still queued — an early return, a trap, a
+    /// receiver that stopped taking — and a queued word of a boxed channel is
+    /// a token naming storage in a store that outlives the run. In a hybrid
+    /// session that store is the native half's, which outlives the process, so
+    /// a run that dropped its table would leak once per run.
+    ///
+    /// Errors are not reported. This runs while a run is being torn down, and
+    /// a token the store no longer knows is one somebody already released:
+    /// there is nothing left to tell and nobody to tell it to.
+    pub(crate) fn release_undelivered_channel_payloads(&mut self) {
+        for token in self.channels.take_undelivered_tokens() {
+            let _ = self
+                .host
+                .native_state_release(NativeStateToken::from_word(token as u64));
+        }
     }
 
     pub(super) fn native_state_release(&mut self) -> Result<(), VmError> {

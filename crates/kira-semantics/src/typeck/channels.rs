@@ -103,6 +103,7 @@ impl Analyzer<'_> {
         };
         self.program.exprs.alloc(HirExpr::ChannelCreate {
             ty: Type::Distinct(sender),
+            wire: self.channel_wire_type(payload),
         })
     }
 

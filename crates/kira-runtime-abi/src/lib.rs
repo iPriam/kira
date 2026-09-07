@@ -81,7 +81,7 @@ pub fn foreign_adapter_name(index: usize) -> String {
 pub fn foreign_callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
 }
-pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
+pub use channels::{BOXED_PAYLOAD, ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
 pub use main_thread::*;
 pub use math_op::MathOp;
 pub use native_state::{

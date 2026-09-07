@@ -29,6 +29,15 @@ thread_local! {
 /// calls it for the executable path.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_channel_reset() {
+    // Undelivered payloads first. A run can end with values still queued — an
+    // early return, a trap, a receiver that stopped taking — and a queued word
+    // of a boxed channel names storage in a store that outlives the scope
+    // being ended. In a hybrid session that store outlives the process, so
+    // dropping the words here is a leak that grows with every run.
+    let undelivered = CHANNELS.with_borrow_mut(ChannelExecutor::take_undelivered_tokens);
+    for token in undelivered {
+        crate::native_state::kira_rt_native_state_release(token as u64);
+    }
     CHANNELS.with_borrow_mut(|channels| *channels = ChannelExecutor::new());
 }
 

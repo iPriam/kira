@@ -166,6 +166,13 @@ pub enum HirExpr {
     ChannelCreate {
         /// The sender row this yields.
         ty: Type,
+        /// How a value of the payload becomes the queued word.
+        ///
+        /// Recorded at creation, not only at each send, because the table has
+        /// to know: a run that ends with values still queued has to release
+        /// the storage the tokens name, and by then there is no send left to
+        /// ask.
+        wire: crate::channel::Crossing,
     },
     /// `sender.receiver`: the matching receiver end.
     ///
@@ -877,7 +884,7 @@ impl HirExpr {
             HirExpr::TypeTest { .. } => Type::Bool,
             HirExpr::TypeOf { .. } => Type::RuntimeType,
             HirExpr::TypeField { ty, .. } | HirExpr::TypeCastResult { ty, .. } => *ty,
-            HirExpr::ChannelCreate { ty }
+            HirExpr::ChannelCreate { ty, .. }
             | HirExpr::ChannelReceiver { ty, .. }
             | HirExpr::ChannelReceive { ty, .. } => *ty,
             HirExpr::ChannelSend { .. } | HirExpr::ChannelClose { .. } => Type::Void,
