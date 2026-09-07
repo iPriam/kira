@@ -1,89 +1,76 @@
 ---
 title: Compiler Architecture
-description: The layered package graph, shared pipeline, backends, and why the repo is split this way.
+description: The Rust crate layer graph, the shared frontend, where Kira source lives, the bundle boundary, and the agent-facing servers.
 ---
 
-Kira uses a strict layered package graph. Lower layers do not depend on higher ones.
+Kira is a Rust workspace. Crates live in `crates/`, organized into layers with no upward dependencies. Each crate's `lib.rs` states its layer in its first doc line, and that line is the source of truth.
 
-## Shared Pipeline
-
-The common compiler path is:
+## The Shared Frontend
 
 ```text
-kira_source -> kira_lexer -> kira_parser -> kira_semantics -> kira_ir
+kira-source -> kira-lexer -> kira-macros -> kira-parser -> kira-semantics -> kira-ir
 ```
 
-Backend selection happens later in `kira_build`.
+Every backend consumes the same IR, and so does the language server. Backend selection happens in `kira-build`, above all of it, which keeps the frontend independent of the CLI, of the project layer, and of any backend's linking.
 
-That keeps the frontend independent from:
+## The Layer Graph
 
-- CLI concerns
-- project/toolchain concerns
-- backend-specific linking
-
-## Package Layers
-
-The repo's current package graph is:
-
-| Layer | Packages |
+| Layer | Crates |
 | --- | --- |
-| 0 | `kira_core`, `kira_source`, `kira_diagnostics`, `kira_log`, `kira_runtime_abi` |
-| 1 | `kira_syntax_model`, `kira_lexer`, `kira_parser` |
-| 2 | `kira_semantics_model`, `kira_semantics` |
-| 3 | `kira_ir`, `kira_hybrid_definition`, `kira_backend_api`, `kira_native_lib_definition` |
-| 4 | `kira_bytecode`, `kira_vm_runtime`, `kira_native_bridge`, `kira_hybrid_runtime`, `kira_llvm_backend` |
-| 5 | `kira_manifest`, `kira_project`, `kira_build_definition` |
-| 6 | `kira_build` |
-| 7 | `kira_linter`, `kira_doc`, `kira_app_generation` |
-| 8 | `kira_cli` |
-| 9 | `kira_main` |
+| 0 | `kira-core`, `kira-toolchain`, `kira-source`, `kira-diagnostics`, `kira-diagnostic-messages`, `kira-runtime-abi`, `kira-dynamic-ffi`, `kira-clang` |
+| 1 | `kira-syntax-model`, `kira-lexer`, `kira-macros`, `kira-parser`, `kira-ksl-syntax-model`, `kira-ksl-parser` |
+| 2 | `kira-semantics-model`, `kira-shader-model`, `kira-ksl-semantics`, `kira-semantics` |
+| 3 | `kira-ir`, `kira-shader-ir`, `kira-hybrid-definition`, `kira-backend-api`, `kira-native-lib-definition` |
+| 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend` |
+| 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (the Rust embedding surface: staticlib, cdylib, rlib) |
+| 6 | `kira-program-graph`, `kira-hybrid-main` (the hybrid embedding surface: a bytecode half plus a loaded native half) |
+| 7 | `kira-check`, `kira-build` (the frontend driver, library builds, and generated Rust wrapper crates) |
+| 8 | `kira-profile`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live`, `kira-compiler-bridge` |
+| 9 | `kira-cli` (the binary `kira`) |
 
-## Backend Responsibilities
+### Outside the Graph
 
-### VM
+| Crate | What it is |
+| --- | --- |
+| `kira-lsp` | The language-server binary, over the same frontend the compiler uses. |
+| `kira-bundle-host`, `kira-desktop-runner`, `kira-app-runner` | Runners. They host a `.klbundle` and see no IR, no source file, and no backend. |
+| `kira-hybrid-launcher` | The binary a standalone hybrid program is staged as. |
+| `kira-export` | The per-platform project generators. |
+| `kira-libffi`, `kira-syscall`, `kira-network` | Runtime capability crates beneath the seam. |
+| `kira-launcher` (`kira`), `kira-knvm` (`knvm`), `kira-devflow` (`devflow`) | Standalone tools, leaves depending only on `kira-toolchain`. |
+| `kira-export-consumer` | A Rust program consuming a Kira library end to end, on each of the three engines. |
 
-- `kira_bytecode` compiles shared IR into the checked-in `KBC0` bytecode format
-- `kira_vm_runtime` executes that bytecode and provides the default runtime `print` behavior
+## Where Kira Source Lives
 
-### LLVM / Native
+Kira source ships in three places, and the difference is who loads it.
 
-- `kira_llvm_backend` lowers shared IR through the text-LLVM/native path, verifies modules, and emits native objects
-- `kira_native_bridge` provides runtime helper symbols such as integer/string print helpers and hybrid callback plumbing
-- `kira_build` asks the Zig linker driver to link the emitted objects and native libraries
+| Directory | Loaded by |
+| --- | --- |
+| `foundation/` | `import Foundation`, found beside the compiler, on every platform. |
+| `packages/` | A dependency named *by path*, which is where anything platform-bound belongs. |
+| `tests-kik/` | The harness packages. |
 
-### Hybrid
+`packages/linux` reaches the Linux kernel through `@FFI.Syscall`, and a declaration like that is refused at compile time on a target that cannot reach it, so inside Foundation it would refuse every Windows and macOS build of every program.
 
-- `kira_hybrid_definition` defines the manifest/contracts used to tie bytecode and native pieces together
-- `kira_hybrid_runtime` loads the `KHM1` hybrid manifest and coordinates entry execution
-- `kira_native_bridge` handles bridge descriptors and native/runtime symbol binding
+## The VM Stays Portable
 
-Hybrid is intentionally explicit: runtime bytecode calls native Kira functions through generated bridge/trampoline entrypoints, and native code can call back into runtime through the installed invoker. The VM side does not execute FFI symbols directly.
+`kira-vm-runtime` and everything below it take no filesystem, process, thread, or dynamic-loading dependency and must compile for `wasm32-unknown-unknown`. The VM consumes bytes and reaches the world only through its host capabilities.
 
-The same bridge layer now also backs the debug-only `--trace-execution` run flag, which is useful when you need to prove whether a path is executing in VM code, native code, or through a trampoline/bridge transition.
+Native-only functionality, dynamic FFI and `dlopen`, is feature-gated and lives in `kira-hybrid-runtime` and `kira-native-bridge`.
 
-## Native Library Placement
+## A Runner Consumes Bundles
 
-FFI work is intentionally not buried inside the frontend.
+The `.klbundle` is the boundary: a runner reads a manifest plus payloads, with no dependency on `kira-ir`, `kira-semantics`, or any backend. **Building a bundle needs LLVM; running one never does**, which is what lets a runner ship to a machine without it.
 
-- `kira_native_lib_definition` defines native library contracts
-- `kira_manifest` parses the per-library TOML shape
-- `kira_build` discovers matching manifests near the source file, resolves them for the host, builds static archives when needed, and runs the autobinder
-- `kira_llvm_backend` consumes the resolved native libraries when emitting native or hybrid output
+## The Agent-Facing Servers
 
-Semantic analysis enforces the declaration boundary before backend selection: direct use of an FFI-bound extern requires `@Native`, while ordinary Kira callers of that native helper remain ordinary Kira declarations. The execution boundary is about where code runs, not about quarantining the rest of the language from native-annotated helpers or values.
+`kira-mcp` and `kira-lldb-mcp` share their JSON-RPC framing through `kira-mcp-protocol`. They are split by lifetime rather than by subject: `kira-mcp` answers one compiler question per call, while a debug session outlives the call that started it, so `kira-lldb-mcp` holds the LLDB processes and the built targets its sessions are debugging.
 
-## Why The Repo Is Split This Way
+Neither is a layer. Both sit above `kira-cli`, and `kira-lldb-mcp` builds through it. See [Debugging](/docs/appendix/debugging).
 
-This layout makes several future changes additive instead of destabilizing:
+## Building the Workspace
 
-- frontend work can grow without dragging backend code upward
-- backend experiments can stay behind `kira_build` and `kira_backend_api`
-- hybrid work does not need to undo a VM-only architecture first
-- CLI code remains a leaf surface instead of becoming compiler glue
-- `kira_main` stays focused on the app-facing C ABI facade rather than compiler orchestration
-
-For contributors, the practical rule is simple:
-
-- put business logic as low in the graph as it can reasonably live
-- keep `root.zig` files small and focused on exports/wiring
-- avoid adding imports that climb back up the architecture
+```bash
+cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```

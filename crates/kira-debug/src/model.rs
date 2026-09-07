@@ -233,6 +233,7 @@ mod tests {
             native_state_locals: Vec::new(),
             return_type: Type::Void,
             execution: Execution::Runtime,
+            is_main_thread: false,
             by_reference_params: Vec::new(),
             by_pointer_params: Vec::new(),
             body: Vec::new(),
@@ -241,10 +242,13 @@ mod tests {
             functions: vec![function],
             types: Default::default(),
             main: Some(0),
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
+            descriptors: Default::default(),
             exprs: Arena::new(),
         };
         let path =

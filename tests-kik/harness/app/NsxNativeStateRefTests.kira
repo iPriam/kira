@@ -1,0 +1,127 @@
+import Foundation
+
+// Native callback state is reference-counted. Prefix: nsx / Nsx.
+//
+// The handle owns one reference and gives it up with its scope; every exported
+// token owns one and gives it up through `nativeUserDataRelease`; an explicit
+// retain pairs with one more release. The state lives exactly as long as one
+// owner remains, and every test here reduces that to a number a wrong count
+// would change.
+
+struct NsxCounter {
+    var hits: Int = 0
+}
+
+function nsxExport(start: Int) -> RawPtr {
+    let state = nativeState(NsxCounter { hits: start })
+    // The handle dies with this frame; the token keeps the state alive.
+    return nativeUserData(state)
+}
+
+function nsxBump(token: RawPtr) {
+    var view = nativeRecover<NsxCounter>(token)
+    view.hits = view.hits + 1
+    return
+}
+
+function nsxConsume(state: NsxCounter) -> Int {
+    let boxed = nativeState(state)
+    let token = nativeUserData(boxed)
+    nsxBump(token)
+    let seen = nativeRecover<NsxCounter>(token).hits
+    nativeUserDataRelease(token)
+    return seen
+}
+
+construct NsxATokenOutlivesTheHandleThatExportedIt() extends Test {
+    test {
+        let token = nsxExport(10)
+        nsxBump(token)
+        nsxBump(token)
+        let seen = nativeRecover<NsxCounter>(token).hits
+        nativeUserDataRelease(token)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
+}
+
+construct NsxARetainPairsWithOneRelease() extends Test {
+    test {
+        let token = nsxExport(3)
+        nativeUserDataRetain(token)
+        nativeUserDataRelease(token)
+        nsxBump(token)
+        let seen = nativeRecover<NsxCounter>(token).hits
+        nativeUserDataRelease(token)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+construct NsxTwoExportsAreTwoOwners() extends Test {
+    test {
+        let handle = nativeState(NsxCounter { hits: 7 })
+        let first = nativeUserData(handle)
+        let second = nativeUserData(handle)
+        nativeUserDataRelease(first)
+        nsxBump(second)
+        let seen = nativeRecover<NsxCounter>(second).hits
+        nativeUserDataRelease(second)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
+}
+
+construct NsxAHandleReleasesWithItsScopeInALoop() extends Test {
+    test {
+        var total = 0
+        var i = 0
+        while i < 50 {
+            total = total + nsxConsume(NsxCounter { hits: i })
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1275) return e }
+}
+
+construct NsxAMovedHandleTransfersItsOwner() extends Test {
+    test {
+        let first = nativeState(NsxCounter { hits: 20 })
+        let second = move first
+        let token = nativeUserData(second)
+        nsxBump(token)
+        let seen = nativeRecover<NsxCounter>(token).hits
+        nativeUserDataRelease(token)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
+}
+
+construct NsxOverwritingAHandleReleasesTheOldOne() extends Test {
+    test {
+        var slot = nativeState(NsxCounter { hits: 1 })
+        let kept = nativeUserData(slot)
+        slot = nativeState(NsxCounter { hits: 2 })
+        nsxBump(kept)
+        let token = nativeUserData(slot)
+        let seen = nativeRecover<NsxCounter>(kept).hits * 10 + nativeRecover<NsxCounter>(token).hits
+        nativeUserDataRelease(kept)
+        nativeUserDataRelease(token)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
+}
+
+construct NsxTheDeprecatedFreeIsOneRelease() extends Test {
+    test {
+        let handle = nativeState(NsxCounter { hits: 5 })
+        let token = nativeUserData(handle)
+        nativeStateFree(handle)
+        nsxBump(token)
+        let seen = nativeRecover<NsxCounter>(token).hits
+        nativeUserDataRelease(token)
+        return seen
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
+}

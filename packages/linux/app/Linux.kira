@@ -100,45 +100,45 @@ function linuxErrorName(error: borrow LinuxError) -> String {
 
 // ─── Raw entry points ───────────────────────────────────────────────────────
 
-@FFI.Syscall { name: write; }
-function linuxSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function linuxSysWrite(fd: Int, buffer: CString, count: U64) -> Int
 
-@FFI.Syscall { name: read; }
-function linuxSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int;
+@FFI.Syscall { name: read }
+function linuxSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int
 
-@FFI.Syscall { name: mount; }
+@FFI.Syscall { name: mount }
 function linuxSysMount(
     source: CString,
     target: CString,
     filesystem: CString,
     flags: U64,
     data: RawPtr,
-) -> Int;
+) -> Int
 
-@FFI.Syscall { name: umount2; }
-function linuxSysUmount2(target: CString, flags: Int) -> Int;
+@FFI.Syscall { name: umount2 }
+function linuxSysUmount2(target: CString, flags: Int) -> Int
 
-@FFI.Syscall { name: reboot; }
-function linuxSysReboot(magic: Int, magic2: Int, command: Int, argument: RawPtr) -> Int;
+@FFI.Syscall { name: reboot }
+function linuxSysReboot(magic: Int, magic2: Int, command: Int, argument: RawPtr) -> Int
 
-@FFI.Syscall { name: execve; }
-function linuxSysExecve(path: CString, argv: RawPtr, envp: RawPtr) -> Int;
+@FFI.Syscall { name: execve }
+function linuxSysExecve(path: CString, argv: RawPtr, envp: RawPtr) -> Int
 
-@FFI.Syscall { name: wait4; }
-function linuxSysWait4(pid: Int, status: RawPtr, options: Int, usage: RawPtr) -> Int;
+@FFI.Syscall { name: wait4 }
+function linuxSysWait4(pid: Int, status: RawPtr, options: Int, usage: RawPtr) -> Int
 
-@FFI.Syscall { name: sync; }
-function linuxSysSync() -> Int;
+@FFI.Syscall { name: sync }
+function linuxSysSync() -> Int
 
-@FFI.Syscall { name: ppoll; }
-function linuxSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int;
+@FFI.Syscall { name: ppoll }
+function linuxSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int
 
 // The one call control does not come back from, so it names no result: there is
 // no value for the kernel to answer with and no next instruction to answer it
 // to. The compiler knows this and tells the optimizer, which is why a caller need
 // not write code after it that could never run.
-@FFI.Syscall { name: exit_group; }
-function linuxSysExitGroup(status: Int);
+@FFI.Syscall { name: exit_group }
+function linuxSysExitGroup(status: Int)
 
 // ─── File descriptors ───────────────────────────────────────────────────────
 

@@ -472,7 +472,9 @@ pub unsafe extern "C" fn kira_rt_array_free(
         return;
     }
     if let Some(free) = element {
-        for at in 0..len {
+        // Elements release last to first, the language's rule for every
+        // engine.
+        for at in (0..len).rev() {
             // SAFETY: the offset lands inside a block of `len` elements.
             unsafe { free(items.add(at * esize)) };
         }

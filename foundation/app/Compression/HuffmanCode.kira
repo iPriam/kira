@@ -55,7 +55,7 @@ function huffmanCodeFromLengths(lengths: borrow [Int], maxLength: Int) -> Huffma
     }
 
     return HuffmanCode {
-        counts: move counts
+        counts: move counts,
         symbols: move symbols
     }
 }

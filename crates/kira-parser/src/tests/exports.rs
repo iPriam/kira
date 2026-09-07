@@ -44,12 +44,12 @@ fn an_argument_list_after_export_is_recorded_rather_than_dropped() {
 
 #[test]
 fn an_annotation_block_after_export_is_recorded_rather_than_dropped() {
-    let text = "@Export { symbol: uif_add; }\nfunction add(a: Int) -> Int { return a }";
+    let text = "@Export { symbol: uif_add }\nfunction add(a: Int) -> Int { return a }";
     let result = parse_text(text);
     let mark = only_function(&result).export.expect("an export marker");
     let payload = mark.payload_span.expect("a recorded payload");
     let end = (payload.start + payload.len) as usize;
-    assert_eq!(&text[payload.start as usize..end], "{ symbol: uif_add; }");
+    assert_eq!(&text[payload.start as usize..end], "{ symbol: uif_add }");
     // The body still parsed: a swallowed block would have eaten the function.
     assert_eq!(result.interner.resolve(only_function(&result).name), "add");
 }

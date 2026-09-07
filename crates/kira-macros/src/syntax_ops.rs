@@ -205,7 +205,7 @@ fn statement_end(file: &Lexed<'_>, from: usize) -> usize {
     let mut index = from;
     while index < file.len() {
         match file.kind(index) {
-            TokenKind::Eof | TokenKind::Semicolon | TokenKind::RBrace => break,
+            TokenKind::Eof | TokenKind::RBrace => break,
             TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
                 match file.match_close(index) {
                     Some(close) => {

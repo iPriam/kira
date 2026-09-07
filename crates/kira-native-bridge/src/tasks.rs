@@ -22,6 +22,17 @@ thread_local! {
     static TASKS: RefCell<TaskExecutor> = RefCell::new(TaskExecutor::new());
 }
 
+/// Starts a native task scope with the same empty table a VM run receives.
+///
+/// Native code can outlive one entrypoint when it is loaded as a hybrid
+/// library, so a thread-local table cannot be allowed to turn into process
+/// state. The host calls this before every run; the generated process entry
+/// calls it for the executable path.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_task_reset() {
+    TASKS.with_borrow_mut(|tasks| *tasks = TaskExecutor::new());
+}
+
 /// Carries out one deferred-task primitive.
 ///
 /// `prim` is a [`TaskPrim`] wire byte and the three operands are the primitive's
@@ -65,6 +76,17 @@ mod tests {
         assert_eq!(
             kira_rt_task_op(i64::from(TaskPrim::SlotGet.as_byte()), handle, 0, 0),
             41
+        );
+    }
+
+    #[test]
+    fn resetting_a_scope_drops_old_handles_and_starts_at_one() {
+        let first = kira_rt_task_op(i64::from(TaskPrim::Spawn.as_byte()), 2, 0, 0);
+        assert_eq!(first, 1);
+        kira_rt_task_reset();
+        assert_eq!(
+            kira_rt_task_op(i64::from(TaskPrim::Spawn.as_byte()), 3, 0, 0),
+            1
         );
     }
 

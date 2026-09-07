@@ -15,7 +15,8 @@ use kira_ir::IrProgram;
 use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{
-    Builtin, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction, HirProgram, HirStmt,
+    Builtin, CallableSignature, Callee, ForeignId, HirExpr, HirExprId, HirForeign, HirFunction,
+    HirProgram, HirStmt,
 };
 use kira_source::Span;
 
@@ -73,6 +74,8 @@ fn foreign(symbol: &str, params: &[ForeignType], result: ForeignType) -> HirFore
         param_wrappers: params.iter().map(|_| None).collect(),
         result_pointee: None,
         result_wrapper: None,
+        param_distincts: params.iter().map(|_| None).collect(),
+        result_distinct: None,
         name_span: Span::new(0, 0),
     }
 }
@@ -98,10 +101,12 @@ fn fixture_program() -> IrProgram {
         locals: Vec::new(),
         body,
         is_main: true,
+        is_main_thread: false,
         is_async: false,
         execution: kira_runtime_abi::Execution::Inherited,
         mutates_self: false,
         name_span: Span::new(0, 4),
+        signature: CallableSignature::synthesized(&[], Type::Void),
     });
     program.main = Some(kira_semantics_model::hir::FuncId(0));
     kira_ir::lower(&program)
@@ -325,6 +330,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             // The test runs the program it builds, so it builds for this
             // machine.
             target: crate::NativeBuildTarget::host(),
+            sanitize: crate::Sanitize::None,
         },
     )
     .expect("the FFI program links");

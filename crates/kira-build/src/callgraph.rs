@@ -59,7 +59,7 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, found: &mut BTreeSet<u32>)
                 walk_stmt(program, statement, found);
             }
         }
-        IrStmt::Break | IrStmt::Continue => {}
+        IrStmt::Break | IrStmt::Continue | IrStmt::ReleaseLocals { .. } => {}
     }
 }
 
@@ -79,6 +79,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, *arg, found);
             }
         }
+        // A constant read names a slot, not a callee; the slot's init runs
+        // before any body does, outside every call graph this answers.
+        IrExpr::ConstantGet { .. } => {}
         IrExpr::Unary { operand, .. } => walk_expr(program, *operand, found),
         IrExpr::Binary { lhs, rhs, .. } => {
             walk_expr(program, *lhs, found);
@@ -106,6 +109,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         }
         IrExpr::EnumTag { value } => walk_expr(program, *value, found),
         IrExpr::EnumPayload { value, .. } => walk_expr(program, *value, found),
+        IrExpr::TypeTest { value, .. } | IrExpr::TypeCast { value, .. } => {
+            walk_expr(program, *value, found)
+        }
         IrExpr::Field { base, .. } => walk_expr(program, *base, found),
         IrExpr::ScalarText { value } | IrExpr::ArrayElements { value, .. } => {
             walk_expr(program, *value, found)
@@ -131,11 +137,18 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_expr(program, *base, found);
             walk_expr(program, *index, found);
         }
-        IrExpr::TaskOp { operands, .. } => {
+        IrExpr::TaskOp { operands, .. } | IrExpr::ChannelOp { operands, .. } => {
             for operand in operands {
                 walk_expr(program, *operand, found);
             }
         }
+        IrExpr::MainThreadCall { function, args, .. } => {
+            found.insert(*function);
+            for arg in args {
+                walk_expr(program, *arg, found);
+            }
+        }
+        IrExpr::MainThreadJoin { handle, .. } => walk_expr(program, *handle, found),
         IrExpr::ArrayLen { array } => walk_expr(program, *array, found),
         IrExpr::StringLen { text } => walk_expr(program, *text, found),
         IrExpr::StringOf { value } => walk_expr(program, *value, found),
@@ -183,13 +196,20 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         // An erasure wraps the value it erases, and a call inside that value is
         // reachable exactly as it would be anywhere else.
         IrExpr::IntoAny { value, .. } => walk_expr(program, *value, found),
-        // A widening wraps its value for the same reason, so a call inside one
-        // is reachable the same way.
-        IrExpr::Widen { value, .. } => walk_expr(program, *value, found),
+        IrExpr::TypeConst { value, .. }
+        | IrExpr::TypeOf { value }
+        | IrExpr::TypeCastResult { value, .. }
+        | IrExpr::TypeField {
+            descriptor: value, ..
+        } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
-        IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
-        IrExpr::NativeStateFree { token } => walk_expr(program, *token, found),
+        IrExpr::NativeRecover { raw, .. } | IrExpr::NativeStateTake { raw, .. } => {
+            walk_expr(program, *raw, found)
+        }
+        IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
+            walk_expr(program, *token, found)
+        }
         // Leaves: nothing inside can be a call.
         IrExpr::Int(_)
         | IrExpr::Float(_)

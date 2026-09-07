@@ -80,6 +80,43 @@ pub struct Module {
     /// `ForeignCallback(id)` instruction indexes it, and the host resolves the
     /// entry thunk the backend generated for the same id.
     pub foreign_callbacks: Vec<ForeignCallback>,
+    /// The module-constant table: one function index per constant, in
+    /// evaluation order.
+    ///
+    /// The host calls each named function once, front to back, and stores the
+    /// results before the entrypoint runs; a `LoadConstant(slot)` reads the
+    /// stored value at the same index. The order is the compiler's dependency
+    /// order, so front-to-back is always correct. Empty for a module with no
+    /// module-scope `let`, which is also what a module written before this
+    /// section existed decodes as.
+    pub constants: Vec<u64>,
+    /// The runtime type descriptors this module's ids index.
+    ///
+    /// A `ConstType` immediate and the tag an `Erase` writes are both rows
+    /// here, so this is what `value.type`'s properties read. Empty for a module
+    /// that erases nothing and asks no type about itself, which is also what a
+    /// module written before this section existed decodes as.
+    pub types: Vec<TypeDescriptorRow>,
+}
+
+/// One runtime type descriptor, as a module carries it.
+///
+/// A flattened [`kira_semantics_model::TypeDescriptor`]: the identity key is
+/// not written, because nothing at run time compares identities as text — ids
+/// compare as words, and the key exists for the compile-time questions that
+/// outlive a build.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TypeDescriptorRow {
+    /// The declared name.
+    pub name: String,
+    /// The declaring package's identity key, or empty.
+    pub package: String,
+    /// The kind word.
+    pub kind: String,
+    /// The descriptor ids of the generic arguments, in declaration order.
+    pub arguments: Vec<u64>,
+    /// The traits this type conforms to, sorted.
+    pub conformances: Vec<String>,
 }
 
 /// One compiled function: its signature shape and its code.
@@ -296,6 +333,16 @@ pub enum ModuleDecodeError {
         /// The repeated parameter position.
         position: usize,
     },
+    /// A module-constant row named an init function the module does not have.
+    #[error("constant slot {slot} names init function {init}; the module has {functions}")]
+    ConstantInitOutOfRange {
+        /// The constant slot whose row is out of range.
+        slot: usize,
+        /// The decoded init-function index.
+        init: u64,
+        /// How many functions the module has.
+        functions: usize,
+    },
     /// Bytes remained after the last section the format defines.
     ///
     /// Every section is self-delimiting, so leftovers mean the stream was
@@ -306,6 +353,44 @@ pub enum ModuleDecodeError {
 }
 
 impl Module {
+    /// Returns every `@MainThreadLifecycle` function index, in module order.
+    ///
+    /// The marker sits at instruction zero of the owning function rather than
+    /// in a header field, so a module carries it through the same append-only
+    /// code section every other body uses.
+    #[must_use]
+    pub fn main_thread_lifecycles(&self) -> Vec<u32> {
+        self.functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| {
+                function.code.first().is_some_and(|instruction| {
+                    matches!(instruction, Instruction::MainThreadLifecycle)
+                })
+            })
+            .map(|(index, _)| index as u32)
+            .collect()
+    }
+
+    /// Returns whether the module contains a main-thread boundary instruction.
+    ///
+    /// Debuggers and profilers use this to keep ordinary VM runs on their
+    /// existing thread while selecting the helper-thread entry only when the
+    /// program actually needs the process main-thread event loop.
+    #[must_use]
+    pub fn uses_main_thread(&self) -> bool {
+        self.functions.iter().any(|function| {
+            function.code.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::MainThreadCall { .. }
+                        | Instruction::MainThreadJoin
+                        | Instruction::MainThreadLifecycle
+                )
+            })
+        })
+    }
+
     /// Serializes the module to its byte format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -338,10 +423,13 @@ impl Module {
         // Each later section forces the ones before it to be written, empty or
         // not, for the same reason: a section is only unambiguous when every
         // section it follows is present to be consumed first.
+        let has_types = !self.types.is_empty();
+        let has_constants = !self.constants.is_empty() || has_types;
         let has_retained = self
             .foreign_imports
             .iter()
-            .any(|import| import.signature().any_retained());
+            .any(|import| import.signature().any_retained())
+            || has_constants;
         let has_releases = self
             .functions
             .iter()
@@ -372,6 +460,33 @@ impl Module {
         // declaration is byte-for-byte what it was before the section existed.
         if has_retained {
             write_foreign_retained(&mut out, &self.foreign_imports);
+        }
+        // The constants section is last: a module with no module-scope `let`
+        // is byte-for-byte what it was before the section existed.
+        if has_constants {
+            write_u64(&mut out, self.constants.len() as u64);
+            for &init in &self.constants {
+                write_u64(&mut out, init);
+            }
+        }
+        // The type-descriptor section is last, on the same terms: a module
+        // whose program never asks a value for its type is byte-for-byte what
+        // it was before descriptors existed.
+        if has_types {
+            write_u64(&mut out, self.types.len() as u64);
+            for row in &self.types {
+                write_bytes(&mut out, row.name.as_bytes());
+                write_bytes(&mut out, row.package.as_bytes());
+                write_bytes(&mut out, row.kind.as_bytes());
+                write_u64(&mut out, row.arguments.len() as u64);
+                for &argument in &row.arguments {
+                    write_u64(&mut out, argument);
+                }
+                write_u64(&mut out, row.conformances.len() as u64);
+                for name in &row.conformances {
+                    write_bytes(&mut out, name.as_bytes());
+                }
+            }
         }
         out
     }
@@ -463,6 +578,8 @@ impl Module {
         let foreign_callbacks = read_foreign_callbacks(&mut reader, format, &foreign_aggregates)?;
         read_releases(&mut reader, &mut functions, format)?;
         read_foreign_retained(&mut reader, &mut foreign_imports, format)?;
+        let constants = read_constants(&mut reader, format, functions.len())?;
+        let types = read_types(&mut reader, format)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -476,8 +593,47 @@ impl Module {
             foreign_imports,
             foreign_aggregates,
             foreign_callbacks,
+            constants,
+            types,
         })
     }
+}
+
+/// Reads the appended type-descriptor section, or an empty table when there is
+/// none. Absent means a program that never asks a value for its type, which is
+/// also what a module written before the section existed decodes as.
+fn read_types(
+    reader: &mut Reader<'_>,
+    format: Format,
+) -> Result<Vec<TypeDescriptorRow>, ModuleDecodeError> {
+    if reader.is_at_end() {
+        return Ok(Vec::new());
+    }
+    let count = reader.read_count(format)?;
+    let mut rows = Vec::new();
+    for _ in 0..count {
+        let name = reader.read_string(format)?;
+        let package = reader.read_string(format)?;
+        let kind = reader.read_string(format)?;
+        let arguments_count = reader.read_count(format)?;
+        let mut arguments = Vec::new();
+        for _ in 0..arguments_count {
+            arguments.push(reader.read_u64()?);
+        }
+        let conformances_count = reader.read_count(format)?;
+        let mut conformances = Vec::new();
+        for _ in 0..conformances_count {
+            conformances.push(reader.read_string(format)?);
+        }
+        rows.push(TypeDescriptorRow {
+            name,
+            package,
+            kind,
+            arguments,
+            conformances,
+        });
+    }
+    Ok(rows)
 }
 
 /// Reads the appended exports section, or an empty table when there is none.
@@ -486,6 +642,33 @@ impl Module {
 /// that absence is the whole compatibility story: no exports, which is exactly
 /// what such a module has. A *partial* section is a different thing entirely and
 /// is a truncation error, never an empty table.
+/// Reads the appended module-constant section: one init-function index per
+/// constant slot, in evaluation order. Absent means no constants, which is
+/// also what a module written before the section existed decodes as.
+fn read_constants(
+    reader: &mut Reader<'_>,
+    format: Format,
+    functions: usize,
+) -> Result<Vec<u64>, ModuleDecodeError> {
+    if reader.is_at_end() {
+        return Ok(Vec::new());
+    }
+    let count = reader.read_count(format)?;
+    let mut constants = Vec::new();
+    for slot in 0..count {
+        let init = reader.read_u64()?;
+        if init >= functions as u64 {
+            return Err(ModuleDecodeError::ConstantInitOutOfRange {
+                slot: slot as usize,
+                init,
+                functions,
+            });
+        }
+        constants.push(init);
+    }
+    Ok(constants)
+}
+
 fn read_exports(reader: &mut Reader<'_>, format: Format) -> Result<ExportTable, ModuleDecodeError> {
     if reader.is_at_end() {
         return Ok(ExportTable::default());

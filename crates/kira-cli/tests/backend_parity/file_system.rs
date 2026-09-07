@@ -71,10 +71,11 @@ function main() {
     assert_eq!(out, "false\n\n0\n0\nfalse\nfalse\nfalse\nfalse\n0\n0\n");
 }
 
-/// The byte path is binary-safe and short at end of file, and `text` is not:
-/// it stops at the first NUL while `size` still counts the whole file.
+/// The byte path is binary-safe and short at end of file, and the text path is
+/// too: a NUL is ordinary string content, so `text.count` and `size` agree on
+/// a file that holds one.
 #[test]
-fn bytes_cross_intact_and_text_stops_at_a_nul_on_every_backend() {
+fn bytes_and_text_both_cross_a_nul_intact_on_every_backend() {
     let out = assert_parity_on_disk(
         r#"
 import Foundation
@@ -108,7 +109,7 @@ function main() {
     );
     assert_eq!(
         out,
-        "true\n4\n104\n105\n0\n122\n2\n0\n0\n0\n4\n2\ntrue\n0\ntrue\ntrue\n"
+        "true\n4\n104\n105\n0\n122\n2\n0\n0\n0\n4\n4\ntrue\n0\ntrue\ntrue\n"
     );
 }
 

@@ -171,13 +171,14 @@ impl Parser<'_> {
         (value, block_span)
     }
 
-    /// Parses the `{ key: value; ... }` block of an `@FFI.Extern` or
+    /// Parses the `{ key: value, ... }` block of an `@FFI.Extern` or
     /// `@FFI.Syscall` annotation.
     ///
-    /// Each field is `identifier : identifier ;`. Every structural mistake — a
-    /// missing brace, a non-identifier key, a missing colon, a non-identifier
-    /// value, a missing terminator — is reported with its own code, and recovery
-    /// advances to the next field so one bad field does not swallow the rest.
+    /// Each field is `identifier : identifier`, fields are comma-separated and
+    /// a trailing comma is allowed. Every structural mistake — a missing brace,
+    /// a non-identifier key, a missing colon, a non-identifier value, a missing
+    /// separator — is reported with its own code, and recovery advances to the
+    /// next field so one bad field does not swallow the rest.
     /// Field *meaning* (required, duplicate, unknown, the `abi` value, whether a
     /// syscall name exists) is the analyzer's, not the parser's.
     ///
@@ -199,9 +200,14 @@ impl Parser<'_> {
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
+            self.skip_unknown();
+            if self.at(TokenKind::RBrace) || self.at_eof() {
+                break;
+            }
             if let Some(field) = self.parse_foreign_field(annotation) {
                 fields.push(field);
             }
+            self.expect_ffi_field_separator(annotation);
             // Force progress: a field that consumed nothing would spin.
             if self.pos == before {
                 self.bump();
@@ -211,7 +217,20 @@ impl Parser<'_> {
         fields
     }
 
-    /// Parses one `identifier : identifier ;` field, or reports why it could
+    /// Consumes the `,` after a field, or reports `KPAR052` when the next
+    /// token is neither a comma nor the block's closing `}`.
+    fn expect_ffi_field_separator(&mut self, annotation: &str) {
+        if self.eat_separator() || self.at(TokenKind::RBrace) || self.at_eof() {
+            return;
+        }
+        self.error(
+            self.current().span,
+            "KPAR052",
+            format!("expected `,` between `{annotation}` fields"),
+        );
+    }
+
+    /// Parses one `identifier : identifier` field, or reports why it could
     /// not and returns `None`.
     fn parse_foreign_field(&mut self, annotation: &str) -> Option<ForeignField> {
         if !self.at(TokenKind::Identifier) {
@@ -245,20 +264,6 @@ impl Parser<'_> {
         let value_span = self.current().span;
         let value = self.intern_span(value_span);
         self.bump();
-        if !self.at(TokenKind::Semicolon) {
-            self.error(
-                self.current().span,
-                "KPAR052",
-                format!("expected `;` after an `{annotation}` field"),
-            );
-            return Some(ForeignField {
-                key,
-                key_span,
-                value,
-                value_span,
-            });
-        }
-        self.bump(); // `;`
         Some(ForeignField {
             key,
             key_span,
@@ -267,7 +272,7 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses the `{ key: value; ... }` block of a struct-attached `@FFI.*`
+    /// Parses the `{ key: value, ... }` block of a struct-attached `@FFI.*`
     /// annotation, collecting each recognized key's value.
     ///
     /// The value grammar depends on the key: `target`/`element`/`result` name a
@@ -288,7 +293,12 @@ impl Parser<'_> {
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
+            self.skip_unknown();
+            if self.at(TokenKind::RBrace) || self.at_eof() {
+                break;
+            }
             self.parse_ffi_field(&mut fields);
+            self.expect_ffi_field_separator("@FFI.*");
             // Force progress: a field that consumed nothing would spin.
             if self.pos == before {
                 self.bump();
@@ -298,7 +308,7 @@ impl Parser<'_> {
         fields
     }
 
-    /// Parses one `key : value ;` field of a struct-attached `@FFI.*` block into
+    /// Parses one `key : value` field of a struct-attached `@FFI.*` block into
     /// `out`, dispatching the value grammar on the key.
     fn parse_ffi_field(&mut self, out: &mut FfiBlockFields) {
         if !self.at(TokenKind::Identifier) {
@@ -333,15 +343,8 @@ impl Parser<'_> {
             "count" => out.count = self.parse_ffi_int_value(),
             "params" => out.params = Some(self.parse_ffi_type_list()),
             // An unknown key is recorded by no form; swallow its value up to the
-            // terminator so the rest of the block still parses.
+            // separator so the rest of the block still parses.
             _ => self.skip_to_ffi_field_end(),
-        }
-        if !self.eat(TokenKind::Semicolon) {
-            self.error(
-                self.current().span,
-                "KPAR052",
-                "expected `;` after an `@FFI.*` field",
-            );
         }
     }
 
@@ -410,7 +413,7 @@ impl Parser<'_> {
             );
             return types;
         }
-        while !self.at(TokenKind::RBracket) && !self.at_eof() && !self.at(TokenKind::Semicolon) {
+        while !self.at(TokenKind::RBracket) && !self.at_eof() && !self.at(TokenKind::RBrace) {
             let before = self.pos;
             types.push(self.parse_ffi_type_value());
             if self.pos == before {
@@ -425,9 +428,16 @@ impl Parser<'_> {
     }
 
     /// Consumes the rest of a malformed `@FFI.*` field up to — but not
-    /// including — its terminating `;` or the block's `}`.
+    /// including — its separating `,` or the block's `}`.
+    ///
+    /// A `[`-list value is skipped whole, since the commas inside a `params`
+    /// list separate types, not fields.
     fn recover_ffi_field(&mut self) {
-        while !self.at(TokenKind::Semicolon) && !self.at(TokenKind::RBrace) && !self.at_eof() {
+        while !self.at(TokenKind::Comma) && !self.at(TokenKind::RBrace) && !self.at_eof() {
+            if self.at(TokenKind::LBracket) {
+                self.skip_balanced(TokenKind::LBracket, TokenKind::RBracket);
+                continue;
+            }
             self.bump();
         }
     }

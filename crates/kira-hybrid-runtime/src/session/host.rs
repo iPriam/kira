@@ -28,6 +28,7 @@ impl HostCapabilities for Host<'_> {
         function_id: u32,
         args: &[NativeArg<'_>],
     ) -> Result<NativeReturn, NativeCallError> {
+        let _active = ActiveSession::bind(self.session);
         self.session.call_native(function_id, args)
     }
 
@@ -51,6 +52,7 @@ impl HostCapabilities for Host<'_> {
         foreign_id: u32,
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
+        let _active = ActiveSession::bind(self.session);
         // The bytecode half reaches a `@FFI.Syscall` only when a `@Runtime`
         // function called one directly; `packages/linux` marks its wrappers
         // `@Native`, so the usual route is the emitted instruction. Served here
@@ -120,13 +122,24 @@ impl HostCapabilities for Host<'_> {
         }
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         match &self.session.vm_state {
             Some(state) => state
                 .lock()
                 .unwrap_or_else(|held| held.into_inner())
-                .free(token),
-            None => self.session.library.native_state_free(token),
+                .retain(token),
+            None => self.session.library.native_state_retain(token),
+        }
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .release(token)
+                .map(|_| ()),
+            None => self.session.library.native_state_release(token),
         }
     }
 

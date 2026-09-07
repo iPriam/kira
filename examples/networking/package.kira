@@ -1,0 +1,5 @@
+Package networking {
+    let version = "0.1.0"
+    let kind = .App
+    let allowThinFfiShim = true
+}

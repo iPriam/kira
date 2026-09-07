@@ -10,7 +10,7 @@
 //! 2. **Admissibility.** Every argument must be accepted by its parameter, by
 //!    the same rule a non-overloaded call is checked with.
 //! 3. **Specificity.** Among the survivors, an argument whose type *is* the
-//!    parameter's beats one that has to widen or erase into it. The candidate
+//!    parameter's beats one that has to convert or erase into it. The candidate
 //!    with the fewest such conversions wins.
 //! 4. **Directness.** Between two candidates that convert equally, the one that
 //!    fills fewer slots from defaults wins, so `f(Int)` beats
@@ -72,7 +72,7 @@ impl Analyzer<'_> {
     /// How badly `args` fit `id`, or `None` when they do not fit at all.
     ///
     /// The first number counts arguments that reach their parameter by a
-    /// conversion rather than by being it already — a widened integer, a
+    /// conversion rather than by being it already — a converted integer, a
     /// concrete declaration erased into `Any Family`, a subclass passed as its
     /// parent. The second counts slots filled from defaults. Lower is a closer
     /// fit in that order, and `(0, 0)` is an exact one.

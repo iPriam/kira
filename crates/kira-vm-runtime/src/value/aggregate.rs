@@ -19,6 +19,7 @@
 //! not, and the two are reported apart so only the second is explained to the
 //! author. Both become a typed trap in the interpreter.
 
+use kira_runtime_abi::c_storage::{bool_from_c_byte, c_bool_byte};
 use kira_runtime_abi::{
     ForeignAggregateId, ForeignAggregates, ForeignArrayElement, ForeignLayout, ForeignMember,
     ForeignPointerWidth, ForeignType, scalar_layout,
@@ -343,7 +344,7 @@ fn encode_scalar(ty: ForeignType, value: Value, width: ForeignPointerWidth) -> O
         (ForeignType::U64, Value::Int(v)) => (v as u64).to_le_bytes().to_vec(),
         (ForeignType::F32, Value::Float(v)) => (v as f32).to_le_bytes().to_vec(),
         (ForeignType::F64, Value::Float(v)) => v.to_le_bytes().to_vec(),
-        (ForeignType::Bool, Value::Bool(v)) => vec![u8::from(v)],
+        (ForeignType::Bool, Value::Bool(v)) => vec![c_bool_byte(v)],
         // A `CString` member is a pointer word like any other: the address of
         // storage that outlives the call (see `kira_runtime_abi::c_string`), so
         // it encodes exactly as a `RawPtr` does and null is a zero word.
@@ -376,10 +377,7 @@ fn decode_scalar(ty: ForeignType, bytes: &[u8]) -> Option<Value> {
         ForeignType::U64 => Value::Int(u64::from_le_bytes(array(bytes)?) as i64),
         ForeignType::F32 => Value::Float(f64::from(f32::from_le_bytes(array(bytes)?))),
         ForeignType::F64 => Value::Float(f64::from_le_bytes(array(bytes)?)),
-        // C `_Bool` holds 0 or 1; anything else came from a foreign write that
-        // did not respect the type, and reading it as `!= 0` is what C itself
-        // would do.
-        ForeignType::Bool => Value::Bool(*bytes.first()? != 0),
+        ForeignType::Bool => Value::Bool(bool_from_c_byte(*bytes.first()?)),
         // Read back as the opaque word it is. Kira never dereferences a
         // pointer it did not mint, so a `CString` member read out of C bytes is
         // a `RawPtr` value and nothing more.

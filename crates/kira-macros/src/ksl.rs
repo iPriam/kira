@@ -235,7 +235,15 @@ fn literal_path(value: &Value) -> Result<String, EvalError> {
         Value::Syntax(syntax) => {
             let trimmed = syntax.text.trim();
             if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-                Ok(kira_lexer::decode_string_literal(trimmed))
+                kira_lexer::decode_string_literal(trimmed).map_err(|_| {
+                    EvalError::coded(
+                        diagnostics::SHADER_PATH_NOT_LITERAL,
+                        format!(
+                            "`{NAMESPACE}.compile` needs a well-formed string literal for its \
+                             shader path; `{trimmed}` has an unknown escape"
+                        ),
+                    )
+                })
             } else {
                 Err(EvalError::coded(
                     diagnostics::SHADER_PATH_NOT_LITERAL,

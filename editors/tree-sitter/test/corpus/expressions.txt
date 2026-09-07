@@ -628,7 +628,47 @@ function f() {
       (return_statement))))
 
 ================================================================================
-An array literal's separators are optional
+An array literal's elements are comma-separated, trailing comma allowed
+================================================================================
+
+function f() {
+    let xs = [1, 2, 3]
+    let ys = [3, 5, 7,]
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (variable_declaration
+        name: (identifier)
+        value: (array_literal
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)))
+      (return_statement))))
+
+================================================================================
+An array literal without commas is an error
+:error
+================================================================================
+
+function f() {
+    let ys = [3 5 7]
+    return
+}
+
+--------------------------------------------------------------------------------
 ================================================================================
 
 function f() {
@@ -755,6 +795,54 @@ function f() {
       (return_statement))))
 
 ================================================================================
+Main-thread capability calls use a trailing block
+================================================================================
+
+function f() {
+    let value = MainThread.invoke { ui(1) }
+    MainThread.spawn { ui(value) }
+    MainThread.post { ui(value) }
+    return
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (integer_literal)))))))
+      (expression_statement
+        (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))))
+      (expression_statement
+        (main_thread_operation
+          namespace: (identifier)
+          body: (content_block
+            (expression_statement
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier)))))))
+      (return_statement))))
+
+================================================================================
 `move` and `copy` are operators only when an operand follows
 ================================================================================
 
@@ -863,3 +951,128 @@ function f() -> Int {
         value: (field_expression
           receiver: (identifier)
           field: (identifier))))))
+
+================================================================================
+`is` and `as` take a type and bind tighter than a comparison
+================================================================================
+
+function f(a: Any) -> Bool {
+    let n = a as Int
+    return a is Int == true
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (type_cast_expression
+          value: (identifier)
+          type: (type_identifier)))
+      (return_statement
+        value: (binary_expression
+          left: (type_test_expression
+            value: (identifier)
+            type: (type_identifier))
+          right: (boolean_literal))))))
+
+================================================================================
+A runtime type descriptor is read with the type keyword after a dot
+================================================================================
+
+function f() -> String {
+    return value.type.name
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (field_expression
+          receiver: (field_expression
+            receiver: (identifier))
+          field: (identifier))))))
+
+================================================================================
+A tried cast is the cast being tried
+================================================================================
+
+function f() -> Int {
+    attempt {
+        let p = try boxed as Point
+        return p.x
+    } handle {
+        Mismatch(actual) { return 0 }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (attempt_statement
+        body: (block
+          (variable_declaration
+            name: (identifier)
+            value: (try_expression
+              value: (type_cast_expression
+                value: (identifier)
+                type: (type_identifier))))
+          (return_statement
+            value: (field_expression
+              receiver: (identifier)
+              field: (identifier))))
+        (handler_arm
+          pattern: (variant_pattern
+            variant: (identifier)
+            binding: (identifier))
+          body: (block
+            (return_statement
+              value: (integer_literal))))))))
+
+================================================================================
+The null pointer is written and compared
+================================================================================
+
+function f(p: RawPtr) -> Bool {
+    return p == RawPtr.null
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (binary_expression
+          left: (identifier)
+          right: (field_expression
+            receiver: (identifier)
+            field: (identifier)))))))

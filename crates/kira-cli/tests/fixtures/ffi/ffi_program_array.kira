@@ -1,29 +1,29 @@
-@FFI.Array { element: I32; count: 4; }
+@FFI.Array { element: I32, count: 4 }
 struct Cells4 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Grid { var cells: Cells4
 var weight: Float }
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Slot { var p: I32
 var q: I32 }
 
-@FFI.Array { element: Slot; count: 3; }
+@FFI.Array { element: Slot, count: 3 }
 struct Slots3 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Board { var slots: Slots3
 var tag: I32 }
 
-@FFI.Extern { library: ffifixture; symbol: ffi_grid_sum; abi: c; }
-function gridSum(g: Grid) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_grid_make; abi: c; }
-function gridMake(base: I32) -> Grid;
-@FFI.Extern { library: ffifixture; symbol: ffi_board_sum; abi: c; }
-function boardSum(b: Board) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_board_make; abi: c; }
-function boardMake(seed: I32) -> Board;
+@FFI.Extern { library: ffifixture, symbol: ffi_grid_sum, abi: c }
+function gridSum(g: Grid) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_grid_make, abi: c }
+function gridMake(base: I32) -> Grid
+@FFI.Extern { library: ffifixture, symbol: ffi_board_sum, abi: c }
+function boardSum(b: Board) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_board_make, abi: c }
+function boardMake(seed: I32) -> Board
 
 @Main function main() {
     // Every element written: 1+2+3+4 + 10.

@@ -28,7 +28,7 @@ construct CfxSBoolAndTable() extends Test {
         // only T,T => 1
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSBoolOrTable() extends Test {
@@ -49,7 +49,7 @@ construct CfxSBoolOrTable() extends Test {
         // F,T; T,F; T,T => 3
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct CfxSBoolXorTable() extends Test {
@@ -70,7 +70,7 @@ construct CfxSBoolXorTable() extends Test {
         // XOR: F,T and T,F => 2
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct CfxSBoolNandTable() extends Test {
@@ -91,7 +91,7 @@ construct CfxSBoolNandTable() extends Test {
         // NAND: F,F; F,T; T,F => 3
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct CfxSBoolNorTable() extends Test {
@@ -112,7 +112,7 @@ construct CfxSBoolNorTable() extends Test {
         // NOR: only F,F => 1
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSBoolThreeVar() extends Test {
@@ -140,7 +140,7 @@ construct CfxSBoolThreeVar() extends Test {
         // (T,T,F),(T,F,T),(F,T,T),(T,T,T) = 4
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct CfxSBoolShortCircuit() extends Test {
@@ -152,7 +152,7 @@ construct CfxSBoolShortCircuit() extends Test {
         }
         return sideEffect
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxSBoolDeMorgan1() extends Test {
@@ -175,7 +175,7 @@ construct CfxSBoolDeMorgan1() extends Test {
         // all 4 combos should match
         return ok
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct CfxSBoolDeMorgan2() extends Test {
@@ -197,7 +197,7 @@ construct CfxSBoolDeMorgan2() extends Test {
         }
         return ok
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,12 +206,12 @@ construct CfxSBoolDeMorgan2() extends Test {
 
 construct CfxSTernarySimple() extends Test {
     test { return 5 > 3 ? 100 : 200 }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct CfxSTernaryFalse() extends Test {
     test { return 2 > 3 ? 100 : 200 }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 construct CfxSTernaryNested() extends Test {
@@ -220,7 +220,7 @@ construct CfxSTernaryNested() extends Test {
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct CfxSTernaryNestedLow() extends Test {
@@ -229,7 +229,7 @@ construct CfxSTernaryNestedLow() extends Test {
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSTernaryZeroPath() extends Test {
@@ -238,7 +238,7 @@ construct CfxSTernaryZeroPath() extends Test {
         var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxSTernaryFoldLoop() extends Test {
@@ -253,7 +253,7 @@ construct CfxSTernaryFoldLoop() extends Test {
         // sum = 0-1+4-3+8-5+12-7+16-9 = 15
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct CfxSTernaryBoolResult() extends Test {
@@ -262,7 +262,7 @@ construct CfxSTernaryBoolResult() extends Test {
         let isLarge = x > 5 ? true : false
         return isLarge ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSTernaryChainModulo() extends Test {
@@ -280,7 +280,7 @@ construct CfxSTernaryChainModulo() extends Test {
         // total = 30+20+10 = 60
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,12 +290,12 @@ construct CfxSTernaryChainModulo() extends Test {
 construct CfxSModPow2() extends Test {
     test { return 255 % 16 }
     // 255 = 15*16 + 15 => 15
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct CfxSDivPow2() extends Test {
     test { return 256 / 16 }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 construct CfxSDigitExtract() extends Test {
@@ -307,7 +307,7 @@ construct CfxSDigitExtract() extends Test {
         return d0 * 100 + d1 * 10 + d2
     }
     // d0=5, d1=6, d2=7 => 567
-    expect { let e: Result<Int, TestFailure> = .Ok(567); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(567) return e }
 }
 
 construct CfxSDigitSumLoop() extends Test {
@@ -321,7 +321,7 @@ construct CfxSDigitSumLoop() extends Test {
         // 9+9+9+9 = 36
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 construct CfxSBitwiseMirrorDiv() extends Test {
@@ -335,7 +335,7 @@ construct CfxSBitwiseMirrorDiv() extends Test {
         // 128+64+32+16+8+4+2+1 = 255
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(255); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(255) return e }
 }
 
 construct CfxSPow2Mod() extends Test {
@@ -350,7 +350,7 @@ construct CfxSPow2Mod() extends Test {
         // sum = 1+2+4+1+2+4+1+2 = 17
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(17) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +368,7 @@ construct CfxSFloatExactSum() extends Test {
         // 40 * 0.25 = 10.0
         return f == 10.0 ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatExactProduct() extends Test {
@@ -382,7 +382,7 @@ construct CfxSFloatExactProduct() extends Test {
         // 0.5^8 = 1/256 = 0.00390625
         return f == 0.00390625 ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatCompareLoop() extends Test {
@@ -399,7 +399,7 @@ construct CfxSFloatCompareLoop() extends Test {
         // f at step i+1 = 1.5*(i+1); >15 when i+1>10 => i>=10 => steps 10..19 = 10
         return above
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct CfxSFloatNegArith() extends Test {
@@ -407,7 +407,7 @@ construct CfxSFloatNegArith() extends Test {
         let a = (-3.5) + 1.5
         return a == (-2.0) ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatDiv() extends Test {
@@ -415,7 +415,7 @@ construct CfxSFloatDiv() extends Test {
         let q = 9.0 / 4.0
         return q == 2.25 ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatMod() extends Test {
@@ -423,7 +423,7 @@ construct CfxSFloatMod() extends Test {
         let r = 9.0 % 4.0
         return r == 1.0 ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatAccumChecksum() extends Test {
@@ -440,7 +440,7 @@ construct CfxSFloatAccumChecksum() extends Test {
         }
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7500) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +454,7 @@ construct CfxSGaussFormula10() extends Test {
         let formula = n * (n + 1) / 2
         return loop_sum == formula ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSGaussFormula100() extends Test {
@@ -464,7 +464,7 @@ construct CfxSGaussFormula100() extends Test {
         let formula = n * (n + 1) / 2
         return loop_sum
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5050) return e }
 }
 
 construct CfxSGaussFormula200() extends Test {
@@ -472,7 +472,7 @@ construct CfxSGaussFormula200() extends Test {
         let n = 200
         return n * (n + 1) / 2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20100) return e }
 }
 
 construct CfxSSquareSumFormula() extends Test {
@@ -482,7 +482,7 @@ construct CfxSSquareSumFormula() extends Test {
         let formula = n * (n + 1) * (2 * n + 1) / 6
         return loop_val == formula ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSSquareSumValue() extends Test {
@@ -490,7 +490,7 @@ construct CfxSSquareSumValue() extends Test {
         return cfxsSquareSum(10)
     }
     // 1+4+9+16+25+36+49+64+81+100 = 385
-    expect { let e: Result<Int, TestFailure> = .Ok(385); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(385) return e }
 }
 
 construct CfxSCubeSum() extends Test {
@@ -504,7 +504,7 @@ construct CfxSCubeSum() extends Test {
         // 1+8+27+64+125 = 225
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(225); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(225) return e }
 }
 
 construct CfxSCubeSumEqualsSquareGauss() extends Test {
@@ -521,7 +521,7 @@ construct CfxSCubeSumEqualsSquareGauss() extends Test {
         let gauss_sq = gauss * gauss
         return cube_sum == gauss_sq ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSTriangularNumbers() extends Test {
@@ -536,7 +536,7 @@ construct CfxSTriangularNumbers() extends Test {
         // sum = 220
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(220); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(220) return e }
 }
 
 construct CfxSOblong() extends Test {
@@ -550,7 +550,7 @@ construct CfxSOblong() extends Test {
         // 2+6+12+20+30+42+56+72 = 240
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(240); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(240) return e }
 }
 
 construct CfxSPentagonal() extends Test {
@@ -565,7 +565,7 @@ construct CfxSPentagonal() extends Test {
         // 1,5,12,22,35,51 => sum=126
         return s
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(126); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(126) return e }
 }
 
 construct CfxSPerfectSquareCount() extends Test {
@@ -588,6 +588,6 @@ construct CfxSPerfectSquareCount() extends Test {
         // perfect squares 1..100: 1,4,9,16,25,36,49,64,81,100 = 10
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 

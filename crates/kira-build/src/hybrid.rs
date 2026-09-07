@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam};
+use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam, HybridSanitizer};
 use kira_ir::IrProgram;
 use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 use kira_semantics_model::Type;
@@ -159,8 +159,9 @@ pub fn engines(program: &IrProgram) -> Vec<Execution> {
 
 /// How many functions the compiled bytecode half carries beyond the program's.
 ///
-/// The VM synthesizes widen helpers and appends them, so this is a subtraction
-/// rather than a count of anything the IR holds. A module with *fewer*
+/// The bytecode compiler may append functions the IR never named, so this is a
+/// subtraction rather than a count of anything the IR holds. A module with
+/// *fewer*
 /// functions than the program is a compiler bug, and is reported as one rather
 /// than wrapping into an enormous count.
 pub fn internal_function_count(
@@ -185,7 +186,7 @@ pub fn internal_function_count(
 /// records the name the backend *emitted*, never a second guess at it.
 ///
 /// `internal_functions` is how many functions the compiled bytecode half
-/// carries beyond the program's own — the VM's synthesized widen helpers. It is
+/// carries beyond the program's own. It is
 /// taken from the compiled module rather than recomputed, for the same reason
 /// `exports` is taken from the backend: the manifest records what was built.
 pub fn manifest(
@@ -217,6 +218,52 @@ pub fn manifest_with_foreign_paths(
     internal_functions: u32,
     foreign_paths: &[Option<String>],
 ) -> Result<HybridManifest, HybridLibraryError> {
+    manifest_with_options(
+        program,
+        HybridManifestOptions {
+            module_name,
+            bytecode_file,
+            native_file,
+            exports,
+            internal_functions,
+            foreign_paths,
+            sanitizer: HybridSanitizer::None,
+        },
+    )
+}
+
+/// Artifact and runtime details recorded around a hybrid program's functions.
+pub struct HybridManifestOptions<'a> {
+    /// Module name used by diagnostics.
+    pub module_name: &'a str,
+    /// Bytecode payload path.
+    pub bytecode_file: &'a str,
+    /// Native payload path.
+    pub native_file: &'a str,
+    /// Native function ids and emitted symbols.
+    pub exports: &'a [(u32, String)],
+    /// Synthesized functions appended to the bytecode table.
+    pub internal_functions: u32,
+    /// Direct foreign-library paths in import order.
+    pub foreign_paths: &'a [Option<String>],
+    /// Native instrumentation required before the library loads.
+    pub sanitizer: HybridSanitizer,
+}
+
+/// Describes `program` with its artifact and runtime options.
+pub fn manifest_with_options(
+    program: &IrProgram,
+    options: HybridManifestOptions<'_>,
+) -> Result<HybridManifest, HybridLibraryError> {
+    let HybridManifestOptions {
+        module_name,
+        bytecode_file,
+        native_file,
+        exports,
+        internal_functions,
+        foreign_paths,
+        sanitizer,
+    } = options;
     let functions = program
         .functions
         .iter()
@@ -266,6 +313,7 @@ pub fn manifest_with_foreign_paths(
         entry: program.main,
         functions,
         internal_functions,
+        sanitizer,
         // One row per `@FFI.Extern` import, carrying the resolved library path
         // for the direct Libffi host. An empty path is an excluded optional
         // library and remains a call-time unavailable binding.
@@ -322,16 +370,24 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         // so it never crosses either — a hold taken on one side and released on
         // the other is a count neither engine owns. It is not surface, so no
         // signature an author writes reaches this arm.
-        Type::CString | Type::CBlock | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+        Type::CString
+        | Type::CBlock
+        | Type::NativeState(_)
+        | Type::Task(_)
+        | Type::MainThreadTask(_)
+        | Type::RuntimeType
+        | Type::Cell(_) => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,
             });
         }
-        // A verified IR carries no `Error` type: reaching one means the frontend
-        // let a broken program through, which is a compiler bug rather than
-        // something to encode into an artifact.
-        Type::Error => {
+        // A verified IR carries no `distinct` type either — `kira-ir` rewrites
+        // every one to the scalar it is, so a manifest row describes that
+        // scalar's tag — and no `Error` type: reaching either means the
+        // frontend let a broken program through, which is a compiler bug rather
+        // than something to encode into an artifact.
+        Type::Distinct(_) | Type::Error => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,
@@ -392,6 +448,9 @@ pub fn build_hybrid_library(
             // process, so it is this machine's by construction: there is no
             // second machine for the bytecode half to be running on.
             target: kira_llvm_backend::NativeBuildTarget::host(),
+            // A consumer-library build carries no sanitize choice yet; the
+            // program paths thread the user's flag.
+            sanitize: kira_llvm_backend::Sanitize::None,
         },
     )?;
 

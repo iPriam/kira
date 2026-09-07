@@ -71,7 +71,7 @@ impl<'a> Analyzer<'a> {
                     );
                     continue;
                 }
-                if !self.construct_families.contains_key(&name) {
+                let Some(name) = self.visible_family_key(&name) else {
                     self.emit(
                         parent.span,
                         "KSEM200",
@@ -80,7 +80,7 @@ impl<'a> Analyzer<'a> {
                         ),
                     );
                     continue;
-                }
+                };
                 if !seen.insert(name.clone()) {
                     self.emit(
                         parent.span,
@@ -389,8 +389,10 @@ impl<'a> Analyzer<'a> {
         for name in reachable {
             if let Some(info) = self.construct_families.get_mut(&name) {
                 let tag = info.variants.len() as u32;
-                info.variants
-                    .push(super::ConstructVariant { struct_id: id, tag });
+                info.variants.push(super::ConstructVariant {
+                    ty: Type::Struct(id),
+                    tag,
+                });
                 registered.push((info.enum_id, tag));
             }
         }

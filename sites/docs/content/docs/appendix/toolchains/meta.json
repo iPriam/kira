@@ -1,4 +1,12 @@
 {
   "title": "Toolchains",
-  "pages": ["index", "llvm"]
+  "pages": [
+    "index",
+    "installing",
+    "selecting",
+    "from-a-checkout",
+    "llvm",
+    "cross-compilation",
+    "releases"
+  ]
 }

@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use kira_dynamic_ffi::{ForeignLibrary, ForeignLibraryError};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
-    HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeReturn, NativeStateError,
+    HostCapabilities, LinuxSyscall, MainThreadError, MainThreadHandle, MainThreadRequest,
+    MainThreadResponse, NativeArg, NativeCallError, NativeReturn, NativeStateError,
     NativeStateToken, NativeStateTypeId, NativeStateValue, SyscallError, syscall,
 };
 
@@ -243,6 +244,20 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.call_native(function_id, args)
     }
 
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        self.inner.main_thread(request)
+    }
+
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        self.inner.main_thread_join(handle)
+    }
+
     fn native_state_create(
         &mut self,
         ty: NativeStateTypeId,
@@ -268,8 +283,12 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.native_state_replace(token, ty, value)
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.inner.native_state_free(token)
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_release(token)
     }
 
     /// Enters this process's kernel, which is the same one the emitted call

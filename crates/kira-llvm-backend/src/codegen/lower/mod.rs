@@ -27,6 +27,7 @@ mod foreign;
 mod foreign_aggregate;
 mod foreign_field;
 mod math;
+mod numeric;
 mod operators;
 mod stmt;
 mod syscall;
@@ -81,9 +82,15 @@ impl<'a> Codegen<'a> {
             .iter()
             .any(|def| def.drop_glue == Some(index as u32));
         let live = self.allocate_live_flags(function, &locals)?;
+        let lifecycle = self
+            .lifecycle_functions
+            .get(index)
+            .copied()
+            .unwrap_or(false);
         let mut body = FunctionLowering {
             codegen: self,
             function,
+            lifecycle,
             drop_glue,
             locals,
             live,
@@ -156,8 +163,10 @@ impl<'a> Codegen<'a> {
         Ok(locals)
     }
 
-    /// Allocates the liveness flag of every local whose type runs a user
-    /// `Drop`, and initializes it.
+    /// Allocates the liveness flag of every heap-owning local and initializes
+    /// it. Scope releases can happen before a frame returns, so the final
+    /// release plan needs the same empty/non-empty bit for strings, arrays,
+    /// enums, and ordinary aggregates as it already needs for user `Drop`.
     ///
     /// A parameter arrives holding a value, so its flag starts set; every other
     /// slot starts holding its type's zero, which is nothing.
@@ -168,7 +177,7 @@ impl<'a> Codegen<'a> {
     ) -> Result<Vec<Option<LLVMValueRef>>, LlvmError> {
         let mut flags = Vec::with_capacity(locals.len());
         for (slot, &ty) in function.locals.iter().enumerate() {
-            if !self.program.types.runs_user_drop(ty) {
+            if !self.program.types.owns_heap(ty) {
                 flags.push(None);
                 continue;
             }
@@ -281,11 +290,21 @@ impl<'a> Codegen<'a> {
                 | Type::ForeignPtr(_)
                 | Type::NativeState(_)
                 | Type::Task(_)
+                | Type::MainThreadTask(_)
+                | Type::RuntimeType
                 | Type::CBlock => LLVMConstInt(llvm_type, 0, 0),
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
                     return Err(LlvmError::internal(
                         "a CString local (it is a foreign-parameter-only type)",
+                    ));
+                }
+                // A `distinct` local holds the zero of the scalar it is, and
+                // `kira-ir` has already rewritten the slot's type to that
+                // scalar — so `llvm_type` above would have refused first.
+                Type::Distinct(_) => {
+                    return Err(LlvmError::internal(
+                        "a distinct type that lowering did not erase",
                     ));
                 }
                 // Every field zeroed, which for a `String` field is the null
@@ -303,7 +322,7 @@ impl<'a> Codegen<'a> {
     /// Builds a private constant global holding `text`, returning a pointer to
     /// its bytes (the null pointer for the empty string, which never
     /// allocates).
-    fn string_constant(&mut self, text: &str) -> LLVMValueRef {
+    pub(in crate::codegen) fn string_constant(&mut self, text: &str) -> LLVMValueRef {
         let bytes = text.as_bytes();
         // SAFETY: every type and value below is from this live module; `bytes`
         // outlives the constant-array copy LLVM makes.
@@ -366,6 +385,8 @@ impl<'a> Codegen<'a> {
 pub(super) struct FunctionLowering<'a, 'p> {
     pub(super) codegen: &'a mut Codegen<'p>,
     pub(super) function: &'p IrFunction,
+    /// Whether this body can execute as part of a lifecycle stack.
+    lifecycle: bool,
     /// Whether this function is a type's user `Drop` body, which is what
     /// excludes its receiver from the release plan.
     pub(super) drop_glue: bool,

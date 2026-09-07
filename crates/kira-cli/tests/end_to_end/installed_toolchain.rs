@@ -131,6 +131,24 @@ fn publish_fixture_release(feed: &Path, staging: &Path) {
         std::fs::write(bin.join(archive), "fixture runtime archive")
             .expect("stage the runtime-archive fixture");
     }
+    #[cfg(target_os = "macos")]
+    for target in [
+        format!("{}-apple-darwin", std::env::consts::ARCH),
+        "aarch64-apple-ios".to_owned(),
+        "aarch64-apple-ios-sim".to_owned(),
+        "aarch64-apple-tvos".to_owned(),
+        "aarch64-apple-tvos-sim".to_owned(),
+        "aarch64-apple-visionos".to_owned(),
+        "aarch64-apple-visionos-sim".to_owned(),
+    ] {
+        let directory = bin.join(target);
+        std::fs::create_dir_all(&directory).expect("create Apple runner directory");
+        std::fs::write(
+            directory.join("libkira_app_runner.a"),
+            "fixture Apple runner archive",
+        )
+        .expect("stage the Apple runner fixture");
+    }
     copy_tree(
         &repository_root().join("foundation"),
         &payload.join("foundation"),

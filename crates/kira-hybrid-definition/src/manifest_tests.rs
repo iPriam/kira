@@ -38,7 +38,29 @@ fn manifest() -> HybridManifest {
         foreign: Vec::new(),
         foreign_aggregates: Default::default(),
         internal_functions: 0,
+        sanitizer: HybridSanitizer::None,
     }
+}
+
+#[test]
+fn address_sanitizer_round_trips_in_the_appended_tail() {
+    let mut original = manifest();
+    original.sanitizer = HybridSanitizer::Address;
+    let bytes = original.to_bytes();
+    let decoded = HybridManifest::from_bytes(&bytes).expect("decodes");
+    assert_eq!(decoded, original);
+    assert_eq!(bytes.last(), Some(&1));
+
+    let without_appended_byte =
+        HybridManifest::from_bytes(&bytes[..bytes.len() - 1]).expect("older tail remains valid");
+    assert_eq!(without_appended_byte.sanitizer, HybridSanitizer::None);
+
+    let mut unknown = bytes;
+    *unknown.last_mut().expect("sanitizer byte") = 2;
+    assert_eq!(
+        HybridManifest::from_bytes(&unknown),
+        Err(ManifestDecodeError::UnknownSanitizer(2))
+    );
 }
 
 fn foreign_manifest() -> HybridManifest {
@@ -238,7 +260,7 @@ fn an_internal_function_count_round_trips_without_a_foreign_section() {
     assert!(decoded.foreign.is_empty());
 }
 
-/// A program that widens nothing writes the bytes it always did.
+/// A bytecode half that appends nothing writes the bytes it always did.
 ///
 /// What keeps the field append-only: the tail is omitted when the count is
 /// zero, so a manifest predating it decodes identically and one written now

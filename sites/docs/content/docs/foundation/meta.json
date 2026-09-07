@@ -1,0 +1,12 @@
+{
+  "title": "Foundation",
+  "pages": [
+    "index",
+    "geometry-and-values",
+    "filesystem",
+    "images",
+    "compiling-kira",
+    "running-kira",
+    "testing"
+  ]
+}

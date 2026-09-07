@@ -1,3 +1,5 @@
+import Foundation
+
 // Ownership stress: `move` into consuming functions, owned aggregates created
 // and dropped in tight loops, structs holding owned array fields churned
 // repeatedly. Designed to expose leaks, double-frees, and use-after-free under
@@ -14,10 +16,8 @@ function ownConsumeString(s: String) -> Int {
 
 function ownConsumeBucket(b: OwnBucket) -> Int {
     var total = b.tag
-    var i = 0
-    while i < b.items.count {
+    for i in 0..b.items.count {
         total = total + b.items[i]
-        i = i + 1
     }
     return total
 }

@@ -11,19 +11,19 @@
 // handed on its address, and this side declares the matching `@FFI.Pointer` and
 // reads members through it.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiView {
     let data: CString
     let length: U64
 }
 
-@FFI.Pointer { target: FfiView; ownership: borrowed; }
+@FFI.Pointer { target: FfiView, ownership: borrowed }
 struct FfiViewPtr {}
 
-@FFI.Callback { abi: c; params: [I32, FfiView]; result: Int; }
+@FFI.Callback { abi: c, params: [I32, FfiView], result: Int }
 struct Viewer {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiQuad {
     let a: Float = 0.0
     let b: Float = 0.0
@@ -31,21 +31,21 @@ struct FfiQuad {
     let d: Float = 0.0
 }
 
-@FFI.Pointer { target: FfiQuad; ownership: borrowed; }
+@FFI.Pointer { target: FfiQuad, ownership: borrowed }
 struct FfiQuadPtr {}
 
-@FFI.Callback { abi: c; params: [FfiQuad, I32]; result: Float; }
+@FFI.Callback { abi: c, params: [FfiQuad, I32], result: Float }
 struct QuadTaker {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_call_viewer; abi: c; }
-function callViewer(viewCb: Viewer, tag: I32, data: CString, length: U64) -> Int;
-@FFI.Extern { library: ffifixture; symbol: ffi_store_viewer; abi: c; }
-function storeViewer(viewCb: Viewer) -> Void;
-@FFI.Extern { library: ffifixture; symbol: ffi_run_stored_viewer; abi: c; }
-function runStoredViewer(tag: I32, data: CString, length: U64) -> Int;
-@FFI.Extern { library: ffifixture; symbol: ffi_call_quad_taker; abi: c; }
+@FFI.Extern { library: ffifixture, symbol: ffi_call_viewer, abi: c }
+function callViewer(viewCb: Viewer, tag: I32, data: CString, length: U64) -> Int
+@FFI.Extern { library: ffifixture, symbol: ffi_store_viewer, abi: c }
+function storeViewer(viewCb: Viewer) -> Void
+@FFI.Extern { library: ffifixture, symbol: ffi_run_stored_viewer, abi: c }
+function runStoredViewer(tag: I32, data: CString, length: U64) -> Int
+@FFI.Extern { library: ffifixture, symbol: ffi_call_quad_taker, abi: c }
 function callQuadTaker(take: QuadTaker, a: Float, b: Float, c: Float, d: Float,
-                       tag: I32) -> Float;
+                       tag: I32) -> Float
 
 // The struct arrives behind a pointer, so its members are read the way every
 // other C-owned struct's are. `tag` is a scalar beside it, which is what makes

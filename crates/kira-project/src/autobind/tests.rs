@@ -100,21 +100,21 @@ fn a_function_and_the_types_its_signature_reaches_are_bound() {
 
     assert!(
         text.contains(
-            "@FFI.Extern { library: demo; symbol: demo_open; abi: c; }\n\
-             function demo_open(path: CString, index: I32): demo_engine_ptr;"
+            "@FFI.Extern { library: demo, symbol: demo_open, abi: c }\n\
+             function demo_open(path: CString, index: I32) -> demo_engine_ptr"
         ),
         "{text}"
     );
     assert!(
-        text.contains("@FFI.Pointer { target: demo_engine; ownership: borrowed; }"),
+        text.contains("@FFI.Pointer { target: demo_engine, ownership: borrowed }"),
         "{text}"
     );
     assert!(
-        text.contains("@FFI.Alias { target: demo_engine; }"),
+        text.contains("@FFI.Alias { target: demo_engine }"),
         "an opaque C type gets an alias so its pointer has a target: {text}"
     );
     assert!(
-        text.contains("@FFI.Struct { layout: c; }\nstruct demo_metrics {\n    var ascender: F32"),
+        text.contains("@FFI.Struct { layout: c }\nstruct demo_metrics {\n    var ascender: F32"),
         "{text}"
     );
 }
@@ -132,12 +132,12 @@ fn a_struct_forward_declared_before_it_is_defined_keeps_its_fields() {
     let text = bind(&package, &library(&["demo.h"]));
 
     assert!(
-        text.contains("@FFI.Struct { layout: c; }\nstruct demo_caps {\n    var count: I32"),
+        text.contains("@FFI.Struct { layout: c }\nstruct demo_caps {\n    var count: I32"),
         "a type the header defines is a struct even when a forward declaration \
          named it first: {text}"
     );
     assert!(
-        !text.contains("@FFI.Alias { target: demo_caps; }"),
+        !text.contains("@FFI.Alias { target: demo_caps }"),
         "a defined type must not also be declared as an opaque handle, which \
          would alias to itself and have no layout to pass by value: {text}"
     );
@@ -155,11 +155,11 @@ fn a_handle_typedef_binds_the_functions_that_take_it() {
     let text = bind(&package, &library(&["demo.h"]));
 
     assert!(
-        text.contains("function demo_device_release(device: demo_deviceImpl_ptr): Void;"),
+        text.contains("function demo_device_release(device: demo_deviceImpl_ptr) -> Void"),
         "a pointer the header typedef'd is still a pointer to a named type: {text}"
     );
     assert!(
-        text.contains("@FFI.Alias { target: demo_deviceImpl; }"),
+        text.contains("@FFI.Alias { target: demo_deviceImpl }"),
         "the handle's pointee is declared so the pointer has a target: {text}"
     );
 }
@@ -201,20 +201,20 @@ fn nested_pointers_keep_each_c_pointer_layer_in_the_generated_binding() {
 
     assert!(
         text.contains(
-            "@FFI.Pointer { target: demo_engine; ownership: borrowed; }\n\
+            "@FFI.Pointer { target: demo_engine, ownership: borrowed }\n\
              struct demo_engine_ptr {}"
         ),
         "the first pointer layer is named: {text}"
     );
     assert!(
         text.contains(
-            "@FFI.Pointer { target: demo_engine_ptr; ownership: borrowed; }\n\
+            "@FFI.Pointer { target: demo_engine_ptr, ownership: borrowed }\n\
              struct demo_engine_ptr_ptr {}"
         ),
         "the out-parameter pointer layer is named rather than skipped: {text}"
     );
     assert!(
-        text.contains("function demo_create(out: demo_engine_ptr_ptr): I32;"),
+        text.contains("function demo_create(out: demo_engine_ptr_ptr) -> I32"),
         "the function keeps the nested pointer type: {text}"
     );
 }
@@ -231,12 +231,12 @@ fn selected_functions_pull_defined_pointer_targets_into_the_binding() {
 
     assert!(
         text.contains(
-            "@FFI.Struct { layout: c; }\nstruct demo_row {\n    var data: RawPtr\n    var size: U32\n}"
+            "@FFI.Struct { layout: c }\nstruct demo_row {\n    var data: RawPtr\n    var size: U32\n}"
         ),
         "a defined record reached only through a selected pointer parameter is emitted: {text}"
     );
     assert!(
-        text.contains("function demo_read(row: demo_row_ptr): I32;"),
+        text.contains("function demo_read(row: demo_row_ptr) -> I32"),
         "the pointer still carries the record target: {text}"
     );
 }
@@ -251,11 +251,18 @@ fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
     );
     let text = bind(&package, &library(&["demo.h"]));
 
+    // Plain `char` takes its signedness from the target, and the binding
+    // reports the target's, so the element name follows it rather than one
+    // platform's. See `plain_char_spelling` for which targets sign it.
+    let byte = plain_char_spelling();
     assert!(
-        text.contains("@FFI.Array { element: I8; count: 56; }"),
+        text.contains(&format!("@FFI.Array {{ element: {byte}, count: 56 }}")),
         "{text}"
     );
-    assert!(text.contains("var opaque: I8_array_56"), "{text}");
+    assert!(
+        text.contains(&format!("var opaque: {byte}_array_56")),
+        "{text}"
+    );
 }
 
 #[test]
@@ -269,11 +276,11 @@ fn a_function_pointer_becomes_a_callback_named_for_its_typedef() {
     let text = bind(&package, &library(&["demo.h"]));
 
     assert!(
-        text.contains("@FFI.Callback { abi: c; params: [I32, RawPtr]; result: I32; }"),
+        text.contains("@FFI.Callback { abi: c, params: [I32, RawPtr], result: I32 }"),
         "{text}"
     );
     assert!(
-        text.contains("function demo_install(hook: demo_hook): Void;"),
+        text.contains("function demo_install(hook: demo_hook) -> Void"),
         "{text}"
     );
 }
@@ -291,12 +298,36 @@ fn integer_width_is_read_from_the_target_rather_than_the_keyword() {
         "windows" => "I32",
         _ => "Int",
     };
+    let byte = plain_char_spelling();
     assert!(
         text.contains(&format!(
-            "function demo_widths(a: I8, b: I16, c: I32, d: {long_spelling}, e: U64, f: Bool): Void;"
+            "function demo_widths(a: {byte}, b: I16, c: I32, d: {long_spelling}, e: U64, f: Bool) \
+             -> Void"
         )),
         "{text}"
     );
+}
+
+/// The Kira type a plain C `char` binds to on this host.
+///
+/// `char` is a third type beside `signed char` and `unsigned char`, and which
+/// of the two it matches is the target's choice. The binding reports what the
+/// target says, so a test that pinned one spelling would pass on one machine
+/// and fail on another for a binding that is right on both.
+///
+/// The rule is not the architecture alone, which is what this said before and
+/// why it failed on Apple silicon: base AAPCS leaves `char` unsigned on ARM,
+/// and both Apple and Microsoft override that to signed on every architecture
+/// they ship. So it is unsigned only on ARM somewhere that follows the base
+/// ABI — Linux and the BSDs — and signed everywhere else.
+fn plain_char_spelling() -> &'static str {
+    let arm = matches!(std::env::consts::ARCH, "aarch64" | "arm");
+    let overrides_to_signed = matches!(std::env::consts::OS, "macos" | "ios" | "windows");
+    if arm && !overrides_to_signed {
+        "U8"
+    } else {
+        "I8"
+    }
 }
 
 #[test]
@@ -311,7 +342,7 @@ fn a_declaration_the_seam_cannot_carry_is_written_down_with_its_reason() {
     let text = bind(&package, &library(&["demo.h"]));
 
     assert!(
-        text.contains("function demo_plain(value: I32): I32;"),
+        text.contains("function demo_plain(value: I32) -> I32"),
         "{text}"
     );
     assert!(

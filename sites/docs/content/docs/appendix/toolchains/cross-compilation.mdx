@@ -1,0 +1,37 @@
+---
+title: Cross Compilation
+description: "`kira build --target`, the three settings that go with it, why relocation model and linkage are separate flags, and the three things that must be in place before a cross link."
+---
+
+`kira build --target <arch-os-abi>` emits and links for a machine that is not this one.
+
+```bash
+kira build --target aarch64-linux-gnu
+kira check --target aarch64-linux-gnu
+```
+
+The triple is the same `arch-os-abi` spelling a manifest's `nativeLibraries` rows are keyed by, so a package's `aarch64-linux-gnu` archives are the ones such a build selects, and a `package.kira` may name the triple as its `buildTarget` instead of repeating it on every command line.
+
+`--target` implies the LLVM backend: the interpreter runs bytecode here, not on the other machine. `run`, `test`, and `debug` refuse a cross target by name for the same reason, because each of them has to start the program it built, and a `live` session is always this machine's, since a runner reloads the app in its own process.
+
+Artifacts go under `.kira-build/<toolchain-triple>/`, so a host build and a cross build of one program never overwrite each other.
+
+## Three Settings
+
+**`--sysroot <dir>`**, or the `KIRA_SYSROOT` environment variable, names the directory holding the target machine's headers and libraries: the one with `usr/include/stdio.h` under it.
+
+There is no compiled-in default, because a sysroot is a property of the machine doing the building rather than of the package. Fedora's `sysroot-aarch64-fc41-glibc` unpacks to `/usr/aarch64-redhat-linux/sys-root/fc41`, Debian's `libc6-dev-arm64-cross` installs into `/usr/aarch64-linux-gnu`, and a container image puts it wherever it likes. `rpm -ql <sysroot-package>` and `dpkg -L <cross-libc-package>` are how to find the one a given machine has.
+
+**`--relocation-model pic|static`** chooses between an ordinary position-independent executable and an absolutely-addressed, non-PIE image. It defaults to `pic` and applies only to a `--target` build; host executables link position-independent everywhere Kira runs.
+
+**`--linkage dynamic|static`** chooses whether the program still needs a loader to start. It defaults to `dynamic` and also applies only to a `--target` build.
+
+The last two are separate flags because they are separate decisions, made by different halves of the build: the relocation model is what the code generator bakes into the objects, and the linkage is what the linker makes of them. A program can be absolutely addressed and still name `/lib/ld-linux-aarch64.so.1` as its interpreter, which on a machine that has no such file the kernel refuses before `main`, so the program never runs to report it. A userland with no dynamic loader wants both `static` answers; a statically linked PIE is an ordinary thing to want and asks for only the second.
+
+## Three Prerequisites
+
+**The managed LLVM must carry the target's code generator.** `llvm-metadata.toml` pins `X86;AArch64;WebAssembly` so every published bundle can emit for every machine Kira publishes for, but a bundle installed before that pin carries only the one belonging to the runner that built it. Such a build reports the missing generator by name, and `knvm install-llvm --force` replaces the bundle.
+
+**The managed LLVM must ship `lld`.** clang selects a linker rather than containing one, and the only linker a machine has by default builds for that machine: a Windows host handed an ELF object to a PE linker and got `unrecognised emulation mode: elf_x86_64`. A bundle without `lld` refuses the cross link by name.
+
+**`libkira_native_bridge.a` must exist built for the target.** It is the Rust `staticlib` every native Kira program links, and the Rust standard library inside it is that machine's code. Build it with `cargo build -p kira-native-bridge --target <toolchain-triple>`; the compiler finds cargo's output beside its own, and `KIRA_NATIVE_BRIDGE_<TARGET>` names it outright when it lives somewhere else.

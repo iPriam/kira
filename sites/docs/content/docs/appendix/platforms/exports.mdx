@@ -1,6 +1,6 @@
 ---
 title: Exports
-description: The `kira export` platform scaffolds — the merged Apple Xcode workspace, Windows/Linux CMake presets, the Android Gradle scaffold, and the Web/WASM bundle.
+description: "The `kira export` platform scaffolds: the merged Apple Xcode workspace, Windows and Linux CMake presets, the Android Gradle scaffold, and the Web bundle."
 ---
 
 `kira export` generates platform project/export scaffolds. The target is optional inside a Kira project; profiles are selected with `--profile debug|profiler|release`, and Web accepts `--surface dom|webgpu|hybrid`.
@@ -19,7 +19,7 @@ kira export linux
 
 ## Apple
 
-Apple export cross-builds every platform it addresses — macOS for this machine's architecture, iOS/tvOS/visionOS as device *and* simulator slices — and links each slice into its platform target through `OTHER_LDFLAGS`. A hybrid app's native half is compiled to a bare object and linked **into the application binary**; its bundle records `@kira-self` as the native half, so the running image is the program's own machine code.
+Apple export cross-builds every platform it addresses, macOS for this machine's architecture and iOS, tvOS, and visionOS as device *and* simulator slices, and links each slice into its platform target through `OTHER_LDFLAGS`. A hybrid app's native half is compiled to a bare object and linked **into the application binary**; its bundle records `@kira-self` as the native half, so the running image is the program's own machine code.
 
 ```text
 exports/apple/
@@ -33,13 +33,13 @@ exports/apple/
   build/<slice>/                      per-architecture objects and archives
 ```
 
-The app itself hosts the session through a static runner archive (`libkira_app_runner.a`), located beside the compiler or under cargo's per-target layout. When an archive for a slice has not been built, the command says so exactly:
+The app itself hosts the session through a static runner archive (`libkira_app_runner.a`), located beside the compiler. macOS release toolchains include every Apple platform archive. `knvm binstall` installs the required Rust targets, builds the same archives, and stages them into a dev toolchain by default:
 
 ```bash
-cargo build -p kira-app-runner --target aarch64-apple-ios-sim   # example slice
+knvm binstall
 ```
 
-A platform whose slices cannot all be built still opens in Xcode: its target compiles with a `KIRA_TARGET_UNAVAILABLE` guard and names the reason in the export report. Nothing is silently dropped.
+`kira export apple` groups failures under explicit platform bullets and marks every cause line with `|`, so copied output keeps its boundaries when whitespace is collapsed. A platform whose slices cannot all be built still opens in Xcode when another platform succeeds: its target compiles with a `KIRA_TARGET_UNAVAILABLE` guard and names the reason in the export report. If every platform fails, no workspace is written.
 
 Exported apps carry a Run Script build phase (`Rebuild Kira`) that invokes `kira export apple <root> --xcode-rebuild $PLATFORM_NAME`, so editing Kira source and pressing Build in Xcode regenerates that SDK's artifacts before linking.
 

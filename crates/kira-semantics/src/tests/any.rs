@@ -1,7 +1,7 @@
 //! Analysis of `Any`, Kira's top type: what widens into it, what does not, and
 //! where the erasure lands in the tree.
 
-use super::{analyze_text, codes};
+use super::{analyze_text, codes, diagnostics};
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirStmt};
 
@@ -207,8 +207,8 @@ fn any_cannot_cross_the_c_seam() {
     assert_eq!(
         codes(
             r#"
-@FFI.Extern { library: l; symbol: host_take; abi: c; }
-function hostTake(value: Any) -> I32;
+@FFI.Extern { library: l, symbol: host_take, abi: c }
+function hostTake(value: Any) -> I32
 
 @Main
 function main() {
@@ -294,4 +294,140 @@ function main() {
         )
         .is_empty()
     );
+}
+
+/// `is` and `as` read an `Any`: a value whose type is already known has
+/// nothing to ask, and a type no `Any` can hold can never answer.
+#[test]
+fn is_and_as_need_an_any_and_an_erasable_target() {
+    let fine = "struct P { let x: Int }\n\
+                @Main function main() {\n    let a: Any = P(x: 1)\n\
+                if a is P { print((a as P).x) }\n    return\n}";
+    assert!(diagnostics(fine).is_empty(), "{:?}", codes(fine));
+    assert_eq!(
+        codes("@Main function main() { let n = 1 print(n is Int) return }"),
+        vec!["KSEM358"]
+    );
+    assert_eq!(
+        codes("@Main function main() { let a: Any = 1 print(a is Any) return }"),
+        vec!["KSEM359"]
+    );
+    assert_eq!(
+        codes("@Main function main() { let a: Any = 1 let v: Void = a as Void return }"),
+        vec!["KSEM359"]
+    );
+}
+
+/// `value.type` answers for every inhabited value, and its descriptor has a
+/// closed set of members.
+#[test]
+fn a_value_answers_with_its_runtime_type() {
+    let ok = "struct Point { let x: Int = 1 }\n\
+              @Main function main() {\n\
+                  let p = Point()\n\
+                  print(p.type.name)\n\
+                  print(p.type.kind)\n\
+                  print(p.type.package)\n\
+                  print(p.type.arguments.count)\n\
+                  print(p.type.conformances.count)\n\
+                  let erased: Any = Point()\n\
+                  print(erased.type == p.type)\n\
+                  return\n\
+              }";
+    assert!(diagnostics(ok).is_empty(), "{:?}", codes(ok));
+}
+
+/// A `Void` call names no value, so it has no type to describe.
+#[test]
+fn a_void_expression_has_no_runtime_type() {
+    let text = "function nothing() { return }\n\
+                @Main function main() { let t = nothing().type return }";
+    assert_eq!(codes(text), vec!["KSEM362"]);
+}
+
+/// The descriptor's members are the whole surface: fields, methods, and layout
+/// stay compile-time facts.
+#[test]
+fn a_descriptor_has_no_member_beyond_the_documented_five() {
+    let text = "struct Point { let x: Int = 1 }\n\
+                @Main function main() { print(Point().type.fields) return }";
+    assert_eq!(codes(text), vec!["KSEM363"]);
+}
+
+/// Two descriptors compare, and a descriptor does not compare with anything
+/// else.
+#[test]
+fn descriptors_compare_only_with_descriptors() {
+    let text = "struct Point { let x: Int = 1 }\n\
+                @Main function main() { print(Point().type == 1) return }";
+    assert!(!codes(text).is_empty());
+}
+
+/// A cast under `try` is a fallible step the enclosing `attempt` handles; the
+/// same cast without one traps and needs no handler.
+#[test]
+fn a_cast_under_try_is_handled_like_any_other_failure() {
+    let handled = "struct Point { let x: Int = 1 }\n\
+                   @Main function main() {\n\
+                       let boxed: Any = Point()\n\
+                       attempt {\n\
+                           let p = try boxed as Point\n\
+                           print(p.x)\n\
+                       } handle {\n\
+                           Mismatch(actual) { print(actual.name) }\n\
+                       }\n\
+                       return\n\
+                   }";
+    assert!(diagnostics(handled).is_empty(), "{:?}", codes(handled));
+
+    // The handler must cover the failure, exactly as it must for a call.
+    let unhandled = "struct Point { let x: Int = 1 }\n\
+                     @Main function main() {\n\
+                         let boxed: Any = Point()\n\
+                         attempt {\n\
+                             let p = try boxed as Point\n\
+                             print(p.x)\n\
+                         } handle {\n\
+                         }\n\
+                         return\n\
+                     }";
+    assert!(
+        codes(unhandled).contains(&"KSEM139".to_owned()),
+        "{:?}",
+        codes(unhandled)
+    );
+
+    // Outside an `attempt` a cast is not fallible, so `try` is refused there
+    // for the reason it is always refused.
+    let loose = "struct Point { let x: Int = 1 }\n\
+                 @Main function main() {\n\
+                     let boxed: Any = Point()\n\
+                     let p = try boxed as Point\n\
+                     print(p.x)\n\
+                     return\n\
+                 }";
+    assert!(
+        codes(loose).contains(&"KSEM137".to_owned()),
+        "{:?}",
+        codes(loose)
+    );
+}
+
+/// A program may declare a `TypeCastError` of its own; the compiler's is a
+/// different type and a tried cast still reports through its own.
+#[test]
+fn a_programs_own_cast_error_name_does_not_capture_the_compilers() {
+    let text = "enum TypeCastError { Other }\n\
+                struct Point { let x: Int = 1 }\n\
+                @Main function main() {\n\
+                    let boxed: Any = Point()\n\
+                    attempt {\n\
+                        let p = try boxed as Point\n\
+                        print(p.x)\n\
+                    } handle {\n\
+                        Mismatch(actual) { print(actual.name) }\n\
+                    }\n\
+                    return\n\
+                }";
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
 }

@@ -4,10 +4,10 @@
 //! `extension.toml`, no Rust involved), and the language server wiring below.
 //!
 //! The server is `kira-language-server` from the `kira-lsp` crate. It speaks
-//! LSP over stdio, takes no CLI arguments, and publishes diagnostics —
-//! everything else answers MethodNotFound. There is deliberately no
-//! `language_server_initialization_options`: the server has no options to
-//! initialize.
+//! LSP over stdio, takes no CLI arguments, publishes diagnostics, and serves
+//! hover, completion, and definition/declaration requests. There is
+//! deliberately no `language_server_initialization_options`: the server has no
+//! options to initialize.
 
 use zed_extension_api::{
     self as zed, Command, LanguageServerId, Result, Worktree,

@@ -202,8 +202,8 @@ fn a_type_declaring_subscript_is_indexed_through_it() {
                  let width: Float
                  function subscript(anchor: Anchor) -> Float {
                      match anchor {
-                         Leading -> return 0.0;
-                         Trailing -> return width;
+                         Leading -> return 0.0
+                         Trailing -> return width
                      }
                  }
              }

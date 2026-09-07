@@ -41,9 +41,9 @@ fn last_struct_new(program: &HirProgram) -> Vec<HirExpr> {
 #[test]
 fn an_ffi_alias_of_a_scalar_crosses_the_extern_seam() {
     // `Address` aliases `U64`, so an extern taking one is a `U64` at the seam.
-    let text = "@FFI.Alias { target: U64; }\nstruct Address {}\n\
-         @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function use_addr(a: Address) -> U64;\n\
+    let text = "@FFI.Alias { target: U64 }\nstruct Address {}\n\
+         @FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function use_addr(a: Address) -> U64\n\
          @Main function main() { print(use_addr(0)) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -52,11 +52,11 @@ fn an_ffi_alias_of_a_scalar_crosses_the_extern_seam() {
 fn an_ffi_pointer_crosses_the_extern_seam_as_a_raw_ptr() {
     // A native pointer is one machine word: `Handle_ptr` reaches the seam as
     // `RawPtr`, which is a legal foreign parameter.
-    let text = "@FFI.Pointer { target: U8; ownership: borrowed; }\nstruct Handle_ptr {}\n\
-         @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function take(p: Handle_ptr) -> Handle_ptr;\n\
-         @FFI.Extern { library: l; symbol: t; abi: c; }\n\
-         function make() -> Handle_ptr;\n\
+    let text = "@FFI.Pointer { target: U8, ownership: borrowed }\nstruct Handle_ptr {}\n\
+         @FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function take(p: Handle_ptr) -> Handle_ptr\n\
+         @FFI.Extern { library: l, symbol: t, abi: c }\n\
+         function make() -> Handle_ptr\n\
          @Main function main() { let p = take(make()) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -64,19 +64,19 @@ fn an_ffi_pointer_crosses_the_extern_seam_as_a_raw_ptr() {
 #[test]
 fn an_ffi_alias_may_chain_through_a_pointer() {
     // `Opaque` aliases `Handle_ptr`, itself an `@FFI.Pointer` → `RawPtr`.
-    let text = "@FFI.Pointer { target: U8; ownership: borrowed; }\nstruct Handle_ptr {}\n\
-         @FFI.Alias { target: Handle_ptr; }\nstruct Opaque {}\n\
-         @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function take(p: Opaque) -> Void;\n\
-         @FFI.Extern { library: l; symbol: t; abi: c; }\n\
-         function make() -> Opaque;\n\
+    let text = "@FFI.Pointer { target: U8, ownership: borrowed }\nstruct Handle_ptr {}\n\
+         @FFI.Alias { target: Handle_ptr }\nstruct Opaque {}\n\
+         @FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function take(p: Opaque) -> Void\n\
+         @FFI.Extern { library: l, symbol: t, abi: c }\n\
+         function make() -> Opaque\n\
          @Main function main() { take(make()) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 #[test]
 fn an_ffi_alias_colliding_with_a_builtin_is_rejected() {
-    let text = "@FFI.Alias { target: U64; }\nstruct Int {}";
+    let text = "@FFI.Alias { target: U64 }\nstruct Int {}";
     assert!(
         codes(text).iter().any(|code| code == "KSEM130"),
         "{:?}",
@@ -88,7 +88,7 @@ fn an_ffi_alias_colliding_with_a_builtin_is_rejected() {
 
 #[test]
 fn a_c_layout_struct_zero_fills_an_empty_literal() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
          struct V { var a: I32\n var b: Bool\n var c: Float }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -104,7 +104,7 @@ fn a_c_layout_struct_zero_fills_an_empty_literal() {
 
 #[test]
 fn a_c_layout_struct_zero_fills_omitted_fields_around_an_initializer() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
          struct V { var a: I32\n var b: I32\n var c: I32 }\n\
          @Main function main() { let v = V { b: 7 }\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -120,7 +120,7 @@ fn a_c_layout_struct_zero_fills_omitted_fields_around_an_initializer() {
 
 #[test]
 fn a_c_layout_struct_is_constructed_zeroed_by_paren_call() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
          struct V { var a: I32\n var b: Bool }\n\
          @Main function main() { let v = V()\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -133,7 +133,7 @@ fn a_c_layout_struct_is_constructed_zeroed_by_paren_call() {
 
 #[test]
 fn a_c_layout_paren_call_refuses_positional_arguments() {
-    let text = "@FFI.Struct { layout: c; }\n\
+    let text = "@FFI.Struct { layout: c }\n\
          struct V { var a: I32 }\n\
          @Main function main() { let v = V(3)\n return }";
     assert!(
@@ -145,8 +145,8 @@ fn a_c_layout_paren_call_refuses_positional_arguments() {
 
 #[test]
 fn a_nested_c_layout_field_zero_fills_recursively() {
-    let text = "@FFI.Struct { layout: c; }\nstruct Inner { var x: I32 }\n\
-         @FFI.Struct { layout: c; }\nstruct Outer { var inner: Inner\n var y: I32 }\n\
+    let text = "@FFI.Struct { layout: c }\nstruct Inner { var x: I32 }\n\
+         @FFI.Struct { layout: c }\nstruct Outer { var inner: Inner\n var y: I32 }\n\
          @Main function main() { let o = Outer {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     // The outermost StructNew holds a nested StructNew and a zero.
@@ -169,7 +169,7 @@ fn a_nested_c_layout_field_zero_fills_recursively() {
 fn a_c_layout_field_with_no_zero_is_refused_when_omitted() {
     // A `String` is a Kira heap value with no C zero, so omitting it is refused
     // precisely rather than mis-initialized.
-    let text = "@FFI.Struct { layout: c; }\nstruct V { var label: String }\n\
+    let text = "@FFI.Struct { layout: c }\nstruct V { var label: String }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM186"),
@@ -182,7 +182,7 @@ fn a_c_layout_field_with_no_zero_is_refused_when_omitted() {
 fn a_pointer_field_zero_fills_to_null() {
     // `NULL` is what C zero-fills a pointer member to, so the omitted field has
     // a zero and the construction is clean.
-    let text = "@FFI.Struct { layout: c; }\nstruct V { var p: RawPtr }\n\
+    let text = "@FFI.Struct { layout: c }\nstruct V { var p: RawPtr }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -192,9 +192,9 @@ fn a_typed_foreign_pointer_field_zero_fills_to_null() {
     // The `nextInChain` shape every WebGPU descriptor carries: a member typed as
     // an `@FFI.Pointer` to a C-layout struct. It is the same pointer word a
     // `RawPtr` member is, so omitting it means `NULL` rather than being refused.
-    let text = "@FFI.Struct { layout: c; }\nstruct Chain { var kind: I32 }\n\
-         @FFI.Pointer { target: Chain; ownership: borrowed; }\nstruct ChainPtr {}\n\
-         @FFI.Struct { layout: c; }\nstruct V { var next: ChainPtr\n var width: U32 }\n\
+    let text = "@FFI.Struct { layout: c }\nstruct Chain { var kind: I32 }\n\
+         @FFI.Pointer { target: Chain, ownership: borrowed }\nstruct ChainPtr {}\n\
+         @FFI.Struct { layout: c }\nstruct V { var next: ChainPtr\n var width: U32 }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let fields = last_struct_new(&program(text));
@@ -206,7 +206,7 @@ fn a_typed_foreign_pointer_field_zero_fills_to_null() {
 
 #[test]
 fn a_c_layout_initializer_still_type_checks_its_value() {
-    let text = "@FFI.Struct { layout: c; }\nstruct V { var a: I32 }\n\
+    let text = "@FFI.Struct { layout: c }\nstruct V { var a: I32 }\n\
          @Main function main() { let v = V { a: true }\n return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM094"),
@@ -221,16 +221,16 @@ fn a_c_layout_initializer_still_type_checks_its_value() {
 fn an_ffi_array_declaration_type_checks_as_a_field() {
     // A C array is valid as a field of a C-layout struct, with its declared
     // extent applied during zero-fill.
-    let text = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
-         @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
+    let text = "@FFI.Array { element: U8, count: 4 }\nstruct Bytes4 {}\n\
+         @FFI.Struct { layout: c }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 #[test]
 fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
-    let text = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
-         @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
+    let text = "@FFI.Array { element: U8, count: 4 }\nstruct Bytes4 {}\n\
+         @FFI.Struct { layout: c }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n print(h.bytes[0])\n return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM244"),
@@ -238,8 +238,8 @@ fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
         codes(text)
     );
     // And the field it names does index.
-    let through_field = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
-         @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
+    let through_field = "@FFI.Array { element: U8, count: 4 }\nstruct Bytes4 {}\n\
+         @FFI.Struct { layout: c }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n print(h.bytes.elements.count)\n return }";
     assert!(
         diagnostics(through_field).is_empty(),
@@ -250,16 +250,16 @@ fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
 
 #[test]
 fn an_ffi_callback_as_an_extern_param_crosses_as_the_pointer_it_is() {
-    let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\nstruct Handler {}\n\
-         @FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function register(h: Handler) -> Void;\n\
+    let text = "@FFI.Callback { abi: c, params: [I32], result: Void }\nstruct Handler {}\n\
+         @FFI.Extern { library: l, symbol: s, abi: c }\n\
+         function register(h: Handler) -> Void\n\
          @Main function main() { return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 #[test]
 fn an_ffi_callback_declaration_alone_type_checks() {
-    let text = "@FFI.Callback { abi: c; params: [I32, RawPtr]; result: Int; }\nstruct Cb {}\n\
+    let text = "@FFI.Callback { abi: c, params: [I32, RawPtr], result: Int }\nstruct Cb {}\n\
          @Main function main() { return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
@@ -271,9 +271,9 @@ fn an_ffi_callback_declaration_alone_type_checks() {
 /// of one name describe one C type, not a collision.
 #[test]
 fn the_same_foreign_type_may_be_described_in_two_files() {
-    const POINTER: &str = "@FFI.Pointer { target: char; ownership: borrowed; }\n\
+    const POINTER: &str = "@FFI.Pointer { target: char, ownership: borrowed }\n\
                            struct char_ptr {}";
-    const ARRAY: &str = "@FFI.Array { element: U32; count: 2; }\nstruct U32_array_2 {}";
+    const ARRAY: &str = "@FFI.Array { element: U32, count: 2 }\nstruct U32_array_2 {}";
     let diagnostics = module_diagnostics(
         "import sokol\nimport vulkan\n@Main function main() { return }",
         &[
@@ -293,11 +293,11 @@ fn a_foreign_type_described_two_different_ways_still_collides() {
         &[
             (
                 "first",
-                "@FFI.Array { element: U32; count: 2; }\nstruct U32_array_2 {}",
+                "@FFI.Array { element: U32, count: 2 }\nstruct U32_array_2 {}",
             ),
             (
                 "second",
-                "@FFI.Array { element: U32; count: 4; }\nstruct U32_array_2 {}",
+                "@FFI.Array { element: U32, count: 4 }\nstruct U32_array_2 {}",
             ),
         ],
     );
@@ -313,11 +313,11 @@ fn a_foreign_type_described_two_different_ways_still_collides() {
         &[
             (
                 "first",
-                "@FFI.Pointer { target: char; ownership: borrowed; }\nstruct thing_ptr {}",
+                "@FFI.Pointer { target: char, ownership: borrowed }\nstruct thing_ptr {}",
             ),
             (
                 "second",
-                "@FFI.Pointer { target: U32; ownership: borrowed; }\nstruct thing_ptr {}",
+                "@FFI.Pointer { target: U32, ownership: borrowed }\nstruct thing_ptr {}",
             ),
         ],
     );
@@ -334,9 +334,9 @@ fn a_foreign_type_described_two_different_ways_still_collides() {
 /// body. The definition that follows is what the name means.
 #[test]
 fn a_foreign_forward_declaration_yields_to_the_definition() {
-    let text = "@FFI.Alias { target: union Version; }\n\
+    let text = "@FFI.Alias { target: union Version }\n\
                 struct Version {}\n\
-                @FFI.Struct { layout: c; }\n\
+                @FFI.Struct { layout: c }\n\
                 struct Version {\n    var major: U32\n    var minor: U32\n}\n\
                 @Main function main() { let v = Version { major: 1, minor: 2 } print(v.major) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -370,11 +370,11 @@ fn a_foreign_forward_declaration_yields_to_a_definition_in_another_file() {
         &[
             (
                 "binding",
-                "@FFI.Alias { target: union Version; }\nstruct Version {}",
+                "@FFI.Alias { target: union Version }\nstruct Version {}",
             ),
             (
                 "shape",
-                "@FFI.Struct { layout: c; }\n\
+                "@FFI.Struct { layout: c }\n\
                  struct Version {\n    var major: U32\n    var minor: U32\n}",
             ),
         ],
@@ -386,12 +386,12 @@ fn a_foreign_forward_declaration_yields_to_a_definition_in_another_file() {
         ModuleSource {
             module: "binding".to_owned(),
             path: "binding.kira".to_owned(),
-            text: "@FFI.Alias { target: union Version; }\nstruct Version {}".to_owned(),
+            text: "@FFI.Alias { target: union Version }\nstruct Version {}".to_owned(),
         },
         ModuleSource {
             module: "shape".to_owned(),
             path: "shape.kira".to_owned(),
-            text: "@FFI.Struct { layout: c; }\n\
+            text: "@FFI.Struct { layout: c }\n\
                    struct Version {\n    var major: U32\n    var minor: U32\n}"
                 .to_owned(),
         },
@@ -418,7 +418,7 @@ fn a_foreign_forward_declaration_yields_to_a_definition_in_another_file() {
 /// still means what it says.
 #[test]
 fn a_foreign_alias_with_no_definition_is_still_an_alias() {
-    let text = "@FFI.Alias { target: U32; }\n\
+    let text = "@FFI.Alias { target: U32 }\n\
                 struct Handle {}\n\
                 @Main function main() { let h: Handle = 7 print(h) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));

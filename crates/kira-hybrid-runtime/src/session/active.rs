@@ -25,6 +25,19 @@ impl<'a> ActiveSession<'a> {
         unsafe { session.library.install_invoker(Some(invoke_runtime)) };
         ActiveSession { session, previous }
     }
+
+    /// Marks only the current thread as active without replacing the loaded
+    /// library's process-wide invoker.
+    ///
+    /// A split main-thread run has one session guard on the caller thread and
+    /// may enter native code on the helper thread. The invoker is already
+    /// installed by the caller guard; this guard gives callbacks on the helper
+    /// the same session pointer without racing the installation lifetime.
+    pub(super) fn bind(session: &'a Session) -> BoundSession {
+        BoundSession {
+            previous: ACTIVE_SESSION.replace(session),
+        }
+    }
 }
 
 impl Drop for ActiveSession<'_> {
@@ -59,6 +72,17 @@ impl Drop for ActiveSession<'_> {
             // as long as the library can reach it.
             unsafe { previous.library.install_invoker(Some(invoke_runtime)) };
         }
+        ACTIVE_SESSION.set(self.previous);
+    }
+}
+
+/// A thread-local session binding that does not touch the native invoker.
+pub(super) struct BoundSession {
+    previous: *const Session,
+}
+
+impl Drop for BoundSession {
+    fn drop(&mut self) {
         ACTIVE_SESSION.set(self.previous);
     }
 }
@@ -137,11 +161,15 @@ unsafe extern "C" fn invoke_runtime(
             "native code called runtime function {function_id}, but the live module has no identity for it"
         ));
     };
-    let returned =
-        match kira_vm_runtime::interp::call_active(current_function_id, &borrowed, &capture) {
-            Some(result) => result,
-            None => program.call_capturing(&mut host, current_function_id, &borrowed, &capture),
-        };
+    let returned = match kira_vm_runtime::interp::call_active_with_host(
+        current_function_id,
+        &borrowed,
+        &capture,
+        &mut host,
+    ) {
+        Some(result) => result,
+        None => program.call_capturing(&mut host, current_function_id, &borrowed, &capture),
+    };
     match returned {
         Ok(returned) => {
             session.observe_generation(generation);

@@ -65,19 +65,19 @@ function skpValue(answer: borrow Result<Int, SkpError>) -> Int {
 
 // ─── Raw entry points ───────────────────────────────────────────────────────
 
-@FFI.Syscall { name: write; }
-function skpSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function skpSysWrite(fd: Int, buffer: CString, count: U64) -> Int
 
 // The same call declared with a 32-bit descriptor, which is what pins the width
 // rule: `-1` in an `I32` has to reach the register sign-extended.
-@FFI.Syscall { name: write; }
-function skpSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function skpSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int
 
-@FFI.Syscall { name: read; }
-function skpSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int;
+@FFI.Syscall { name: read }
+function skpSysRead(fd: Int, buffer: RawPtr, count: U64) -> Int
 
-@FFI.Syscall { name: ppoll; }
-function skpSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int;
+@FFI.Syscall { name: ppoll }
+function skpSysPpoll(fds: RawPtr, count: U64, timeout: RawPtr, mask: RawPtr) -> Int
 
 // ─── Wrappers ───────────────────────────────────────────────────────────────
 //
@@ -108,14 +108,14 @@ function skpPpollFault() -> Result<Int, SkpError> {
 
 construct SkpDecodeReadsASmallNegativeAsErrno() extends Test {
     test { return skpErrno(skpDecode(-2)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // One past the boundary is a value, not a failure — the case a plain
 // `answer < 0` test gets wrong.
 construct SkpDecodeKeepsALargeNegativeValue() extends Test {
     test { return skpValue(skpDecode(-4096)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(-4096) return e }
 }
 
 // ─── Three arguments: `write` ───────────────────────────────────────────────
@@ -125,12 +125,12 @@ construct SkpDecodeKeepsALargeNegativeValue() extends Test {
 // landing in the middle of the driver's report.
 construct SkpWriteOfNoBytesTakesNone() extends Test {
     test { return skpValue(skpWrite(skpStdout(), "")) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct SkpWriteToABadDescriptorIsEbadf() extends Test {
     test { return skpErrno(skpWrite(-1, "x")) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // The raw entry point answers the kernel's own encoding with no decode in the
@@ -139,7 +139,7 @@ construct SkpWriteToABadDescriptorIsEbadf() extends Test {
 // nowhere else.
 construct SkpTheRawEntryPointAnswersNegativeErrno() extends Test {
     test { return skpSysWrite(-1, "x", U64(1)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(-9) return e }
 }
 
 // A declaration's written width is what reaches the register. `fd: I32` holding
@@ -149,7 +149,7 @@ construct SkpTheRawEntryPointAnswersNegativeErrno() extends Test {
 // asserts the whole answer.
 construct SkpANarrowDescriptorIsSignExtendedIntoItsRegister() extends Test {
     test { return skpSysWriteNarrowFd(-1, "x", U64(1)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(-9) return e }
 }
 
 // ─── Three arguments through a pointer: `read` ──────────────────────────────
@@ -159,7 +159,7 @@ construct SkpANarrowDescriptorIsSignExtendedIntoItsRegister() extends Test {
 // the `EFAULT` a valid descriptor would have produced.
 construct SkpReadFromABadDescriptorIsEbadf() extends Test {
     test { return skpErrno(skpRead(-1, RawPtr(0), 8)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // A zero count still reaches the kernel rather than being answered here: a
@@ -167,7 +167,7 @@ construct SkpReadFromABadDescriptorIsEbadf() extends Test {
 // open, which is the one answer a caller must not get.
 construct SkpReadOfNoBytesStillChecksTheDescriptor() extends Test {
     test { return skpErrno(skpRead(-1, RawPtr(0), 0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // ─── No arguments: not here ───────────────────────────────────────────────
@@ -181,5 +181,5 @@ construct SkpReadOfNoBytesStillChecksTheDescriptor() extends Test {
 
 construct SkpPpollOverAnUnreadableArrayIsEfault() extends Test {
     test { return skpErrno(skpPpollFault()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }

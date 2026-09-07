@@ -1,0 +1,345 @@
+import Foundation
+
+// Kira Test coverage for `distinct Name = Representation`.
+//
+// The folds live in Distincts.kira; these pin their values, so a backend that
+// erased the type differently — or generated a different derive — comes back
+// with a different number rather than with a passing test.
+
+construct DnxDistinctPositionsFold() extends Test {
+    test {
+        return distinctsSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(9329) return e }
+}
+
+construct DnxDerivesFold() extends Test {
+    test {
+        return distinctDerivesSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(10101) return e }
+}
+
+construct DnxSerdeRoundTrip() extends Test {
+    test {
+        return distinctSerdeSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(133) return e }
+}
+
+construct DnxOptionOverADistinctType() extends Test {
+    test {
+        return distinctOptionSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(59) return e }
+}
+
+// A value of a distinct type reaches a parameter of that type and reads back as
+// the representation, which is the whole of the surface.
+construct DnxRawReadsTheRepresentation() extends Test {
+    test {
+        return distinctTabIndex(DistinctTabId(U32(12)))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
+}
+
+// Two declarations over one `U32` are two types, and a value of one equals a
+// value of the same one and nothing else.
+construct DnxSiblingIdsAreSeparateTypes() extends Test {
+    test {
+        let tab = DistinctTabId(U32(5))
+        let bookmark = DistinctBookmarkId(U32(5))
+        var score = 0
+        if tab == DistinctTabId(U32(5)) {
+            score = score + 1
+        }
+        if bookmark == DistinctBookmarkId(U32(5)) {
+            score = score + 10
+        }
+        return score + distinctTabIndex(tab) + distinctBookmarkIndex(bookmark)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
+}
+
+// Serde escaping: a text value that carries the format's own delimiters comes
+// back as itself. Before escaping existed the parse succeeded and answered
+// something else, which is the one failure a wire format must not have.
+
+@Derive(Serializable)
+struct DnxAwkward {
+    var title: String
+    var body: String
+    var rank: Int
+}
+
+construct DnxSerdeEscapesTheFormatsOwnDelimiters() extends Test {
+    test {
+        let note = DnxAwkward(
+            title: "a\"b",
+            body: "semi; brace} back\\slash",
+            rank: 7
+        )
+        let back = deserialize_DnxAwkward(serialize_DnxAwkward(note))
+        var score = 0
+        if back.title == note.title { score = score + 1 }
+        if back.body == note.body { score = score + 10 }
+        if back.rank == note.rank { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct DnxSerdeCarriesLineEndingsAndTabs() extends Test {
+    test {
+        let note = DnxAwkward(title: "one\ntwo", body: "tab\there\r", rank: 1)
+        let back = deserialize_DnxAwkward(serialize_DnxAwkward(note))
+        var score = 0
+        if back.title == note.title { score = score + 1 }
+        if back.body == note.body { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+// Floats travel as their exact bits, which is the only way a signed zero, an
+// infinity, or a NaN payload survives a round trip at all.
+
+@Derive(Serializable)
+struct DnxReading {
+    var value: Float
+    var label: String
+}
+
+@Derive(Serializable)
+distinct DnxRatio = Float
+
+construct DnxSerdeCarriesAFloatExactly() extends Test {
+    test {
+        var score = 0
+        let tenth = DnxReading(value: 0.1, label: "tenth")
+        if deserialize_DnxReading(serialize_DnxReading(tenth)).value == 0.1 { score = score + 1 }
+        let third = DnxReading(value: 1.0 / 3.0, label: "third")
+        if deserialize_DnxReading(serialize_DnxReading(third)).value == third.value {
+            score = score + 10
+        }
+        if deserialize_DnxRatio(serialize_DnxRatio(DnxRatio(2.5))).raw == 2.5 {
+            score = score + 100
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+construct DnxSerdeCarriesTheFloatsADecimalCannot() extends Test {
+    test {
+        var score = 0
+        let zero = DnxReading(value: 0.0 - 0.0, label: "zero")
+        let zeroBack = deserialize_DnxReading(serialize_DnxReading(zero))
+        if floatToBits(zeroBack.value) == floatToBits(zero.value) { score = score + 1 }
+
+        let infinite = DnxReading(value: 1.0 / 0.0, label: "inf")
+        if deserialize_DnxReading(serialize_DnxReading(infinite)).value == infinite.value {
+            score = score + 10
+        }
+
+        let undefined = DnxReading(value: 0.0 / 0.0, label: "nan")
+        let undefinedBack = deserialize_DnxReading(serialize_DnxReading(undefined))
+        if floatToBits(undefinedBack.value) == floatToBits(undefined.value) { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+// Integers travel tagged with their width — `U8(200)`, not `200` — so the
+// value carries the range it is checked against, and a tag naming another
+// width is refused rather than converted.
+
+@Derive(Serializable)
+distinct DnxTabId = U32
+
+@Derive(Serializable)
+struct DnxWidths {
+    var narrow: U8
+    var wide: I32
+    var big: U64
+    var small: F32
+}
+
+@Derive(Serializable)
+enum DnxToken {
+    Num(Int)
+    Huge(U64)
+    Small(U8)
+    Part(Float)
+    Tiny(F32)
+    Word(String)
+    Point
+}
+
+construct DnxSerdeTagsEveryIntegerWithItsWidth() extends Test {
+    test {
+        let row = DnxWidths(narrow: U8(200), wide: -5, big: U64(9223372036854775807), small: 2.5)
+        let back = deserialize_DnxWidths(serialize_DnxWidths(row))
+        var score = 0
+        if back.narrow == row.narrow { score = score + 1 }
+        if back.wide == row.wide { score = score + 10 }
+        if back.big == row.big { score = score + 100 }
+        if back.small == row.small { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeTagsADistinctAroundItsRepresentation() extends Test {
+    test {
+        var score = 0
+        if deserialize_DnxTabId("DnxTabId(U32(70000))") == DnxTabId(70000) { score = score + 1 }
+        if deserialize_DnxTabId(serialize_DnxTabId(DnxTabId(7))) == DnxTabId(7) { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct DnxSerdeTagsEnumPayloadsToo() extends Test {
+    test {
+        var score = 0
+        let small = DnxToken.Small(U8(9))
+        match deserialize_DnxToken(serialize_DnxToken(small)) {
+            Small(v) -> { if v == U8(9) { score = score + 1 } }
+            Num(v) -> { score = score + 100 }
+            Huge(v) -> { score = score + 100 }
+            Part(v) -> { score = score + 100 }
+            Tiny(v) -> { score = score + 100 }
+            Word(v) -> { score = score + 100 }
+            Point -> { score = score + 100 }
+        }
+        let huge = DnxToken.Huge(U64(9223372036854775807))
+        match deserialize_DnxToken(serialize_DnxToken(huge)) {
+            Huge(v) -> { if v == U64(9223372036854775807) { score = score + 10 } }
+            Num(v) -> { score = score + 100 }
+            Small(v) -> { score = score + 100 }
+            Part(v) -> { score = score + 100 }
+            Tiny(v) -> { score = score + 100 }
+            Word(v) -> { score = score + 100 }
+            Point -> { score = score + 100 }
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+construct DnxSerdeCarriesU64PastTheSignedRange() extends Test {
+    test {
+        // The top half of the `U64` range is past what a signed accumulation
+        // holds and past what a literal spells, so the text form of the
+        // maximum still reads back exactly.
+        let back = deserialize_DnxWidths("DnxWidths{narrow:U8(1),wide:I32(2),big:U64(18446744073709551615),small:F32(0x00000000)}")
+        if String(back.big) == "18446744073709551615" { return 1 }
+        return 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// Arrays travel as bracketed element lists, nested to any depth: `[Int(1)]`,
+// `[[U8(1)]]`, `[Point{x:Int(1)}]`. An empty array is `[]`, and every level
+// parses with the same tag and range checks a scalar field gets.
+
+@Derive(Serializable)
+struct DnxInner {
+    var n: Int
+}
+
+@Derive(Serializable)
+struct DnxBatch {
+    var xs: [Int]
+    var names: [String]
+    var matrix: [[U8]]
+    var inners: [DnxInner]
+}
+
+@Derive(Serializable)
+enum DnxLoad {
+    Nums([Int])
+    Word(String)
+    Point
+}
+
+construct DnxSerdeCarriesArraysOfScalars() extends Test {
+    test {
+        let batch = DnxBatch(xs: [1, 2, 3], names: ["a,b}c", "d"], matrix: [[U8(1)]], inners: [DnxInner(n: 1)])
+        let back = deserialize_DnxBatch(serialize_DnxBatch(batch))
+        var score = 0
+        if back.xs[2] == 3 { score = score + 1 }
+        if back.names[0] == "a,b}c" { score = score + 10 }
+        if back.matrix[0][0] == U8(1) { score = score + 100 }
+        if back.inners[0].n == 1 { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeCarriesEmptyAndNestedArrays() extends Test {
+    test {
+        let batch = DnxBatch(xs: [], names: [], matrix: [[], [U8(3)]], inners: [])
+        let back = deserialize_DnxBatch(serialize_DnxBatch(batch))
+        var score = 0
+        if back.xs.count == 0 { score = score + 1 }
+        if back.matrix[0].count == 0 { score = score + 10 }
+        if back.matrix[1][0] == U8(3) { score = score + 100 }
+        if back.inners.count == 0 { score = score + 1000 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111) return e }
+}
+
+construct DnxSerdeCarriesAnArrayPayload() extends Test {
+    test {
+        let loaded = DnxLoad.Nums([7, 8])
+        match deserialize_DnxLoad(serialize_DnxLoad(loaded)) {
+            Nums(v) -> { return v[0] + v[1] }
+            Word(v) -> { return 0 - 1 }
+            Point -> { return 0 - 2 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}
+
+// The whole `Int` range round-trips, the most negative value included. The
+// parser used to accumulate the positive magnitude and apply the sign after,
+// and the magnitude of the most negative Int is one past the most positive
+// one — so the minimum overflowed on its own round trip.
+
+@Derive(Serializable)
+struct DnxBound {
+    var value: Int
+}
+
+construct DnxSerdeCarriesTheMostNegativeInt() extends Test {
+    test {
+        let low = DnxBound(value: 0 - 9223372036854775807 - 1)
+        let back = deserialize_DnxBound(serialize_DnxBound(low))
+        return back.value == low.value ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct DnxSerdeCarriesTheMostPositiveInt() extends Test {
+    test {
+        let high = DnxBound(value: 9223372036854775807)
+        let back = deserialize_DnxBound(serialize_DnxBound(high))
+        return back.value == high.value ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct DnxSerdeCarriesZeroAndMinusOne() extends Test {
+    test {
+        let zero = deserialize_DnxBound(serialize_DnxBound(DnxBound(value: 0)))
+        let minus = deserialize_DnxBound(serialize_DnxBound(DnxBound(value: 0 - 1)))
+        var score = 0
+        if zero.value == 0 { score = score + 1 }
+        if minus.value == 0 - 1 { score = score + 10 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}

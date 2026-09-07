@@ -1,0 +1,32 @@
+// A `distinct` type crosses the C seam as the scalar it is, in both directions
+// and with no wrapper anywhere.
+//
+// `ffi_id_u32` is `unsigned int ffi_id_u32(unsigned int)`. Declaring its
+// parameter and result as `TabId` changes nothing about the call it makes: the
+// wire signature is `(u32) -> u32`, the same one `idU32` below declares by
+// hand, and the same bits reach C either way. What the declaration buys is on
+// this side of the seam — a `TabId` reaches `tabRoundTrip` and a bare `U32`
+// does not, so a caller cannot hand a window id to a tab API by mistake.
+
+distinct TabId = U32
+
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u32, abi: c }
+function tabRoundTrip(id: TabId) -> TabId
+
+@FFI.Extern { library: ffifixture, symbol: ffi_id_u32, abi: c }
+function idU32(value: U32) -> U32
+
+@Main
+function main() {
+    let id = TabId(U32(4000000000))
+    // Out through C and back, still a `TabId`.
+    let same = tabRoundTrip(id)
+    print(Int(same.raw))
+    // The identical call declared over the representation prints the identical
+    // number, which is the whole transparency claim as a program.
+    print(Int(idU32(U32(4000000000))))
+    // The result is nominal on the Kira side: it compares to a `TabId` and to
+    // nothing else.
+    print(same == id)
+    return
+}

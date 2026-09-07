@@ -1,32 +1,22 @@
 ---
 title: Appendix
-description: Operational material for the Kira toolchain, including install flow, CLI usage, toolchains, diagnostics, examples, and contributor docs.
+description: Install, CLI, toolchains, platforms, shaders, FFI workflows, diagnostics, debugging, profiling, architecture, examples, and contributing.
 ---
 
-The appendix keeps workflow-heavy material close to the language book without interrupting the language-first reading flow.
+Everything operational, kept beside the language book rather than inside it.
 
-## Appendix Sections
-
-- [Getting Started](/docs/appendix/getting-started)
-- [CLI](/docs/appendix/cli)
-- [Toolchains](/docs/appendix/toolchains)
-- [Platforms & Runners](/docs/appendix/platforms)
-- [KSL Shaders](/docs/appendix/shaders)
-- [FFI Workflows](/docs/appendix/ffi-workflows)
-- [Diagnostics](/docs/appendix/diagnostics)
-- [Compiler Architecture](/docs/appendix/compiler-architecture)
-- [Examples](/docs/appendix/examples)
-- [Contributing](/docs/appendix/contributing)
-
-## When to Use the Appendix
-
-Reach for the appendix when you need to:
-
-- install or run the current toolchain
-- look up exact command behavior
-- understand the current package manager and Foundation workflow
-- understand LLVM/toolchain setup
-- target platforms, run live sessions, or generate exports
-- compile `.ksl` shaders
-- inspect native-library and autobinding workflows
-- follow real proof targets from the examples and corpus
+| Section | For |
+| --- | --- |
+| [Getting Started](/docs/appendix/getting-started) | Installing the toolchain and running a program. |
+| [CLI](/docs/appendix/cli) | Every command, its flags, and the package workflow. |
+| [Toolchains](/docs/appendix/toolchains) | `knvm`, the install tree, channels, pins, LLVM, and cross compilation. |
+| [Platforms and Runners](/docs/appendix/platforms) | Live sessions, exports, and the Web target. |
+| [KSL Shaders](/docs/appendix/shaders) | The `.ksl` language and its five backends. |
+| [FFI Workflows](/docs/appendix/ffi-workflows) | Manifests, generated bindings, C-layout values, callbacks, and system calls. |
+| [Diagnostics](/docs/appendix/diagnostics) | Codes, prefixes, and what a rendered diagnostic carries. |
+| [Debugging](/docs/appendix/debugging) | `kira debug`, what a stop is on each backend, and the debug MCP server. |
+| [Profiling](/docs/appendix/profiling) | `kira profile`, its verbs, views, events, and report columns. |
+| [Editors](/docs/appendix/editors) | The language server, what it answers, and the Zed extension. |
+| [Compiler Architecture](/docs/appendix/compiler-architecture) | The crate layer graph and where code goes. |
+| [Examples](/docs/appendix/examples) | The checked-in programs and what each proves. |
+| [Contributing](/docs/appendix/contributing) | Repository layout, testing expectations, and the docs site. |

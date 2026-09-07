@@ -141,26 +141,6 @@ impl AutobindMode {
     }
 }
 
-/// A named binding-generator ruleset (`vulkan`, `directx12`, …).
-///
-/// Free-form on purpose: the profile names a generator's own ruleset, so a
-/// profile this compiler has never heard of must survive being read rather than
-/// fail a manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AutobindProfile(String);
-
-impl AutobindProfile {
-    /// Names a profile.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
-    /// The profile name as written.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 /// The bindings a library wants generated from its headers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AutobindSpec {
@@ -174,8 +154,6 @@ pub struct AutobindSpec {
     pub structs: Vec<String>,
     /// How much of the headers to expose.
     pub mode: AutobindMode,
-    /// The generator ruleset, when the declaration names one.
-    pub profile: Option<AutobindProfile>,
     /// Where generated bindings are written, when the declaration names a path.
     pub output: Option<String>,
 }

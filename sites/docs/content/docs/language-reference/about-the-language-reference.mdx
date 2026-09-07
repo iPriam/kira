@@ -1,25 +1,16 @@
 ---
 title: About the Language Reference
-description: How to read the Kira reference and why it focuses on current syntax and status instead of future design.
+description: What the reference records, and how a refusal is written down.
 ---
 
-This reference is deliberately narrower and more normative than the guide.
+The reference records the contract the compiler enforces: the tokens the lexer produces, the grammar shapes the parser accepts, the builtin names, and the rules semantics checks.
 
-## What It Records
+## How a Refusal Is Written
 
-The reference records the current repository contract:
+Every refusal names its diagnostic code, and the code is the stable part. A message may be reworded; `KSEM107` will always be a use after move.
 
-- accepted tokens and grammar shapes
-- builtin names and declaration forms
-- semantic rules that are already enforced
-- the gap between frontend support and runnable lowering
+A refusal is documented as a decision when the language takes a different route instead. `print(someStruct)` is `KSEM081` because no format for a struct is pinned anywhere, not because printing one is unimplemented. Where the reference says a shape is refused, it says what to write instead.
 
-## What It Does Not Do
+## What Is Not Here
 
-It does not try to document:
-
-- aspirational language features that are not in this repo
-- a future stable product specification
-- a guessed completion of partially implemented features
-
-If a feature is only parsed, only checked, or only runnable on one backend path, the reference says so directly.
+Design that has not landed. A form the reference does not list is a form the parser does not accept.

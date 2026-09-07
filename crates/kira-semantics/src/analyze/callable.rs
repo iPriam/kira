@@ -14,7 +14,7 @@ impl<'a> Analyzer<'a> {
     /// takes a slot in the same table. Everything downstream of analysis — the
     /// IR, both compilers, the hybrid manifest — sees a flat list of functions
     /// and never learns that some of them were written inside a struct.
-    pub(super) fn callables(&self) -> Vec<Callable<'a>> {
+    pub(super) fn callables(&mut self) -> Vec<Callable<'a>> {
         let mut callables = Vec::new();
         for (source, item) in self.tree.items_with_source() {
             match item {
@@ -23,6 +23,9 @@ impl<'a> Analyzer<'a> {
                 // `HirFunction`, so it is skipped here and handled by
                 // `collect_foreign`.
                 Item::Function(function) if function.foreign.is_some() => {}
+                // A generic free function is a template. Its concrete body is
+                // appended when a call infers an argument substitution.
+                Item::Function(function) if !function.type_params.is_empty() => {}
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
                     origin: None,
@@ -30,8 +33,12 @@ impl<'a> Analyzer<'a> {
                     initializes: None,
                     function,
                     source,
+                    type_bindings: Vec::new(),
                 }),
                 Item::Struct(declaration) => {
+                    if !declaration.type_params.is_empty() {
+                        continue;
+                    }
                     // The struct this declaration minted, under its own
                     // package: a bare name is not unique across packages, and
                     // this is registering what *this* declaration provides.
@@ -43,16 +50,20 @@ impl<'a> Analyzer<'a> {
                         .lookup_owned(package, self.interner.resolve(declaration.name));
                     for method in &declaration.methods {
                         callables.push(Callable {
-                            receiver: owner,
+                            receiver: owner.map(Type::Struct),
                             origin: None,
                             specialize: Vec::new(),
                             initializes: None,
                             function: method,
                             source,
+                            type_bindings: Vec::new(),
                         });
                     }
                 }
                 Item::Class(declaration) => {
+                    if !declaration.type_params.is_empty() {
+                        continue;
+                    }
                     self.class_callables(declaration, source, &mut callables)
                 }
                 Item::Construct(declaration) => {
@@ -62,14 +73,24 @@ impl<'a> Analyzer<'a> {
                 // each lowers to a synthesized function whose receiver is the
                 // family value, built after signatures exist. See
                 // `constructs::extend`.
-                Item::Enum(_)
+                // A module-scope `let` is a value, not a callable. Its
+                // initializer is folded during analysis and substituted at every
+                // read, so nothing about it reaches this table.
+                Item::Constant(_)
+                | Item::Enum(_)
                 | Item::TypeAlias(_)
+                | Item::Distinct(_)
                 | Item::Import(_)
                 | Item::Extend(_)
                 | Item::Trait(_)
                 | Item::Unsupported(_) => {}
             }
         }
+        // Concrete generic aggregate rows are minted while the type passes
+        // run, before this list is built. Their methods are ordinary methods
+        // from this point onward and therefore share the same signature and
+        // lowering path.
+        callables.extend(self.generic_method_callables.iter().cloned());
         // Before specialization, so a trait default a class inherits specializes
         // on its class-typed parameters exactly as a written method does.
         self.trait_callables(&mut callables);
@@ -89,7 +110,7 @@ impl<'a> Analyzer<'a> {
     /// back to the parent's method, which is the bug this exists to remove. It
     /// is bounded by [`Self::SPECIALIZATION_LIMIT`], past which the function is
     /// left as written rather than silently half-specialized.
-    pub(super) fn specialize_callables(&self, callables: &mut Vec<Callable<'a>>) {
+    pub(super) fn specialize_callables(&mut self, callables: &mut Vec<Callable<'a>>) {
         let mut added: Vec<Callable<'a>> = Vec::new();
         for callable in callables.iter() {
             let choices = self.parameter_subclasses(callable);
@@ -115,6 +136,21 @@ impl<'a> Analyzer<'a> {
                 }
             }
             if combinations.len() > Self::SPECIALIZATION_LIMIT {
+                // Refused rather than quietly compiled against the parent's
+                // body: a call with a subclass argument must reach the subclass
+                // or not compile at all.
+                self.source = callable.source;
+                self.emit(
+                    callable.function.name_span,
+                    "KSEM357",
+                    format!(
+                        "`{}` takes class-typed parameters whose subclass combinations exceed \
+                         the {} specializations one function may have; split it, or take \
+                         fewer class-typed parameters",
+                        self.interner.resolve(callable.function.name),
+                        Self::SPECIALIZATION_LIMIT
+                    ),
+                );
                 continue;
             }
             for specialize in combinations {
@@ -213,10 +249,10 @@ impl<'a> Analyzer<'a> {
             })
             .collect();
         let written = &format!("{written}{suffix}");
-        let Some(id) = callable.receiver else {
+        let Some(receiver_ty) = callable.receiver else {
             return written.to_owned();
         };
-        let receiver = self.program.types.type_name(Type::Struct(id));
+        let receiver = self.member_owner_name(receiver_ty);
         // A class carries one copy of every method any ancestor declares. The
         // copy that wins bare lookup takes the plain `Class.method` name a call
         // site spells; a copy an override shadows takes a qualified name, which
@@ -230,9 +266,9 @@ impl<'a> Analyzer<'a> {
             self.interner.resolve(callable.function.name),
             &callable.function.params,
         );
-        match callable.origin {
-            Some(origin) if !self.is_most_derived(id, origin, &key) => {
-                let origin = self.program.types.type_name(Type::Struct(origin));
+        match (receiver_ty, callable.origin) {
+            (Type::Struct(id), Some(origin)) if !self.is_most_derived(id, origin, &key) => {
+                let origin = self.member_owner_name(Type::Struct(origin));
                 format!("{receiver}.{origin}${written}")
             }
             _ => format!("{receiver}.{written}"),
@@ -245,7 +281,23 @@ impl<'a> Analyzer<'a> {
     /// program can write, and the declaration's own name is in it so two
     /// declarations' initializers never share an overload set.
     pub(crate) fn initializer_name(&self, id: StructId) -> String {
-        format!("{}$init", self.program.types.type_name(Type::Struct(id)))
+        format!("{}$init", self.member_owner_name(Type::Struct(id)))
+    }
+
+    /// The name a type's members are filed under: its declared name,
+    /// qualified by the declaring package (`Pkg::Point`), so two packages'
+    /// same-named types never share an overload set.
+    pub(crate) fn member_owner_name(&self, ty: Type) -> String {
+        let name = self.program.types.type_name(ty);
+        let owner = match ty {
+            Type::Struct(id) => self.program.types.structs().owner_of(id),
+            Type::Enum(id) => self.program.types.enums().owner_of(id),
+            _ => None,
+        };
+        match owner {
+            Some(owner) => format!("{owner}::{name}"),
+            None => name,
+        }
     }
 
     /// What a class member is known by: its name together with what it takes.

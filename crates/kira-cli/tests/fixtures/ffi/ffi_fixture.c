@@ -420,3 +420,41 @@ int ffi_call_userdata_twice(ffi_userdata_taker take, unsigned long long userdata
     int first = take(userdata, n);
     return take(userdata, first);
 }
+
+unsigned char ffi_bool_byte(_Bool b) {
+    /* Reading the parameter object through a character type is the one legal
+     * way to see the byte that actually crossed; the value of `b` itself is
+     * already 0 or 1 by the language's own conversion. */
+    volatile unsigned char *raw = (volatile unsigned char *)&b;
+    return *raw;
+}
+
+static struct ffi_flags ffi_flags_storage;
+
+/* Writes `odd` as a byte outside `_Bool`'s value set. Written through a
+ * `volatile unsigned char *` so no store of a `_Bool` value can normalize it. */
+static void ffi_flags_fill(void) {
+    volatile unsigned char *raw = (volatile unsigned char *)&ffi_flags_storage;
+    raw[0] = 1;
+    raw[1] = 2;
+    raw[2] = 7;
+}
+
+struct ffi_flags ffi_flags_current(void) {
+    ffi_flags_fill();
+    return ffi_flags_storage;
+}
+
+const struct ffi_flags *ffi_flags_at(void) {
+    ffi_flags_fill();
+    return &ffi_flags_storage;
+}
+
+const struct ffi_flags *ffi_flags_none(void) {
+    return 0;
+}
+
+int ffi_flags_bytes(struct ffi_flags f) {
+    volatile unsigned char *raw = (volatile unsigned char *)&f;
+    return (int)raw[0] + (int)raw[1] * 256 + (int)raw[2] * 65536;
+}

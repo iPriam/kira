@@ -7,7 +7,7 @@
 //! right number of arguments — is [`check_signature`].
 
 use kira_bytecode::module::Module;
-use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult, NativeReturn};
+use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult, NativeReturn, NativeStateValue};
 
 use crate::debug::VmDebugObserver;
 use crate::error::VmError;
@@ -48,9 +48,11 @@ fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutc
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
     let result = vm.enter(module, main, &[])?;
-    // The program's result is no longer referenced by anything; drop it so
-    // heap accounting reflects a fully reclaimed program.
+    // The program's result is no longer referenced by anything; drop it — and
+    // the module constants with it — so heap accounting reflects a fully
+    // reclaimed program.
     vm.heap.drop_value(result);
+    vm.release_constants();
     Ok(RunOutcome {
         result,
         heap: vm.heap.stats(),
@@ -66,6 +68,7 @@ fn run_entry_with_debug(
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
     let result = vm.enter_values_with_debug(module, main, Vec::new(), observer)?;
     vm.heap.drop_value(result);
+    vm.release_constants();
     Ok(RunOutcome {
         result,
         heap: vm.heap.stats(),
@@ -162,6 +165,7 @@ impl Program {
 
         let mut vm = Vm::new(host, Heap::new());
         let (result, captured) = vm.enter_capturing(&self.module, function_id, args, capture)?;
+        vm.release_constants();
         let mut writebacks = Vec::with_capacity(captured.len());
         for (slot, value) in captured {
             let lifted = vm.heap.lift(value);
@@ -182,6 +186,38 @@ impl Program {
             writebacks,
         })
     }
+
+    /// Runs one function from an owned main-thread request.
+    ///
+    /// The request tree is copied into a fresh VM heap, so the main-thread
+    /// invocation never borrows the helper VM's objects. `None` represents a
+    /// `Void` return, which has no node in the callback-state tree.
+    pub fn call_state(
+        &self,
+        host: &mut dyn HostCapabilities,
+        function_id: u32,
+        args: &[NativeStateValue],
+    ) -> Result<Option<NativeStateValue>, VmError> {
+        check_signature(&self.module, function_id, args.len())?;
+        let mut vm = Vm::new(host, Heap::new());
+        let lowered = args
+            .iter()
+            .map(|arg| vm.heap.from_native_state(arg))
+            .collect();
+        let result = vm.enter_values(&self.module, function_id, lowered)?;
+        vm.release_constants();
+        if matches!(result, Value::Void) {
+            vm.heap.drop_value(result);
+            return Ok(None);
+        }
+        let state = vm
+            .heap
+            .into_native_state(result)
+            .map_err(|_| VmError::MainThreadValue {
+                function: u64::from(function_id),
+            })?;
+        Ok(Some(state))
+    }
 }
 
 impl Vm<'_> {
@@ -192,14 +228,35 @@ impl Vm<'_> {
         args: &[NativeArg<'_>],
         capture: &[u32],
     ) -> Result<NativeReturn, VmError> {
+        let host: *mut dyn HostCapabilities = self.host;
+        // SAFETY: `host` is this VM's own host reference, and the nested VM
+        // ends before this frame returns, so the reborrow does not outlive it.
+        self.call_capturing_on_shared_heap_with_host(module, function_id, args, capture, unsafe {
+            &mut *host
+        })
+    }
+
+    /// Runs a nested call on this VM's heap with an explicitly supplied host.
+    ///
+    /// Hybrid callbacks use this to avoid re-locking the helper's forwarding
+    /// host when native code calls back into a runtime function that calls
+    /// native code again.
+    pub(super) fn call_capturing_on_shared_heap_with_host(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+        capture: &[u32],
+        host: &mut dyn HostCapabilities,
+    ) -> Result<NativeReturn, VmError> {
         check_signature(module, function_id, args.len())?;
 
         let heap = std::mem::take(&mut self.heap);
-        let host: *mut dyn HostCapabilities = self.host;
-        // SAFETY: `host` is this VM's own host reference, and the nested VM ends
-        // before this frame returns, so the reborrow does not outlive it.
-        let mut nested = Vm::new(unsafe { &mut *host }, heap);
+        let mut nested = Vm::new(host, heap);
         let outcome = nested.enter_capturing(module, function_id, args, capture);
+        // The heap goes back to the outer VM below; the nested run's constants
+        // are dropped first so crossings do not accumulate copies in it.
+        nested.release_constants();
         let result = match outcome {
             Ok((value, captured)) => {
                 let mut writebacks = Vec::with_capacity(captured.len());

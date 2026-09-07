@@ -28,7 +28,7 @@ construct EnxGRangeOk5() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 // buildRange(10) -> Ok([0,3,6,...,27]) -> sum=3*(0+1+...+9)=3*45=135
@@ -48,7 +48,7 @@ construct EnxGRangeOk10() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(135); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(135) return e }
 }
 
 // buildRange(0) -> Error(Empty) -> -4
@@ -62,7 +62,7 @@ construct EnxGRangeErrEmpty() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 4) return e }
 }
 
 // buildRange(-1) -> Error(Empty) -> -4
@@ -76,7 +76,7 @@ construct EnxGRangeErrNeg() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 4) return e }
 }
 
 // buildRange(200) -> Error(Overflow) -> -2
@@ -90,7 +90,7 @@ construct EnxGRangeErrOverflow() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }
 
 // sum buildRange(m) for m=1..6:
@@ -115,7 +115,7 @@ construct EnxGRangeSumFold() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(105); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(105) return e }
 }
 
 // buildRange(3) -> count = 3
@@ -129,7 +129,7 @@ construct EnxGRangeCount() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // buildRange(1) -> Ok([0]) -> sum=0
@@ -145,7 +145,7 @@ construct EnxGRangeSingleElem() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,31 +156,31 @@ construct EnxGRangeSingleElem() extends Test {
 // r1=Ok(20); r2=safeDiv(30,4)=Ok(7); r3=safeDiv(12,2)=Ok(6); return 20+7+6=33
 construct EnxGChain3Success() extends Test {
     test { return enxGChain3(100, 5, 4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(33) return e }
 }
 
 // chain3(100, 0, 4): r1=Error(DivByZero) -> -1
 construct EnxGChain3ErrStep1() extends Test {
     test { return enxGChain3(100, 0, 4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 // chain3(100, 5, 0): r1=Ok(20); r2=safeDiv(30,0)=Error(DivByZero) -> -1
 construct EnxGChain3ErrStep2() extends Test {
     test { return enxGChain3(100, 5, 0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 // chain3(0, 5, 4): r1=Ok(0); r2=safeDiv(10,4)=Ok(2); r3=safeDiv(7,2)=Ok(3); return 0+2+3=5
 construct EnxGChain3ZeroSeed() extends Test {
     test { return enxGChain3(0, 5, 4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // chain3(-1, 5, 4): r1=Error(BadInput) -> -5
 construct EnxGChain3BadInput() extends Test {
     test { return enxGChain3(0 - 1, 5, 4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // sum chain3 results for multiple inputs: 33 + (-1) + (-1) + 5 = 36
@@ -192,7 +192,7 @@ construct EnxGChain3SumFold() extends Test {
         let v4 = enxGChain3(0, 5, 4)
         return v1 + v2 + v3 + v4
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,20 +204,20 @@ construct EnxGChain3SumFold() extends Test {
 // r2=step(4,2)=safeDiv(6,2)=Ok(3); r3=step(3,3)=safeDiv(6,3)=Ok(2); return 2
 construct EnxGPipelineSuccess() extends Test {
     test { return enxGPipeline(12, 4, 2, 3) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // pipeline(20, 0, 3, 5): k1=0 causes DivByZero at step1, propagates -> -1
 construct EnxGPipelineErrPropagates() extends Test {
     test { return enxGPipeline(20, 0, 3, 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 // pipeline(6, 3, 2, 4):
 // r0=Ok(6); r1=safeDiv(9,3)=Ok(3); r2=safeDiv(5,2)=Ok(2); r3=safeDiv(6,4)=Ok(1); return 1
 construct EnxGPipelineSmallValues() extends Test {
     test { return enxGPipeline(6, 3, 2, 4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // Two-step manual pipeline using enxGStep
@@ -235,7 +235,7 @@ construct EnxGStepTwoSteps() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ construct EnxGSlotOk() extends Test {
         let slot = EnxGSlot { tag: 10, r: .Ok(5) }
         return enxGSlotVal(slot)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 // slot{10, Error(DivByZero)} -> 10+(-1)=9
@@ -257,7 +257,7 @@ construct EnxGSlotErr() extends Test {
         let slot = EnxGSlot { tag: 10, r: .Error(.DivByZero) }
         return enxGSlotVal(slot)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // slot{0, Error(BadInput)} -> 0+(-5)=-5
@@ -266,7 +266,7 @@ construct EnxGSlotErrBadInput() extends Test {
         let slot = EnxGSlot { tag: 0, r: .Error(.BadInput) }
         return enxGSlotVal(slot)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // Fold slots: s=0..9, slot{s, safeDiv(200,s+1)} (all Ok, b>=1>0, a=200>=0)
@@ -284,7 +284,7 @@ construct EnxGSlotFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(629); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(629) return e }
 }
 
 // Mixed slots: some Ok, some Error, fold values
@@ -305,7 +305,7 @@ construct EnxGSlotMixedFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(35) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ construct EnxGResultArrayFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(141); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(141) return e }
 }
 
 // Build results from safeDiv, then sum: safeDiv(100, j+1) for j=0..5 (all Ok)
@@ -359,7 +359,7 @@ construct EnxGResultArrayDivFold() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(244); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(244) return e }
 }
 
 // Mix Ok and Error in result array, count errors
@@ -381,7 +381,7 @@ construct EnxGResultArrayCountErrors() extends Test {
         }
         return errCount
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +406,7 @@ construct EnxGCombineIntAndRect() extends Test {
         }
         return vi + vr
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 // Combine T=enum and T=array
@@ -428,7 +428,7 @@ construct EnxGCombineToneAndRange() extends Test {
         }
         return tone + rngSum
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(309); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(309) return e }
 }
 
 // Error path combines: all errors -> DivByZero(-1)+BadInput(-5)+Empty(-4)+Overflow(-2)=-12
@@ -446,7 +446,7 @@ construct EnxGCombineAllErrors() extends Test {
         return e1 + e2 + e3 + e4
     }
     // -1 + -5 + -5 + -4 = -15
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 15) return e }
 }
 
 // Nested Ok: chain feeds rect
@@ -467,7 +467,7 @@ construct EnxGChainFeedsRect() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 // Multiple independent results combined
@@ -480,7 +480,7 @@ construct EnxGMultipleResults() extends Test {
         let v3 = enxGResultIntVal(enxGSafeDiv(0 - 10, 5))
         return v1 + v2 + v3
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 // Pipeline result feeding into rect creation
@@ -496,7 +496,7 @@ construct EnxGPipelineFeedsRect() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +510,7 @@ construct EnxGTrapDivZero() extends Test {
         let b = 0
         return a / b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // Direct mod by zero
@@ -520,7 +520,7 @@ construct EnxGTrapModZero() extends Test {
         let b = 0
         return a % b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // Match Ok of range array, then index OOB
@@ -537,7 +537,7 @@ construct EnxGTrapOOBOnOkArray() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // OOB on empty array
@@ -547,7 +547,7 @@ construct EnxGTrapOOBEmpty() extends Test {
         let _ = xs[0]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // OOB on result array after building it
@@ -559,7 +559,7 @@ construct EnxGTrapResultArrayOOB() extends Test {
         let _ = enxGResultIntVal(results[10])
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // Div by zero derived from rect area
@@ -577,7 +577,7 @@ construct EnxGTrapDivByOkValue() extends Test {
         }
         return 5 / divisor
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // Mod by zero derived from Ok value
@@ -591,7 +591,7 @@ construct EnxGTrapModByOkValue() extends Test {
         }
         return 42 % d
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // OOB via loop scanning result array past end
@@ -611,5 +611,5 @@ construct EnxGTrapResultArrayLoopOOB() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }

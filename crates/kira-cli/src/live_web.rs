@@ -75,8 +75,7 @@ pub(crate) fn run(options: &crate::live::LiveOptions) -> i32 {
             "the program does not compile; its diagnostics printed above".to_owned()
         })?;
         let ir = crate::pipeline::entrypoint_ir("live", compiled).map_err(|_| {
-            "the program has no entrypoint to run, so there is nothing to serve"
-                .to_owned()
+            "the program has no entrypoint to run, so there is nothing to serve".to_owned()
         })?;
         let foreign = crate::pipeline::foreign_inputs(&entry, &ir, &device)
             .map_err(|_| "foreign import resolution failed".to_owned())?;
@@ -136,7 +135,9 @@ pub(crate) fn run(options: &crate::live::LiveOptions) -> i32 {
 
     eprintln!("kira: watching for changes; refresh the browser tab to load them");
     let mut watcher = match kira_live::SourceWatcher::new(
-        kira_live::WatchSet::new().root(PathBuf::from(&root)).root(PathBuf::from(&entry)),
+        kira_live::WatchSet::new()
+            .root(PathBuf::from(&root))
+            .root(PathBuf::from(&entry)),
     ) {
         Ok(watcher) => watcher,
         Err(error) => {
@@ -157,7 +158,9 @@ pub(crate) fn run(options: &crate::live::LiveOptions) -> i32 {
         }
         match rebuild() {
             Ok(()) => out!("rebuilt the web app; refresh the browser tab"),
-            Err(reason) => err!("kira live web: rebuild failed, still serving the last good app: {reason}"),
+            Err(reason) => {
+                err!("kira live web: rebuild failed, still serving the last good app: {reason}")
+            }
         }
     }
 }

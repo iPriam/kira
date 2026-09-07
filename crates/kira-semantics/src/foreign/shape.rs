@@ -27,6 +27,13 @@ impl<'a> Analyzer<'a> {
             Type::Float(FloatSpelling::Plain) => Some(ForeignType::F64),
             Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
             Type::Bool => Some(ForeignType::Bool),
+            // A distinct type crosses as the scalar it is. `foreign_seam_of`
+            // already unwraps one before it reaches here; this arm answers the
+            // direct callers so the mapping is total wherever it is asked.
+            Type::Distinct(_) => {
+                let representation = self.program.types.representation(ty);
+                self.foreign_type_of(representation, span, position)
+            }
             Type::Void => match position {
                 Position::Result => Some(ForeignType::Void),
                 Position::Param => {
@@ -53,7 +60,7 @@ impl<'a> Analyzer<'a> {
             Type::RawPtr | Type::ForeignPtr(_) | Type::CBlock => Some(ForeignType::RawPtr),
             // A task handle names a row in the running program's own task table,
             // so it means nothing outside it and never crosses the C seam.
-            Type::Task(_) => {
+            Type::Task(_) | Type::MainThreadTask(_) => {
                 self.emit(
                     span,
                     "KSEM182",
@@ -90,6 +97,19 @@ impl<'a> Analyzer<'a> {
                     "KSEM182",
                     "`Any` cannot cross the C seam: an erased value has no type for C \
                      to read it back as. Write the concrete type the value has.",
+                );
+                None
+            }
+            // A runtime type descriptor is one word too, and it names a row in
+            // this build's descriptor table: it means nothing to C, and a C
+            // library that kept one across a rebuild would name a type the new
+            // program never described.
+            Type::RuntimeType => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "a `Type` cannot cross the C seam: it names a row in this build's type \
+                     table and means nothing outside it",
                 );
                 None
             }

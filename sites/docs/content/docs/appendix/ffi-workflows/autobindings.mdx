@@ -1,87 +1,57 @@
 ---
-title: Generated Autobindings
-description: How Kira reads headers, applies manifest binding filters, and emits normal `.kira` modules.
+title: Generated Bindings
+description: "`autobind`: what triggers generation, what is bound and what is not, the caching stamp, and the `bind-types/` convention for hand-written bindings."
 ---
 
-Kira's autobinder is not generating an opaque sidecar format. It emits real Kira source files.
+A library that declares `autobind` gets its `@FFI.Extern` declarations written for it, from its own headers, before anything is analyzed.
 
-That is one of the most important design decisions in the current FFI system.
-
-## What Triggers Generation
-
-When a Kira source file imports a binding module described by a nearby native library manifest, the current pipeline prepares that native library during parsing/check/build work and runs the autobinder when needed.
-
-That means commands like:
-
-```bash
-kira check examples/sokol_triangle
+```kira
+autobind: Autobind { module: "text", headers: ["NativeLibs/Text/kira_text.h"], mode: AutobindMode.AllPublic },
 ```
 
-can validate the native library description and ensure the generated binding module exists before a full native run.
+`kira check`, `run`, `build`, `test`, and `live` all generate first, for every package in the dependency graph. A library is declared by the package that owns it, so an app importing a UI foundation gets that library bound into the UI foundation's own `app/bindings/text.kira`.
 
-## Binding Filter Shapes
+The generated file is **ordinary Kira source** in the dialect the rest of this section describes, compiled with the rest of that package, and readable. Nothing about it is generator-private, and there is no wrapper API to learn before calling a native function: the generated module is the public API.
 
-Binding filters now live directly in the native library manifest.
+## Widths Come From clang
 
-### Listed mode
+The C parser is the managed toolchain's own `libclang`, and every width is read from it rather than assumed. `long length` binds as `Int` on macOS and `I32` under MSVC because that is what `long` *is* on each. That is the mistake a hand-written binding makes silently, and the reason this is the compiler's job.
 
-Use it when you want to expose a selected subset:
+## What Is Bound
 
-```toml
-[bindings]
-functions = ["kira_invoke_callback"]
-callbacks = ["kira_i64_callback"]
+Functions come from the listed headers and nowhere else. A header includes `<stdio.h>` to get a `FILE *`, and binding what it reaches would declare libc into every package that used it, colliding on `fread` with the next library that did the same.
+
+| Mode | Binds |
+| --- | --- |
+| `AllPublic` | Every function those headers declare. |
+| `Selected` | The ones the declaration names. |
+
+Types follow the signatures, at any depth, plus the structs the headers define.
+
+## What Is Not, and Why You Can Tell
+
+A variadic function has no fixed signature, a `long double` has no portable width, and `char *argv[]` has no length. Each is written into the generated file as a comment naming the declaration and the reason, so a missing function reads as a decision rather than a gap. A hand-written `@FFI.Extern` for one of them would be refused by the same rule.
+
+## Caching
+
+A binding is regenerated when it is missing or when a header it was generated from has changed. A stamp under `.kira-build/autobind/` records what it was generated from, and an unchanged tree loads no C parser at all.
+
+A binding that exists with *no* stamp is the package's own source, because some packages ship bindings whose regeneration needs an SDK that is not on every machine. It is adopted as it stands and reported once (`KPK041`). Delete it to have it generated.
+
+`kira ffi` regenerates explicitly, without running a full check or build.
+
+## The `bind-types/` Convention
+
+A *hand-written* binding leans on C primitive typedefs it never defines: `VkFlags`, `UINT`, `BOOL`, `HRESULT`. Define each as a transparent alias to its Kira scalar in a `*_types.kira` file.
+
+```kira
+type VkFlags = U32
+type HANDLE = RawPtr
+type BOOL = I32
 ```
 
-### `all_public` mode
+The alias resolves away in the frontend, so a use site and its scalar are the same type on every backend.
 
-Use it when the proof target wants the whole public header surface:
+Such a file must live in a `bind-types/` directory, a peer of `bindings/`, kept apart from a package's own `types/` domain types and from generated `bindings/`. A `*_types.kira` source anywhere else is rejected with `KPK025`. The rule is a convention enforced at project discovery, not a compiler mechanism.
 
-```toml
-[bindings]
-mode = "all_public"
-```
-
-The Sokol triangle proof uses `all_public` in its `[bindings]` section.
-
-## Generated Declaration Kinds
-
-The current autobinder emits Kira declarations such as:
-
-```ts
-@FFI.Callback { abi: c; params: [I64, RawPtr]; result: I64; }
-struct kira_i64_callback {}
-
-@FFI.Extern { library: callbacks; symbol: kira_invoke_callback; abi: c; }
-function kira_invoke_callback(callback: kira_i64_callback, user_data: RawPtr, value: I64): I64;
-```
-
-It currently generates:
-
-- `@FFI.Extern`
-- `@FFI.Callback`
-- `@FFI.Pointer`
-- `@FFI.Struct`
-- `@FFI.Alias`
-- `@FFI.Array`
-
-## Why "Real Kira Source" Matters
-
-Because the emitted files are normal `.kira` modules:
-
-- imports are ordinary Kira imports
-- diagnostics refer to Kira source, not an opaque generator format
-- contributors can inspect the generated declarations directly
-- there is no separate wrapper API to learn before calling a native function
-
-That "no shim public API" rule is deliberate. The generated module is the public API.
-
-## Sokol As The Proof Target
-
-The strongest autobinding proof in the repo is Sokol:
-
-- upstream headers under `third_party/sokol/`
-- a manifest under `examples/sokol_triangle/native_libs/`
-- a generated module at `examples/sokol_triangle/sokol.kira`
-- Kira-written app logic that uses the generated declarations directly
-
+A generated binding needs none of this: autobind resolves each typedef through clang and writes the scalar the target actually uses, so `VkFlags` arrives as `U32` at every use with nothing to declare.

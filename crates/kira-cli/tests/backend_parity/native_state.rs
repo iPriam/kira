@@ -1,4 +1,4 @@
-use super::{assert_parity, assert_parity_with_heap_balance};
+use super::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
 
 #[test]
 fn callback_state_mutation_crosses_runtime_and_native_byte_identically() {
@@ -25,14 +25,14 @@ function invokeLikeCallback(user_data: RawPtr, value: Int) -> Int {
 @Main
 @Runtime
 function main() {
-    var state = nativeState(CounterState { count: 0 total: 0 })
+    var state = nativeState(CounterState { count: 0, total: 0 })
     var token = nativeUserData(state)
     print(invokeLikeCallback(token, 5))
     print(invokeLikeCallback(token, 7))
     var recovered = nativeRecover<CounterState>(token)
     print(recovered.count)
     print(recovered.total)
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
 }
 "#,
     );
@@ -48,10 +48,11 @@ struct State { var count: Int }
     var original = State { count: 3 }
     var state = nativeState(original)
     original.count = 9
-    var recovered = nativeRecover<State>(nativeUserData(state))
+    let token = nativeUserData(state)
+    var recovered = nativeRecover<State>(token)
     print(original.count)
     print(recovered.count)
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
 }
 "#,
     );
@@ -72,11 +73,13 @@ function makePtr() -> RawPtr {
 @Main function main() {
     var probe = makePtr()
     var state = nativeState(State { ctx: probe, count: 0 })
-    var view = nativeRecover<State>(nativeUserData(state))
+    let token = nativeUserData(state)
+    var view = nativeRecover<State>(token)
     view.count = view.count + 5
-    var again = nativeRecover<State>(nativeUserData(state))
+    var again = nativeRecover<State>(token)
     print(again.count)
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
+    nativeUserDataRelease(probe)
 }
 "#,
     );
@@ -91,16 +94,17 @@ enum Mode { None Some(Int) }
 struct State { var mode: Mode }
 function code(mode: Mode) -> Int {
     match mode {
-        Some(value) -> return value;
-        None -> return 0;
+        Some(value) -> return value
+        None -> return 0
     }
     return 0
 }
 @Main function main() {
     var state = nativeState(State { mode: .Some(42) })
-    var recovered = nativeRecover<State>(nativeUserData(state))
+    let token = nativeUserData(state)
+    var recovered = nativeRecover<State>(token)
     print(code(recovered.mode))
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
 }
 "#,
     );
@@ -117,8 +121,8 @@ struct State { var layers: [Layer] }
 
 function code(mode: Mode) -> Int {
     match mode {
-        Surface -> return 1;
-        None -> return 0;
+        Surface -> return 1
+        None -> return 0
     }
     return 0
 }
@@ -126,9 +130,10 @@ function code(mode: Mode) -> Int {
 @Main
 function main() {
     var state = nativeState(State { layers: [Layer { payload: .Surface }] })
-    var recovered = nativeRecover<State>(nativeUserData(state))
+    let token = nativeUserData(state)
+    var recovered = nativeRecover<State>(token)
     print(code(recovered.layers[0].payload))
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
 }
 "#,
     );
@@ -169,20 +174,22 @@ struct AppState {
 @Main
 function main() {
     let boxed = nativeState(AppState { count: 4, onFrame: bump })
-    var recovered = nativeRecover<AppState>(nativeUserData(boxed))
+    let first = nativeUserData(boxed)
+    var recovered = nativeRecover<AppState>(first)
     var f = Frame { n: 10 }
     recovered.onFrame(f)
     print(recovered.count)
     print(f.n)
 
     let other = nativeState(AppState { count: 9, onFrame: scale })
-    var second = nativeRecover<AppState>(nativeUserData(other))
+    let next = nativeUserData(other)
+    var second = nativeRecover<AppState>(next)
     second.onFrame(f)
     print(second.count)
     print(f.n)
 
-    nativeStateFree(boxed)
-    nativeStateFree(other)
+    nativeUserDataRelease(first)
+    nativeUserDataRelease(next)
     return
 }
 "#,
@@ -221,10 +228,10 @@ struct Tree {
 
 function describe(shape: Shape) -> String {
     match shape {
-        Empty -> return "empty";
-        Box(r) -> return "box";
-        Nested(i) -> return "nested";
-        Label(s) -> return s;
+        Empty -> return "empty"
+        Box(r) -> return "box"
+        Nested(i) -> return "nested"
+        Label(s) -> return s
     }
     return "?"
 }
@@ -232,31 +239,34 @@ function describe(shape: Shape) -> String {
 @Main
 function main() {
     let boxed = nativeState(Tree { shape: Shape.Box(Rect { w: 3, h: 4 }), depth: 1 })
-    var back = nativeRecover<Tree>(nativeUserData(boxed))
+    let first = nativeUserData(boxed)
+    var back = nativeRecover<Tree>(first)
     print(describe(back.shape))
     match back.shape {
-        Empty -> print(0);
-        Box(r) -> print(r.w * r.h);
-        Nested(i) -> print(i.tag);
-        Label(s) -> print(s.count);
+        Empty -> print(0)
+        Box(r) -> print(r.w * r.h)
+        Nested(i) -> print(i.tag)
+        Label(s) -> print(s.count)
     }
     print(back.depth)
-    nativeStateFree(boxed)
+    nativeUserDataRelease(first)
 
     let listed = nativeState(Tree { shape: Shape.Nested(Inner { tag: 11 }), depth: 2 })
-    var second = nativeRecover<Tree>(nativeUserData(listed))
+    let next = nativeUserData(listed)
+    var second = nativeRecover<Tree>(next)
     match second.shape {
-        Empty -> print(0);
-        Box(r) -> print(r.w);
-        Nested(i) -> print(i.tag);
-        Label(s) -> print(s.count);
+        Empty -> print(0)
+        Box(r) -> print(r.w)
+        Nested(i) -> print(i.tag)
+        Label(s) -> print(s.count)
     }
-    nativeStateFree(listed)
+    nativeUserDataRelease(next)
 
     let named = nativeState(Tree { shape: Shape.Label("kira"), depth: 3 })
-    var third = nativeRecover<Tree>(nativeUserData(named))
+    let last = nativeUserData(named)
+    var third = nativeRecover<Tree>(last)
     print(describe(third.shape))
-    nativeStateFree(named)
+    nativeUserDataRelease(last)
     return
 }
 "#,
@@ -285,7 +295,8 @@ struct AppState {
     let bump: () -> Void = { in total = total + 1 }
 
     let boxed = nativeState(AppState { label: "frames", bump: bump })
-    var state = nativeRecover<AppState>(nativeUserData(boxed))
+    let token = nativeUserData(boxed)
+    var state = nativeRecover<AppState>(token)
     state.bump()
     state.bump()
     // The frame's own binding sees what the boxed closure wrote.
@@ -295,7 +306,7 @@ struct AppState {
     // …and the boxed closure writes into what the frame reads.
     state.bump()
     print(total)
-    nativeStateFree(boxed)
+    nativeUserDataRelease(token)
     print(total)
     return
 }
@@ -342,19 +353,104 @@ function main() {
     var pointerSource = nativeState(0)
     let pointer = nativeUserData(pointerSource)
     var pointerState = nativeState(State { payload: .Pointer(pointer) })
-    print(inspect(nativeUserData(pointerState), pointer))
-    nativeStateFree(pointerState)
-    nativeStateFree(pointerSource)
+    let pointerToken = nativeUserData(pointerState)
+    print(inspect(pointerToken, pointer))
+    nativeUserDataRelease(pointerToken)
+    nativeUserDataRelease(pointer)
 
     var total = 0
     let bump: () -> Void = { in total = total + 1 }
     var handlerState = nativeState(State { payload: .Handler(bump) })
-    print(inspect(nativeUserData(handlerState), RawPtr(0)))
-    nativeStateFree(handlerState)
+    let handlerToken = nativeUserData(handlerState)
+    print(inspect(handlerToken, RawPtr(0)))
+    nativeUserDataRelease(handlerToken)
     print(total)
     return
 }
 "#,
     );
     assert_eq!(output, "true\ntrue\n1\n");
+}
+
+/// Every owner of a state is counted the same way on every backend: the
+/// handle, each exported token, and each explicit retain. A handle gives its
+/// reference up with its scope, a token with `nativeUserDataRelease`, and the
+/// state survives exactly as long as one owner remains.
+#[test]
+fn native_state_owners_are_counted_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Counter {
+    var hits: Int = 0
+    var label: String = "state"
+}
+
+function exportToken() -> RawPtr {
+    let state = nativeState(Counter {})
+    // The handle dies here; the token keeps the state alive on its own.
+    return nativeUserData(state)
+}
+
+function bump(token: RawPtr) {
+    var view = nativeRecover<Counter>(token)
+    view.hits = view.hits + 1
+    return
+}
+
+@Main
+function main() {
+    let token = exportToken()
+    bump(token)
+    nativeUserDataRetain(token)
+    nativeUserDataRelease(token)
+    bump(token)
+    let again = nativeRecover<Counter>(token)
+    print(again.hits)
+    nativeUserDataRelease(token)
+
+    // A second export of one handle is a second owner.
+    let handle = nativeState(Counter { hits: 7 })
+    let first = nativeUserData(handle)
+    let second = nativeUserData(handle)
+    nativeUserDataRelease(first)
+    let still = nativeRecover<Counter>(second)
+    print(still.hits)
+    nativeUserDataRelease(second)
+
+    // The deprecated spelling is one release through the handle.
+    let old = nativeState(Counter { hits: 1 })
+    let kept = nativeUserData(old)
+    nativeStateFree(old)
+    let alive = nativeRecover<Counter>(kept)
+    print(alive.hits)
+    nativeUserDataRelease(kept)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n7\n1\n");
+}
+
+/// A token whose state lost its last owner names nothing, and recovering
+/// through it traps rather than reading freed storage.
+#[test]
+fn a_token_past_its_last_release_traps() {
+    assert_trap_parity(
+        r#"
+struct Counter { var hits: Int = 0 }
+
+@Main
+function main() {
+    let state = nativeState(Counter { hits: 4 })
+    let token = nativeUserData(state)
+    print(nativeRecover<Counter>(token).hits)
+    nativeUserDataRelease(token)
+    nativeStateFree(state)
+    let gone = nativeRecover<Counter>(token)
+    print(gone.hits)
+    return
+}
+"#,
+        "4\n",
+    );
 }

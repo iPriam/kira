@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+use kira_diagnostics::Diagnostic;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::TokenKind;
 
@@ -89,6 +90,10 @@ pub(crate) struct Declarative {
     pub(crate) fragments: Vec<Fragment>,
     /// The text between the braces of `expand { … }`.
     pub(crate) template: String,
+    /// Where it was written, for a diagnostic about the declaration itself.
+    pub(crate) source: SourceId,
+    /// The span of its name.
+    pub(crate) span: Span,
 }
 
 /// A `comptime function name(…) -> T { … }` declaration.
@@ -110,6 +115,9 @@ pub(crate) struct ComptimeFunction {
     pub(crate) parameters: Vec<String>,
     /// The text between the braces of its body.
     pub(crate) body: String,
+    /// The span that text covers, so a failure inside the body points at the
+    /// opener the author wrote rather than at the function's name.
+    pub(crate) body_span: Span,
     /// Where it was written.
     pub(crate) source: SourceId,
     /// The span of its name.
@@ -133,6 +141,9 @@ pub(crate) struct Procedural {
     pub(crate) parameters: Vec<String>,
     /// The text between the braces of `expand(…) -> Syntax { … }`.
     pub(crate) body: String,
+    /// The span that text covers, so a failure inside the body points at the
+    /// opener the author wrote rather than at the macro's name.
+    pub(crate) body_span: Span,
     /// Where the declaration was written, for diagnostics about it.
     pub(crate) source: SourceId,
     /// The span of the declaration's name.
@@ -146,31 +157,111 @@ pub(crate) struct Registry {
     procedural: HashMap<String, Procedural>,
     comptime_functions: HashMap<String, ComptimeFunction>,
     enums: HashMap<String, Vec<String>>,
+    /// Which package declared the macro now holding each name.
+    ///
+    /// A name is one declaration inside one scope, and this is what says
+    /// whether the declaration about to take a name is in the same scope as
+    /// the one already holding it.
+    owners: HashMap<String, Option<String>>,
 }
 
 impl Registry {
-    /// Adds one file's declarations, a later file's name winning over an
-    /// earlier one's.
+    /// Adds one file's declarations, reporting a name its own scope already
+    /// declared and letting a nearer package's win over a further one's.
     ///
-    /// The same rule the whole-program scan followed when it inserted into one
-    /// map as it walked the files in order — merging per-file results in that
-    /// same order reproduces it exactly.
-    pub(crate) fn absorb(&mut self, file: &FileRegistry) {
+    /// Files arrive dependencies first and the program's own last, so a later
+    /// name winning is the resolution order the rest of the language uses:
+    /// the program's own package, then the packages it imports. Between two
+    /// *different* packages that is a deliberate override and silent.
+    ///
+    /// Inside one package it is not an override, it is the same name declared
+    /// twice — and answering it by file order means the program's behaviour
+    /// depends on which file was read first, which is the failure that cannot
+    /// be reproduced from the source. Reported instead, the way `KSEM004`
+    /// reports a type declared twice in one package.
+    pub(crate) fn absorb(
+        &mut self,
+        owner: Option<&str>,
+        file: &FileRegistry,
+        conflicts: &mut Vec<Diagnostic>,
+    ) {
         for declared in &file.declarative {
-            self.declarative
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.declarative
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for declared in &file.procedural {
-            self.procedural
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.procedural
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for declared in &file.comptime_functions {
-            self.comptime_functions
-                .insert(declared.name.clone(), declared.clone());
+            if self.claim(
+                &declared.name,
+                owner,
+                declared.source,
+                declared.span,
+                conflicts,
+            ) {
+                self.comptime_functions
+                    .insert(declared.name.clone(), declared.clone());
+            }
         }
         for (name, variants) in &file.enums {
             self.enums.insert(name.clone(), variants.clone());
         }
+    }
+
+    /// Records `name` as declared by `owner`, answering whether the
+    /// declaration takes the name.
+    ///
+    /// It does not when its own scope already declared that name: the first
+    /// declaration keeps it, so which file was read first cannot change what
+    /// the program means, and the second is reported.
+    fn claim(
+        &mut self,
+        name: &str,
+        owner: Option<&str>,
+        source: SourceId,
+        span: Span,
+        conflicts: &mut Vec<Diagnostic>,
+    ) -> bool {
+        if let Some(held) = self.owners.get(name)
+            && held.as_deref() == owner
+        {
+            let scope = match owner {
+                Some(package) => format!("package `{package}`"),
+                None => "this program".to_owned(),
+            };
+            conflicts.push(diagnostics::error(
+                source,
+                span,
+                diagnostics::DUPLICATE_MACRO,
+                format!(
+                    "macro `{name}` is already declared in {scope}: a macro name means exactly \
+                     one declaration, and answering a second by file order would make the \
+                     program mean whichever file was read first"
+                ),
+            ));
+            return false;
+        }
+        self.owners
+            .insert(name.to_owned(), owner.map(str::to_owned));
+        true
     }
 
     /// Whether the program declares no macros at all.
@@ -351,7 +442,14 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                // The definition's structure is unknowable past this point, so
+                // parsing the tail would report the raw `quote` text as broken
+                // Kira rather than anything the author wrote. Blank it: the
+                // scan error above already names the failure.
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
@@ -362,7 +460,10 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         if file.is_word(index, "macro")
@@ -376,12 +477,30 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                     index = next;
                     continue;
                 }
-                None => break,
+                None => {
+                    blank_to_end(file, index, &mut found.spans);
+                    break;
+                }
             }
         }
         index += 1;
     }
     found
+}
+
+/// Blanks the file from `index` to its end, so a definition whose structure
+/// the scanner could not recover never reaches the parser as raw text.
+///
+/// Without this, an unclosed macro body leaves every later `#{` in place and
+/// each one is reported as an unexpected character, burying the scan error
+/// that names the actual failure under noise from text the author never meant
+/// as code.
+fn blank_to_end(file: &Lexed<'_>, index: usize, spans: &mut Vec<Span>) {
+    let start = file.span(index).start;
+    let end = file.text.len() as u32;
+    if start < end {
+        spans.push(Span::from_bounds(start, end));
+    }
 }
 
 /// Scans `macro Name(p: expr) { expand { … } }` starting at the `macro` word.
@@ -391,6 +510,7 @@ fn scan_declarative(
     reporter: &mut Reporter,
 ) -> Option<(Declarative, Span, usize)> {
     let name = file.text_at(start + 1).to_owned();
+    let name_span = file.span(start + 1);
     let open_params = start + 2;
     let Some(close_params) = file.match_close(open_params) else {
         // Reported rather than silent: a `None` here would otherwise stop the
@@ -400,7 +520,7 @@ fn scan_declarative(
             file.source,
             file.span(open_params),
             diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `( … )` parameter list"),
+            format!("macro `{name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
         );
         return None;
     };
@@ -448,7 +568,9 @@ fn scan_declarative(
             file.source,
             file.span(open_body),
             diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `{{ … }}` body"),
+            format!(
+                "macro `{name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"
+            ),
         );
         return None;
     };
@@ -475,6 +597,8 @@ fn scan_declarative(
             name,
             fragments,
             template,
+            source: file.source,
+            span: name_span,
         },
         file.span_of(start, close_body),
         close_body + 1,
@@ -531,7 +655,7 @@ fn scan_comptime_function(
             file.source,
             name_span,
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `( … )` parameter list"),
+            format!("`comptime function {name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
         );
         return None;
     };
@@ -561,21 +685,18 @@ fn scan_comptime_function(
             file.source,
             name_span,
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `{{ … }}` body"),
+            format!("`comptime function {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
         );
         return None;
     };
-    let body = file
-        .slice(Span::from_bounds(
-            file.span(open_body).end(),
-            file.span(close_body).start,
-        ))
-        .to_owned();
+    let body_span = Span::from_bounds(file.span(open_body).end(), file.span(close_body).start);
+    let body = file.slice(body_span).to_owned();
     Some((
         ComptimeFunction {
             name,
             parameters,
             body,
+            body_span,
             source: file.source,
             span: name_span,
         },
@@ -616,7 +737,7 @@ fn scan_procedural(
             file.source,
             file.span(open_body),
             diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime macro {name}` has an unclosed `{{ … }}` body"),
+            format!("`comptime macro {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
         );
         return None;
     };
@@ -642,13 +763,9 @@ fn scan_procedural(
                 brace += 1;
             }
             let close_expand = file.match_close(brace)?;
-            body = Some(
-                file.slice(Span::from_bounds(
-                    file.span(brace).end(),
-                    file.span(close_expand).start,
-                ))
-                .to_owned(),
-            );
+            let body_span =
+                Span::from_bounds(file.span(brace).end(), file.span(close_expand).start);
+            body = Some((file.slice(body_span).to_owned(), body_span));
             index = close_expand + 1;
             continue;
         }
@@ -695,7 +812,7 @@ fn scan_procedural(
         );
         return None;
     };
-    let Some(body) = body else {
+    let Some((body, body_span)) = body else {
         reporter.error(
             file.source,
             name_span,
@@ -713,6 +830,7 @@ fn scan_procedural(
         replace,
         parameters,
         body,
+        body_span,
         source: file.source,
         span: name_span,
     };
@@ -805,14 +923,54 @@ pub(crate) fn kind_word(kind: ProceduralKind) -> &'static str {
 mod tests {
     use super::*;
 
-    fn collect_text(text: &str) -> (Registry, Vec<kira_diagnostics::Diagnostic>) {
+    fn collect_text(text: &str) -> (Registry, Vec<Diagnostic>) {
         let mut reporter = Reporter::new();
         let mut registry = Registry::default();
-        registry.absorb(&collect_file(
-            &Lexed::new(SourceId::new(0), text),
-            &mut reporter,
-        ));
+        registry.absorb(
+            None,
+            &collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter),
+            &mut Vec::new(),
+        );
         (registry, reporter.into_diagnostics())
+    }
+
+    /// A macro definition scans the same indented or not: the scanner reads
+    /// tokens, and tokens carry no columns.
+    #[test]
+    fn indentation_does_not_change_what_a_definition_is() {
+        let indented = "comptime macro BadName {\n    kind { function }\n    expand(input: Syntax) -> Syntax {\n        return quote { 42 }\n    }\n}\n";
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
+        for text in [indented, flat] {
+            let (registry, diagnostics) = collect_text(text);
+            assert!(diagnostics.is_empty(), "{text:?}: {diagnostics:?}");
+            assert!(registry.procedural("BadName").is_some(), "{text:?}");
+        }
+    }
+
+    /// The blanked span covers the whole definition, indented or not: what the
+    /// parser never sees cannot produce diagnostics.
+    #[test]
+    fn the_definition_span_covers_the_definition() {
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
+        assert!(reporter.into_diagnostics().is_empty());
+        assert_eq!(found.spans.len(), 1);
+        let covered = &flat[found.spans[0].start as usize..found.spans[0].end() as usize];
+        assert!(covered.contains("return quote { 42 }"), "{covered:?}");
+    }
+
+    /// …and nothing else: a span running past the definition would blank the
+    /// `@Main` below it, and the program would lose its entrypoint.
+    #[test]
+    fn the_definition_span_stops_at_the_definition() {
+        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n@Main\nfunction main() {\nprint(1)\nreturn\n}\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
+        assert!(reporter.into_diagnostics().is_empty());
+        assert_eq!(found.spans.len(), 1);
+        let end = found.spans[0].end() as usize;
+        assert!(flat[end..].contains("@Main"), "tail: {:?}", &flat[end..]);
     }
 
     #[test]
@@ -825,6 +983,28 @@ mod tests {
         assert_eq!(declared.fragments.len(), 1);
         assert_eq!(declared.fragments[0].kind, FragmentKind::Expr);
         assert!(declared.template.contains("value * value"));
+    }
+
+    /// An unclosed macro body blanks the file from the breakage on: the
+    /// definition's raw `quote` text must never reach the parser, or every
+    /// surviving `#{` is reported as an unexpected character burying the scan
+    /// error that names the actual failure.
+    #[test]
+    fn an_unclosed_macro_body_blanks_its_tail() {
+        let text = "comptime macro Broken {\n    kind { derive }\n    expand(target: Declaration) -> Syntax {\n        return quote { x }\n";
+        let mut reporter = Reporter::new();
+        let found = collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter);
+        let diagnostics = reporter.into_diagnostics();
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains("unclosed")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            !found.spans.is_empty(),
+            "the unscannable tail must be blanked"
+        );
+        let last = found.spans.last().expect("a span");
+        assert_eq!(last.end() as usize, text.len());
     }
 
     #[test]

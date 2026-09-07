@@ -10,9 +10,11 @@ pub mod diagnostic_code;
 pub mod diagnostic_domain;
 pub mod diagnostic_message;
 pub mod package_messages;
+pub mod registry;
 pub mod toolchain_messages;
 
 pub use compiler_phase::CompilerPhase;
 pub use diagnostic_code::DiagnosticCode;
 pub use diagnostic_domain::DiagnosticDomain;
 pub use diagnostic_message::{MessageArgs, build};
+pub use registry::{CodeFamily, RegisteredCode};

@@ -1,0 +1,35 @@
+---
+title: Selecting a Toolchain
+description: Listing what is installed, selecting one globally, removing one, and pinning a directory tree to a version.
+---
+
+## Listing
+
+`list` walks the channel directories, reports `release` before `dev` and newest first within each, and marks the selected one with `*`.
+
+A toolchains root that does not exist is an empty listing rather than an error: it is the state of a machine that has never run `knvm install`. A version whose tree has lost its `bin/kira` is listed and flagged broken instead of being hidden.
+
+`list --remote` asks the same question of the release feed instead of of the disk: what each channel publishes, newest first. It is a flag on `list` rather than a verb of its own because it is one question with two sources.
+
+## Selecting
+
+`use` refuses a version that is not installed, and equally refuses one missing the binary the launcher runs: selecting either would leave `kira` unable to dispatch, which is better reported now than at the next invocation.
+
+## Removing
+
+`uninstall` removes exactly `<channel>/<version>/`. When the removed version was the selected one, `current.toml` is deleted and the removal warns that nothing is selected. Repointing at some surviving version would silently change which compiler a user runs.
+
+## Pinning a Directory Tree
+
+`current.toml` is a single global selection, which is the wrong granularity for a machine building two projects that want different compilers. `knvm pin 1.10.0` writes a `kira-toolchain.toml` in the working directory:
+
+```toml
+channel = "release"
+version = "1.10.0"
+```
+
+The launcher walks up from its working directory, and the nearest pin wins over the global selection, the same precedence a project's `rust-toolchain.toml` has over a default toolchain. `knvm unpin` removes it.
+
+`pin` refuses a version that is not installed, because writing one would leave every later `kira` in that tree unable to dispatch. The launcher refuses a pin whose toolchain has since been removed, and refuses one it cannot parse, rather than falling back: falling back would silently run the compiler the project explicitly said it does not want, which is the one outcome a pin exists to prevent. Both refusals name the remedy.
+
+A pin says which toolchain, never which binary inside it. Which binary to run stays the launcher's own decision, made from `argv[0]`, so the multi-call language-server alias keeps working inside a pinned tree.

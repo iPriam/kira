@@ -70,6 +70,7 @@ kira-hybrid-main = { path = "crates/kira-hybrid-main" }
 kira-launcher = { path = "crates/kira-launcher" }
 kira-knvm = { path = "crates/kira-knvm" }
 kira-devflow = { path = "crates/kira-devflow" }
+kira-diagnostic-registry = { path = "crates/kira-diagnostic-registry" }
 kira-lsp = { path = "crates/kira-lsp" }
 kira-mcp-protocol = { path = "crates/kira-mcp-protocol" }
 
@@ -94,7 +95,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }
-redb = "4.1"
 bytes = "1"
 futures-util = "0.3"
 h3 = "0.0.8"
@@ -113,11 +113,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 # the managed toolchain ships (`llvm-sys` majors track the LLVM major.minor).
 # A hard dependency of the backend: every workspace build needs a managed LLVM
 # (LLVM_SYS_231_PREFIX names it; CI provisions the bundle before building).
-# The pre-release requirement tracks `llvm-metadata.toml`, whose pin is
-# 23.1.0-rc3: 231.0.0-rc2 is the only published binding for that series, and
-# Cargo will not select a pre-release unless the requirement names one, so this
-# cannot be shortened to "231".
-llvm-sys = "231.0.0-rc2"
+llvm-sys = "231.0.0"
 # LSP-first frontend: salsa incremental queries; lsp-server/lsp-types for
 # the language server (rust-analyzer's stack).
 salsa = "0.28"
@@ -159,4 +155,3 @@ opt-level = 3
 
 [profile.dev.package.kira-runtime-abi]
 opt-level = 3
-

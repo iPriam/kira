@@ -159,8 +159,16 @@ impl Session {
         client.set_capabilities(capabilities);
         let configured = client.await_configuration("launch", launch_arguments, LAUNCH_TIMEOUT);
         if let Err(error) = configured {
+            // A launch the adapter never answers is what an unauthorized host
+            // looks like; the hint turns a bare timeout into the one command
+            // that fixes it.
+            let reason = if kira_debug::debugging_unauthorized() {
+                format!("{error} ({})", kira_debug::ENABLE_DEBUGGING_HINT)
+            } else {
+                error.to_string()
+            };
             return Err(StartFailure {
-                reason: error.to_string(),
+                reason,
                 target: Box::new(target),
             });
         }

@@ -82,7 +82,13 @@ fn bridge_tag_of(
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
-        Type::CString | Type::CBlock | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+        Type::CString
+        | Type::CBlock
+        | Type::RuntimeType
+        | Type::NativeState(_)
+        | Type::Task(_)
+        | Type::MainThreadTask(_)
+        | Type::Cell(_) => {
             return Err(LlvmError::internal(
                 "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
             ));
@@ -92,6 +98,16 @@ fn bridge_tag_of(
         // aggregate, while the node retains the recursively owned value.
         Type::Any => (BridgeValueTag::ANY.0, Some(PayloadForm::Node)),
         Type::Error => return Err(LlvmError::internal("a value with no type")),
+        // `kira-ir` rewrites every `distinct` type to the scalar it is before
+        // a backend sees the program, so what crosses this seam is that
+        // scalar's tag. One reaching here is a lowering that skipped the
+        // erasure, which is a broken contract rather than a value to guess a
+        // tag for.
+        Type::Distinct(_) => {
+            return Err(LlvmError::internal(
+                "a distinct type that lowering did not erase",
+            ));
+        }
     })
 }
 
@@ -163,8 +179,10 @@ impl Codegen<'_> {
                     self.decode_native_state_value(node, ty)?
                 }
                 Type::RawPtr | Type::ForeignPtr(_) => payload,
+                Type::MainThreadTask(_) => payload,
                 Type::CString
                 | Type::CBlock
+                | Type::RuntimeType
                 | Type::NativeState(_)
                 | Type::Task(_)
                 | Type::Cell(_) => {
@@ -174,6 +192,11 @@ impl Codegen<'_> {
                 }
                 Type::Void | Type::Error => {
                     return Err(LlvmError::internal("a parameter with no runtime value"));
+                }
+                Type::Distinct(_) => {
+                    return Err(LlvmError::internal(
+                        "a distinct type that lowering did not erase",
+                    ));
                 }
             })
         }
@@ -258,6 +281,7 @@ impl Codegen<'_> {
 mod tests {
     use kira_runtime_abi::Execution;
     use kira_semantics_model::Type;
+    use kira_semantics_model::hir::CallableSignature;
     use kira_semantics_model::hir::{HirExpr, HirFunction, HirProgram, HirStmt};
     use kira_source::Span;
 
@@ -281,10 +305,12 @@ mod tests {
             locals: Vec::new(),
             body: vec![ret],
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(0, 6),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         let ir = kira_ir::lower(&program);
 
@@ -319,10 +345,12 @@ mod tests {
             locals: Vec::new(),
             body: vec![main_return],
             is_main: true,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Runtime,
             mutates_self: false,
             name_span: Span::new(0, 4),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         let unused_value = program.exprs.alloc(HirExpr::Int(7));
         let unused_return = program.stmts.alloc(HirStmt::Return {
@@ -335,10 +363,12 @@ mod tests {
             locals: Vec::new(),
             body: vec![unused_return],
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(5, 17),
+            signature: CallableSignature::synthesized(&[], Type::INT),
         });
         program.main = Some(kira_semantics_model::hir::FuncId(0));
         let ir = kira_ir::lower(&program);

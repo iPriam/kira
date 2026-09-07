@@ -39,4 +39,19 @@ impl NativeStateTable {
     pub fn target(&self, id: NativeStateId) -> Option<Type> {
         self.targets.get(id.0 as usize).copied()
     }
+
+    /// Rewrites every row's boxed type through `visit`, then rebuilds the
+    /// intern index. See [`super::arrays::ArrayTable::visit_elements_mut`] for
+    /// why a duplicate row is kept rather than merged.
+    pub fn visit_targets_mut(&mut self, visit: &dyn Fn(&mut Type)) {
+        for target in &mut self.targets {
+            visit(target);
+        }
+        self.index.clear();
+        for (index, target) in self.targets.iter().enumerate() {
+            self.index
+                .entry(*target)
+                .or_insert(NativeStateId(index as u32));
+        }
+    }
 }

@@ -9,6 +9,9 @@
     "shaders",
     "ffi-workflows",
     "diagnostics",
+    "debugging",
+    "profiling",
+    "editors",
     "compiler-architecture",
     "examples",
     "contributing"

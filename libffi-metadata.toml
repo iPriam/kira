@@ -19,10 +19,18 @@
 
 schema_version = 1
 
+# The release tag and the version are deliberately not the same string. This is
+# libffi 3.5.2 — `configure.ac` says so and the asset names carry it — published
+# again under a second tag because the first tag's static archives were built
+# without `--with-pic`. Under the compiler's default of `-fPIE` a global is not
+# preemptible, so x86_64 reached `ffi_type_float` with a direct `R_X86_64_PC32`
+# and the archive could not be linked into a shared object at all, which is what
+# `kira live` does. Nothing under `v3.5.2` was rewritten: a tag owns its assets.
+
 [libffi]
 version = "3.5.2"
 repository = "kira-lang-com/libffi"
-release_tag = "v3.5.2"
+release_tag = "v3.5.2-kira.2"
 
 # The target table is keyed by the same spelling `libffi_vendor_target` returns,
 # so the build script that links an archive and the installer that fetches one

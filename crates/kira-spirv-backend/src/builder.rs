@@ -276,7 +276,9 @@ pub(crate) fn literal_string(text: &str) -> Vec<u32> {
         bytes.push(0);
     }
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
             u32::from(chunk[0])
                 | (u32::from(chunk[1]) << 8)

@@ -11,8 +11,8 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MathOp, PathStep, PlacePath, StringOp,
-    TaskPrim, WritebackTarget, opcode as o, step_tag,
+    ChannelPrim, CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MainThreadOp, MathOp,
+    PathStep, PlacePath, StringOp, TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.
@@ -67,6 +67,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         }
         Instruction::StoreLocal(slot) => {
             out.push(o::STORE_LOCAL);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
+        Instruction::LoadConstant(slot) => {
+            out.push(o::LOAD_CONSTANT);
             out.extend_from_slice(&slot.to_le_bytes());
         }
         Instruction::Jump(target) => {
@@ -132,6 +136,69 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::NEW_STRUCT_DROPPING);
             out.extend_from_slice(&fields.to_le_bytes());
             out.extend_from_slice(&glue.to_le_bytes());
+        }
+        Instruction::AddIntChecked => out.push(o::ADD_INT_CHECKED),
+        Instruction::SubIntChecked => out.push(o::SUB_INT_CHECKED),
+        Instruction::MulIntChecked => out.push(o::MUL_INT_CHECKED),
+        Instruction::NegIntChecked => out.push(o::NEG_INT_CHECKED),
+        Instruction::DivIntChecked => out.push(o::DIV_INT_CHECKED),
+        Instruction::AddUIntChecked => out.push(o::ADD_UINT_CHECKED),
+        Instruction::SubUIntChecked => out.push(o::SUB_UINT_CHECKED),
+        Instruction::MulUIntChecked => out.push(o::MUL_UINT_CHECKED),
+        Instruction::CheckInt(code) => {
+            out.push(o::CHECK_INT);
+            out.push(*code);
+        }
+        Instruction::WrapInt(code) => {
+            out.push(o::WRAP_INT);
+            out.push(*code);
+        }
+        Instruction::CheckShift(bits) => {
+            out.push(o::CHECK_SHIFT);
+            out.push(*bits);
+        }
+        Instruction::ConvertInt { from, to } => {
+            out.push(o::CONVERT_INT);
+            out.push(*from);
+            out.push(*to);
+        }
+        Instruction::ConvertUIntToFloat => out.push(o::CONVERT_UINT_TO_FLOAT),
+        Instruction::PrintUnsigned => out.push(o::PRINT_UNSIGNED),
+        Instruction::StringOfUnsigned => out.push(o::STRING_OF_UNSIGNED),
+        Instruction::TypeOf => out.push(o::TYPE_OF),
+        Instruction::TypeField(field) => {
+            out.push(o::TYPE_FIELD);
+            out.push(*field);
+        }
+        Instruction::TypeTest(id) => {
+            out.push(o::TYPE_TEST);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::Downcast(id) => {
+            out.push(o::DOWNCAST);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::ConstType(id) => {
+            out.push(o::CONST_TYPE);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::TypeCastResult(id) => {
+            out.push(o::TYPE_CAST_RESULT);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::NewStructOrdered { order, glue } => {
+            out.push(o::NEW_STRUCT_ORDERED);
+            out.extend_from_slice(&(order.len() as u64).to_le_bytes());
+            for slot in order {
+                out.extend_from_slice(&slot.to_le_bytes());
+            }
+            match glue {
+                Some(glue) => {
+                    out.push(1);
+                    out.extend_from_slice(&glue.to_le_bytes());
+                }
+                None => out.push(0),
+            }
         }
         Instruction::GetField(index) => {
             out.push(o::GET_FIELD);
@@ -204,6 +271,22 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::TASK_OP);
             out.push(prim.as_byte());
         }
+        Instruction::ChannelOp(prim) => {
+            out.push(o::CHANNEL_OP);
+            out.push(prim.as_byte());
+        }
+        Instruction::MainThreadCall {
+            operation,
+            function,
+            args,
+        } => {
+            out.push(o::MAIN_THREAD_CALL);
+            out.push(operation.as_byte());
+            out.extend_from_slice(&function.to_le_bytes());
+            out.extend_from_slice(&args.to_le_bytes());
+        }
+        Instruction::MainThreadJoin => out.push(o::MAIN_THREAD_JOIN),
+        Instruction::MainThreadLifecycle => out.push(o::MAIN_THREAD_LIFECYCLE),
         Instruction::CStringNew => out.push(o::CSTRING_NEW),
         Instruction::CLayoutAddress(aggregate) => {
             out.push(o::CLAYOUT_ADDRESS);
@@ -239,10 +322,19 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
+        Instruction::ConvertFloatToUInt => out.push(o::CONVERT_FLOAT_TO_UINT),
+        Instruction::NativeStateTake(type_word) => {
+            out.push(o::NATIVE_STATE_TAKE);
+            out.extend_from_slice(&type_word.to_le_bytes());
+        }
         Instruction::ConvertIntToRawPtr => out.push(o::CONVERT_INT_TO_RAW_PTR),
         Instruction::ConvertRawPtrToInt => out.push(o::CONVERT_RAW_PTR_TO_INT),
-        Instruction::NativeUserData => out.push(o::NATIVE_USER_DATA),
-        Instruction::NativeStateFree => out.push(o::NATIVE_STATE_FREE),
+        Instruction::NativeUserData { shared } => {
+            out.push(o::NATIVE_USER_DATA);
+            out.push(u8::from(*shared));
+        }
+        Instruction::NativeStateRetain => out.push(o::NATIVE_STATE_RETAIN),
+        Instruction::NativeStateRelease => out.push(o::NATIVE_STATE_RELEASE),
         Instruction::ConstRawPtrNull => out.push(o::RAW_PTR_NULL),
         Instruction::ForeignCallback(id) => {
             out.push(o::FOREIGN_CALLBACK);
@@ -296,6 +388,8 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&type_id.to_le_bytes());
         }
         Instruction::EqAny => out.push(o::EQ_ANY),
+        Instruction::EqType => out.push(o::EQ_TYPE),
+        Instruction::NeType => out.push(o::NE_TYPE),
         Instruction::NeAny => out.push(o::NE_ANY),
         Instruction::EqStr => out.push(o::EQ_STR),
         Instruction::NeStr => out.push(o::NE_STR),
@@ -415,6 +509,7 @@ impl Cursor<'_> {
             o::CELL_GET => Instruction::CellGet(self.read_slot(legacy)?),
             o::CELL_SET => Instruction::CellSet(self.read_slot(legacy)?),
             o::STORE_LOCAL => Instruction::StoreLocal(self.read_slot(legacy)?),
+            o::LOAD_CONSTANT => Instruction::LoadConstant(self.read_slot(legacy)?),
             o::JUMP => Instruction::Jump(self.read_word(legacy)?),
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(self.read_word(legacy)?),
             o::CALL => Instruction::Call(self.read_word(legacy)?),
@@ -423,6 +518,10 @@ impl Cursor<'_> {
             o::FOREIGN_CALLBACK => Instruction::ForeignCallback(u32::from_le_bytes(self.take()?)),
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
+            o::NATIVE_STATE_TAKE => Instruction::NativeStateTake(u64::from_le_bytes(self.take()?)),
+            o::NATIVE_USER_DATA => Instruction::NativeUserData {
+                shared: self.read_bool()?,
+            },
             o::NEW_STRUCT => Instruction::NewStruct(self.read_slot(legacy)?),
             o::TAKE_LOCAL => Instruction::TakeLocal(self.read_slot(legacy)?),
             o::NEW_STRUCT_DROPPING => {
@@ -431,6 +530,55 @@ impl Cursor<'_> {
                     fields,
                     glue: u32::from_le_bytes(self.take()?),
                 }
+            }
+            o::ADD_INT_CHECKED => Instruction::AddIntChecked,
+            o::SUB_INT_CHECKED => Instruction::SubIntChecked,
+            o::MUL_INT_CHECKED => Instruction::MulIntChecked,
+            o::NEG_INT_CHECKED => Instruction::NegIntChecked,
+            o::DIV_INT_CHECKED => Instruction::DivIntChecked,
+            o::ADD_UINT_CHECKED => Instruction::AddUIntChecked,
+            o::SUB_UINT_CHECKED => Instruction::SubUIntChecked,
+            o::MUL_UINT_CHECKED => Instruction::MulUIntChecked,
+            o::CHECK_INT => {
+                let [code] = self.take()?;
+                Instruction::CheckInt(code)
+            }
+            o::WRAP_INT => {
+                let [code] = self.take()?;
+                Instruction::WrapInt(code)
+            }
+            o::CHECK_SHIFT => {
+                let [bits] = self.take()?;
+                Instruction::CheckShift(bits)
+            }
+            o::CONVERT_INT => {
+                let [from, to] = self.take()?;
+                Instruction::ConvertInt { from, to }
+            }
+            o::CONVERT_UINT_TO_FLOAT => Instruction::ConvertUIntToFloat,
+            o::PRINT_UNSIGNED => Instruction::PrintUnsigned,
+            o::STRING_OF_UNSIGNED => Instruction::StringOfUnsigned,
+            o::TYPE_TEST => Instruction::TypeTest(u64::from_le_bytes(self.take()?)),
+            o::DOWNCAST => Instruction::Downcast(u64::from_le_bytes(self.take()?)),
+            o::CONST_TYPE => Instruction::ConstType(u64::from_le_bytes(self.take()?)),
+            o::TYPE_CAST_RESULT => Instruction::TypeCastResult(u64::from_le_bytes(self.take()?)),
+            o::TYPE_OF => Instruction::TypeOf,
+            o::TYPE_FIELD => {
+                let [field] = self.take()?;
+                Instruction::TypeField(field)
+            }
+            o::NEW_STRUCT_ORDERED => {
+                let count = self.read_slot(legacy)?;
+                let mut order = Vec::new();
+                for _ in 0..count {
+                    order.push(self.read_slot(legacy)?);
+                }
+                let glue = if self.read_bool()? {
+                    Some(u32::from_le_bytes(self.take()?))
+                } else {
+                    None
+                };
+                Instruction::NewStructOrdered { order, glue }
             }
             o::GET_FIELD => Instruction::GetField(self.read_slot(legacy)?),
             o::FOREIGN_OFFSET => Instruction::ForeignOffset(u32::from_le_bytes(self.take()?)),
@@ -566,6 +714,30 @@ impl Cursor<'_> {
                 })?;
                 Instruction::TaskOp(prim)
             }
+            o::CHANNEL_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let prim = ChannelPrim::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::ChannelOp(prim)
+            }
+            o::MAIN_THREAD_CALL => {
+                let operation_offset = self.offset;
+                let [operation] = self.take::<1>()?;
+                let operation =
+                    MainThreadOp::from_byte(operation).ok_or(DecodeError::UnknownOpcode {
+                        opcode: operation,
+                        offset: operation_offset,
+                    })?;
+                Instruction::MainThreadCall {
+                    operation,
+                    function: self.read_word(legacy)?,
+                    args: self.read_word(legacy)?,
+                }
+            }
+            o::MAIN_THREAD_JOIN => Instruction::MainThreadJoin,
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
@@ -650,6 +822,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::EQ_BOOL => Instruction::EqBool,
         o::NE_BOOL => Instruction::NeBool,
         o::EQ_ANY => Instruction::EqAny,
+        o::EQ_TYPE => Instruction::EqType,
+        o::NE_TYPE => Instruction::NeType,
         o::NE_ANY => Instruction::NeAny,
         o::EQ_STR => Instruction::EqStr,
         o::NE_STR => Instruction::NeStr,
@@ -670,14 +844,16 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::ENUM_PAYLOAD => Instruction::EnumPayload,
         o::CONVERT_INT_TO_FLOAT => Instruction::ConvertIntToFloat,
         o::CONVERT_FLOAT_TO_INT => Instruction::ConvertFloatToInt,
+        o::CONVERT_FLOAT_TO_UINT => Instruction::ConvertFloatToUInt,
         o::CONVERT_INT_TO_RAW_PTR => Instruction::ConvertIntToRawPtr,
         o::CONVERT_RAW_PTR_TO_INT => Instruction::ConvertRawPtrToInt,
-        o::NATIVE_USER_DATA => Instruction::NativeUserData,
-        o::NATIVE_STATE_FREE => Instruction::NativeStateFree,
+        o::NATIVE_STATE_RETAIN => Instruction::NativeStateRetain,
+        o::NATIVE_STATE_RELEASE => Instruction::NativeStateRelease,
         o::RAW_PTR_NULL => Instruction::ConstRawPtrNull,
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,
         o::RETURN_VOID => Instruction::ReturnVoid,
+        o::MAIN_THREAD_LIFECYCLE => Instruction::MainThreadLifecycle,
         _ => return None,
     })
 }

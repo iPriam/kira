@@ -153,7 +153,9 @@ impl Heap {
         let Ok(elements) = Rc::try_unwrap(elements) else {
             return;
         };
-        for element in elements {
+        // Elements release last to first, the language's rule for every
+        // engine.
+        for element in elements.into_iter().rev() {
             self.drop_value(element);
         }
     }

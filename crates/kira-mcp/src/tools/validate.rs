@@ -96,7 +96,7 @@ pub fn call(arguments: &Value) -> (Value, bool) {
     let mut runs: Vec<Run> = Vec::new();
     let mut fixes: Vec<String> = Vec::new();
 
-    let planned = planned_checks(fix);
+    let planned = planned_checks(fix, with_tests);
     if fix {
         fixes.push("cargo fmt --all".to_owned());
     }
@@ -225,8 +225,15 @@ pub fn call(arguments: &Value) -> (Value, bool) {
 }
 
 /// The commands the gate runs before its tests, in order.
-fn planned_checks(fix: bool) -> Vec<Check> {
-    vec![
+///
+/// A run whose tests are on compiles the workspace once, not three times.
+/// `clippy --all-targets` already type-checks every library, binary and test
+/// with the lints on, and the test phase builds and links the same debug
+/// artifacts `cargo build --workspace` would — so the standalone build step is
+/// planned only when the tests that would subsume it are off. Each pass a
+/// change to a core crate avoids is minutes off every gate.
+fn planned_checks(fix: bool, with_tests: bool) -> Vec<Check> {
+    let mut checks = vec![
         Check {
             name: "formatting",
             program: "cargo",
@@ -247,6 +254,8 @@ fn planned_checks(fix: bool) -> Vec<Check> {
                 "warnings",
             ]),
         },
+    ];
+    if !with_tests {
         // The whole workspace, this server included. It can be included because
         // `scripts/mcp-server.sh` runs the server from a copy of the executable
         // rather than from `target/debug/`, so the file cargo has to replace is
@@ -254,23 +263,24 @@ fn planned_checks(fix: bool) -> Vec<Check> {
         // refuses to replace a running image, and the gate excluded its own
         // crate and type-checked it separately — which meant a link error in
         // the tool doing the checking was the one error the gate could not see.
-        Check {
+        checks.push(Check {
             name: "workspace_compilation",
             program: "cargo",
             args: exec::argv(&["build", "--workspace"]),
-        },
-        Check {
-            name: "portable_core",
-            program: "cargo",
-            args: exec::argv(&[
-                "check",
-                "-p",
-                "kira-vm-runtime",
-                "--target",
-                "wasm32-unknown-unknown",
-            ]),
-        },
-    ]
+        });
+    }
+    checks.push(Check {
+        name: "portable_core",
+        program: "cargo",
+        args: exec::argv(&[
+            "check",
+            "-p",
+            "kira-vm-runtime",
+            "--target",
+            "wasm32-unknown-unknown",
+        ]),
+    });
+    checks
 }
 
 /// Refuses a test selection alongside `test: false`.
@@ -397,7 +407,7 @@ mod tests {
     /// gone — and this is what keeps it gone.
     #[test]
     fn the_workspace_build_excludes_nothing() {
-        let planned = planned_checks(false);
+        let planned = planned_checks(false, false);
         let build = planned
             .iter()
             .find(|check| check.name == "workspace_compilation")
@@ -408,6 +418,22 @@ mod tests {
             build.args
         );
         assert!(build.args.contains(&"--workspace".to_owned()));
+    }
+
+    /// With tests on, the workspace compiles once: clippy type-checks every
+    /// target and the test build links the same artifacts, so a standalone
+    /// build pass would be a third compilation of the same code.
+    #[test]
+    fn the_test_phase_subsumes_the_standalone_build() {
+        let planned = planned_checks(false, true);
+        assert!(
+            !planned
+                .iter()
+                .any(|check| check.name == "workspace_compilation"),
+            "a gate with tests must not compile the workspace a second time"
+        );
+        assert!(planned.iter().any(|check| check.name == "lints"));
+        assert!(planned.iter().any(|check| check.name == "portable_core"));
     }
 
     /// Omitting the flag runs the tests. The default is what an agent gets by

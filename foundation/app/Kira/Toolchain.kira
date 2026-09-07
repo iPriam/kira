@@ -1,0 +1,190 @@
+// Kira's toolchain, as a Kira program drives it.
+//
+// Three verbs on a package that is already on a disk: check it, build it, run
+// it. `path` names a directory holding a `package.kira`, which is what
+// separates this from `checkPackages` in `Compiler` — that one takes its
+// sources as values and touches no disk, and this one drives the toolchain over
+// a project that is there.
+//
+// The engine performs each of these through its host, the way it performs a
+// file read. Nothing here spawns a process of its own: a program calling
+// `runApp` hands the request to the host, which drives the same build the
+// command line drives and reads back the exit code and the diagnostics as
+// values.
+//
+// The seam carries one flat `[String]` each way, the one aggregate every
+// backend already moves across it. `encodeRequest` writes the request and
+// `decodeDiagnostics` reads the answer, so the Kira side that writes the wire
+// and the host side that reads it cannot drift.
+
+// Which side a hybrid build leans on where either would serve.
+enum KiraHybridBias {
+    RuntimeBias
+    NativeBias
+}
+
+// Which backend compiles the package, and runs it.
+enum KiraBackend {
+    Vm
+    Native
+    Hybrid(KiraHybridBias)
+}
+
+// One variable the app sees in its environment when it is run.
+struct KiraEnvironmentVariable {
+    var name: String = ""
+    var value: String = ""
+}
+
+// One problem the toolchain reported, as a value.
+//
+// A code, the line it points at, and how serious it is — what an assertion is
+// written against. No message: messages get reworded and codes do not, so a
+// test that matched text would break on an edit that changed nothing.
+struct KiraDiagnostic {
+    var code: KiraError = .Unrecognized
+    var line: Int = 0
+    var severity: KiraSeverity = .Error
+}
+
+// What one check answered.
+struct KiraCheckResult {
+    var diagnostics: [KiraDiagnostic] = []
+}
+
+// What one build answered.
+struct KiraBuildResult {
+    var diagnostics: [KiraDiagnostic] = []
+}
+
+// What one run answered.
+//
+// `exitCode` means nothing unless the diagnostics hold no error: a package that
+// never built has no code to report, and a zero there would read as a program
+// that ran and succeeded.
+struct KiraRunResult {
+    var diagnostics: [KiraDiagnostic] = []
+    var exitCode: Int = 0
+}
+
+class Kira {
+    // Checks the package at `path`: the frontend and nothing after it.
+    function check(path: borrow String, backend: borrow KiraBackend) -> KiraCheckResult {
+        var empty: [KiraEnvironmentVariable] = []
+        let answer = kcCheck(encodeRequest(path, backend, empty))
+        var result = KiraCheckResult()
+        result.diagnostics = decodeDiagnostics(answer)
+        return result
+    }
+
+    // Builds the package at `path`, answering with every diagnostic produced.
+    function build(path: borrow String, backend: borrow KiraBackend) -> KiraBuildResult {
+        var empty: [KiraEnvironmentVariable] = []
+        let answer = kcBuild(encodeRequest(path, backend, empty))
+        var result = KiraBuildResult()
+        result.diagnostics = decodeDiagnostics(answer)
+        return result
+    }
+
+    // Builds the package at `path` and runs it, with `environment` as what the
+    // app sees.
+    //
+    // A package that does not build answers with its diagnostics and no exit
+    // code.
+    function runApp(
+        path: borrow String,
+        backend: borrow KiraBackend,
+        environment: borrow [KiraEnvironmentVariable]
+    ) -> KiraRunResult {
+        let answer = kcRun(encodeRequest(path, backend, environment))
+        var result = KiraRunResult()
+        result.exitCode = decodeExitCode(answer)
+        result.diagnostics = decodeDiagnostics(answer)
+        return result
+    }
+}
+
+// Writes a request as the flat string array the seam carries.
+//
+// The layout is the path, the backend's text, then a name and a value per
+// environment variable. The host reads exactly this shape.
+function encodeRequest(
+    path: borrow String,
+    backend: borrow KiraBackend,
+    environment: borrow [KiraEnvironmentVariable]
+) -> [String] {
+    var fields: [String] = []
+    fields.append(path)
+    fields.append(backendText(backend))
+    var index = 0
+    while index < environment.count {
+        fields.append(environment[index].name)
+        fields.append(environment[index].value)
+        index = index + 1
+    }
+    return fields
+}
+
+// The wire spelling of a backend.
+//
+// A hybrid build is two spellings, not one with a flag, because the bias is
+// part of naming the backend: a run that leans on the runtime and one that
+// leans on native code are two different programs.
+function backendText(backend: borrow KiraBackend) -> String {
+    match backend {
+        Vm -> { return "vm" }
+        Native -> { return "native" }
+        Hybrid(bias) -> {
+            match bias {
+                RuntimeBias -> { return "hybrid-runtime" }
+                NativeBias -> { return "hybrid-native" }
+            }
+        }
+    }
+}
+
+// Reads the diagnostics out of the flat string array the host answered with.
+//
+// The layout is a status, an exit code, then a fixed-stride record per
+// diagnostic: a code, a line, and a severity. A status other than `ok` is a
+// host that could not perform the request, and answers with no diagnostics
+// rather than a guess. A trailing partial record is dropped: the host writes
+// whole records.
+function decodeDiagnostics(fields: borrow [String]) -> [KiraDiagnostic] {
+    var diagnostics: [KiraDiagnostic] = []
+    if fields.count < 2 {
+        return diagnostics
+    }
+    if fields[0] != "ok" {
+        return diagnostics
+    }
+    var index = 2
+    while index + 2 < fields.count {
+        var diagnostic = KiraDiagnostic()
+        diagnostic.code = kiraErrorFromCode(fields[index])
+        diagnostic.line = lineFromText(fields[index + 1])
+        diagnostic.severity = kiraSeverityFromText(fields[index + 2])
+        diagnostics.append(diagnostic)
+        index = index + 3
+    }
+    return diagnostics
+}
+
+// The exit code the answer carries, or `0` when it carries none.
+function decodeExitCode(fields: borrow [String]) -> Int {
+    if fields.count < 2 {
+        return 0
+    }
+    if fields[0] != "ok" {
+        return 0
+    }
+    return lineFromText(fields[1])
+}
+
+// Reads a whole number the host wrote, or `0` when it wrote something else.
+function lineFromText(text: borrow String) -> Int {
+    if !text.isInt() {
+        return 0
+    }
+    return text.toInt()
+}

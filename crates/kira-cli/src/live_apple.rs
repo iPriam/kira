@@ -185,6 +185,9 @@ pub(crate) fn run(options: &crate::live::LiveOptions) -> i32 {
                 )),
                 Some(sysroot),
             ),
+            // A sanitized device app must also carry the runtime dylib inside
+            // its bundle; the live surface grows the flag with that step.
+            sanitize: kira_llvm_backend::Sanitize::None,
         };
         let (_object, trampolines) = kira_llvm_backend::build_hybrid_object(&ir, &options)
             .map_err(|error| LiveError::Build {

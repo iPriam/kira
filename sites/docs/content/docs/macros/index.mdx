@@ -1,0 +1,49 @@
+---
+title: Macros
+description: Kira's two macro forms and one compile-time function form, what each is for, and why macro output has structural backend parity.
+---
+
+Kira has two macro forms and one compile-time function form. All three are pure frontend source-to-source transforms that run after lexing and before parsing.
+
+| Form | Declared with | Invoked as |
+| --- | --- | --- |
+| Declarative | `macro Name(p: expr) { expand { … } }` | `Name!(arg)` |
+| Procedural, function | `comptime macro Name { kind { function } … }` | `Name!(arg)` |
+| Procedural, attribute | `comptime macro Name { kind { attribute } … }` | `@Name` above a declaration |
+| Procedural, derive | `comptime macro Name { kind { derive } … }` | `@Derive(Name, …)` above a declaration |
+| Procedural, field-triggered | `kind { attribute } trigger { field } replace { true }` | `@Name` on a *field* of a declaration |
+| Procedural, wrapper | `comptime macro Name { kind { wrapper } … }` | `@Name` declares a template; the template's name on a field summons it |
+| Compile-time function | `comptime function name(p: Int) -> Int { … }` | `name(arg)`, with **no `!`** |
+
+`macro` is **declarative**: it binds expression fragments and substitutes them into a fixed template, with no compile-time execution. `comptime macro` is **procedural**: a real compile-time function that receives syntax, runs arbitrary Kira against it, and returns the syntax to splice in.
+
+A trailing `!` marks every value-position macro, so a reader always sees that the arguments are unevaluated syntax rather than values. A `comptime function` is the exception, and deliberately so. Attribute and derive macros attach to a declaration with `@`, and `@Derive` takes a comma-separated list, running each derive over the same declaration.
+
+## Backend Parity Is Structural
+
+Expansion output flows through the normal pipeline like any hand-written code:
+
+```text
+kira-source -> kira-lexer -> kira-macros -> kira-parser -> kira-semantics -> kira-ir -> backends
+```
+
+A macro therefore cannot produce code that runs on one backend and not another: by the time a backend sees it, it is ordinary Kira. There is no per-backend macro work.
+
+## Where Expansion Sits
+
+`kira-macros` owns the whole pass and runs between reading a file and parsing it. A program that declares no macros is returned byte-identical after one lexing pass per file, so nothing downstream can tell the pass ran.
+
+Everything a macro consumes, the macro declarations themselves and the annotations they answer to, is **blanked rather than deleted**. Every byte the user wrote that survives expansion keeps the offset it started at, so a diagnostic about untouched code still points at its own line. Generated declarations are appended to the end of the file that produced them.
+
+Expansion is total: a malformed macro is reported and left unexpanded, so the file still reaches the parser and everything else wrong with it is still reported.
+
+## Chapters
+
+1. [Declarative Macros](/docs/macros/declarative-macros)
+2. [Compile-Time Functions](/docs/macros/comptime-functions)
+3. [Procedural Macros](/docs/macros/procedural-macros)
+4. [Reflection, Quote, and Splice](/docs/macros/reflection)
+5. [Derives](/docs/macros/derives)
+6. [Property Wrappers](/docs/macros/property-wrappers)
+7. [The Shader Macro](/docs/macros/shaders)
+8. [Macro Diagnostics](/docs/macros/diagnostics)

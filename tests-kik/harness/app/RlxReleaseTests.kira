@@ -1,0 +1,59 @@
+import Foundation
+
+// Frame release of scalar-only structs. Prefix: rlx / Rlx.
+//
+// A struct whose fields are all scalars is inline storage on the native frame
+// and a heap object on the VM, so its release is the one place the engines'
+// release plans legitimately differ. These shapes are exactly the ones a
+// wrong plan leaked in a real application — a colour resolved per widget per
+// frame — and they churn enough copies that an unreleased slot is caught by
+// the VM's exit accounting, which fails the run when the heap is unbalanced.
+
+struct RlxColor {
+    var r: Float = 0.0
+    var g: Float = 0.0
+    var b: Float = 0.0
+    var a: Float = 0.0
+}
+
+struct RlxResolution {
+    var color: RlxColor = RlxColor {}
+    var found: Bool = false
+}
+
+// A `var` local that is field-written and then returned: the return copies,
+// so the frame still holds the original and the plan must release it.
+function rlxResolve(tag: Int) -> RlxResolution {
+    var resolution = RlxResolution()
+    resolution.color = RlxColor { r: Float(tag), g: 2.0, b: 3.0, a: 4.0 }
+    resolution.found = tag > 0
+    return resolution
+}
+
+// A chained field read off a call result: the temporary and its field both
+// die in this frame.
+function rlxResolveColor(tag: Int) -> RlxColor {
+    return rlxResolve(tag).color
+}
+
+// A scalar-only struct borrowed by a callee. The VM passes a copy the callee
+// owns, so the parameter slot must be in the callee's plan.
+function rlxRead(resolution: borrow RlxResolution) -> Float {
+    return resolution.color.r
+}
+
+let rlxModuleResolution = rlxResolve(7)
+
+function rlxSection() -> Int {
+    var total = 0
+    for index in 0..2000 {
+        // A `let` rebound every iteration: the scope release frees last
+        // iteration's value, the frame plan frees the final one.
+        let resolved = rlxResolveColor(index)
+        total = total + Int(resolved.r)
+        // The module constant crosses as a borrow; each call's copy is the
+        // callee's to release.
+        total = total + Int(rlxRead(rlxModuleResolution))
+    }
+    return total
+}

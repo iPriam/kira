@@ -33,6 +33,38 @@ pub mod sinstall;
 pub mod source;
 pub mod unpack;
 
+/// Rust targets whose runner archives make a macOS toolchain able to export
+/// every Apple platform without consulting a compiler checkout.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) const APPLE_RUNNER_TARGETS: [&str; 7] = [
+    "aarch64-apple-darwin",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "aarch64-apple-tvos",
+    "aarch64-apple-tvos-sim",
+    "aarch64-apple-visionos",
+    "aarch64-apple-visionos-sim",
+];
+
+/// Intel macOS toolchains carry an Intel macOS runner and arm64 device runners.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub(crate) const APPLE_RUNNER_TARGETS: [&str; 7] = [
+    "x86_64-apple-darwin",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "aarch64-apple-tvos",
+    "aarch64-apple-tvos-sim",
+    "aarch64-apple-visionos",
+    "aarch64-apple-visionos-sim",
+];
+
+/// Other hosts cannot run Apple export because they have no Xcode SDK.
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64")
+)))]
+pub(crate) const APPLE_RUNNER_TARGETS: [&str; 0] = [];
+
 /// The layout vocabulary knvm produces trees for, re-exported so a consumer
 /// needs one crate. These are `kira-toolchain`'s types, not copies of them.
 pub use kira_toolchain::{Channel, CurrentToolchain, Paint};

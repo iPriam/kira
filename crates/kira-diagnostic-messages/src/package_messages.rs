@@ -230,6 +230,45 @@ pub fn lockfile_sync_failed(path: &str, reason: &str) -> Diagnostic {
     )
 }
 
+/// Builds KPK028: a registry dependency was declared but could not be fetched.
+///
+/// Resolution reports this at the dependency edge instead of returning a graph
+/// that silently omits the package. Callers can vendor the package as a path
+/// dependency without mistaking a partial graph for a valid one.
+pub fn unavailable_registry_dependency(name: &str, version: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk028RegistryDependencyUnavailable,
+        "registry dependency could not be resolved",
+        format!(
+            "Dependency `{name}` requests registry version `{version}`, but this package manager has no registry fetcher configured."
+        ),
+        "Use `kira add --path` with a checked-out package, or configure a package-manager registry client before resolving this dependency.",
+    )
+}
+
+/// Builds KPK029: a git dependency was declared but could not be fetched.
+pub fn unavailable_git_dependency(
+    name: &str,
+    url: &str,
+    rev: Option<&str>,
+    tag: Option<&str>,
+) -> Diagnostic {
+    let pin = match (rev, tag) {
+        (Some(rev), Some(tag)) => format!("rev `{rev}` and tag `{tag}`"),
+        (Some(rev), None) => format!("rev `{rev}`"),
+        (None, Some(tag)) => format!("tag `{tag}`"),
+        (None, None) => "no commit or tag pin".to_owned(),
+    };
+    package_error(
+        DiagnosticCode::Kpk029GitDependencyUnavailable,
+        "git dependency could not be resolved",
+        format!(
+            "Dependency `{name}` requests `{url}` ({pin}), but this package manager has no git fetcher configured."
+        ),
+        "Use `kira add --path` with a checked-out package, or configure a package-manager git client before resolving this dependency.",
+    )
+}
+
 /// Builds KPK030: a manifest handed to the compiler in memory could not be read.
 ///
 /// The in-memory counterpart of a `package.kira` that will not load: there is
@@ -289,7 +328,8 @@ mod tests {
     use super::{
         conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
         lockfile_drift, lockfile_sync_failed, lockfile_synced, misplaced_bind_types_file,
-        missing_dependency_package, unknown_root_package, unreadable_manifest,
+        missing_dependency_package, unavailable_git_dependency, unavailable_registry_dependency,
+        unknown_root_package, unreadable_manifest,
     };
     use crate::{CompilerPhase, DiagnosticDomain};
     use kira_diagnostics::{Diagnostic, Severity};
@@ -357,6 +397,25 @@ mod tests {
         let diagnostic = lockfile_sync_failed("/project/kira.lock", "permission denied");
 
         assert_package_diagnostic(&diagnostic, "KPK027", Severity::Warning);
+    }
+
+    #[test]
+    fn unavailable_registry_dependency_is_a_package_error() {
+        let diagnostic = unavailable_registry_dependency("Core", "1.2.3");
+
+        assert_package_diagnostic(&diagnostic, "KPK028", Severity::Error);
+    }
+
+    #[test]
+    fn unavailable_git_dependency_is_a_package_error() {
+        let diagnostic = unavailable_git_dependency(
+            "Core",
+            "https://example.test/core.git",
+            Some("abc123"),
+            None,
+        );
+
+        assert_package_diagnostic(&diagnostic, "KPK029", Severity::Error);
     }
 
     #[test]

@@ -14,6 +14,10 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
     if let Some(main) = program.main {
         pending.push_back(main);
     }
+    // A `@MainThreadLifecycle` function is a root: the main thread starts it,
+    // so no body the walk below can see calls it, and everything it calls has
+    // to be emitted with it.
+    pending.extend(program.main_thread_lifecycles.iter().copied());
     pending.extend(
         program
             .foreign_callbacks
@@ -31,6 +35,10 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
             .iter()
             .filter_map(|def| def.drop_glue),
     );
+    // A module constant's init is a root too: nothing calls it — the entry (or
+    // the load-time constructor) invokes it once to fill the constant's slot,
+    // before any body the walk below can see runs.
+    pending.extend(program.constants.iter().map(|constant| constant.init));
 
     while let Some(index) = pending.pop_front() {
         let index = index as usize;
@@ -40,6 +48,20 @@ pub(crate) fn native_functions(program: &IrProgram) -> Vec<bool> {
         for callee in body_facts(program, &program.functions[index].body).calls {
             pending.push_back(callee);
         }
+    }
+    reachable
+}
+
+/// Functions whose execution may be part of a lifecycle's preserved stack.
+pub(crate) fn lifecycle_functions(program: &IrProgram) -> Vec<bool> {
+    let mut reachable = vec![false; program.functions.len()];
+    let mut pending: VecDeque<u32> = program.main_thread_lifecycles.iter().copied().collect();
+    while let Some(index) = pending.pop_front() {
+        let index = index as usize;
+        if index >= reachable.len() || std::mem::replace(&mut reachable[index], true) {
+            continue;
+        }
+        pending.extend(body_facts(program, &program.functions[index].body).calls);
     }
     reachable
 }
@@ -117,7 +139,7 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, facts: &mut BodyFacts) {
                 walk_stmt(program, statement, facts);
             }
         }
-        IrStmt::Break | IrStmt::Continue => {}
+        IrStmt::Break | IrStmt::Continue | IrStmt::ReleaseLocals { .. } => {}
     }
 }
 
@@ -137,6 +159,9 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
                 walk_expr(program, *arg, facts);
             }
         }
+        // A constant read names a slot, not a function; the slot's init is a
+        // root above, so nothing here adds to the facts.
+        IrExpr::ConstantGet { .. } => {}
         IrExpr::Unary { operand, .. } => walk_expr(program, *operand, facts),
         IrExpr::Binary { lhs, rhs, .. } => {
             walk_expr(program, *lhs, facts);
@@ -162,9 +187,10 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
                 walk_expr(program, *payload, facts);
             }
         }
-        IrExpr::EnumTag { value } | IrExpr::EnumPayload { value, .. } => {
-            walk_expr(program, *value, facts)
-        }
+        IrExpr::EnumTag { value }
+        | IrExpr::EnumPayload { value, .. }
+        | IrExpr::TypeTest { value, .. }
+        | IrExpr::TypeCast { value, .. } => walk_expr(program, *value, facts),
         IrExpr::Field { base, .. }
         | IrExpr::ForeignField { base, .. }
         | IrExpr::ForeignMemberAddress { base, .. } => walk_expr(program, *base, facts),
@@ -225,11 +251,18 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
             walk_expr(program, *base, facts);
             walk_expr(program, *index, facts);
         }
-        IrExpr::TaskOp { operands, .. } => {
+        IrExpr::TaskOp { operands, .. } | IrExpr::ChannelOp { operands, .. } => {
             for operand in operands {
                 walk_expr(program, *operand, facts);
             }
         }
+        IrExpr::MainThreadCall { function, args, .. } => {
+            facts.calls.insert(*function);
+            for arg in args {
+                walk_expr(program, *arg, facts);
+            }
+        }
+        IrExpr::MainThreadJoin { handle, .. } => walk_expr(program, *handle, facts),
         IrExpr::ArrayAppend { place, value } => {
             walk_place(program, place, facts);
             walk_expr(program, *value, facts);
@@ -237,11 +270,19 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         IrExpr::Convert { operand, .. }
         | IrExpr::CellNew { value: operand, .. }
         | IrExpr::IntoAny { value: operand, .. }
-        | IrExpr::Widen { value: operand, .. }
+        | IrExpr::TypeConst { value: operand, .. }
+        | IrExpr::TypeOf { value: operand }
+        | IrExpr::TypeField {
+            descriptor: operand,
+            ..
+        }
+        | IrExpr::TypeCastResult { value: operand, .. }
         | IrExpr::NativeState { value: operand, .. }
         | IrExpr::NativeUserData { state: operand }
         | IrExpr::NativeRecover { raw: operand, .. }
-        | IrExpr::NativeStateFree { token: operand } => walk_expr(program, *operand, facts),
+        | IrExpr::NativeStateTake { raw: operand, .. }
+        | IrExpr::NativeStateRetain { token: operand }
+        | IrExpr::NativeStateRelease { token: operand } => walk_expr(program, *operand, facts),
         IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Int(_)
         | IrExpr::Float(_)

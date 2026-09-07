@@ -94,7 +94,8 @@ impl Parser<'_> {
             self.error(
                 self.current().span,
                 "KPAR011",
-                "a binding needs an `=` initializer in the v0 subset",
+                "a binding needs an `=` initializer; definite initialization begins at \
+                 the declaration",
             );
             self.error_expr(self.current().span)
         };

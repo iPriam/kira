@@ -26,6 +26,22 @@ construct Style {
 }
 
 #[test]
+fn a_construct_var_member_is_recorded_as_mutable_storage() {
+    let result = parse_text(
+        r#"
+construct Panel() extends Widget {
+    var count: Int = 0
+}
+"#,
+    );
+    let [Item::Construct(declaration)] = result.tree.items() else {
+        panic!("expected one construct declaration");
+    };
+    assert!(declaration.fields[0].mutable);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn bare_braces_and_dotted_let_overrides_remain_a_braced_call() {
     let result = parse_text(
         r#"

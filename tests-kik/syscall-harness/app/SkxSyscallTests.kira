@@ -38,29 +38,29 @@ function skxValue(answer: borrow Result<Int, LinuxError>) -> Int {
 
 construct SkxDecodeTreatsZeroAsSuccess() extends Test {
     test { return skxValue(linuxDecode(0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct SkxDecodeKeepsAPositiveCount() extends Test {
     test { return skxValue(linuxDecode(4096)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4096); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4096) return e }
 }
 
 construct SkxDecodeReadsASmallNegativeAsErrno() extends Test {
     test { return skxErrno(linuxDecode(-2)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct SkxDecodeReadsTheLargestErrno() extends Test {
     test { return skxErrno(linuxDecode(-4095)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4095); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4095) return e }
 }
 
 // One past the boundary is a value, not a failure. This is the case a plain
 // `answer < 0` test gets wrong, and it is why the decode has an upper bound.
 construct SkxDecodeKeepsALargeNegativeValue() extends Test {
     test { return skxValue(linuxDecode(-4096)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(-4096); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(-4096) return e }
 }
 
 construct SkxErrorNamesAreTheKernelsOwn() extends Test {
@@ -68,7 +68,7 @@ construct SkxErrorNamesAreTheKernelsOwn() extends Test {
         let failure = LinuxError { errno: 2 }
         return linuxErrorName(failure)
     }
-    expect { let e: Result<String, TestFailure> = .Ok("ENOENT"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("ENOENT") return e }
 }
 
 construct SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess() extends Test {
@@ -76,7 +76,7 @@ construct SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess() extends Test {
         let failure = LinuxError { errno: 4094 }
         return linuxErrorName(failure)
     }
-    expect { let e: Result<String, TestFailure> = .Ok(""); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("") return e }
 }
 
 // ─── Three arguments: `write` and `read` ────────────────────────────────────
@@ -86,17 +86,17 @@ construct SkxAnUnnamedErrnoAnswersNothingRatherThanAGuess() extends Test {
 // output landing in the driver's report.
 construct SkxWriteOfNoBytesTakesNone() extends Test {
     test { return skxValue(linuxWrite(linuxStdout(), "")) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct SkxWriteToABadDescriptorIsEbadf() extends Test {
     test { return skxErrno(linuxWrite(-1, "x")) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct SkxReadFromABadDescriptorIsEbadf() extends Test {
     test { return skxErrno(linuxRead(-1, RawPtr(0), 0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // The `errno` name of a real kernel failure, end to end: the register answered
@@ -109,7 +109,7 @@ construct SkxARealFailureNamesItself() extends Test {
             Error(failure) -> { return linuxErrorName(failure) }
         }
     }
-    expect { let e: Result<String, TestFailure> = .Ok("EBADF"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("EBADF") return e }
 }
 
 // ─── No arguments: `sync` ───────────────────────────────────────────────────
@@ -117,7 +117,7 @@ construct SkxARealFailureNamesItself() extends Test {
 // The arity-0 entry sequence, which names only its output and the call number.
 construct SkxSyncTakesNoArgumentsAndSucceeds() extends Test {
     test { return skxValue(linuxSync()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // ─── Two arguments: `umount2` ───────────────────────────────────────────────
@@ -131,7 +131,7 @@ construct SkxUnmountingAPathThatIsNotThereFails() extends Test {
         let errno = skxErrno(linuxUmount("/kira-syscall-harness-no-such-path", 0))
         return errno == 1 || errno == 2
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 // ─── Three arguments through a pointer: `execve` ────────────────────────────
@@ -143,7 +143,7 @@ construct SkxExecvingAProgramThatIsNotThereIsEnoent() extends Test {
     test {
         return skxErrno(linuxExecve("/kira-syscall-harness-no-such-program", RawPtr(0), RawPtr(0)))
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 // ─── Four arguments: `wait4` ────────────────────────────────────────────────
@@ -151,7 +151,7 @@ construct SkxExecvingAProgramThatIsNotThereIsEnoent() extends Test {
 // A process with no children answers `ECHILD`, whoever runs it.
 construct SkxWaitingWithNoChildrenIsEchild() extends Test {
     test { return skxErrno(linuxWait(-1, RawPtr(0), 0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // ─── Five arguments: `mount` ────────────────────────────────────────────────
@@ -171,7 +171,7 @@ construct SkxMountingASourceThatIsNotThereFails() extends Test {
         ))
         return errno == 1 || errno == 2
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 // ─── Widths ─────────────────────────────────────────────────────────────────
@@ -180,8 +180,8 @@ construct SkxMountingASourceThatIsNotThereFails() extends Test {
 // -1 has to arrive as a sign-extended 64-bit -1, not as 4294967295 — which the
 // kernel would read as an enormous descriptor number and answer `EBADF` for
 // anyway, so the count is what tells the two apart.
-@FFI.Syscall { name: write; }
-function skxSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function skxSysWriteNarrowFd(fd: I32, buffer: CString, count: U64) -> Int
 
 // `@Native` because that is where an instruction can live. On hybrid the body
 // holding the kernel entry belongs to the native half, and a `Test` reaches it
@@ -195,14 +195,14 @@ function skxNarrowDescriptorErrno() -> Int {
 
 construct SkxANarrowDescriptorIsSignExtendedIntoItsRegister() extends Test {
     test { return skxNarrowDescriptorErrno() }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // The raw entry point answers the kernel's own encoding, with no decode in the
 // way: this is what every wrapper above is built on, and it is worth asserting
 // once that the negative number really is what the register held.
-@FFI.Syscall { name: write; }
-function skxSysWrite(fd: Int, buffer: CString, count: U64) -> Int;
+@FFI.Syscall { name: write }
+function skxSysWrite(fd: Int, buffer: CString, count: U64) -> Int
 
 @Native
 function skxRawWriteAnswer() -> Int {
@@ -211,7 +211,7 @@ function skxRawWriteAnswer() -> Int {
 
 construct SkxTheRawEntryPointAnswersNegativeErrno() extends Test {
     test { return skxRawWriteAnswer() }
-    expect { let e: Result<Int, TestFailure> = .Ok(-9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(-9) return e }
 }
 
 // `ppoll` is what PID 1 idles on, so the case that can be tested is the one that
@@ -225,5 +225,5 @@ function skxPpollFaultAnswer() -> Result<Int, LinuxError> {
 
 construct SkxPpollOverAnUnreadableArrayIsEfault() extends Test {
     test { return skxErrno(skxPpollFaultAnswer()) }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }

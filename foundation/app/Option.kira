@@ -1,0 +1,24 @@
+// An ordinary generic enum for a value that may be absent.
+//
+//   let found: Option<TabId> = .Some(TabId(U32(3)))
+//   let missing: Option<TabId> = .None
+//
+//   match found {
+//       Some(id) -> return id;
+//       None -> return TabId(U32(0));
+//   }
+//
+// Deliberately nothing more than the declaration. There is no `?T` sugar, no
+// implicit wrapping at a call site, and no unwrap operator: `Option<Value>` is
+// used everywhere a generic enum is used, matched the way `Result<Value,
+// Failure>` is matched, and monomorphized by the same pass. A sugar added
+// before the plain form has been lived with is a spelling nobody has yet needed.
+//
+// Why this and not a sentinel value: a sentinel is a value of the type it is
+// standing in for, so the compiler cannot tell "no tab" from "tab 0" and every
+// reader has to remember which number means nothing. Absence as a *variant* is
+// a case a `match` has to answer, which is the whole difference.
+enum Option<Value> {
+    Some(Value)
+    None
+}

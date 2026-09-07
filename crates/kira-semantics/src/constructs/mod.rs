@@ -26,6 +26,8 @@ mod backed;
 mod collection;
 mod construction;
 mod dispatch;
+mod dispatch_arm;
+mod dispatch_tree;
 mod extend;
 mod inferred;
 mod inherit;
@@ -91,10 +93,21 @@ pub(crate) struct ContentSlot {
 /// One concrete variant of a construct family.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ConstructVariant {
-    /// The concrete construct-backed struct.
-    pub(crate) struct_id: StructId,
+    /// The concrete value carried by the variant. Construct families use a
+    /// struct, while trait existentials may carry any concrete type.
+    pub(crate) ty: Type,
     /// Its declaration-order tag in the synthesized family enum.
     pub(crate) tag: u32,
+}
+
+impl ConstructVariant {
+    /// Returns the struct id carried by an ordinary construct-family variant.
+    pub(crate) fn struct_id(self) -> Option<StructId> {
+        match self.ty {
+            Type::Struct(id) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 /// One method exposed by a construct family.
@@ -190,6 +203,7 @@ pub(crate) struct ConstructFamilyStoredField {
     pub(crate) default: Option<ExprId>,
     pub(crate) source: SourceId,
     pub(crate) slot: bool,
+    pub(crate) mutable: bool,
 }
 
 /// One construct family's type, conformance surface, and concrete variants.

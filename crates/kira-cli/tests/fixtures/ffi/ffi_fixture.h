@@ -302,4 +302,33 @@ double ffi_call_quad_taker(ffi_quad_taker take, double a, double b, double c, do
 typedef int (*ffi_userdata_taker)(unsigned long long userdata, int n);
 int ffi_call_userdata_twice(ffi_userdata_taker take, unsigned long long userdata, int n);
 
+/* The exact byte Kira handed over for a `_Bool` parameter.
+ *
+ * A C `_Bool` object holds 0 or 1 and nothing else, so an argument arriving as
+ * any other byte is corruption C cannot see. Reading the parameter object
+ * through a character type is the only way to observe what actually crossed. */
+unsigned char ffi_bool_byte(_Bool b);
+
+/* Flags whose `odd` member deliberately holds a byte no `_Bool` should hold.
+ * A library that writes one exists, and every Kira engine has to read it the
+ * same way — reading the low bit and reading the whole byte disagree, and a
+ * disagreement here is a wrong answer rather than a refusal.
+ *
+ * Handed over both by value and by address, because the two travel by different
+ * routes: a returned struct is copied out of C's storage, a pointer is read
+ * where C left it. */
+struct ffi_flags {
+    _Bool set;
+    _Bool odd;
+    signed char tag;
+};
+struct ffi_flags ffi_flags_current(void);
+const struct ffi_flags *ffi_flags_at(void);
+/* A null of the same pointer type, so a program can test one against
+ * `RawPtr.null` rather than against a word it cast itself. */
+const struct ffi_flags *ffi_flags_none(void);
+/* The raw bytes of a struct Kira built: `set` in the low byte, `odd` in the
+ * next, `tag` in the third. */
+int ffi_flags_bytes(struct ffi_flags f);
+
 #endif /* KIRA_FFI_FIXTURE_H */

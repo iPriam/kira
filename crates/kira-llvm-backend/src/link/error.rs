@@ -16,6 +16,21 @@ pub enum LinkError {
         /// Where `clang` was expected.
         path: PathBuf,
     },
+    /// `--sanitize address` was asked of a target with no runtime layout.
+    #[error(
+        "`--sanitize address` has no Address Sanitizer runtime layout for a \
+         `{os}` target"
+    )]
+    SanitizerUnsupportedTarget {
+        /// The target operating system, as the triple spells it.
+        os: String,
+    },
+    /// The managed bundle could not answer for the sanitizer runtime.
+    #[error("{detail}")]
+    SanitizerRuntimeMissing {
+        /// The discovery error, verbatim: it already names the path and the fix.
+        detail: String,
+    },
     /// The discovered LLVM install has no `llvm-ar` archiver.
     #[error("no `llvm-ar` archiver at `{path}` in the discovered LLVM install")]
     ArchiverMissing {

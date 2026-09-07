@@ -1,0 +1,51 @@
+---
+title: Building and Running Kira From Kira
+description: "`Kira/Toolchain.kira`: checking, building, and running a package on disk from a Kira program, and which hosts carry a toolchain to answer."
+---
+
+`Kira/Toolchain.kira` lets a Kira program drive the toolchain over a project that is already on a disk. It is the sibling of [`Kira/Compiler.kira`](/docs/foundation/compiling-kira), and the difference is the point: that surface answers a question about source held in memory, and this one works on a directory with a `package.kira` in it — so building it and running it produce artifacts and start a program.
+
+The three verbs are methods on `Kira`:
+
+```kira
+import Foundation
+
+@Main
+function main() {
+    let kira = Kira()
+
+    let checked = kira.check("/path/to/App", .Vm)
+    print(checked.diagnostics.count)
+
+    let built = kira.build("/path/to/App", .Native)
+    print(built.diagnostics.count)
+
+    let run = kira.runApp("/path/to/App", .Vm, [])
+    print(run.exitCode)
+    return
+}
+```
+
+- `check` runs the frontend and nothing after it.
+- `build` continues into the backend and produces artifacts.
+- `runApp` builds the package and runs it, with the environment variables it is given.
+
+A program calling `runApp` is **not** shelling out to `kira run`: it hands the request to the host, which drives the same build the command line drives and reads back the exit code and the diagnostics as values.
+
+## The Backend
+
+`KiraBackend` names which backend compiles the package and runs it: `.Vm`, `.Native`, or `.Hybrid(bias)`. A hybrid build is named with a bias — `.Hybrid(.RuntimeBias)` or `.Hybrid(.NativeBias)` — because the bias steers the split, and a run that leans on the runtime and one that leans on native code are two different programs.
+
+## Diagnostics
+
+Each `KiraDiagnostic` carries the code as a `KiraError` value, the `line` it points at, and its `severity`. No message: a message gets reworded and a code does not, so a test asserts `.KSEM060` on the line the call is written rather than matching text.
+
+`KiraRunResult` adds an `exitCode`. It means nothing unless the diagnostics hold no error — a package that never built has no code to report, and a zero there would read as a program that ran and succeeded.
+
+## Which Hosts Carry One
+
+A toolchain is a host capability, separate from the compiler capability, because a host can honestly have one and not the other: a browser tab embeds the frontend and can check a package set held in memory, and has no directory to build and no process to start.
+
+`kira` is the host that carries a toolchain, so the verbs answer under the engines `kira` runs: the **VM** and the **hybrid** runtime, whose native half reaches the same installed toolchain.
+
+A **standalone native build** carries no build system — a binary compiled ahead of time ships without a linker or a backend — so a program that calls a toolchain verb from one **refuses by name and stops**. It never answers as though the package compiled, which an empty diagnostic list would read as. The refusal is the native mirror of the VM raising a trap: the same refusal, said the only way native code can say it.

@@ -9,7 +9,10 @@
 //! deliberately — it resolves a local against the enclosing function's slot
 //! types, so it is a question about a program, not about a node.
 
-use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, NativeStateTypeId, TaskPrim};
+use kira_runtime_abi::{
+    ChannelPrim, CompilerOp, EnvOp, FileSystemOp, MainThreadOp, NativeStateTypeId, TaskPrim,
+};
+use kira_semantics_model::hir::FieldOrder;
 use kira_semantics_model::{EnumId, StructId, Type};
 
 use super::{ConvertKind, IrBinOp, IrExprId, IrPlace, IrUnOp, IrWriteback};
@@ -36,12 +39,45 @@ pub enum IrExpr {
     },
     /// A read of a local slot.
     Local(u32),
+    /// A read of a module constant's global slot.
+    ///
+    /// The slot indexes [`IrProgram::constants`]; the backend's init sequence
+    /// filled it before `main` ran, so a read copies the stored value.
+    ///
+    /// [`IrProgram::constants`]: super::IrProgram::constants
+    ConstantGet {
+        /// The constant's index in the program's evaluation-ordered table.
+        constant: u32,
+        /// The constant's type.
+        ty: Type,
+    },
     /// A unary operation.
     Unary {
         /// The operator.
         op: IrUnOp,
         /// The operand.
         operand: IrExprId,
+        /// The result type, carrying the integer width the operation is
+        /// checked at.
+        ty: Type,
+    },
+    /// `value is Type`: whether the erased value's runtime identity is
+    /// `target`'s. The value is consumed.
+    TypeTest {
+        /// The `Any` being asked.
+        value: IrExprId,
+        /// The erased identity tested for.
+        target: kira_semantics_model::ErasedTypeId,
+    },
+    /// `value as Type`: the payload of an erased value whose identity is
+    /// `target`'s, owned; any other identity traps.
+    TypeCast {
+        /// The `Any` being unboxed.
+        value: IrExprId,
+        /// The erased identity expected.
+        target: kira_semantics_model::ErasedTypeId,
+        /// The type the payload is read as.
+        ty: Type,
     },
     /// A binary operation.
     Binary {
@@ -51,6 +87,9 @@ pub enum IrExpr {
         lhs: IrExprId,
         /// Right operand.
         rhs: IrExprId,
+        /// The result type, carrying the integer width the operation is
+        /// checked at.
+        ty: Type,
     },
     /// A conditional expression, `cond ? then : otherwise`.
     ///
@@ -99,6 +138,8 @@ pub enum IrExpr {
         struct_id: StructId,
         /// One initializer per field, in declaration order.
         fields: Vec<IrExprId>,
+        /// The sequence the initializers are evaluated in.
+        order: FieldOrder,
     },
     /// Construction of an enum value: a variant (by `tag`) plus its optional
     /// single payload, defaults already filled in by analysis.
@@ -379,8 +420,29 @@ pub enum IrExpr {
         /// The Kira value type exposed by the mutable view.
         ty: Type,
     },
-    /// Releases a callback-state handle or userdata token exactly once.
-    NativeStateFree {
+    /// Takes a whole callback state out as a value, giving up the token.
+    ///
+    /// [`IrExpr::NativeRecover`] answers a view, which is what a reader of one
+    /// field wants and not what a caller needing the value itself wants. This
+    /// is the second: it materialises the state and releases the token in one
+    /// step, because the two always happen together — a token whose value has
+    /// been taken has nothing left to name.
+    NativeStateTake {
+        /// The opaque raw userdata token.
+        raw: IrExprId,
+        /// The stable runtime identity the take validates.
+        type_id: NativeStateTypeId,
+        /// The Kira value type taken out.
+        ty: Type,
+    },
+    /// Adds one owner to the callback state a handle or userdata token names.
+    NativeStateRetain {
+        /// The state handle or raw token.
+        token: IrExprId,
+    },
+    /// Removes one owner from the callback state a handle or userdata token
+    /// names. The last owner's release destroys the state.
+    NativeStateRelease {
         /// The state handle or raw token.
         token: IrExprId,
     },
@@ -418,25 +480,72 @@ pub enum IrExpr {
         value: IrExprId,
         /// The type it had before erasure, which is what says what it owns.
         from: Type,
+        /// The runtime identity the box carries.
+        ///
+        /// Fixed at lowering rather than derived by a backend from `from`,
+        /// because the two answer different questions: `from` is the machine
+        /// form of the payload and is rewritten when a `distinct` becomes its
+        /// representation, while this is what the language says the value *is*
+        /// and must survive that rewrite.
+        tag: kira_semantics_model::ErasedTypeId,
     },
-    /// One generic instantiation carried into another whose type arguments are
-    /// `Any`.
-    ///
-    /// The two engines split here, and for the same reason. A VM `Value`
-    /// carries its own tag, but an `Int` payload sits inline in its box while
-    /// an `Any` payload is a pointer to another box — so the bytecode compiler
-    /// synthesizes per-instantiation rebuild helpers and calls one. Native
-    /// code keeps the same two layouts and the LLVM backend rebuilds inline:
-    /// read the tag, box the payloads that crossed into `Any`, and build the
-    /// destination row's value. Both types are carried because the rebuild
-    /// reads a variant list from each.
-    Widen {
-        /// The value being widened.
+    /// `value.type` where the value's type is known: the descriptor of that
+    /// type, after evaluating and releasing the value for its effects.
+    TypeConst {
+        /// The value, evaluated and released.
         value: IrExprId,
-        /// The instantiation it had.
-        from: Type,
-        /// The instantiation the position declared.
-        to: Type,
+        /// The identity its type was interned under.
+        id: kira_semantics_model::ErasedTypeId,
+    },
+    /// `value.type` on an `Any`: the identity the erasure box carries.
+    TypeOf {
+        /// The `Any` being asked, consumed by the read.
+        value: IrExprId,
+    },
+    /// `try value as Type`: the cast as a result a handler can answer.
+    ///
+    /// Builds `Ok(payload)` when the box holds `target` and
+    /// `Error(Mismatch(type))` when it does not, so a failed cast is a value
+    /// rather than a trap. Both engines lower it as a branch over the same box
+    /// tag [`IrExpr::TypeTest`] reads.
+    TypeCastResult {
+        /// The `Any` being unboxed, consumed either way.
+        value: IrExprId,
+        /// The identity the payload must carry.
+        target: kira_semantics_model::ErasedTypeId,
+        /// The result row being built.
+        result: EnumId,
+        /// The failure row the error variant carries.
+        failure: EnumId,
+        /// The payload type read on the success path.
+        payload: Type,
+    },
+    /// A property of a runtime type descriptor.
+    TypeField {
+        /// The descriptor being read.
+        descriptor: IrExprId,
+        /// Which property.
+        field: kira_semantics_model::TypeField,
+        /// The property's type.
+        ty: Type,
+    },
+    /// A call routed through the host's main-thread event loop.
+    MainThreadCall {
+        /// The requested scheduling operation.
+        operation: MainThreadOp,
+        /// The target function in the program's function table.
+        function: u32,
+        /// Arguments evaluated by the requesting context.
+        args: Vec<IrExprId>,
+        /// The result type, including `MainThreadTask` for `spawn`.
+        ty: Type,
+    },
+    /// A join of a handle returned by `MainThread.spawn`.
+    MainThreadJoin {
+        /// The handle expression.
+        handle: IrExprId,
+        /// The target's result type.
+        ty: Type,
     },
     /// One primitive of the deferred-task executor.
     ///
@@ -453,6 +562,20 @@ pub enum IrExpr {
     TaskOp {
         /// Which primitive this is.
         prim: TaskPrim,
+        /// Its three operands, in order.
+        operands: [IrExprId; 3],
+    },
+    /// One channel-table primitive.
+    ///
+    /// The channel surface reaches both engines through this node on the same
+    /// terms [`IrExpr::TaskOp`] states: the ordering policy is synthesized
+    /// Kira-shaped IR, and what a backend carries is the table.
+    ///
+    /// Every primitive takes three `Int` operands and yields one. Operands a
+    /// primitive does not use are the constant `0`.
+    ChannelOp {
+        /// Which primitive this is.
+        prim: ChannelPrim,
         /// Its three operands, in order.
         operands: [IrExprId; 3],
     },

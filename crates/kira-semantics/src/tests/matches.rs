@@ -12,8 +12,8 @@ fn an_exhaustive_match_of_returning_arms_is_a_definite_return() {
     assert!(
         codes(
             "enum Shade { Light Mid Dark }\n\
-             function rank(s: borrow Shade) -> Int { match s { Light -> return 1; \
-             Mid -> return 2; Dark -> return 3; } }\n\
+             function rank(s: borrow Shade) -> Int { match s { Light -> return 1 \
+             Mid -> return 2 Dark -> return 3 } }\n\
              @Main function main() { let d: Shade = .Dark print(rank(d)) return }"
         )
         .is_empty()
@@ -25,8 +25,8 @@ fn a_payload_binding_is_typed_by_its_variant() {
     assert!(
         codes(
             "enum Note { Tag(String) Rank(Int) Blank }\n\
-             function textOf(n: borrow Note) -> String { match n { Tag(t) -> return t; \
-             Rank(r) -> return \"rank\"; Blank -> return \"blank\"; } }\n\
+             function textOf(n: borrow Note) -> String { match n { Tag(t) -> return t \
+             Rank(r) -> return \"rank\" Blank -> return \"blank\" } }\n\
              @Main function main() { let n: Note = .Blank print(textOf(n)) return }"
         )
         .is_empty()
@@ -40,8 +40,8 @@ fn a_payload_binding_used_at_the_wrong_type_is_reported() {
     assert_eq!(
         codes(
             "enum Note { Rank(Int) Blank }\n\
-             function f(n: borrow Note) -> String { match n { Rank(r) -> return r; \
-             Blank -> return \"b\"; } }\n\
+             function f(n: borrow Note) -> String { match n { Rank(r) -> return r \
+             Blank -> return \"b\" } }\n\
              @Main function main() { let n: Note = .Blank print(f(n)) return }"
         ),
         vec!["KSEM032"],

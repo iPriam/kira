@@ -1,0 +1,221 @@
+import Foundation
+
+// Kira Test coverage for the diagnostic code registry.
+//
+// `KiraError` and `kiraErrorFromCode` are generated from
+// `crates/kira-diagnostic-messages/diagnostic-codes.tsv`, so what a program can
+// rely on is what these pin: a code that arrived as text becomes the value a
+// test compares, a code the enum does not list becomes `.Unrecognized` rather
+// than a trap, and two codes are two values.
+
+// 1 when `text` names `want`, 0 otherwise.
+function dgxResolves(text: borrow String, want: borrow KiraError) -> Int {
+    if kiraErrorFromCode(text) == want {
+        return 1
+    }
+    return 0
+}
+
+// 1 when `text` names no code this enum lists.
+function dgxUnrecognized(text: borrow String) -> Int {
+    let unknown: KiraError = .Unrecognized
+    if kiraErrorFromCode(text) == unknown {
+        return 1
+    }
+    return 0
+}
+
+// One code from every family the registry carries, so a family dropped from the
+// table stops a test rather than a program.
+function dgxFamilySection() -> Int {
+    var score = 0
+    score = score + dgxResolves("KLEX005", .KLEX005)
+    score = score + dgxResolves("KPAR002", .KPAR002)
+    score = score + dgxResolves("KMAC014", .KMAC014)
+    score = score + dgxResolves("KSEM107", .KSEM107)
+    score = score + dgxResolves("KIR005", .KIR005)
+    score = score + dgxResolves("KBE001", .KBE001)
+    score = score + dgxResolves("KSLP001", .KSLP001)
+    score = score + dgxResolves("KSLS018", .KSLS018)
+    score = score + dgxResolves("KPK041", .KPK041)
+    score = score + dgxResolves("KTC001", .KTC001)
+    score = score + dgxResolves("KCL001", .KCL001)
+    score = score + dgxResolves("KLINT003", .KLINT003)
+    score = score + dgxResolves("KIC001", .KIC001)
+    return score
+}
+
+construct DgxEveryFamilyResolves() extends Test {
+    test {
+        return dgxFamilySection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
+}
+
+// The four channel codes were typed into the registry by hand before it was
+// generated, which is how the drift was found. They resolve from the table now.
+construct DgxChannelCodesResolve() extends Test {
+    test {
+        var score = 0
+        score = score + dgxResolves("KSEM364", .KSEM364)
+        score = score + dgxResolves("KSEM365", .KSEM365)
+        score = score + dgxResolves("KSEM366", .KSEM366)
+        score = score + dgxResolves("KSEM367", .KSEM367)
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+// The registry listed 290 codes against 438 emitted before it was generated.
+// These are codes it never listed, and a program reading a diagnostic saw
+// `.Unrecognized` for every one of them.
+construct DgxCodesTheHandWrittenRegistryMissed() extends Test {
+    test {
+        var score = 0
+        score = score + dgxResolves("KPAR043", .KPAR043)
+        score = score + dgxResolves("KPAR087", .KPAR087)
+        score = score + dgxResolves("KSEM255", .KSEM255)
+        score = score + dgxResolves("KSEM312", .KSEM312)
+        score = score + dgxResolves("KSEM349", .KSEM349)
+        score = score + dgxResolves("KMAC030", .KMAC030)
+        score = score + dgxResolves("KSLS017", .KSLS017)
+        score = score + dgxResolves("KPK025", .KPK025)
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
+}
+
+// Reading a diagnostic is total: text no code spells answers `.Unrecognized`
+// rather than trapping or answering some neighbouring code.
+construct DgxUnlistedTextIsUnrecognized() extends Test {
+    test {
+        var score = 0
+        score = score + dgxUnrecognized("KSEM999")
+        score = score + dgxUnrecognized("")
+        score = score + dgxUnrecognized("KSEM")
+        score = score + dgxUnrecognized("107")
+        score = score + dgxUnrecognized("NOTACODE")
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}
+
+// A code is matched as written: the comparison is on the text, so a different
+// case is a different string and names nothing.
+construct DgxCodeTextIsCaseSensitive() extends Test {
+    test {
+        var score = 0
+        score = score + dgxUnrecognized("ksem107")
+        score = score + dgxUnrecognized("Ksem107")
+        score = score + dgxResolves("KSEM107", .KSEM107)
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
+}
+
+// Two codes are two values, which is the whole reason a test asserts a code
+// rather than a message.
+construct DgxTwoCodesAreTwoValues() extends Test {
+    test {
+        let moved: KiraError = .KSEM107
+        let borrowed: KiraError = .KSEM109
+        var score = 0
+        if moved == kiraErrorFromCode("KSEM107") {
+            score = score + 1
+        }
+        if moved == borrowed {
+            score = score + 100
+        }
+        if borrowed == kiraErrorFromCode("KSEM109") {
+            score = score + 10
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+// Neighbouring codes are separate values: a chain that fell through to the next
+// arm would answer `.KSEM108` here.
+construct DgxNeighbouringCodesDoNotCollide() extends Test {
+    test {
+        let moved: KiraError = .KSEM107
+        let transferred: KiraError = .KSEM108
+        var score = 0
+        if kiraErrorFromCode("KSEM107") == moved {
+            score = score + 1
+        }
+        if kiraErrorFromCode("KSEM107") == transferred {
+            score = score + 100
+        }
+        if kiraErrorFromCode("KSEM108") == transferred {
+            score = score + 10
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
+}
+
+// A code crosses an enum payload and comes back as itself, which is how the
+// harness reports a diagnostic failure.
+construct DgxCodeSurvivesAnEnumPayload() extends Test {
+    test {
+        let failure: TestFailure = .Diagnostic(kiraErrorFromCode("KSEM071"))
+        var score = 0
+        match failure {
+            Runtime(message) -> { score = 0 }
+            Diagnostic(code) -> {
+                let widths: KiraError = .KSEM071
+                if code == widths {
+                    score = 7
+                }
+            }
+            Compile(text) -> { score = 0 }
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
+}
+
+// A code held in an array keeps its identity, so a program can collect the
+// codes a run reported and compare them.
+construct DgxCodesCollectIntoAnArray() extends Test {
+    test {
+        var codes: [KiraError] = []
+        codes.append(kiraErrorFromCode("KSEM003"))
+        codes.append(kiraErrorFromCode("KLEX005"))
+        codes.append(kiraErrorFromCode("KSEM999"))
+        var score = 0
+        let duplicate: KiraError = .KSEM003
+        let semicolon: KiraError = .KLEX005
+        let unknown: KiraError = .Unrecognized
+        for code in codes {
+            if code == duplicate {
+                score = score + 1
+            }
+            if code == semicolon {
+                score = score + 10
+            }
+            if code == unknown {
+                score = score + 100
+            }
+        }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
+}
+
+// The lexer family is six codes and the enum lists all six; the hand-written
+// registry listed three of them in its lookup and six in its enum.
+construct DgxEveryLexerCodeResolves() extends Test {
+    test {
+        var score = 0
+        score = score + dgxResolves("KLEX001", .KLEX001)
+        score = score + dgxResolves("KLEX002", .KLEX002)
+        score = score + dgxResolves("KLEX003", .KLEX003)
+        score = score + dgxResolves("KLEX004", .KLEX004)
+        score = score + dgxResolves("KLEX005", .KLEX005)
+        score = score + dgxResolves("KLEX006", .KLEX006)
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
+}

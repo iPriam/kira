@@ -19,6 +19,12 @@
  * lexer. They are written as literals here, which tree-sitter's keyword
  * extraction resolves per parse state, so a binding named `handle` still parses
  * everywhere the `attempt … handle` clause is not expected.
+ *
+ * `MainThread.invoke { … }`, `MainThread.spawn { … }`, and `MainThread.post
+ * { … }` are explicit capability calls with a trailing content block. They
+ * have their own node so editor tooling does not mistake the namespace for a
+ * struct literal, even though the compiler's general postfix parser stores
+ * the same source shape as a method call with children.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />
@@ -34,11 +40,12 @@ const PREC = {
   bitAnd: 6,
   equality: 7,
   comparison: 8,
-  shift: 9,
-  additive: 10,
-  multiplicative: 11,
-  unary: 12,
-  postfix: 13,
+  typeOperator: 9,
+  shift: 10,
+  additive: 11,
+  multiplicative: 12,
+  unary: 13,
+  postfix: 14,
 };
 
 /**
@@ -65,9 +72,10 @@ function commaSep1Trailing(rule) {
 module.exports = grammar({
   name: 'kira',
 
-  // The lexer skips ASCII whitespace and `//` comments and emits no newline
-  // token, so the language is fully newline-insensitive.
-  extras: ($) => [/\s/, $.comment],
+  // The lexer skips ASCII whitespace and both comment forms and emits no
+  // newline token, so the language is fully newline-insensitive. `;` is not a
+  // token of the language (KLEX005).
+  extras: ($) => [/\s/, $.comment, $.block_comment],
 
   // Keywords are carved out of `identifier`, exactly as the lexer classifies a
   // lexed identifier through `keyword_from_text`.
@@ -81,6 +89,11 @@ module.exports = grammar({
     [$.construction_expression],
     [$._named_fills],
     [$._operand_construction],
+    // `a as T < b`: the `<` after the type may open generic arguments or be a
+    // comparison; the closing `>` settles it.
+    [$._type, $.generic_type],
+    [$._type_path, $.qualified_type_identifier],
+    [$.qualified_type_identifier],
     // A brace after a name may close a construction; a name alone is a read.
     [$._expression, $._construction_target],
     [$._expression, $._callable],
@@ -101,6 +114,7 @@ module.exports = grammar({
       choice(
         $.import_declaration,
         $.function_definition,
+        $.constant_declaration,
         $.struct_declaration,
         $.class_declaration,
         $.enum_declaration,
@@ -109,11 +123,23 @@ module.exports = grammar({
         $.family_conformance_declaration,
         $.extend_declaration,
         $.type_alias_declaration,
+        $.distinct_declaration,
         $.package_declaration,
         $.macro_declaration,
         $.comptime_macro_declaration,
         $.comptime_function_declaration,
         $.macro_invocation,
+      ),
+
+    // `let Name[: T] = value` at module scope: one value computed once for
+    // the program. There is no module-scope `var`.
+    constant_declaration: ($) =>
+      seq(
+        'let',
+        field('name', $.identifier),
+        optional(seq(':', field('type', $._type))),
+        '=',
+        field('value', $._expression),
       ),
 
     // `import Module[.Sub…] [as Alias]`. A module name is a name, not a path.
@@ -154,9 +180,11 @@ module.exports = grammar({
 
     _attribute_token: (_$) => token(prec(-1, /[^()"]+/)),
 
-    // `{ library: ffimath; symbol: ffi_add; abi: c; retains: desc; }` — the
-    // `@FFI.*` and `@Export` block. A `retains:` field repeats.
-    attribute_block: ($) => seq('{', repeat($.attribute_field), '}'),
+    // `{ library: ffimath, symbol: ffi_add, abi: c, retains: desc }` — the
+    // `@FFI.*` and `@Export` block. Fields are comma-separated with a
+    // trailing comma allowed; a `retains:` field repeats.
+    attribute_block: ($) =>
+      seq('{', commaSepTrailing($.attribute_field), '}'),
 
     // The value grammar follows the key, exactly as the parser dispatches it:
     // `target`/`element`/`result` name a type, `params` a bracketed type list,
@@ -186,7 +214,6 @@ module.exports = grammar({
             ),
           ),
         ),
-        optional(';'),
       ),
 
     attribute_type_list: ($) => seq('[', commaSepTrailing($._type), ']'),
@@ -194,8 +221,8 @@ module.exports = grammar({
     // ----- functions -----------------------------------------------------
 
     // A bodyless function is a trait requirement, an `@Required` construct
-    // member, or an `@FFI.*` declaration — which ends with `;`. Every other
-    // function carries a block.
+    // member, or an `@FFI.*` declaration — its declaration ends with the
+    // signature. Every other function carries a block.
     function_definition: ($) =>
       prec.right(
         seq(
@@ -203,9 +230,10 @@ module.exports = grammar({
           optional('async'),
           'function',
           field('name', $.identifier),
+          optional(field('type_parameters', $.type_parameters)),
           field('parameters', $.parameters),
           optional(field('return_type', $.return_type)),
-          optional(choice(field('body', $.block), ';')),
+          optional(field('body', $.block)),
         ),
       ),
 
@@ -301,11 +329,12 @@ module.exports = grammar({
         repeat($.attribute),
         'struct',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         field('body', $.struct_body),
       ),
 
-    struct_body: ($) => seq('{', repeat(choice($._aggregate_member, ';')), '}'),
+    struct_body: ($) => seq('{', repeat($._aggregate_member), '}'),
 
     // `class Name[: Trait, …] [extends Parent, …] { <member>* }`. Traits first,
     // parents second.
@@ -314,6 +343,7 @@ module.exports = grammar({
         repeat($.attribute),
         'class',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         optional(field('extends', $.extends_list)),
         field('body', $.class_body),
@@ -322,13 +352,29 @@ module.exports = grammar({
     class_body: ($) =>
       seq(
         '{',
-        repeat(choice($._aggregate_member, $.override_member, ';')),
+        repeat(choice($._aggregate_member, $.override_member)),
         '}',
       ),
 
-    conformance_list: ($) => seq(':', commaSep1Trailing($._type_path)),
+    conformance_list: ($) => seq(':', commaSep1Trailing($._trait_reference)),
 
-    extends_list: ($) => seq('extends', commaSep1Trailing($._type_path)),
+    // A conformance may name an ordinary trait or one concrete generic trait
+    // instance (`Provider<Int>`). The rule is hidden so the existing tree for
+    // an ordinary `: Hashable, Tagged` list stays flat.
+    _trait_reference: ($) =>
+      seq(
+        $._type_path,
+        optional($.type_arguments),
+      ),
+
+    // A parent may be a concrete generic aggregate (`extends Parent<Value>`).
+    // Keep the rule hidden so an ordinary parent remains the same flat
+    // `type_identifier` node in the tree.
+    extends_list: ($) =>
+      seq(
+        'extends',
+        commaSep1Trailing(seq($._type_path, optional($.type_arguments))),
+      ),
 
     _aggregate_member: ($) => choice($.field_declaration, $.function_definition),
 
@@ -358,7 +404,7 @@ module.exports = grammar({
         ),
       ),
 
-    // `enum Name[<A, B>] { <variant>* }`. Variants are separated by nothing.
+    // `enum Name[<A, B>][: Trait, …] { <variant>* }`. Variants are separated by nothing.
     // A parameter may carry trait bounds (`Value: Scored + Send`); the comma
     // separates parameters, so the traits of one parameter's bound join with
     // `+`.
@@ -368,6 +414,7 @@ module.exports = grammar({
         'enum',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
+        optional(field('conforms', $.conformance_list)),
         field('body', $.enum_body),
       ),
 
@@ -385,7 +432,7 @@ module.exports = grammar({
         repeat(seq('+', alias($.identifier, $.type_identifier))),
       ),
 
-    enum_body: ($) => seq('{', repeat(choice($.enum_variant, ';')), '}'),
+    enum_body: ($) => seq('{', repeat($.enum_variant), '}'),
 
     // `Empty`, `Text(String)`, and `InvalidFormat: String = "…"`.
     enum_variant: ($) =>
@@ -407,6 +454,18 @@ module.exports = grammar({
     type_alias_declaration: ($) =>
       seq('type', field('name', $.identifier), '=', field('target', $._type)),
 
+    // `distinct Name = Representation`. The same shape as an alias and the
+    // opposite meaning: an alias is a second spelling for one type, while this
+    // is a second type over one representation.
+    distinct_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        'distinct',
+        field('name', $.identifier),
+        '=',
+        field('representation', $._type),
+      ),
+
     // ----- traits --------------------------------------------------------
 
     // `trait Name { … }`. A member with no body is a requirement; one with a
@@ -415,11 +474,12 @@ module.exports = grammar({
       seq(
         'trait',
         field('name', $.identifier),
+        optional(field('type_parameters', $.type_parameters)),
         optional(field('conforms', $.conformance_list)),
         field('body', $.trait_body),
       ),
 
-    trait_body: ($) => seq('{', repeat(choice($.function_definition, ';')), '}'),
+    trait_body: ($) => seq('{', repeat($.function_definition), '}'),
 
     // `extend Family { … }` is the fluent modifier block; `extend T: Trait { … }`
     // is the impl block.
@@ -432,7 +492,7 @@ module.exports = grammar({
       ),
 
     extend_body: ($) =>
-      seq('{', repeat(choice($.function_definition, ';')), '}'),
+      seq('{', repeat($.function_definition), '}'),
 
     // ----- constructs ----------------------------------------------------
 
@@ -462,7 +522,7 @@ module.exports = grammar({
       ),
 
     construct_body: ($) =>
-      seq('{', repeat(choice($._construct_member, ';')), '}'),
+      seq('{', repeat($._construct_member), '}'),
 
     _construct_member: ($) =>
       choice(
@@ -507,11 +567,11 @@ module.exports = grammar({
     // `requires { function f(…) -> T … }` — the section spelling of
     // `@Required function`.
     requires_section: ($) =>
-      seq('requires', '{', repeat(choice($.function_definition, ';')), '}'),
+      seq('requires', '{', repeat($.function_definition), '}'),
 
     // `lifecycle { onAppear() { … } }` — the points a runtime drives.
     lifecycle_section: ($) =>
-      seq('lifecycle', '{', repeat(choice($.lifecycle_hook, ';')), '}'),
+      seq('lifecycle', '{', repeat($.lifecycle_hook), '}'),
 
     lifecycle_hook: ($) =>
       seq(
@@ -558,7 +618,7 @@ module.exports = grammar({
       ),
 
     comptime_macro_body: ($) =>
-      seq('{', repeat(choice($.macro_section, $.expand_function, ';')), '}'),
+      seq('{', repeat(choice($.macro_section, $.expand_function)), '}'),
 
     // `kind { derive }`, `appliesTo { struct, enum }`, `replace { true }`. The
     // separator is a comma or nothing at all.
@@ -619,13 +679,20 @@ module.exports = grammar({
       seq(
         field('name', $.identifier),
         token.immediate('!'),
-        field('arguments', $.arguments),
+        field('arguments', $.macro_arguments),
+      ),
+
+    macro_arguments: ($) =>
+      seq(
+        '(',
+        commaSepTrailing(choice($.labeled_argument, $.variable_declaration, $._expression)),
+        ')',
       ),
 
     // ----- statements ----------------------------------------------------
 
-    // A block eats arbitrary runs of semicolons, so `;` is never part of a
-    // statement node and `{ ;;; }` is legal.
+    // Statements are delimited structurally: nothing separates one from the
+    // next, and newlines are whitespace.
     //
     // The precedence is what makes a `{` where a body is expected open a block
     // rather than the content of a construction the condition would then have
@@ -633,7 +700,7 @@ module.exports = grammar({
     block: ($) =>
       prec.dynamic(
         1,
-        prec(1, seq('{', repeat(choice($._statement, ';')), '}')),
+        prec(1, seq('{', repeat($._statement), '}')),
       ),
 
     _statement: ($) =>
@@ -735,7 +802,7 @@ module.exports = grammar({
       seq(
         field('pattern', $.variant_pattern),
         '->',
-        field('body', choice($.block, seq($._statement, optional(';')))),
+        field('body', choice($.block, $._statement)),
       ),
 
     variant_pattern: ($) =>
@@ -767,11 +834,14 @@ module.exports = grammar({
       choice(
         $.conditional_expression,
         $.binary_expression,
+        $.type_test_expression,
+        $.type_cast_expression,
         $.unary_expression,
         $.ownership_expression,
         $.try_expression,
         $.call_expression,
         $.method_call_expression,
+        $.main_thread_operation,
         $.construction_expression,
         $.trailing_closure_expression,
         $.macro_invocation,
@@ -810,6 +880,21 @@ module.exports = grammar({
           ':',
           field('alternative', $._expression),
         ),
+      ),
+
+    // `value is Type` and `value as Type`: a type on the right, binding
+    // tighter than a comparison and looser than a shift, as the parser's
+    // `TYPE_OPERATOR_BP` does.
+    type_test_expression: ($) =>
+      prec.left(
+        PREC.typeOperator,
+        seq(field('value', $._expression), 'is', field('type', $._type)),
+      ),
+
+    type_cast_expression: ($) =>
+      prec.left(
+        PREC.typeOperator,
+        seq(field('value', $._expression), 'as', field('type', $._type)),
       ),
 
     // The ladder is C's, rung for rung: the bitwise operators bind looser than
@@ -878,9 +963,15 @@ module.exports = grammar({
         $.boolean_literal,
       ),
 
-    // `try f(n)` binds like a prefix operator, so it takes the whole call.
+    // `try f(n)` binds like a prefix operator, so it takes the whole call, and
+    // looser than `is`/`as` so `try value as T` is the cast being tried. That
+    // is the only reading with a meaning: a `try` names the fallible step, and
+    // there the fallible step is the cast.
     try_expression: ($) =>
-      prec.right(PREC.unary, seq('try', field('value', $._expression))),
+      prec.right(
+        PREC.typeOperator - 1,
+        seq('try', field('value', $._expression)),
+      ),
 
     // The callee is a name or a field path, never an arbitrary expression:
     // `Expr::Call` carries a Symbol, so `(f)(x)` is not a call.
@@ -906,6 +997,21 @@ module.exports = grammar({
         ),
       ),
 
+    // The compiler recognizes these three no-parentheses calls before the
+    // general content-block construction rule. Keep the operation list closed
+    // so a typo falls through to an ordinary expression and gets an editor
+    // error instead of a false capability node.
+    main_thread_operation: ($) =>
+      prec(
+        PREC.postfix + 1,
+        seq(
+          field('namespace', alias('MainThread', $.identifier)),
+          '.',
+          field('operation', choice('invoke', 'spawn', 'post')),
+          field('body', $.content_block),
+        ),
+      ),
+
     arguments: ($) =>
       seq(
         '(',
@@ -923,11 +1029,18 @@ module.exports = grammar({
         field('value', $._expression),
       ),
 
-    // `xs.count` is a property read and takes the field path.
+    // `xs.count` is a property read and takes the field path. `value.type` is
+    // one too: `type` starts a declaration and is a keyword there, and after a
+    // `.` there is no declaration to start, so it names the runtime type
+    // descriptor and nothing else.
     field_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(field('receiver', $._expression), '.', field('field', $.identifier)),
+        seq(
+          field('receiver', $._expression),
+          '.',
+          field('field', choice($.identifier, 'type')),
+        ),
       ),
 
     index_expression: ($) =>
@@ -1015,7 +1128,7 @@ module.exports = grammar({
       ),
 
     content_block: ($) =>
-      seq('{', repeat(choice($._brace_item, ',', ';')), '}'),
+      seq('{', repeat(choice($._brace_item, ',')), '}'),
 
     _brace_item: ($) => choice($.field_initializer, $.content_for, $._statement),
 
@@ -1050,14 +1163,14 @@ module.exports = grammar({
         '{',
         optional(field('parameters', $.closure_parameters)),
         'in',
-        repeat(choice($._statement, ';')),
+        repeat($._statement),
         '}',
       ),
 
     closure_parameters: ($) => commaSep1Trailing($.identifier),
 
     array_literal: ($) =>
-      seq('[', repeat(seq($._expression, optional(','))), ']'),
+      seq('[', commaSepTrailing($._expression), ']'),
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
@@ -1088,11 +1201,17 @@ module.exports = grammar({
 
     _string_content: (_$) => token.immediate(prec(1, /[^"\\\n]+/)),
 
-    // Backslash + ANY single character: only `\n \t \r \0 \" \\` decode
-    // specially, and every other escape decodes to the character itself.
-    escape_sequence: (_$) => token.immediate(/\\[\s\S]/),
+    // Exactly the escapes the lexer decodes: `\n \t \r \e \0 \" \\` and a
+    // backslash before a newline (line continuation). Anything else is
+    // KLEX003, so it stays out of the literal here and must ERROR.
+    escape_sequence: (_$) => token.immediate(/\\(?:[ntre0"\\]|\r?\n)/),
 
-    // Line comments only. `/* x */` lexes as Slash, Star, … and must ERROR.
     comment: (_$) => token(seq('//', /[^\n]*/)),
+
+    // `/* … */`, nesting: a `/*` inside opens another comment that its own
+    // `*/` closes. The lexer keeps a depth counter (KLEX004 when the file
+    // ends inside one); the grammar recurses instead.
+    block_comment: ($) =>
+      seq('/*', repeat(choice(/[^*/]+/, $.block_comment, '/', '*')), '*/'),
   },
 });

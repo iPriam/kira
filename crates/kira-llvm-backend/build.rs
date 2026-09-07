@@ -41,7 +41,94 @@ fn main() {
     // The bundle's LLVM archives are linked statically: a `kira` must run
     // without the bundle installed beside it. The system libraries LLVM
     // itself needs stay dynamic — they are the host's, not the bundle's.
-    for name in link_names(&run(&llvm_config, &["--link-static", "--libs"])) {
+    let libs = run(&llvm_config, &["--link-static", "--libs"]);
+    let names = link_names(&libs);
+    // Refused rather than emitted empty. A search path with no libraries on it
+    // links, right up until the linker reports every LLVM symbol the crate
+    // names as unresolved — hundreds of them, pointing at Kira's own functions,
+    // with nothing saying the library list was the part that came back empty.
+    // Whatever `llvm-config` answered is the answer worth reading, so it is
+    // what this prints.
+    if names.is_empty() {
+        fail(&format!(
+            "`{} --link-static --libs` named no libraries, so there is nothing to \
+             link the LLVM C API against. It answered: {:?}",
+            llvm_config.display(),
+            libs.trim(),
+        ));
+    }
+    // A healthy bundle answers with something like two hundred archives. A
+    // handful means `llvm-config` answered a shape this parser mostly did not
+    // recognise — which links, and then fails at the far end naming Kira's own
+    // functions rather than the list that came back short. `cargo:warning`
+    // rather than a refusal because the threshold is a judgement about
+    // plausibility, not a fact, and a bundle is allowed to surprise us.
+    if names.len() < 10 {
+        println!(
+            "cargo:warning=`{} --link-static --libs` named only {} librar{} ({}).              That is far fewer than an LLVM bundle carries, so the link line is              probably missing most of the C API.",
+            llvm_config.display(),
+            names.len(),
+            if names.len() == 1 { "y" } else { "ies" },
+            names.join(", "),
+        );
+    }
+    // What was actually asked for, when something is asking. A build script
+    // can see what it emitted and not what cargo did with it, so when a link
+    // fails for want of symbols these libraries define, the first question is
+    // whether they were requested at all — and that question has no answer in
+    // any log unless this one puts it there. Off unless
+    // `KIRA_LLVM_LINK_TRACE` is set, because it is a question with one asker.
+    println!("cargo:rerun-if-env-changed=KIRA_LLVM_LINK_TRACE");
+    if std::env::var_os("KIRA_LLVM_LINK_TRACE").is_some() {
+        // The raw answer as well as what was made of it. Which of the two is
+        // wrong is the whole question when a link fails for want of symbols
+        // these archives define, and a host nobody can log into answers it
+        // only if both are in the log.
+        println!(
+            "cargo:warning=llvm-config --link-static --libs answered: {}",
+            libs.trim()
+        );
+        println!(
+            "cargo:warning=linking {} LLVM librar{} from {}: {}",
+            names.len(),
+            if names.len() == 1 { "y" } else { "ies" },
+            run(&llvm_config, &["--libdir"]).trim(),
+            names.join(" "),
+        );
+    }
+    // Written into the crate rather than only emitted as cargo directives.
+    //
+    // `cargo:rustc-link-lib` names a library for the artifacts cargo links this
+    // crate into *as a dependency*. It does not reach a link that includes this
+    // rlib from somewhere else — another crate's build-script executable, which
+    // is what `kira-export-consumer` builds — and there the search path arrives
+    // while the library names do not, so the link fails naming Kira's own
+    // functions and not the list that never got there.
+    //
+    // A `#[link]` attribute is recorded in the crate's own metadata, so it
+    // travels with the rlib wherever it goes. The requirement stops depending
+    // on inheritance that is not guaranteed, which is the same rule as a
+    // producer refusing rather than emitting nothing: a link line that arrives
+    // half-formed is worse than one that does not arrive.
+    let declarations: String = names
+        .iter()
+        .map(|name| {
+            format!("#[link(name = \"{name}\", kind = \"static\")]\nunsafe extern \"C\" {{}}\n")
+        })
+        .collect();
+    let out_dir = std::env::var("OUT_DIR").unwrap_or_else(|error| {
+        fail(&format!("cargo set no OUT_DIR: {error}"));
+    });
+    let written = Path::new(&out_dir).join("llvm_link.rs");
+    if let Err(error) = std::fs::write(&written, declarations) {
+        fail(&format!(
+            "cannot write the LLVM link declarations to `{}`: {error}",
+            written.display()
+        ));
+    }
+    // Kept as well: they are what a plain dependent has always used, and the
+    // order `llvm-config` gives is a dependency order a static link needs.
+    for name in names {
         println!("cargo:rustc-link-lib=static={name}");
     }
     for name in link_names(&run(&llvm_config, &["--link-static", "--system-libs"])) {
@@ -176,17 +263,27 @@ fn run(llvm_config: &Path, args: &[&str]) -> String {
 /// else on the line (search-path flags, verbatim paths) is not a library
 /// name and is dropped.
 fn link_names(line: &str) -> Vec<String> {
-    line.split_whitespace()
-        .filter_map(|token| {
-            if let Some(name) = token.strip_prefix("-l") {
-                Some(name.to_owned())
-            } else {
-                token
-                    .strip_suffix(".lib")
-                    .map(|name| name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned())
-            }
-        })
-        .collect()
+    line.split_whitespace().filter_map(library_name).collect()
+}
+
+/// One token of an `llvm-config` link line as a bare library name, or `None`
+/// when the token names no library.
+///
+/// Every spelling is reduced the same way rather than by branch, because the
+/// branches were not equivalent and the difference was invisible on the
+/// platform they were written on. A `-l` prefix, a directory, and a `.lib`
+/// suffix are each removed if present, in that order — so `-lLLVMCore`,
+/// `LLVMCore.lib`, `C:\bundle\lib\LLVMCore.lib` and even `-lLLVMCore.lib`
+/// all answer `LLVMCore`.
+///
+/// The last of those is the one that mattered: it used to keep its suffix,
+/// because only the non-`-l` branch stripped it, and a name carrying `.lib`
+/// asks a linker that appends the extension itself for `LLVMCore.lib.lib`.
+fn library_name(token: &str) -> Option<String> {
+    let token = token.strip_prefix("-l").unwrap_or(token);
+    let token = token.rsplit(['/', '\\']).next().unwrap_or(token);
+    let name = token.strip_suffix(".lib").unwrap_or(token);
+    (!name.is_empty() && !name.starts_with('-')).then(|| name.to_owned())
 }
 
 /// Fails the build with a message cargo shows the user, without a backtrace.

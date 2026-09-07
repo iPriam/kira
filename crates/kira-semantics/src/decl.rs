@@ -124,6 +124,14 @@ impl<'a> Analyzer<'a> {
             let Item::Struct(declaration) = item else {
                 continue;
             };
+            // A generic struct is a template. Its concrete row is declared by
+            // `resolve_generic_instantiation` when a use site supplies the
+            // arguments; declaring the bare header here would make `Box` an
+            // ordinary, incomplete type and would also collide with the first
+            // specialization.
+            if !declaration.type_params.is_empty() {
+                continue;
+            }
             // `@FFI.Alias`/`@FFI.Pointer` become type aliases, not struct rows —
             // `collect_type_aliases` already registered them, so they take no
             // struct id here.
@@ -163,6 +171,8 @@ impl<'a> Analyzer<'a> {
                 },
             ) {
                 Some(id) => {
+                    let module = self.imports.module_of(source).to_owned();
+                    self.program.types.structs_mut().set_module(id, &module);
                     // A `@FFI.Struct`/`Array`/`Callback` mints a nominal id; the
                     // kind decides zero-fill construction and use-site refusals.
                     if let Some(crate::ffi_types::FfiClassification::Struct(kind)) = classification
@@ -461,7 +471,7 @@ impl<'a> Analyzer<'a> {
     ///
     /// Returns the definition and its per-field defaults, index-aligned: a
     /// field dropped as a duplicate is dropped from both.
-    fn resolve_struct_def(
+    pub(crate) fn resolve_struct_def(
         &mut self,
         declaration: &StructDecl,
     ) -> (StructDef, Vec<Option<FieldDefault>>) {

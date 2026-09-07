@@ -616,25 +616,50 @@ pub unsafe extern "C" fn kira_rt_native_state_replace(
     }
 }
 
-/// Releases one state token exactly once.
+/// Adds one owner to a state token.
+///
+/// One path for both kinds of state, told apart by the token itself: a native
+/// engine's state is a box it owns, and the value-tree store never hands out an
+/// odd token. See `crate::state_box`.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_native_state_free(token: u64) -> u32 {
-    // One release path for both kinds of state, told apart by the token itself:
-    // a native engine's state is a box it owns, and the value-tree store never
-    // hands out an odd token. See `crate::state_box`.
+pub extern "C" fn kira_rt_native_state_retain(token: u64) -> u32 {
     if crate::state_box::is_box_token(token) {
-        // SAFETY: the token is a box token this runtime handed out, and a
-        // caller releases it once — the same contract this function already had.
+        // SAFETY: the token is a box token this runtime handed out.
+        return unsafe { crate::state_box::kira_rt_native_state_box_retain(token) };
+    }
+    let mut store = match store().lock() {
+        Ok(store) => store,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    match store.retain(NativeStateToken::from_word(token)) {
+        Ok(()) => NativeStateStatus::OK.0,
+        Err(error) => status(error),
+    }
+}
+
+/// Removes one owner from a state token; the last release destroys the state.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_native_state_release(token: u64) -> u32 {
+    if crate::state_box::is_box_token(token) {
+        // SAFETY: the token is a box token this runtime handed out, and every
+        // owner releases it once.
         return unsafe { crate::state_box::kira_rt_native_state_box_free(token) };
     }
     let mut store = match store().lock() {
         Ok(store) => store,
         Err(poisoned) => poisoned.into_inner(),
     };
-    match store.free(NativeStateToken::from_word(token)) {
-        Ok(()) => NativeStateStatus::OK.0,
+    match store.release(NativeStateToken::from_word(token)) {
+        Ok(_) => NativeStateStatus::OK.0,
         Err(error) => status(error),
     }
+}
+
+/// Releases one owner of a state token: the name native code compiled against
+/// before releases were counted, kept so that code keeps linking.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_native_state_free(token: u64) -> u32 {
+    kira_rt_native_state_release(token)
 }
 
 /// Terminates native execution with a deterministic callback-state trap.

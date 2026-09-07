@@ -63,6 +63,13 @@ pub enum HirBinaryOp {
     SubInt,
     /// Integer multiplication.
     MulInt,
+    /// `wrappingAdd(a, b)`: integer addition that wraps at the operands'
+    /// width instead of trapping.
+    WrappingAddInt,
+    /// `wrappingSub(a, b)`, wrapping at the operands' width.
+    WrappingSubInt,
+    /// `wrappingMul(a, b)`, wrapping at the operands' width.
+    WrappingMulInt,
     /// Integer division (truncating), signed.
     DivInt,
     /// Integer remainder, signed.
@@ -150,6 +157,13 @@ pub enum HirBinaryOp {
     EqAny,
     /// Structural inequality of two erased values (`Any`).
     NeAny,
+    /// Identity equality of two runtime type descriptors (`Type`).
+    ///
+    /// One word against another: a type has one descriptor row, so equal ids
+    /// mean one package-qualified nominal identity and unequal ids mean two.
+    EqType,
+    /// Identity inequality of two runtime type descriptors (`Type`).
+    NeType,
     /// Short-circuiting logical AND.
     And,
     /// Short-circuiting logical OR.

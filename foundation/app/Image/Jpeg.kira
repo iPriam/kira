@@ -144,7 +144,7 @@ class JpegDecoder {
         var slot = 0
         while slot < 8 {
             self.huffmanTables.append(HuffmanCode {
-                counts: filledInts(16, 0)
+                counts: filledInts(16, 0),
                 symbols: []
             })
             slot = slot + 1
@@ -267,7 +267,7 @@ class JpegDecoder {
             at = at + total
             let place = alternating ? slot + 4 : slot
             self.huffmanTables[place] = HuffmanCode {
-                counts: move counts
+                counts: move counts,
                 symbols: move symbols
             }
         }
@@ -313,9 +313,9 @@ class JpegDecoder {
                 return
             }
             self.components.append(JpegComponent {
-                identifier: Int(self.data[at])
-                horizontal: horizontal
-                vertical: vertical
+                identifier: Int(self.data[at]),
+                horizontal: horizontal,
+                vertical: vertical,
                 quantTable: quantTable
             })
             index = index + 1

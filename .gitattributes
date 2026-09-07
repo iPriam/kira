@@ -1,0 +1,18 @@
+# Every text file is LF in the working tree, on every platform.
+#
+# Not a style preference. This repository generates files and then checks that
+# what is on disk is byte-for-byte what the generator writes — the diagnostics
+# registry's drift gate is exactly that comparison, and it is the thing that
+# keeps the code table and the files derived from it from drifting apart.
+#
+# A Windows checkout with `core.autocrlf` on hands that gate CRLF where the
+# generator writes LF, so every generated file differs on its first line and the
+# gate fires with nothing actually wrong. The fix belongs here rather than in
+# the comparison: normalising the comparison would weaken it into "differs only
+# in ways we chose to ignore", and the property worth protecting is that the
+# file on disk *is* what the generator writes.
+#
+# `text=auto` leaves git to identify what is text, so binary assets are
+# untouched. Nothing in the tree is committed with CRLF today, so this pins the
+# state that already exists rather than converting anything.
+* text=auto eol=lf

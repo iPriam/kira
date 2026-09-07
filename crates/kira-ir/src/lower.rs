@@ -11,17 +11,20 @@
 //! is an *error* was already decided upstream, by
 //! [`kira_semantics::BuildKind`].
 
-use kira_semantics_model::OwnershipMode;
+use kira_semantics_model::channel::Crossing;
 use kira_semantics_model::hir::{
     Builtin, Callee, HirAttempt, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt,
     HirStmtId, TaskTarget,
 };
+use kira_semantics_model::{OwnershipMode, Type, TypeDescriptorTable, TypeTable};
 
 use crate::tasks::TaskTargets;
 
+use kira_runtime_abi::ChannelPrim;
+
 use crate::ir::{
-    IrAttempt, IrAttemptStep, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
-    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrWriteback,
+    IrAttempt, IrAttemptStep, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport,
+    IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrWriteback,
 };
 
 /// Lowers an analyzed program to IR.
@@ -32,7 +35,13 @@ pub fn lower(program: &HirProgram) -> IrProgram {
     let mut ir = IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
         types: program.types.clone(),
+        descriptors: TypeDescriptorTable::new(),
         main: program.main.map(|main| main.0),
+        main_thread_lifecycles: program
+            .main_thread_lifecycles
+            .iter()
+            .map(|lifecycle| lifecycle.0)
+            .collect(),
         exports: program
             .exports
             .iter()
@@ -60,6 +69,15 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         foreign_aggregates: program.foreign_aggregates.clone(),
         foreign_callbacks: program.foreign_callbacks.clone(),
         exprs: la_arena::Arena::new(),
+        constants: program
+            .constants
+            .iter()
+            .map(|constant| crate::ir::IrConstant {
+                name: constant.name.clone(),
+                ty: constant.ty,
+                init: constant.init.0,
+            })
+            .collect(),
     };
     // Task functions are appended after source functions. Reserve their base
     // index before lowering so `.await` can reference their eventual rows.
@@ -70,6 +88,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         aliases: std::collections::HashMap::new(),
         task_base,
         task_targets: TaskTargets::default(),
+        channel_rows: Vec::new(),
         uses_tasks: false,
     };
     let functions: Vec<IrFunction> = program
@@ -79,10 +98,28 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         .collect();
     let uses_tasks = lowerer.uses_tasks;
     let targets = std::mem::take(&mut lowerer.task_targets);
+    let channel_rows = std::mem::take(&mut lowerer.channel_rows);
     ir.functions = functions;
-    if uses_tasks {
+    // A receive yields to the task spine while it waits, so a program with a
+    // channel has the spine whether or not it wrote `Task`.
+    if uses_tasks || !channel_rows.is_empty() {
         crate::tasks::synthesize(&mut ir, task_base, &targets);
+        crate::channels::synthesize(
+            &mut ir,
+            &channel_rows,
+            task_base + crate::tasks::TaskFns::STEP,
+        );
+        for function in ir.functions.iter_mut().skip(task_base as usize) {
+            crate::mid::scope_releases(function, &ir.exprs, &ir.types);
+        }
     }
+    // Once every body has been lowered, so every type a program can ask about
+    // has its row: what each of them conforms to.
+    ir.descriptors.record_conformances(&program.conformances);
+    // Last, once every function and every synthesized task helper exists: the
+    // IR a backend consumes carries no `distinct` type, so nothing below here
+    // has a distinct path to lay out, box, copy, release, or lower to C.
+    crate::erase::erase_distinct_types(&mut ir);
     ir
 }
 
@@ -96,6 +133,9 @@ struct Lowerer<'a> {
     task_base: u32,
     /// The spawn targets seen so far, each holding the dispatcher arm it took.
     task_targets: TaskTargets,
+    /// The receive rows seen so far, in first-use order: one per payload type,
+    /// each the function a receive of that payload calls.
+    channel_rows: Vec<crate::channels::ReceiverRow>,
     /// Whether anything in the program reached the task spine.
     ///
     /// A program that never spawns, joins, or yields gets no synthesized
@@ -139,7 +179,7 @@ fn by_reference_params(function: &kira_semantics_model::hir::HirFunction) -> Vec
 /// slot already taken by reference, which is a pointer for a stronger reason.
 fn by_pointer_params(
     function: &kira_semantics_model::hir::HirFunction,
-    types: &kira_semantics_model::TypeTable,
+    types: &TypeTable,
     by_reference: &[u32],
 ) -> Vec<u32> {
     (0..function.param_count)
@@ -157,7 +197,7 @@ fn by_pointer_params(
 /// Anything with storage behind it — a string, an array, an enum box — and any
 /// struct, whose fields may hold all three and which is copied field by field
 /// either way.
-fn worth_lending(ty: kira_semantics_model::Type, types: &kira_semantics_model::TypeTable) -> bool {
+fn worth_lending(ty: Type, types: &TypeTable) -> bool {
     use kira_semantics_model::Type;
     matches!(ty, Type::Struct(_)) || types.owns_heap(ty)
 }
@@ -167,7 +207,7 @@ impl Lowerer<'_> {
         self.aliases = crate::borrow_alias::borrow_aliases(self.hir, function);
         let by_reference = by_reference_params(function);
         let body = self.lower_stmts(&function.body);
-        IrFunction {
+        let mut lowered = IrFunction {
             name: function.name.clone(),
             param_count: function.param_count,
             locals: function.locals.iter().map(|local| local.ty).collect(),
@@ -178,10 +218,16 @@ impl Lowerer<'_> {
                 .collect(),
             return_type: function.return_type,
             execution: function.execution,
+            is_main_thread: function.is_main_thread,
             by_reference_params: by_reference.clone(),
             by_pointer_params: by_pointer_params(function, &self.hir.types, &by_reference),
             body,
-        }
+        };
+        // Scope-exit releases are placed once, here where the source's block
+        // structure is still what was walked; both engines lower the statements
+        // this adds.
+        crate::mid::scope_releases(&mut lowered, &self.ir.exprs, &self.hir.types);
+        lowered
     }
 
     fn lower_stmts(&mut self, stmts: &[HirStmtId]) -> Vec<IrStmt> {
@@ -273,6 +319,12 @@ impl Lowerer<'_> {
 
     fn lower_expr(&mut self, id: HirExprId) -> IrExprId {
         let node = match self.hir.expr(id).clone() {
+            // A `distinct` crossing lowers to the value that crossed, and to
+            // nothing else. `TabId(word)` and `id.raw` are the same bits either
+            // way, so the node that carried the type through the type checker
+            // has no instruction to become: it disappears here, which is the
+            // whole of what makes a distinct type cost nothing.
+            HirExpr::Distinct { value, .. } => return self.lower_expr(value),
             HirExpr::Int(value) => IrExpr::Int(value),
             HirExpr::Float(value) => IrExpr::Float(value),
             HirExpr::Bool(value) => IrExpr::Bool(value),
@@ -280,6 +332,7 @@ impl Lowerer<'_> {
             HirExpr::RawPtrNull => IrExpr::RawPtrNull,
             HirExpr::ForeignCallbackPtr { callback } => IrExpr::ForeignCallbackPtr { callback },
             HirExpr::Local { local, .. } => IrExpr::Local(self.slot(local.0)),
+            HirExpr::ConstantGet { constant, ty } => IrExpr::ConstantGet { constant, ty },
             HirExpr::CellNew { value, ty } => IrExpr::CellNew {
                 value: self.lower_expr(value),
                 ty,
@@ -289,14 +342,68 @@ impl Lowerer<'_> {
                 slot: self.slot(local.0),
                 ty,
             },
-            HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
+            // A copy of a Copyable value is the value: every engine's read of a
+            // scalar is a copy, and a string or array read shares until written.
+            HirExpr::Copy { value, .. } => return self.lower_expr(value),
+            HirExpr::TypeTest { value, target } => IrExpr::TypeTest {
+                value: self.lower_expr(value),
+                target: self.descriptor_of(target),
+            },
+            HirExpr::TypeCast { value, target } => IrExpr::TypeCast {
+                value: self.lower_expr(value),
+                target: self.descriptor_of(target),
+                ty: target,
+            },
+            // `value.type` on a value whose type is known needs no runtime
+            // question: the answer is the id lowering just interned, and the
+            // operand is still evaluated and released for its effects.
+            HirExpr::TypeCastResult {
+                value,
+                target,
+                failure,
+                ty,
+            } => {
+                let Type::Enum(result) = ty else {
+                    // Analysis mints the row before it builds the node, so a
+                    // non-enum here is a lowering that skipped it.
+                    return self.ir.exprs.alloc(IrExpr::Int(0));
+                };
+                IrExpr::TypeCastResult {
+                    value: self.lower_expr(value),
+                    target: self.descriptor_of(target),
+                    result,
+                    failure,
+                    payload: target,
+                }
+            }
+            HirExpr::TypeField {
+                descriptor,
+                field,
+                ty,
+            } => IrExpr::TypeField {
+                descriptor: self.lower_expr(descriptor),
+                field,
+                ty,
+            },
+            HirExpr::TypeOf { value, of } => match of {
+                Type::Any => IrExpr::TypeOf {
+                    value: self.lower_expr(value),
+                },
+                known => IrExpr::TypeConst {
+                    value: self.lower_expr(value),
+                    id: self.descriptor_of(known),
+                },
+            },
+            HirExpr::Unary { op, operand, ty } => IrExpr::Unary {
                 op,
                 operand: self.lower_expr(operand),
+                ty,
             },
-            HirExpr::Binary { op, lhs, rhs, .. } => IrExpr::Binary {
+            HirExpr::Binary { op, lhs, rhs, ty } => IrExpr::Binary {
                 op,
                 lhs: self.lower_expr(lhs),
                 rhs: self.lower_expr(rhs),
+                ty,
             },
             HirExpr::Select {
                 cond,
@@ -330,11 +437,16 @@ impl Lowerer<'_> {
                     writebacks,
                 }
             }
-            HirExpr::StructNew { struct_id, fields } => {
+            HirExpr::StructNew {
+                struct_id,
+                fields,
+                order,
+            } => {
                 let ir_fields = fields.iter().map(|&field| self.lower_expr(field)).collect();
                 IrExpr::StructNew {
                     struct_id,
                     fields: ir_fields,
+                    order,
                 }
             }
             HirExpr::Field { base, index, ty } => IrExpr::Field {
@@ -498,7 +610,10 @@ impl Lowerer<'_> {
                 type_id,
                 ty,
             },
-            HirExpr::NativeStateFree { token } => IrExpr::NativeStateFree {
+            HirExpr::NativeStateRetain { token } => IrExpr::NativeStateRetain {
+                token: self.lower_expr(token),
+            },
+            HirExpr::NativeStateRelease { token } => IrExpr::NativeStateRelease {
                 token: self.lower_expr(token),
             },
             HirExpr::Convert { operand, kind, ty } => IrExpr::Convert {
@@ -507,13 +622,24 @@ impl Lowerer<'_> {
                 ty,
             },
             HirExpr::IntoAny { value, from } => IrExpr::IntoAny {
+                tag: self.descriptor_of(from),
                 value: self.lower_expr(value),
                 from,
             },
-            HirExpr::Widen { value, from, to } => IrExpr::Widen {
-                value: self.lower_expr(value),
-                from,
-                to,
+            HirExpr::MainThreadCall {
+                operation,
+                function,
+                args,
+                ty,
+            } => IrExpr::MainThreadCall {
+                operation,
+                function: function.0,
+                args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
+                ty,
+            },
+            HirExpr::MainThreadJoin { handle, ty } => IrExpr::MainThreadJoin {
+                handle: self.lower_expr(handle),
+                ty,
             },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless
@@ -523,6 +649,96 @@ impl Lowerer<'_> {
                 return self.lower_task_spawn(target, &args, ty);
             }
             HirExpr::TaskJoin { handle, ty } => return self.lower_task_join(handle, ty),
+            HirExpr::ChannelCreate { .. } => {
+                return self.channel_op(ChannelPrim::Create, Vec::new());
+            }
+            HirExpr::ChannelReceiver { sender, .. } => {
+                // The two ends share an index and a generation and differ only
+                // in the end bit of a 1-based slot field, which makes the
+                // receiver the sender's word plus one. A derivation rather than
+                // a table call: there is one channel however many times this is
+                // read.
+                let sender = self.lower_expr(sender);
+                let step = self.ir.exprs.alloc(IrExpr::Int(
+                    kira_semantics_model::channel::RECEIVER_END_OFFSET,
+                ));
+                return self.ir.exprs.alloc(IrExpr::Binary {
+                    op: IrBinOp::AddInt,
+                    lhs: sender,
+                    rhs: step,
+                    ty: Type::INT,
+                });
+            }
+            HirExpr::ChannelSend {
+                sender,
+                value,
+                wire,
+            } => {
+                let sender = self.lower_expr(sender);
+                let value = self.lower_expr(value);
+                // One queue slot is one word, so the value becomes one: a
+                // float as its bits, and a value that owns storage as a token
+                // naming it in the store that outlives this context.
+                let value = match wire {
+                    Crossing::Word => value,
+                    Crossing::FloatBits => self.ir.exprs.alloc(IrExpr::Convert {
+                        operand: value,
+                        kind: kira_semantics_model::hir::ConvertKind::FloatToBits,
+                        ty: Type::INT,
+                    }),
+                    Crossing::Boxed(type_id) => {
+                        let boxed = self.ir.exprs.alloc(IrExpr::NativeState {
+                            value,
+                            type_id,
+                            ty: Type::INT,
+                        });
+                        let token = self.ir.exprs.alloc(IrExpr::NativeUserData { state: boxed });
+                        // The token is a pointer word; a queue slot is an
+                        // `Int`. The two are the same bits, and the VM is the
+                        // engine that says so out loud — it carries the value's
+                        // kind beside it and refuses one where the other
+                        // belongs, where native sees one machine word either
+                        // way.
+                        self.ir.exprs.alloc(IrExpr::Convert {
+                            operand: token,
+                            kind: kira_semantics_model::hir::ConvertKind::RawPtrToInt,
+                            ty: Type::INT,
+                        })
+                    }
+                };
+                return self.channel_op(ChannelPrim::Send, vec![sender, value]);
+            }
+            HirExpr::ChannelReceive {
+                receiver,
+                payload,
+                wire,
+                failure,
+                ty,
+            } => return self.lower_channel_receive(receiver, payload, wire, failure, ty),
+            HirExpr::ChannelClose { end, sender, wire } => {
+                let end = self.lower_expr(end);
+                // A receiver closing discards whatever is still queued. When
+                // those slots hold tokens they own the storage behind them, so
+                // the queue is drained and released before the end is closed
+                // rather than dropped on the floor. A sender closing discards
+                // nothing — the queue stays for the receiver to drain.
+                if !sender && wire.is_boxed() {
+                    self.uses_tasks = true;
+                    let callee =
+                        self.task_base + crate::tasks::TaskFns::COUNT + crate::channels::CLOSER;
+                    return self.ir.exprs.alloc(IrExpr::Call {
+                        callee: IrCallee::User(callee),
+                        args: vec![end],
+                        result: Type::Void,
+                        writebacks: Vec::new(),
+                    });
+                }
+                let prim = match sender {
+                    true => ChannelPrim::CloseSender,
+                    false => ChannelPrim::CloseReceiver,
+                };
+                return self.channel_op(prim, vec![end]);
+            }
             HirExpr::TaskDetach { handle } => {
                 return self.lower_task_handle_call(handle, crate::tasks::TaskFns::DETACH);
             }
@@ -531,6 +747,17 @@ impl Lowerer<'_> {
             }
         };
         self.ir.exprs.alloc(node)
+    }
+
+    /// The runtime identity of `ty`, minting its descriptor row on first
+    /// mention.
+    ///
+    /// Analysis admits only types that name a value here, so a `None` would be
+    /// a lowering that skipped a check rather than a program a user can write.
+    fn descriptor_of(&mut self, ty: Type) -> kira_semantics_model::ErasedTypeId {
+        let types = &self.ir.types;
+        kira_semantics_model::ErasedTypeId::of(&mut self.ir.descriptors, types, ty)
+            .expect("analysis admits only types that name a value")
     }
 
     /// The IR callee one HIR callee names.
@@ -559,12 +786,7 @@ impl Lowerer<'_> {
     /// The helper takes a fixed argument list, so a body with fewer arguments
     /// pads with zeros: one generated function serves every arity, and the
     /// dispatcher reads back exactly as many slots as its target declares.
-    fn lower_task_spawn(
-        &mut self,
-        target: TaskTarget,
-        args: &[HirExprId],
-        ty: kira_semantics_model::Type,
-    ) -> IrExprId {
+    fn lower_task_spawn(&mut self, target: TaskTarget, args: &[HirExprId], ty: Type) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;
         let arm = match target {
@@ -608,7 +830,68 @@ impl Lowerer<'_> {
     }
 
     /// Lowers `handle.await` to a call to the join helper.
-    fn lower_task_join(&mut self, handle: HirExprId, ty: kira_semantics_model::Type) -> IrExprId {
+    /// One channel primitive, its operands zero-filled to three.
+    fn channel_op(&mut self, prim: ChannelPrim, operands: Vec<IrExprId>) -> IrExprId {
+        let mut filled = operands;
+        while filled.len() < 3 {
+            filled.push(self.ir.exprs.alloc(IrExpr::Int(0)));
+        }
+        let operands = [filled[0], filled[1], filled[2]];
+        self.ir.exprs.alloc(IrExpr::ChannelOp { prim, operands })
+    }
+
+    /// `receiver.receive()`: a call to the synthesized receiver for its payload.
+    ///
+    /// The waiting itself is not here. It is one synthesized function per
+    /// payload, so the VM and the native backend run the same wait rather than
+    /// two copies of it — the argument [`crate::tasks`] makes for the
+    /// scheduler, made again for the one other place a program blocks.
+    fn lower_channel_receive(
+        &mut self,
+        receiver: HirExprId,
+        payload: Type,
+        wire: Crossing,
+        failure: kira_semantics_model::EnumId,
+        ty: Type,
+    ) -> IrExprId {
+        // A receive yields while it waits, so it needs the task spine.
+        self.uses_tasks = true;
+        let Type::Enum(result) = ty else {
+            let receiver = self.lower_expr(receiver);
+            return receiver;
+        };
+        let index = match self
+            .channel_rows
+            .iter()
+            .position(|row| row.result == result)
+        {
+            Some(index) => index,
+            None => {
+                self.channel_rows.push(crate::channels::ReceiverRow {
+                    result,
+                    failure,
+                    payload,
+                    wire,
+                });
+                self.channel_rows.len() - 1
+            }
+        };
+        let receiver = self.lower_expr(receiver);
+        // The channel receivers are appended after the whole task spine and
+        // the one step helper they share.
+        let callee = self.task_base
+            + crate::tasks::TaskFns::COUNT
+            + crate::channels::STEP_HELPERS
+            + index as u32;
+        self.ir.exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(callee),
+            args: vec![receiver],
+            result: ty,
+            writebacks: Vec::new(),
+        })
+    }
+
+    fn lower_task_join(&mut self, handle: HirExprId, ty: Type) -> IrExprId {
         use kira_semantics_model::Type;
         self.uses_tasks = true;
         let handle = self.lower_expr(handle);
@@ -635,7 +918,7 @@ impl Lowerer<'_> {
         self.ir.exprs.alloc(IrExpr::Call {
             callee: IrCallee::User(self.task_base + helper),
             args: vec![handle],
-            result: kira_semantics_model::Type::Void,
+            result: Type::Void,
             writebacks: Vec::new(),
         })
     }

@@ -1,0 +1,157 @@
+import Foundation
+
+// FnpNullPointerTests.kira — the null pointer written, compared, and carried
+// across the @Native/@Runtime bridge.
+// All top-level names use the fnp / Fnp prefix.
+//
+// `RawPtr.null` is the value; `==` is the test. Before them a program wrote
+// `RawPtr(0)` and `rawPointerWord(p) == 0`, which are two casts standing in for
+// one meaning. Every case here reduces to a scalar so the verdict is the same
+// on every backend.
+
+@FFI.Struct { layout: c }
+struct FnpTarget {
+    let tag: I32
+}
+
+@FFI.Pointer { target: FnpTarget, ownership: borrowed }
+struct FnpTargetPtr {}
+
+// A descriptor whose two pointer members are left out at construction, which
+// zero-fills them. The omitted member has to *be* the null.
+@FFI.Struct { layout: c }
+struct FnpDescriptor {
+    let next: FnpTargetPtr
+    let data: RawPtr
+    let tag: I32
+}
+
+distinct FnpAdapter = RawPtr
+
+@Native
+function fnpNativeNull() -> RawPtr {
+    return RawPtr.null
+}
+
+@Native
+function fnpNativeIsNull(p: RawPtr) -> Bool {
+    return p == RawPtr.null
+}
+
+@Native
+function fnpNativeWord(p: RawPtr) -> Int {
+    return Int(rawPointerWord(p))
+}
+
+@Runtime
+function fnpRuntimeIsNull(p: RawPtr) -> Bool {
+    return p == RawPtr.null
+}
+
+construct FnpNullWordIsZero() extends Test {
+    test { return Int(rawPointerWord(RawPtr.null)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
+}
+
+construct FnpNullEqualsItself() extends Test {
+    test { return RawPtr.null == RawPtr.null }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNullDoesNotDifferFromItself() extends Test {
+    test { return RawPtr.null != RawPtr.null }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
+}
+
+construct FnpCastZeroEqualsNull() extends Test {
+    test { return RawPtr(0) == RawPtr.null }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNonZeroIsNotNull() extends Test {
+    test { return RawPtr(4096) != RawPtr.null }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNullBindsToALocal() extends Test {
+    test {
+        let p: RawPtr = RawPtr.null
+        return p == RawPtr.null
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpTwoWordsCompareByValue() extends Test {
+    test {
+        let a = RawPtr(1234)
+        let b = RawPtr(1234)
+        return a == b
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpZeroFilledPointerMemberIsNull() extends Test {
+    test {
+        let descriptor = FnpDescriptor { tag: 9 }
+        return descriptor.next == RawPtr.null
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpZeroFilledRawMemberIsNull() extends Test {
+    test {
+        let descriptor = FnpDescriptor { tag: 9 }
+        return descriptor.data == RawPtr.null
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpZeroFillLeavesTheWrittenMember() extends Test {
+    test {
+        let descriptor = FnpDescriptor { tag: 9 }
+        return descriptor.tag
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
+}
+
+construct FnpDistinctPointerComparesToItself() extends Test {
+    test {
+        let a = FnpAdapter(RawPtr.null)
+        let b = FnpAdapter(RawPtr.null)
+        return a == b
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNullCrossesFromNative() extends Test {
+    test { return fnpNativeNull() == RawPtr.null }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNullCrossesIntoNative() extends Test {
+    test { return fnpNativeIsNull(RawPtr.null) }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpNonNullCrossesIntoNative() extends Test {
+    test { return fnpNativeIsNull(RawPtr(77)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
+}
+
+construct FnpWordSurvivesTheBridge() extends Test {
+    test { return fnpNativeWord(RawPtr(4096)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(4096) return e }
+}
+
+construct FnpRuntimeAndNativeAgreeOnNull() extends Test {
+    test { return fnpRuntimeIsNull(fnpNativeNull()) }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FnpWordRoundTripsBackToAPointer() extends Test {
+    test {
+        let p = RawPtr(512)
+        return RawPtr(Int(rawPointerWord(p))) == p
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}

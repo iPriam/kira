@@ -87,6 +87,10 @@ impl Analyzer<'_> {
                 param_pointees: vec![None; function.params.len()].into(),
                 result_pointee: None,
                 result_wrapper: None,
+                // A syscall argument is a machine word written as one; a
+                // `distinct` type never names a register the kernel reads.
+                param_distincts: vec![None; function.params.len()].into(),
+                result_distinct: None,
                 name_span: function.name_span,
             }),
             _ => None,

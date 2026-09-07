@@ -1,47 +1,52 @@
 ---
-title: Examples Overview
-description: The checked-in examples and what each one proves about the current Kira implementation.
+title: Examples
+description: Every package under examples/, what each one demonstrates, and how to run it.
 ---
 
-Every example in `examples/` is there to prove something about the current toolchain.
+Each directory under `examples/` is a readable program for one part of the language. Run any of them on any engine.
 
-## Backend Matrix
+```bash
+kira run examples/structs/structs.kira
+kira run --backend llvm examples/structs/structs.kira
+kira run --backend hybrid examples/structs/structs.kira
+```
 
-| Example | Proven backends | What it demonstrates |
-| --- | --- | --- |
-| `hello` | `vm`, `llvm`, `hybrid` | small runnable entrypoint and VM-side struct printing |
-| `arithmetic` | `vm`, `llvm`, `hybrid` | small multi-function arithmetic subset |
-| `imports_demo` | `vm`, `llvm`, `hybrid` | imports and local helper calls |
-| `report_pipeline` | `vm`, `llvm`, `hybrid` | ordinary runnable subset plus richer struct declarations |
-| `geometry_story` | `vm`, `llvm`, `hybrid` | similar subset with frontend-only struct/class surface alongside runnable top section |
-| `status_board` | `vm`, `llvm`, `hybrid` | same pattern for small app-shaped data |
-| `callbacks` | `llvm`, `hybrid` | native callback interop |
-| `callbacks_chain` | `llvm`, `hybrid` | multiple callback-driven native calls |
-| `sokol_triangle` | `llvm`, `hybrid` | manifest-driven autobinding plus a real triangle proof |
-| `sokol_runtime_entry` | `llvm`, `hybrid` | similar Sokol flow with a slightly different state layout |
-| `hybrid_roundtrip` | `hybrid` | runtime/native/runtime call flow |
-| `complex_language_showcase` | frontend/check-focused | constructs, lifecycle hooks, builder/content, namespaced annotations |
-| `ui_library` | frontend/check-focused | construct-driven library-style surface |
+`crates/kira-cli/tests/backend_parity/examples.rs` builds them on all three engines, so an example whose output stopped matching fails a test rather than going stale.
 
-## How To Use The Examples
+## Language
 
-If you want:
+| Example | Demonstrates |
+| --- | --- |
+| `hello` | `@Main`, typed functions, `print`, integer arithmetic. |
+| `fib` | Recursion and `if`/`else`. |
+| `loops` | `while`, `for` over a half-open range, `break`, `continue`, and operator precedence. |
+| `strings` | Literals, concatenation, comparison, and string-returning functions. |
+| `structs` | Stored members with defaults, nested writes, and the value semantics that make a copy independent. |
+| `classes` | Inheritance, `override`, parent-qualified access, and flattening. |
+| `enums` | Variants, payloads, and leading-dot construction. |
+| `match` | Dispatch on a variant, binding a payload, and why this is not a `switch`. |
+| `generics` | Generic enums and what each written instantiation names. |
+| `arrays` | The shared growable handle and the ownership that comes with it. |
+| `aliases` | `type Name = Target` as a second spelling. |
+| `widths` | The fixed-width scalar spellings and the two things a spelling decides. |
+| `bitwise` | The conditional expression and the bitwise operators. |
+| `closures` | Function values, capture by value and by cell, and escaping closures. |
+| `ownership` | Owned by default, `borrow`, `borrow mut`, `move`, and `copy`. |
+| `attempt` | `attempt` / `try` / `handle` over a `Result`-shaped enum. |
+| `imports` | File-scoped imports and namespace roots across several files. |
+| `foundation` | `import Foundation` with no dependency entry. |
 
-- the smallest runnable example, start with `examples/hello/`
-- a real native callback path, open [Callbacks](/docs/appendix/examples/callbacks)
-- a mixed runtime/native example, open [Hybrid Roundtrip](/docs/appendix/examples/hybrid-roundtrip)
-- the strongest FFI/autobinding proof, open [Sokol Triangle](/docs/appendix/examples/sokol-triangle)
+## Interop and Toolchain
 
-The current `hello` example also shows the built-in `Foundation` package and the default VM path printing a named struct value.
+| Example | Demonstrates |
+| --- | --- |
+| `ffi` | Calling C with no `@Native`: one manifest, one C source, one Kira file, four engines. |
+| `library` | A Kira library and the Rust program that calls it, written to be read. |
+| `networking` | Async operations started from a task body and joined through the cooperative scheduler. |
+| `debug-lab` | A deliberately broken program for the debugger walkthrough. Its three `BUG` markers are logic faults, not traps. |
 
-## Examples vs Tests
+## Where to Start
 
-The examples folder is app- and workflow-oriented.
-
-The `tests/` corpus is more explicit about expectations:
-
-- `tests/pass/run/` for successful execution cases
-- `tests/pass/check/` for frontend/check-only cases
-- `tests/fail/` for expected diagnostics
-
-When you are unsure whether a feature is just an example shape or a tested backend contract, check the corpus.
+- The smallest runnable program: `examples/hello`.
+- The FFI seam end to end: `examples/ffi`, whose README carries the archive build commands.
+- A library and its consumer: `examples/library`, whose README snippet was run against the generated crate before it was written down.

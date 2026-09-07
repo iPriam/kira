@@ -8,28 +8,28 @@
 // The widths differ on purpose, as they do for the argument position: Kira holds
 // a `[F32]` as doubles and C reads four bytes each.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiRange {
     var ptr: RawPtr
     var size: U64
 }
 
-@FFI.Pointer { target: FfiRange; ownership: borrowed; }
+@FFI.Pointer { target: FfiRange, ownership: borrowed }
 struct FfiRangePtr {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_range_sum_floats; abi: c; }
-function ffiRangeSumFloats(range: FfiRangePtr): F32;
-@FFI.Extern { library: ffifixture; symbol: ffi_range_sum_ints; abi: c; }
-function ffiRangeSumInts(range: FfiRange): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_range_sum_floats, abi: c }
+function ffiRangeSumFloats(range: FfiRangePtr): F32
+@FFI.Extern { library: ffifixture, symbol: ffi_range_sum_ints, abi: c }
+function ffiRangeSumInts(range: FfiRange): I32
 @FFI.Extern {
-    library: ffifixture;
-    symbol: ffi_range_keep;
-    abi: c;
-    retains: range;
+    library: ffifixture,
+    symbol: ffi_range_keep,
+    abi: c,
+    retains: range
 }
-function ffiRangeKeep(range: FfiRangePtr): Void;
-@FFI.Extern { library: ffifixture; symbol: ffi_range_recall; abi: c; }
-function ffiRangeRecall(): I32;
+function ffiRangeKeep(range: FfiRangePtr): Void
+@FFI.Extern { library: ffifixture, symbol: ffi_range_recall, abi: c }
+function ffiRangeRecall(): I32
 
 // The descriptor reaches C by address, which is how sokol takes every one.
 @Native

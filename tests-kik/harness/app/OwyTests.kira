@@ -59,7 +59,7 @@ construct OwyConstructAnyTreeChurnParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(180); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(180) return e }
 }
 
 // ---- ownership_enum_argument_into_field_parity ----
@@ -97,7 +97,7 @@ construct OwyEnumArgumentIntoFieldParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 // ---- ownership_enum_string_payload_free_parity ----
@@ -149,7 +149,7 @@ construct OwyEnumStringPayloadFreeParity() extends Test {
         }
         return hits
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 // ---- ownership_enum_struct_field_parity ----
@@ -191,7 +191,7 @@ construct OwyEnumStructFieldParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // ---- ownership_explicit_move_ok ----
@@ -209,7 +209,7 @@ construct OwyExplicitMoveOk() extends Test {
         var mesh = OwyMesh5 { id: 7 }
         return owyConsume5(move mesh)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // ---- ownership_free_state_moveout_return_parity ----
@@ -281,10 +281,11 @@ construct OwyFreeStateMoveoutReturnParity() extends Test {
             k = k + 1
         }
 
+        nativeUserDataRelease(handle)
         let combined = tree.nodes[0] * 100000 + tree.nodes[1] * 1000 + tree.generation * 100 + sum * 10 + tree.nodes.count
         return okFlag * combined
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1113202); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1113202) return e }
 }
 
 // ---- ownership_let_field_alias_if_partial_move ----
@@ -306,7 +307,7 @@ construct OwyLetFieldAliasIfPartialMove() extends Test {
         let bag = OwyBag7 { items: [1, 2, 3] }
         return owyLeak7(true, move bag)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---- ownership_let_field_alias_partial_move ----
@@ -325,7 +326,7 @@ construct OwyLetFieldAliasPartialMove() extends Test {
         let bag = OwyBag8 { items: [1, 2, 3] }
         return owyLeak8(move bag)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---- ownership_let_field_alias_partial_move ----
@@ -348,7 +349,7 @@ construct OwyLetFieldAliasSwitchPartialMove() extends Test {
         let bag = OwyBag9 { items: [1, 2, 3] }
         return owyLeak9(0, move bag)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---- ownership_let_field_alias_while_partial_move ----
@@ -370,7 +371,7 @@ construct OwyLetFieldAliasWhilePartialMove() extends Test {
         let bag = OwyBag10 { items: [1, 2, 3] }
         return owyLeak10(true, move bag)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---- ownership_multi_closure_copy_capture ----
@@ -394,7 +395,7 @@ construct OwyMultiClosureCopyCapture() extends Test {
         let combined = owyCallTwice11(move adder, move multiplier)
         return combined * 10 + direct
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5404); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5404) return e }
 }
 
 // ---- ownership_partial_move_scope_exit_parity ----
@@ -458,6 +459,6 @@ construct OwyPartialMoveScopeExitParity() extends Test {
         }
         return total
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(135); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(135) return e }
 }
 

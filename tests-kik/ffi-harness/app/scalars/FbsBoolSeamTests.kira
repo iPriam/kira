@@ -1,0 +1,128 @@
+import Foundation
+
+// FbsBoolSeamTests.kira — `Bool` in C-layout storage and across the bridge.
+// All top-level names use the fbs / Fbs prefix.
+//
+// A `Bool` in a `@FFI.Struct { layout: c }` is one byte of C storage holding 0
+// or 1, sitting beside members of other widths. Its byte therefore has to be
+// written and read at the right offset, keep its value across the bridge, and
+// come back the same whichever engine marshalled it. Padding is deliberate in
+// `FbsMixed`: a byte before an eight-byte member is the case a marshaller that
+// packed fields gets wrong.
+
+@FFI.Struct { layout: c }
+struct FbsFlags {
+    let first: Bool
+    let second: Bool
+    let third: Bool
+    let tag: I8
+}
+
+@FFI.Struct { layout: c }
+struct FbsMixed {
+    let on: Bool
+    let value: Float
+    let count: U32
+    let off: Bool
+}
+
+@Native
+function fbsNativeMakeFlags(a: Bool, b: Bool, c: Bool) -> FbsFlags {
+    return FbsFlags { first: a, second: b, third: c, tag: 5 }
+}
+
+@Native
+function fbsNativeScore(flags: borrow FbsFlags) -> Int {
+    var total = 0
+    if flags.first { total = total + 1 }
+    if flags.second { total = total + 2 }
+    if flags.third { total = total + 4 }
+    return total + Int(flags.tag) * 8
+}
+
+@Native
+function fbsNativeMixedSum(m: borrow FbsMixed) -> Int {
+    var total = Int(m.value)
+    if m.on { total = total + 100 }
+    if m.off { total = total + 1000 }
+    return total + Int(m.count)
+}
+
+@Native
+function fbsNativeNot(b: Bool) -> Bool {
+    return b == false
+}
+
+@Runtime
+function fbsRuntimeScore(flags: borrow FbsFlags) -> Int {
+    return fbsNativeScore(flags)
+}
+
+construct FbsFlagsCrossIntoNative() extends Test {
+    test {
+        let flags = FbsFlags { first: true, second: false, third: true, tag: 5 }
+        return fbsNativeScore(flags)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
+}
+
+construct FbsFalseFlagsCrossIntoNative() extends Test {
+    test {
+        let flags = FbsFlags { first: false, second: false, third: false, tag: 0 }
+        return fbsNativeScore(flags)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
+}
+
+construct FbsFlagsCrossOutOfNative() extends Test {
+    test {
+        let flags = fbsNativeMakeFlags(false, true, true)
+        return fbsNativeScore(flags)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(46) return e }
+}
+
+construct FbsZeroFilledBoolMemberIsFalse() extends Test {
+    test {
+        let flags = FbsFlags { tag: 1 }
+        return fbsNativeScore(flags)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
+}
+
+construct FbsBoolMemberReadsBackInKira() extends Test {
+    test {
+        let flags = fbsNativeMakeFlags(true, false, false)
+        return flags.first
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FbsBoolBesideAWiderMember() extends Test {
+    test {
+        let mixed = FbsMixed { on: true, value: 7.0, count: 3, off: false }
+        return fbsNativeMixedSum(mixed)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(110) return e }
+}
+
+construct FbsTrailingBoolKeepsItsOffset() extends Test {
+    test {
+        let mixed = FbsMixed { on: false, value: 2.0, count: 1, off: true }
+        return fbsNativeMixedSum(mixed)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1003) return e }
+}
+
+construct FbsBoolCrossesTheBridgeBothWays() extends Test {
+    test { return fbsNativeNot(fbsNativeNot(true)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
+}
+
+construct FbsRuntimeAndNativeAgreeOnFlags() extends Test {
+    test {
+        let flags = FbsFlags { first: true, second: true, third: false, tag: 2 }
+        return fbsRuntimeScore(flags)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(19) return e }
+}

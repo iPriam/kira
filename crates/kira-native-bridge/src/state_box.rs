@@ -54,6 +54,9 @@ struct BoxHeader {
     size: usize,
     align: usize,
     free: Option<NativeStateBoxFree>,
+    /// Owners of the box: the Kira handle, every exported token, and every
+    /// explicit retain. The release that takes it to zero frees the box.
+    refs: u64,
 }
 
 /// The header's own layout, which every box starts with.
@@ -130,6 +133,7 @@ pub unsafe extern "C" fn kira_rt_native_state_box_new(
             size,
             align,
             free,
+            refs: 1,
         });
     }
     debug_assert!(offset >= size_of::<BoxHeader>());
@@ -183,13 +187,43 @@ pub unsafe extern "C" fn kira_rt_native_state_box_payload(
     NativeStateStatus::OK.0
 }
 
-/// Releases a boxed state: drops what its fields own, then frees the box.
-///
-/// The magic is cleared first, so freeing the same token twice is reported as
-/// an unknown token rather than corrupting the allocator.
+/// Adds one owner to a boxed state.
 ///
 /// # Safety
-/// `token` must be a live box token from this runtime, freed at most once.
+/// `token` must be null, a live box token from this runtime, or a token this
+/// runtime handed out.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_native_state_box_retain(token: u64) -> u32 {
+    if token == 0 {
+        return NativeStateStatus::NULL_TOKEN.0;
+    }
+    if !NativeStateToken::from_word(token).is_boxed() {
+        return NativeStateStatus::UNKNOWN_TOKEN.0;
+    }
+    let base = base_of(token);
+    // SAFETY: the token addresses a live header until its last release.
+    let header = unsafe { &mut *base.cast::<BoxHeader>() };
+    if header.magic != MAGIC {
+        return NativeStateStatus::UNKNOWN_TOKEN.0;
+    }
+    match header.refs.checked_add(1) {
+        Some(refs) => {
+            header.refs = refs;
+            NativeStateStatus::OK.0
+        }
+        None => NativeStateStatus::TOKEN_EXHAUSTED.0,
+    }
+}
+
+/// Removes one owner from a boxed state; the last release drops what its
+/// fields own, then frees the box.
+///
+/// The magic is cleared first, so releasing the same token past its last
+/// owner is reported as an unknown token rather than corrupting the allocator.
+///
+/// # Safety
+/// `token` must be null, a live box token from this runtime, or a token this
+/// runtime handed out.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_native_state_box_free(token: u64) -> u32 {
     if token == 0 {
@@ -203,6 +237,10 @@ pub unsafe extern "C" fn kira_rt_native_state_box_free(token: u64) -> u32 {
     let header = unsafe { &mut *base.cast::<BoxHeader>() };
     if header.magic != MAGIC {
         return NativeStateStatus::UNKNOWN_TOKEN.0;
+    }
+    if header.refs > 1 {
+        header.refs -= 1;
+        return NativeStateStatus::OK.0;
     }
     let Some((layout, offset)) = box_layout(header.size, header.align) else {
         return NativeStateStatus::MALFORMED_VALUE.0;
@@ -376,5 +414,33 @@ mod tests {
         let again = unsafe { kira_rt_native_state_box_free(token) };
         assert_eq!(again, NativeStateStatus::UNKNOWN_TOKEN.0);
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
+    }
+
+    /// A retained box survives every release but the last, and the field-drop
+    /// leaf runs on that one alone.
+    #[test]
+    fn a_retained_box_is_freed_by_its_last_release() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn count(_: *mut u8) {
+            RUNS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        RUNS.store(0, Ordering::SeqCst);
+        let token = new_box(Some(count));
+        // SAFETY: the token is live.
+        assert_eq!(unsafe { kira_rt_native_state_box_retain(token) }, 0);
+        // SAFETY: the token is live and has two owners.
+        assert_eq!(unsafe { kira_rt_native_state_box_free(token) }, 0);
+        assert_eq!(RUNS.load(Ordering::SeqCst), 0);
+        assert!(payload(token, TYPE).is_ok());
+        // SAFETY: the token is live and has one owner.
+        assert_eq!(unsafe { kira_rt_native_state_box_free(token) }, 0);
+        assert_eq!(RUNS.load(Ordering::SeqCst), 1);
+        // SAFETY: the box is gone, which the header's cleared magic reports.
+        let refused = unsafe { kira_rt_native_state_box_retain(token) };
+        assert_eq!(refused, NativeStateStatus::UNKNOWN_TOKEN.0);
     }
 }

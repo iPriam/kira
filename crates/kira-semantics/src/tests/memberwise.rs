@@ -72,7 +72,7 @@ struct StrictExample {
 @Main
 function main() {
     let value = StrictExample {
-        name = "given name"
+        name = "given name",
         content = "given content"
     }
     print(value.title)

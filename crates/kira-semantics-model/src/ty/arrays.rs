@@ -79,6 +79,25 @@ impl ArrayTable {
             .map(|(index, element)| (ArrayId(index as u32), *element))
     }
 
+    /// Rewrites every row's element through `visit`, then rebuilds the intern
+    /// index over the rewritten elements.
+    ///
+    /// Rewriting can make two rows equal — `[TabId]` and `[U32]` are one shape
+    /// once the distinct type is erased — so the index is rebuilt rather than
+    /// patched, and the earliest row wins the key. The duplicate row is kept:
+    /// an id already handed out has to keep naming an array of the right
+    /// element, and a backend that emits one helper per row emits one helper
+    /// too many rather than the wrong one.
+    pub fn visit_elements_mut(&mut self, visit: &dyn Fn(&mut Type)) {
+        for element in &mut self.elements {
+            visit(element);
+        }
+        self.index.clear();
+        for (index, element) in self.elements.iter().enumerate() {
+            self.index.entry(*element).or_insert(ArrayId(index as u32));
+        }
+    }
+
     /// How many distinct array types the program mentions.
     pub fn len(&self) -> usize {
         self.elements.len()

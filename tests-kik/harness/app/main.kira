@@ -22,9 +22,16 @@ import Foundation
 @Main
 function main() {
     print("kik-harness-begin")
+
     print(scalarsSection())
     print(aliasesSection())
+    print(distinctsSection())
+    print(distinctDerivesSection())
+    print(distinctSerdeSection())
+    print(distinctOptionSection())
     print(asyncSpineSection())
+    print(mainThreadSection())
+
     print(collectionsSection())
     print(structsSection())
     print(enumsPayloadlessSection())
@@ -44,7 +51,12 @@ function main() {
     print(mcxSection())
     print(trxSection())
     print(gbxSection())
+
     print(drxSection())
+    print(tlxSection())
+    print(rlxSection())
+
+
     print("kik-harness-end")
     return
 }

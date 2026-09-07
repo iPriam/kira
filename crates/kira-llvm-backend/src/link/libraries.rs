@@ -14,7 +14,7 @@ use super::driver::{
     native_live_runtime_arguments, shared_library_flag, tool_diagnostic,
 };
 use super::target::NativeBuildTarget;
-use super::{LinkError, link_with};
+use super::{LinkError, LinkOptions, link_with};
 
 /// Links `object` against the native runtime archive into a shared library.
 ///
@@ -29,10 +29,10 @@ pub fn link_shared_library(
     object: &Path,
     runtime_archive: &Path,
     library: &Path,
-    target: &NativeBuildTarget,
+    options: LinkOptions<'_>,
 ) -> Result<(), LinkError> {
-    let mut arguments = vec![shared_library_flag(target).to_owned()];
-    arguments.extend(force_host_symbols(target));
+    let mut arguments = vec![shared_library_flag(options.target).to_owned()];
+    arguments.extend(force_host_symbols(options.target));
     link_with(
         llvm,
         &[object.to_path_buf()],
@@ -40,7 +40,7 @@ pub fn link_shared_library(
         &NativeLinkInputs::default(),
         library,
         &arguments,
-        target,
+        options,
     )
 }
 
@@ -60,6 +60,7 @@ pub fn link_native_live_library(
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
     library: &Path,
+    sanitize: crate::Sanitize,
 ) -> Result<(), LinkError> {
     let target = NativeBuildTarget::host();
     let mut arguments = vec![shared_library_flag(&target).to_owned()];
@@ -72,7 +73,11 @@ pub fn link_native_live_library(
         foreign_link,
         library,
         &arguments,
-        &target,
+        LinkOptions {
+            target: &target,
+            sanitize,
+            shared: true,
+        },
     )
 }
 
@@ -83,13 +88,13 @@ pub fn link_native_live_library(
 /// opted-in static FFI symbols shared with its runtime half. It is loaded by the
 /// interpreter running in this process, so it is the host's like the live
 /// library above.
-pub fn link_hybrid_library(
+pub(crate) fn link_hybrid_library(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
-    retained_symbols: &[String],
     library: &Path,
+    options: HybridLinkOptions<'_>,
 ) -> Result<(), LinkError> {
     link_hybrid_library_inner(
         llvm,
@@ -97,40 +102,15 @@ pub fn link_hybrid_library(
         runtime_archive,
         foreign_link,
         library,
-        HybridLinkOptions {
-            retained_symbols,
-            debug_symbols: None,
-        },
-    )
-}
-
-/// Links a hybrid native half while retaining its debugger symbols.
-pub fn link_hybrid_library_debug(
-    llvm: &LlvmInstallation,
-    object: &Path,
-    runtime_archive: &Path,
-    foreign_link: &NativeLinkInputs,
-    retained_symbols: &[String],
-    library: &Path,
-    debug_symbols: &[String],
-) -> Result<(), LinkError> {
-    link_hybrid_library_inner(
-        llvm,
-        object,
-        runtime_archive,
-        foreign_link,
-        library,
-        HybridLinkOptions {
-            retained_symbols,
-            debug_symbols: Some(debug_symbols),
-        },
+        options,
     )
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HybridLinkOptions<'a> {
-    retained_symbols: &'a [String],
-    debug_symbols: Option<&'a [String]>,
+pub(crate) struct HybridLinkOptions<'a> {
+    pub(crate) retained_symbols: &'a [String],
+    pub(crate) debug_symbols: Option<&'a [String]>,
+    pub(crate) sanitize: crate::Sanitize,
 }
 
 fn link_hybrid_library_inner(
@@ -159,7 +139,11 @@ fn link_hybrid_library_inner(
         foreign_link,
         library,
         &arguments,
-        &target,
+        LinkOptions {
+            target: &target,
+            sanitize: options.sanitize,
+            shared: true,
+        },
     )
 }
 

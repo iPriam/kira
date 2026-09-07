@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use kira_runtime_abi::{NativeStateToken, NativeStateTypeId, NativeStateValue};
+use kira_runtime_abi::{MainThreadHandle, NativeStateToken, NativeStateTypeId, NativeStateValue};
 
 /// A handle to a heap-allocated string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +155,11 @@ pub enum Value {
     RawPtr(u64),
     /// An opaque owning handle to native callback state.
     NativeState(NativeStateToken),
+    /// An opaque handle to work queued on the host main-thread event loop.
+    ///
+    /// The host owns the task; this value only carries the typed handle word
+    /// until a `MainThreadJoin` consumes it.
+    MainThreadTask(MainThreadHandle),
     /// A typed mutable view through an opaque callback-state token.
     NativeView {
         /// The stable userdata token.
@@ -181,6 +186,12 @@ pub enum Value {
     /// `retains:` parameter transfers them to the heap's retained registry —
     /// so no reference count exists and no storage outlives its owner.
     CBlock(CBlockId),
+    /// A runtime type descriptor: the id of a row in the module's type table.
+    ///
+    /// Inline and `Copy` like the other scalar words. Two are equal exactly
+    /// when they name one type by package-qualified nominal identity, which is
+    /// what `value.type == other.type` asks.
+    Type(u64),
     /// The unit value.
     Void,
 }
@@ -301,11 +312,13 @@ pub struct HeapStats {
     pub freed: u64,
     /// Live strings right now (`allocated - freed`).
     pub current: u64,
-    /// Values a `retains:` foreign parameter transferred to the heap.
+    /// Heap slots the `retains:` registry owns, counted transitively.
     ///
     /// Counted apart from `current` because they are alive by contract — C
     /// holds their pointers until instance teardown — so a program that exits
-    /// with `current == retained` balanced everything it still owned.
+    /// with `current == retained` balanced everything it still owned. Slots
+    /// rather than registry entries, in `current`'s own units: one retained
+    /// C-layout struct is a parent block plus every member block under it.
     pub retained: u64,
 }
 
@@ -342,6 +355,14 @@ pub struct Heap {
     /// stays alive until the body has run, which is what makes "before the
     /// members are released" true rather than nearly true.
     pending_drops: Vec<PendingDrop>,
+    /// Native-state handles copied since the interpreter last settled them.
+    ///
+    /// The heap cannot reach the host that counts a state's owners, so a copy
+    /// of a handle records the reference it took here, and [`crate::interp`]
+    /// settles it with the host between instructions.
+    native_state_retains: Vec<NativeStateToken>,
+    /// Native-state handles dropped since the interpreter last settled them.
+    native_state_releases: Vec<NativeStateToken>,
 }
 
 /// One struct object waiting for its user `Drop` body.
@@ -414,6 +435,20 @@ impl Heap {
     /// the answer is always no and nothing else runs.
     pub fn owes_drops(&self) -> bool {
         !self.pending_drops.is_empty()
+    }
+
+    /// Whether a handle copy or drop is waiting to be counted by the host.
+    pub fn owes_native_state(&self) -> bool {
+        !self.native_state_retains.is_empty() || !self.native_state_releases.is_empty()
+    }
+
+    /// Takes the references handles took and gave up since the last settle:
+    /// the retains, then the releases.
+    pub fn take_native_state_events(&mut self) -> (Vec<NativeStateToken>, Vec<NativeStateToken>) {
+        (
+            std::mem::take(&mut self.native_state_retains),
+            std::mem::take(&mut self.native_state_releases),
+        )
     }
 
     /// Takes the object whose user `Drop` body is owed next.

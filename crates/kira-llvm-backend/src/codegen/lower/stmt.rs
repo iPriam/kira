@@ -61,6 +61,14 @@ impl FunctionLowering<'_, '_> {
                 self.branch_to(test);
                 Ok(())
             }
+            IrStmt::ReleaseLocals { locals } => {
+                for &slot in locals {
+                    let ty = self.local_type(slot)?;
+                    let pointer = self.local_pointer(slot)?;
+                    self.release_local_if_live(slot, pointer, ty)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -418,11 +426,13 @@ impl FunctionLowering<'_, '_> {
     /// a local read clones, a returned string is never one of the slots being
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
-        // `kira_ir::mid` supplies the shared ownership plan for both engines.
+        // `kira_ir::mid` supplies the ownership plan, built for this engine's
+        // lending and its inline heap model.
         let plan = kira_ir::mid::plan_function(
             self.function,
             &self.codegen.program.types,
             self.codegen.lending(),
+            kira_ir::mid::HeapModel::Inline,
             self.drop_glue,
         )
         .map_err(|error| LlvmError::internal(mid_error_detail(error)))?;
@@ -488,6 +498,17 @@ impl FunctionLowering<'_, '_> {
         // condition is re-evaluated on each iteration as the VM does.
         unsafe { LLVMBuildBr(self.codegen.builder, test_block) };
         self.position_at(test_block);
+        if self.lifecycle {
+            // SAFETY: the runtime declaration belongs to this module and the
+            // builder is positioned on the live loop-test block.
+            unsafe {
+                self.codegen.call_runtime(
+                    self.codegen.runtime.main_thread_lifecycle_checkpoint,
+                    &mut [],
+                    c"",
+                );
+            }
+        }
         let condition = self.lower_expr(cond)?;
         // SAFETY: the test block is unterminated and `condition` is an `i1`.
         unsafe { LLVMBuildCondBr(self.codegen.builder, condition, body_block, exit_block) };

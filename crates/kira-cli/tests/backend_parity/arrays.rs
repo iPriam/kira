@@ -220,7 +220,7 @@ function main() {
 fn an_array_of_structs_agrees() {
     assert_parity(
         r#"
-struct Point { var x: Int; var y: Int }
+struct Point { var x: Int var y: Int }
 
 @Main
 function main() {
@@ -513,8 +513,8 @@ struct Node {
 @Main
 function main() {
     var nodes: [Node] = [
-        Node { name: "first" count: 1 },
-        Node { name: "second" count: 2 }
+        Node { name: "first", count: 1 },
+        Node { name: "second", count: 2 }
     ]
     print(nodes[0].name)
     print(nodes[1].count)
@@ -544,7 +544,7 @@ struct Tree {
 
 @Main
 function main() {
-    var tree = Tree { nodes: [3, 4, 5] label: "t" }
+    var tree = Tree { nodes: [3, 4, 5], label: "t" }
     print(tree.nodes[0])
     print(tree.nodes[2])
     print(tree.nodes.count)
@@ -617,7 +617,7 @@ function copiesThenChanges(node: borrow Node) -> String {
 
 @Main
 function main() {
-    var node = Node { name: "root" children: [1, 2] }
+    var node = Node { name: "root", children: [1, 2] }
     print(reads(node))
     print(copiesThenChanges(node))
     print(node.name)
@@ -647,13 +647,13 @@ function joined(pair: borrow Pair) -> String {
 }
 
 function make(left: String, right: String) -> Pair {
-    return Pair { left: left right: right }
+    return Pair { left: left, right: right }
 }
 
 @Main
 function main() {
     print(joined(make("a", "b")))
-    print(joined(Pair { left: "c" right: "d" }))
+    print(joined(Pair { left: "c", right: "d" }))
     return
 }
 "#,

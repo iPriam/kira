@@ -162,6 +162,7 @@ impl Heap {
             // what is behind one, so identity is the only honest answer, and
             // neither erases into `Any` either.
             (Value::NativeState(a), Value::NativeState(b)) => a == b,
+            (Value::MainThreadTask(a), Value::MainThreadTask(b)) => a == b,
             (
                 Value::NativeView {
                     token: a,

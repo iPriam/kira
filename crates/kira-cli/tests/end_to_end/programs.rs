@@ -236,14 +236,77 @@ fn a_generic_arity_mismatch_is_rejected_with_a_rendered_diagnostic() {
 }
 
 #[test]
-fn a_generic_struct_is_refused_by_name() {
-    // Only an `enum` takes type parameters. A generic struct, class, or
-    // function has no call site in the corpus, so it is refused rather than
-    // guessed at.
-    let output =
-        run_source("struct Box<Value> { let v: Int }\n@Main function main() { print(1) return }");
+fn a_generic_struct_is_instantiated_at_an_explicit_call_site() {
+    let output = run_source(
+        "struct Box<Value> {\n\
+             let v: Value\n\
+             function value(borrow self) -> Value { return self.v }\n\
+         }\n\
+         @Main function main() {\n\
+             let boxed: Box<Int> = Box<Int>(7)\n\
+             print(boxed.value())\n\
+             return\n\
+         }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn a_generic_member_is_refused_before_semantic_type_resolution() {
+    let output = run_source(
+        "struct Box {
+             function get<Value>(value: Value) -> Value { return value }
+         }
+         @Main function main() { print(1) return }",
+    );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("KPAR047"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KPAR047"), "stderr was: {stderr}");
+    assert!(!stderr.contains("KSEM050"), "stderr was: {stderr}");
+}
+
+#[test]
+fn a_generic_class_inherits_a_parameterized_parent_and_runs() {
+    let output = run_source(
+        "class Grand<Value> {
+             let value: Value
+             function get(borrow self) -> Value { return self.value }
+         }
+         class Parent<Value> extends Grand<Value> {}
+         class Child<Value> extends Parent<Value> {}
+         @Main function main() {
+             let child = Child(value: 7)
+             print(child.get())
+             return
+         }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn incomplete_generic_inference_has_a_specific_diagnostic() {
+    let output = check_source(
+        "function make<Left, Right>() -> Left { return 1 }
+         @Main function main() {
+             let value = make()
+             print(value)
+             return
+         }",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[KSEM316]"), "stderr was: {stderr}");
+    assert!(!stderr.contains("KSEM061"), "stderr was: {stderr}");
 }
 
 /// A build that fails takes the previous build's executable with it.

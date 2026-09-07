@@ -4,6 +4,7 @@ use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::NonNull;
 
+use kira_runtime_abi::c_storage::{bool_from_c_byte, c_bool_byte};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature, ForeignType,
     ForeignTypeSpec,
@@ -161,7 +162,7 @@ impl LibffiRuntime {
                 },
             );
         }
-        lift_result(signature.result(), result.as_ref(), aggregates)
+        lift_result(signature.result(), result.as_ref(), result_size, aggregates)
     }
 
     /// Calls a function whose arguments and result already occupy C-layout
@@ -283,7 +284,7 @@ fn write_argument(
         ForeignArg::U16(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::U32(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::U64(value) => destination.write(&value.to_ne_bytes()),
-        ForeignArg::Bool(value) => destination.write(&[u8::from(value)]),
+        ForeignArg::Bool(value) => destination.write(&[c_bool_byte(value)]),
         ForeignArg::F32(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::F64(value) => destination.write(&value.to_ne_bytes()),
         ForeignArg::RawPtr(value) => {
@@ -328,12 +329,20 @@ fn write_argument(
 fn lift_result(
     result_spec: ForeignTypeSpec,
     result: Option<&AlignedBytes>,
+    declared: usize,
     aggregates: &ForeignAggregates,
 ) -> Result<ForeignResult, LibffiError> {
     let Some(result) = result else {
         return Ok(ForeignResult::Void);
     };
+    // Libffi writes a whole `ffi_arg` word for a result narrower than one, so
+    // the buffer it filled is wider than the result whenever the declared type
+    // is. The value is the low `declared` bytes of it on every target Kira
+    // builds for, all of which are little-endian, and the rest is the word
+    // libffi rounded up to. Reading the whole buffer instead makes an aggregate
+    // arrive the size of the word rather than the size of the struct.
     let bytes = result.as_slice();
+    let bytes = bytes.get(..declared.min(bytes.len())).unwrap_or(bytes);
     let value = match result_spec {
         ForeignTypeSpec::Scalar(ForeignType::I8) => ForeignResult::I8(bytes[0] as i8),
         ForeignTypeSpec::Scalar(ForeignType::I16) => ForeignResult::I16(i16::from_ne_bytes(
@@ -355,7 +364,9 @@ fn lift_result(
         ForeignTypeSpec::Scalar(ForeignType::U64) => ForeignResult::U64(u64::from_ne_bytes(
             bytes[..8].try_into().map_err(|_| malformed())?,
         )),
-        ForeignTypeSpec::Scalar(ForeignType::Bool) => ForeignResult::Bool(bytes[0] != 0),
+        ForeignTypeSpec::Scalar(ForeignType::Bool) => {
+            ForeignResult::Bool(bool_from_c_byte(bytes[0]))
+        }
         ForeignTypeSpec::Scalar(ForeignType::F32) => ForeignResult::F32(f32::from_ne_bytes(
             bytes[..4].try_into().map_err(|_| malformed())?,
         )),

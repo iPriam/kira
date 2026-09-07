@@ -23,32 +23,6 @@ pub enum CompileError {
     /// Internal invariant: a short-circuit operator reached opcode selection.
     #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
     ShortCircuitOpcode,
-    /// Internal invariant: a type with no runtime value reached an erasure.
-    ///
-    /// Nothing analysis admits can get here — `Void`, `Cell`, `Task`, and
-    /// `NativeState` are all refused by `Type::assignable_to` before `Any`
-    /// takes them — so this is a compiler bug surfaced typed rather than a
-    /// program the user can write.
-    #[error("bytecode compiler invariant violated: a type with no value was erased into `Any`")]
-    ErasureOfAValuelessType,
-    /// Internal invariant: a widening reached codegen with a non-enum row.
-    ///
-    /// Only a generic instantiation widens, and `TypeTable::admits` refuses
-    /// every other pair before lowering runs.
-    #[error("bytecode compiler invariant violated: a widening of something not an enum")]
-    WidenedNonEnum,
-    /// Internal invariant: a widening named an enum the program never declared.
-    #[error("bytecode compiler invariant violated: a widening of an undeclared enum")]
-    WidenedUndeclaredEnum,
-    /// Internal invariant: the two rows of a widening disagree about their
-    /// variants — a different count, or one carrying a payload where the other
-    /// does not.
-    #[error("bytecode compiler invariant violated: a widening between rows that disagree")]
-    WidenedMismatchedRows,
-    /// Internal invariant: a widened payload crossed to a type the type rule
-    /// admits no crossing to.
-    #[error("bytecode compiler invariant violated: a widening of a payload the type rule refuses")]
-    WidenedPayloadTypeRefused,
     /// Internal invariant: a `break`/`continue` reached codegen with no
     /// enclosing loop, which analysis is supposed to have rejected.
     #[error(
@@ -87,6 +61,14 @@ pub enum CompileError {
     MalformedMutCall {
         /// The offending function's name.
         function: String,
+    },
+    /// Internal invariant: a main-thread request named no lowered function.
+    #[error("main-thread request in `{function}` names function {target}, which is not in the IR")]
+    UnknownMainThreadTarget {
+        /// The function containing the request.
+        function: String,
+        /// The requested target index.
+        target: u32,
     },
     /// Internal invariant: an export's signature names a type that cannot cross
     /// the export boundary, which the frontend refuses before this runs.

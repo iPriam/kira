@@ -1,51 +1,40 @@
 ---
 title: Collection Types
-description: Array literals, indexing, indexed assignment, and where arrays show up in current Kira.
+description: Arrays as shared growable handles, the two members they answer, indexing traps, copy-on-write, and how one crosses the native seam.
 ---
 
-The current frontend and executable corpus understand **array syntax**.
+An array is a shared, growable, heap-backed sequence, written `[T]`. Its whole surface is two members, `.append(v)` and `.count`, plus `xs[i]` to read and write elements.
 
-## Array Literals
+```kira
+let xs = [1, 2, 3]           // full the moment it exists; commas optional
+var ys: [Int] = []           // the universal idiom: an empty literal, grown
+for i in 0..5 { ys.append(i * i) }
+ys[1] = 99                   // an index write lands in place
+print(ys.count)              // a property, never `.count()`
 
-Examples in the repo use array literals like these:
-
-```ts
-[1, 2, 3]
-[Widget]
-[I64, RawPtr]
+var grid: [[Int]] = [[1, 2], [3, 4]]
+grid[1][1] = 77              // a write walks as deep as the path goes
 ```
 
-Executable code can also index arrays:
+## Indexing Traps
 
-```ts
-let value = values[index]
-values[index] = nextValue
-```
+An out-of-range or negative index is a **runtime trap**, not a compile error: an index is rarely a constant, so a static check would reject working programs. A negative index and one past the end are different traps, because they are different mistakes.
 
-Those appear in several different roles:
+## Value Semantics
 
-- ordinary expressions such as `for item in [1, 2, 3]`
-- construct representation fields such as `children: [Widget]`
-- FFI annotation arguments such as `params: [I64, RawPtr]`
+The value semantics are the mirror image of a struct's. A struct copies on binding, so a copy is independent. An array is a **handle**: reading one *out* of a place, such as an element or a returned value, copies it, so what you read cannot be perturbed afterwards. The array itself aliases, which is why the ownership checker **moves it on binding**: `let alias = xs` ends `xs`.
 
-## Where Arrays Show Up Today
+An explicit `copy xs` keeps the source binding live. The copy shares its element block until one side writes, then detaches with copy-on-write, so reads stay cheap while a mutation stays independent. Copying a struct that owns an array uses the same value operation for the field.
 
-Arrays are currently most visible in:
+## Two Boundary Rules
 
-- check-only declarative examples
-- construct definitions
-- generated FFI metadata
+- **`print(someArray)` is rejected (`KSEM081`).** No call site in the language corpus pins a separator or a bracket, so a format chosen here would be invented surface. Print the elements.
+- **An array crosses the `@Native`/`@Runtime` boundary as a copy**, the same node tree a struct crosses as. Each side owns its array, so a native callee growing one does not change the other, and the side that reads the elements frees them.
 
-The book does **not** currently document a broader standard-library collection API for arrays, dictionaries, or sets, because the repo does not prove one.
+## Iterating
 
-## Runnable Boundary
+`for x in xs` binds each element in turn. It only reads, so `xs` is still usable afterwards, and the loop variable is a copy, so writing to what it names cannot perturb the iteration. See [Control Flow](/docs/language-guide/control-flow).
 
-The current corpus proves:
+## What Arrays Are Not
 
-- array literals
-- array locals, params, and returns
-- indexing
-- indexed assignment
-- `for item in values`
-
-Kira still does not document a larger collection API beyond that proven surface.
+There is no dictionary and no set in the language or in Foundation. `[T]` is the collection Kira has.

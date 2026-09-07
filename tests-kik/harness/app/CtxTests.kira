@@ -44,7 +44,7 @@ construct CtxIfBasic() extends Test {
         return out
     }
 
-    expect { let e: Result<String, TestFailure> = .Ok("if-then"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("if-then") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ construct CtxIfConditionTrailingCall() extends Test {
         return out
     }
 
-    expect { let e: Result<String, TestFailure> = .Ok("1234"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("1234") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ construct CtxForBasic() extends Test {
         return out
     }
 
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ construct CtxForBinding() extends Test {
         return total
     }
 
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ construct CtxForEmpty() extends Test {
         return out
     }
 
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ construct CtxForStateful() extends Test {
         return out
     }
 
-    expect { let e: Result<String, TestFailure> = .Ok("one,two,other,done"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("one,two,other,done") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ construct CtxSwitchBasic() extends Test {
         return out
     }
 
-    expect { let e: Result<String, TestFailure> = .Ok("two"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("two") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,5 +207,5 @@ construct CtxEmptyControlFlowBodies() extends Test {
         return n
     }
 
-    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(11) return e }
 }

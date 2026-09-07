@@ -59,3 +59,29 @@ fn consumer_qualified_enum_through_import() {
         "an imported package's enum is nameable qualified: {diagnostics:?}"
     );
 }
+
+/// An imported package's *generic* enum is constructible by its qualified
+/// spelling too. The row records the template's package-qualified identity,
+/// so a check that compared it against the written bare name refused every
+/// imported template while accepting the program's own.
+#[test]
+fn consumer_qualified_generic_enum_through_import() {
+    let modules = vec![ModuleSource {
+        module: ImportTable::package_module_identity("Alpha", "Alpha"),
+        path: "Alpha/Alpha.kira".to_owned(),
+        text: "enum Crate<Held> { Full(Held) Empty }".to_owned(),
+    }];
+    let diagnostics = packaged(
+        modules,
+        "import Alpha\n\
+         @Main function main() {\n\
+             let held: Crate<Int> = Crate.Full(7)\n\
+             match held { Full(value) -> { print(value) } Empty -> { print(0) } }\n\
+             return\n\
+         }",
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "an imported package's generic enum is constructible qualified: {diagnostics:?}"
+    );
+}

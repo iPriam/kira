@@ -22,7 +22,7 @@ use kira_runtime_abi::{
     ForeignAggregateId, ForeignCallback, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::hir::{FieldOrder, HirExpr, HirExprId};
 use kira_source::Span;
 
 use crate::analyze::Analyzer;
@@ -94,6 +94,7 @@ impl Analyzer<'_> {
                     self.program.exprs.alloc(HirExpr::StructNew {
                         struct_id: callback,
                         fields: vec![pointer],
+                        order: FieldOrder::Declared,
                     })
                 }
                 Err(reason) => {

@@ -5,6 +5,9 @@
 //! declarations into [`FuncSig`] rows and answering questions about them —
 //! lookup by name, parameter shapes, and the declaration site a call links to.
 
+use kira_semantics_model::hir::{
+    CallableSignature, ParamSignature, ReceiverSignature, ThreadAffinity,
+};
 use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
 use kira_semantics_model::ty::StructId;
 use kira_semantics_model::{OwnershipMode, Type};
@@ -36,6 +39,12 @@ pub(crate) struct FuncSig {
     /// can link to it.
     pub(crate) source: SourceId,
     pub(crate) is_main: bool,
+    pub(crate) is_main_thread_lifecycle: bool,
+    pub(crate) is_main_thread: bool,
+    /// The complete contract: receiver, per-parameter ownership and labels,
+    /// defaults, result, `async`, and thread affinity. What every comparison
+    /// of two callables reads, so none compares types alone.
+    pub(crate) signature: CallableSignature,
 }
 
 impl<'a> Analyzer<'a> {
@@ -43,6 +52,8 @@ impl<'a> Analyzer<'a> {
         let mut main_seen = false;
         for callable in callables {
             let function = callable.function;
+            let outer_bindings =
+                std::mem::replace(&mut self.type_bindings, callable.type_bindings.clone());
             // A signature's types are written in the file the function was, so
             // they resolve against that file's imports.
             self.source = callable.source;
@@ -65,7 +76,7 @@ impl<'a> Analyzer<'a> {
             }
             // A method's receiver is parameter 0, so its signature carries the
             // struct type ahead of what was written.
-            let mut params: Vec<Type> = callable.receiver.map(Type::Struct).into_iter().collect();
+            let mut params: Vec<Type> = callable.receiver.into_iter().collect();
             // A specialized copy takes the subclass where the declaration wrote
             // the parent. This is the whole of the substitution: everything
             // downstream — the body, `self`-less method resolution inside it,
@@ -98,6 +109,27 @@ impl<'a> Analyzer<'a> {
             // Defaults align with `params`, receiver included. A receiver slot
             // never has one; each written parameter carries its default as
             // unresolved syntax bound to this file, resolved once below.
+            // A `copy` parameter promises a second holder of every argument, so
+            // its type has to be Copyable.
+            for (param, &ty) in function
+                .params
+                .iter()
+                .zip(params.iter().skip(usize::from(callable.receiver.is_some())))
+            {
+                if param.ownership == OwnershipMode::Copy
+                    && let Some(reason) = self.copy_refusal(ty)
+                {
+                    self.emit(
+                        function.name_span,
+                        "KSEM356",
+                        format!(
+                            "parameter `{}` cannot be `copy {}`: {reason}",
+                            self.interner.resolve(param.name),
+                            self.type_name(ty)
+                        ),
+                    );
+                }
+            }
             let mut param_defaults: Vec<Option<FieldDefault>> =
                 callable.receiver.map(|_| None).into_iter().collect();
             param_defaults.extend(function.params.iter().map(|param| {
@@ -136,19 +168,91 @@ impl<'a> Analyzer<'a> {
                 self.sig_index.entry(name.clone()).or_default().push(id);
             }
             let is_main = function.is_main;
+            if function.is_main && function.is_main_thread_lifecycle {
+                self.emit(
+                    function.name_span,
+                    "KSEM339",
+                    "the entrypoint runs on the application thread, so it cannot also be \
+                     `@MainThreadLifecycle`: declare the main-thread loop as its own function",
+                );
+            }
+            if function.is_main && function.is_main_thread {
+                self.emit(
+                    function.name_span,
+                    "KSEM337",
+                    "an entrypoint cannot also be `@MainThread`",
+                );
+            }
+            if function.is_main_thread_lifecycle && !params.is_empty() {
+                self.emit(
+                    function.name_span,
+                    "KSEM341",
+                    "a `@MainThreadLifecycle` function must take no parameters: calling it \
+                     starts an independent preserved stack and transfers no arguments",
+                );
+            }
+            if function.is_main_thread_lifecycle && return_type != Type::Void {
+                self.emit(
+                    function.name_span,
+                    "KSEM344",
+                    "a `@MainThreadLifecycle` function must return `Void`: its call starts the \
+                     lifecycle and does not wait for its eventual result",
+                );
+            }
+            if (function.is_main_thread || function.is_main_thread_lifecycle)
+                && (self.machine.platform() == "emscripten"
+                    || self.machine.architecture().starts_with("wasm"))
+            {
+                self.emit(
+                    function.name_span,
+                    "KSEM338",
+                    "a main-thread annotation requires an operating-system main thread and is \
+                     unavailable on WebAssembly",
+                );
+            }
             if is_main && main_seen {
                 self.emit(
                     function.name_span,
                     "KSEM010",
-                    "a program may declare only one `@Main` function",
+                    "a program may declare only one `@Main` entrypoint",
                 );
             }
             main_seen = main_seen || is_main;
+            let signature = CallableSignature {
+                receiver: callable.receiver.map(|ty| ReceiverSignature {
+                    ty,
+                    mutable: function.receiver.is_some_and(|receiver| receiver.mutable),
+                }),
+                params: function
+                    .params
+                    .iter()
+                    .zip(params.iter().skip(usize::from(callable.receiver.is_some())))
+                    .zip(
+                        param_ownership
+                            .iter()
+                            .skip(usize::from(callable.receiver.is_some())),
+                    )
+                    .map(|((param, &ty), &ownership)| ParamSignature {
+                        label: self.interner.resolve(param.name).to_owned(),
+                        ty,
+                        ownership,
+                        has_default: param.default.is_some(),
+                    })
+                    .collect(),
+                result: return_type,
+                is_async: function.is_async,
+                affinity: if function.is_main_thread || function.is_main_thread_lifecycle {
+                    ThreadAffinity::MainThread
+                } else {
+                    ThreadAffinity::Any
+                },
+                execution: function.execution,
+            };
             self.sigs.push(FuncSig {
                 // Filled by `name_overloads` once every declaration is in, so a
                 // symbol depends on the overload set rather than on which
                 // declaration happened to be read first.
-                symbol: name.clone(),
+                symbol: self.qualified_symbol(callable.source, &name),
                 name,
                 params,
                 param_ownership,
@@ -156,11 +260,15 @@ impl<'a> Analyzer<'a> {
                 name_span: function.name_span,
                 source: callable.source,
                 is_main,
+                is_main_thread_lifecycle: function.is_main_thread_lifecycle,
+                is_main_thread: function.is_main_thread,
+                signature,
             });
             // Pushed in lockstep with `sigs` so a `FuncId` indexes both. A
             // synthesized function reserves a later id with no row here, so the
             // default lookup returns `None` for it — never a panic.
             self.param_defaults.push(param_defaults);
+            self.type_bindings = outer_bindings;
         }
         self.name_overloads();
     }
@@ -185,12 +293,25 @@ impl<'a> Analyzer<'a> {
             .collect();
         for id in overloaded {
             let params = self.sigs[id.0 as usize].params.clone();
-            let mut symbol = self.sigs[id.0 as usize].name.clone();
+            let mut symbol = self.qualified_symbol(
+                self.sigs[id.0 as usize].source,
+                &self.sigs[id.0 as usize].name,
+            );
             for param in params {
                 symbol.push('$');
-                symbol.push_str(&self.program.types.type_name(param).replace(' ', "_"));
+                symbol.push_str(&self.program.types.identity_key(param).replace(' ', "_"));
             }
             self.sigs[id.0 as usize].symbol = symbol;
+        }
+    }
+
+    /// The symbol a function declared in `source` gets: its name, qualified
+    /// by the declaring package so two packages' same-named functions never
+    /// share one.
+    pub(crate) fn qualified_symbol(&self, source: SourceId, name: &str) -> String {
+        match self.imports.package_of(source) {
+            Some(package) => format!("{package}::{name}"),
+            None => name.to_owned(),
         }
     }
 
@@ -277,7 +398,10 @@ impl<'a> Analyzer<'a> {
         receiver: StructId,
         method: &str,
     ) -> Option<(FuncId, &[Type], Type)> {
-        let qualified = format!("{}.{method}", self.type_name(Type::Struct(receiver)));
+        let qualified = format!(
+            "{}.{method}",
+            self.member_owner_name(Type::Struct(receiver))
+        );
         let ids = self.sig_index.get(&qualified)?;
         let wanted = Type::Struct(receiver);
         let id = *ids

@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -87,6 +88,15 @@ pub enum DapError {
         #[source]
         source: std::io::Error,
     },
+    /// A private LLDB module cache could not be created.
+    #[error("cannot create LLDB session cache `{path}`: {source}")]
+    SessionCache {
+        /// The cache directory that was requested.
+        path: PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// The connection to the adapter failed.
     #[error("{0}")]
     Transport(TransportError),
@@ -97,6 +107,14 @@ pub enum DapError {
         command: String,
         /// The adapter's message.
         message: String,
+    },
+    /// The adapter stopped answering during a named protocol phase.
+    #[error("while waiting for `{operation}`: {error}")]
+    Waiting {
+        /// The request or event the client was waiting for.
+        operation: String,
+        /// The transport failure.
+        error: TransportError,
     },
     /// The request needs a stopped target and the target is not stopped.
     #[error("the target is {state} rather than stopped")]
@@ -127,15 +145,53 @@ pub struct DapClient {
     /// that never comes — the whole session times out with the adapter sitting
     /// there, having already said everything it was going to say.
     initialized: bool,
+    /// Per-session Clang module cache, removed after the adapter exits.
+    _module_cache: SessionCache,
+}
+
+/// A private Clang module cache for one LLDB process.
+struct SessionCache {
+    path: PathBuf,
+}
+
+impl SessionCache {
+    fn create() -> Result<Self, DapError> {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "kira-lldb-dap-cache-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).map_err(|source| DapError::SessionCache {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for SessionCache {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 impl DapClient {
     /// Starts the adapter `engine` names and connects to it.
     pub fn start(engine: Engine) -> Result<Self, DapError> {
         let executable = engine.executable();
+        let module_cache = SessionCache::create()?;
         let mut command = Command::new(&executable);
         engine::configure(&mut command, &executable);
         command
+            // LLDB otherwise shares one per-user Clang module cache across
+            // every adapter. Concurrent sessions can block each other while
+            // initializing that cache and miss their protocol deadlines.
+            .arg("--pre-init-command")
+            .arg(format!(
+                "settings set symbols.clang-modules-cache-path {}",
+                lldb_quote(&module_cache.path)
+            ))
             .arg("--pre-init-command")
             .arg("settings set target.inline-breakpoint-strategy always")
             // The probe's breakpoint carries a condition over the ARGUMENT
@@ -170,6 +226,7 @@ impl DapClient {
             capabilities: Value::Null,
             executable,
             initialized: false,
+            _module_cache: module_cache,
         })
     }
 
@@ -219,7 +276,13 @@ impl DapClient {
     ) -> Result<Value, DapError> {
         let sequence = self.transport.send(command, arguments)?;
         loop {
-            let message = self.transport.receive(timeout)?;
+            let message = self
+                .transport
+                .receive(timeout)
+                .map_err(|error| DapError::Waiting {
+                    operation: command.to_owned(),
+                    error,
+                })?;
             self.record(&message);
             if message.get("type").and_then(Value::as_str) != Some("response")
                 || message.get("request_seq").and_then(Value::as_u64) != Some(sequence)
@@ -246,7 +309,13 @@ impl DapClient {
             return Ok(stop.clone());
         }
         loop {
-            let message = self.transport.receive(timeout)?;
+            let message = self
+                .transport
+                .receive(timeout)
+                .map_err(|error| DapError::Waiting {
+                    operation: "stopped event".to_owned(),
+                    error,
+                })?;
             self.record(&message);
             match &self.state {
                 TargetState::Stopped(stop) => return Ok(stop.clone()),
@@ -332,7 +401,13 @@ impl DapClient {
         let mut reply = None;
         let mut initialized = self.initialized;
         while !initialized {
-            let message = self.transport.receive(timeout)?;
+            let message = self
+                .transport
+                .receive(timeout)
+                .map_err(|error| DapError::Waiting {
+                    operation: format!("{command} initialization"),
+                    error,
+                })?;
             self.record(&message);
             if message.get("type").and_then(Value::as_str) == Some("event")
                 && message.get("event").and_then(Value::as_str) == Some("initialized")
@@ -357,6 +432,17 @@ impl DapClient {
         }
         Ok(reply.unwrap_or(Value::Null))
     }
+}
+
+/// Quotes one path for LLDB's command interpreter.
+fn lldb_quote(path: &Path) -> String {
+    format!(
+        "\"{}\"",
+        path.display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    )
 }
 
 /// Applies one adapter event to a session's view of its target.
@@ -468,6 +554,16 @@ mod tests {
         assert_eq!(stop.hit_breakpoints, vec![2]);
         assert_eq!(session.state.label(), "stopped");
         assert!(session.state.is_alive());
+    }
+
+    #[test]
+    fn every_adapter_gets_a_private_module_cache() {
+        let first = SessionCache::create().expect("first cache");
+        let second = SessionCache::create().expect("second cache");
+        assert_ne!(first.path, second.path);
+        assert!(first.path.is_dir());
+        assert!(second.path.is_dir());
+        assert!(lldb_quote(Path::new("/tmp/a b")).contains("/tmp/a b"));
     }
 
     #[test]

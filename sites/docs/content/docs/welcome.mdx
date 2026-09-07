@@ -1,40 +1,23 @@
 ---
 title: Welcome to Kira
-description: What this manual is for, how it is organized, and how to read Kira's current-status-first documentation.
+description: What this manual covers, how it is organized, and the conventions it follows.
 ---
 
-Welcome to Kira.
+This manual documents the Kira implementation in this repository. Read the guide chapters for an explanation in order, the reference chapters for one rule at a time, and the appendix for install, command, and platform workflows.
 
-This manual is written for the Kira implementation that exists in this repository today, not for a future product brochure. That shapes the whole book:
-
-- guide chapters explain the language in a readable order
-- reference chapters pin down the accepted syntax and current rules
-- appendix chapters keep operational material nearby without breaking the flow of the language manual
-
-## Current-Status-First
-
-Kira's frontend understands more than the current backends execute.
-
-That means the book will often distinguish between:
-
-- syntax the parser accepts
-- forms the semantics pass validates
-- code paths the current VM, LLVM/native, and hybrid backends can run
-
-This is not a warning label. It is part of how Kira is being built, and the docs make that boundary explicit instead of hiding it.
-
-## The Shape of the Book
-
-Read the early pages if you want orientation:
+## Reading Order
 
 1. [About Kira](/docs/about-kira)
-2. [Kira for LLMs & Agents](/docs/for-llms) — a dense orientation if you are a model or coding agent
-3. [Version Compatibility](/docs/version-compatibility)
-4. [A Kira Tour](/docs/a-kira-tour)
+2. [A Kira Tour](/docs/a-kira-tour)
+3. [Language Guide](/docs/language-guide)
+4. [Language Reference](/docs/language-reference)
 
-Then use the two main halves of the manual:
+If you are a language model or a coding agent, read [Kira for LLMs and Agents](/docs/for-llms) first: it is the dense version, and it lists the syntax that other languages have and Kira does not.
 
-- [Language Guide](/docs/language-guide) for a chapter-by-chapter explanation
-- [Language Reference](/docs/language-reference) for concise, lookup-style rules
+## Conventions
 
-Operational material such as install flow, CLI commands, diagnostics, examples, platform targets, and shaders lives in the [Appendix](/docs/appendix).
+Kira code is fenced as `kira`, KSL as `ksl`, shell as `bash`, and manifests as `toml`.
+
+A diagnostic code in the text names the exact refusal. `KSEM107` is a use after move; the prefix says which pass reported it. [Diagnostics](/docs/appendix/diagnostics) lists the prefixes.
+
+Where a rule is a deliberate refusal rather than missing work, the manual says which alternative Kira takes instead.

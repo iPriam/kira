@@ -9,8 +9,8 @@
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
 use kira_runtime_abi::{
-    HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId, NativeStateValue,
-    TaskExecutor,
+    ChannelExecutor, HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, TaskExecutor,
 };
 use std::sync::OnceLock;
 
@@ -18,6 +18,7 @@ use crate::debug::{VmDebugAction, VmDebugEvent, VmDebugFrame, VmDebugObserver};
 use crate::error::VmError;
 use crate::value::{Heap, Value};
 
+mod active;
 mod arrays;
 mod cells;
 mod compiler;
@@ -26,12 +27,15 @@ mod file_system;
 mod frames;
 mod host;
 mod instructions;
+mod main_thread;
 mod native_state;
+mod numeric;
 mod operators;
 mod place;
 mod program;
 mod strings;
 
+pub use self::active::{call_active, call_active_with_host};
 pub(crate) use self::program::check_signature;
 pub use self::program::{Program, RunOutcome, execute, execute_with_debug};
 
@@ -118,6 +122,12 @@ pub(crate) struct Vm<'h> {
     /// *policy* is not here — the scheduler is generated Kira the IR
     /// synthesizes, so this only answers what each primitive means.
     tasks: TaskExecutor,
+    /// The channels this run created.
+    ///
+    /// One table per run, for the reason the task table is one per run: an end
+    /// handle is an index into it, so two runs sharing a table would let one
+    /// program's end name another's channel.
+    channels: ChannelExecutor,
     /// Returned call frames whose local-vector capacity can be reused by the
     /// next call. Recursive programs otherwise allocate one `Vec<Value>` for
     /// every invocation even when the same small set of local shapes repeats.
@@ -131,6 +141,18 @@ pub(crate) struct Vm<'h> {
     native_writebacks: Vec<Writeback>,
     /// Temporary buffers used to marshal the next native crossing.
     native_scratch: NativeCallScratch,
+    /// The module-constant slots, in the module's table order.
+    ///
+    /// Filled front to back by [`Vm::ensure_constants`] before an embedder
+    /// entry's first frame runs, and read by `LoadConstant` the way a local is
+    /// read — a copy out, value semantics intact. The vector travels with
+    /// [`VmScratch`], so a persistent [`crate::Instance`] fills it once and
+    /// keeps it; a per-call VM fills it per call, which is the hybrid seam's
+    /// per-call isolation applied to constants.
+    constants: Vec<Value>,
+    /// Guards [`Vm::ensure_constants`] against re-entering itself while the
+    /// init calls it makes are running.
+    initializing_constants: bool,
     /// The user `Drop` bodies running right now, with the frame depth each was
     /// entered at.
     ///
@@ -140,6 +162,25 @@ pub(crate) struct Vm<'h> {
     /// it before doing anything else with it.
     running_drops: Vec<(usize, crate::value::StructId)>,
     trap_probe: Option<TrapProbe>,
+    /// Instructions this slice may still execute before the dispatch loop
+    /// suspends, or `None` for a run that owns the thread until it ends.
+    ///
+    /// A `@MainThreadLifecycle` function is a long-lived loop sharing one
+    /// thread with its siblings and with dispatched `@MainThread` work, so it
+    /// is run in slices rather than waited on.
+    slice_budget: Option<u64>,
+}
+
+/// Why a dispatch loop stopped.
+#[derive(Debug)]
+pub(crate) enum Dispatched {
+    /// The entered function returned this value.
+    Completed(Value),
+    /// The slice ran out of budget with frames still live.
+    ///
+    /// The frame stack, operand stack and heap are left intact, so resuming
+    /// continues at the instruction the loop stopped before.
+    Suspended,
 }
 
 /// Temporary native-call storage detached from [`Vm`] while a host call runs.
@@ -154,78 +195,6 @@ pub(crate) struct NativeCallScratch {
     pub(crate) native_views: Vec<Option<(NativeStateToken, NativeStateTypeId)>>,
 }
 
-struct ActiveVmContext {
-    vm: *mut (),
-    module: *const Module,
-}
-
-thread_local! {
-    static ACTIVE_VM: std::cell::Cell<*mut ActiveVmContext> = const {
-        std::cell::Cell::new(std::ptr::null_mut())
-    };
-}
-
-struct ActiveVmGuard {
-    previous: *mut ActiveVmContext,
-    _context: Box<ActiveVmContext>,
-}
-
-impl ActiveVmGuard {
-    fn install(vm: *mut Vm<'_>, module: &Module) -> Self {
-        let mut context = Box::new(ActiveVmContext {
-            vm: vm.cast(),
-            module: std::ptr::from_ref(module),
-        });
-        let current = std::ptr::from_mut(context.as_mut());
-        let previous = ACTIVE_VM.with(|active| active.replace(current));
-        Self {
-            previous,
-            _context: context,
-        }
-    }
-}
-
-impl Drop for ActiveVmGuard {
-    fn drop(&mut self) {
-        ACTIVE_VM.with(|active| active.set(self.previous));
-    }
-}
-
-/// Calls a runtime function on the VM currently suspended at a native seam.
-///
-/// `None` means the caller is outside a VM call, so it must create the ordinary
-/// standalone callback VM instead.
-pub fn call_active(
-    function_id: u32,
-    args: &[kira_runtime_abi::NativeArg<'_>],
-    capture: &[u32],
-) -> Option<Result<kira_runtime_abi::NativeReturn, VmError>> {
-    ACTIVE_VM.with(|active| {
-        let context = active.get();
-        // SAFETY: a non-null `ACTIVE_VM` is the frame this thread is executing
-        // inside, so the context outlives this reentrant call.
-        (!context.is_null()).then(|| unsafe { call_on_active(context, function_id, args, capture) })
-    })
-}
-
-unsafe fn call_on_active(
-    context: *mut ActiveVmContext,
-    function_id: u32,
-    args: &[kira_runtime_abi::NativeArg<'_>],
-    capture: &[u32],
-) -> Result<kira_runtime_abi::NativeReturn, VmError> {
-    // SAFETY: the context is installed only around a synchronous host call;
-    // both pointers remain live until that call returns.
-    let context = unsafe { &*context };
-    // SAFETY: the active VM is suspended while native code calls back, so its
-    // heap can be lent to a nested interpreter without touching its frames.
-    let vm = unsafe { &mut *context.vm.cast::<Vm<'_>>() };
-    // SAFETY: the module belongs to the suspended VM call and remains live for
-    // the same duration as the context.
-    let module = unsafe { &*context.module };
-    vm.call_capturing_on_shared_heap(module, function_id, args, capture)
-}
-
 impl NativeCallScratch {
     pub(crate) fn clear(&mut self) {
         self.arguments.clear();
@@ -234,9 +203,33 @@ impl NativeCallScratch {
     }
 }
 
+/// The task and channel tables of an execution that outlives one entry into
+/// the interpreter.
+///
+/// A slice boundary is not the end of anything the program wrote. A
+/// `@MainThreadLifecycle` function is suspended and resumed many times and
+/// keeps its locals across every suspension, so a task it spawned and a channel
+/// it created have to survive with them: a handle is an index, and a table
+/// rebuilt under a live handle either refuses it or, worse, hands it another
+/// row.
+///
+/// Kept apart from [`VmScratch`] because the two answer different questions. A
+/// persistent [`crate::Instance`] reuses its scratch across calls and must
+/// *not* reuse these: separate calls are separate runs, and a handle from one
+/// naming a row in the next is the aliasing this type exists to prevent.
+#[derive(Default)]
+pub(crate) struct VmExecutors {
+    /// The task table, carried between entries.
+    pub(crate) tasks: TaskExecutor,
+    /// The channel table, carried with it: a receive orders work against a task,
+    /// so one surviving a slice without the other would be half an execution.
+    pub(crate) channels: ChannelExecutor,
+}
+
 /// Reusable interpreter storage that can outlive one call on a persistent
 /// [`crate::Instance`]. The task table is intentionally absent: task handles
-/// are valid only for one run and are recreated for every entry.
+/// are valid only for one run and are recreated for every entry. An execution
+/// that *is* one run across several entries carries [`VmExecutors`] instead.
 #[derive(Default)]
 pub(crate) struct VmScratch {
     stack: Vec<Value>,
@@ -249,6 +242,9 @@ pub(crate) struct VmScratch {
     frame_cache: Vec<Frame>,
     native_writebacks: Vec<Writeback>,
     native_scratch: NativeCallScratch,
+    /// Module-constant slots, kept with the heap that owns their storage: an
+    /// [`crate::Instance`] hands both back to the next call together.
+    constants: Vec<Value>,
 }
 
 impl Vm<'_> {
@@ -286,8 +282,27 @@ impl Vm<'_> {
         entry: Frame,
         observer: Option<&mut dyn VmDebugObserver>,
     ) -> Result<Value, VmError> {
+        match self.dispatch_frames(module, Some(entry), observer)? {
+            Dispatched::Completed(value) => Ok(value),
+            // Only a sliced run can suspend, and a sliced run is entered
+            // through `resume`. Reaching here would mean a budget was left on
+            // a VM that owns its thread.
+            Dispatched::Suspended => Err(VmError::UnexpectedSuspend),
+        }
+    }
+
+    /// Dispatches `entry` when given one, or continues the frames already on
+    /// this VM when resuming a suspended slice.
+    fn dispatch_frames(
+        &mut self,
+        module: &Module,
+        entry: Option<Frame>,
+        observer: Option<&mut dyn VmDebugObserver>,
+    ) -> Result<Dispatched, VmError> {
         let mut frames = std::mem::take(&mut self.frames);
-        frames.push(entry);
+        if let Some(entry) = entry {
+            frames.push(entry);
+        }
         let dispatched = match observer {
             Some(observer) => {
                 self.dispatch_inner::<true, false>(module, &mut frames, Some(observer))
@@ -298,7 +313,7 @@ impl Vm<'_> {
             None => self.dispatch_inner::<false, false>(module, &mut frames, None),
         };
         let result = match dispatched {
-            Ok(value) => Ok(value),
+            Ok(outcome) => Ok(outcome),
             Err(error) => {
                 self.report_trap_context(&error);
                 self.unwind(&mut frames);
@@ -389,7 +404,7 @@ impl Vm<'_> {
         module: &Module,
         frames: &mut Vec<Frame>,
         mut observer: Option<&mut dyn VmDebugObserver>,
-    ) -> Result<Value, VmError> {
+    ) -> Result<Dispatched, VmError> {
         // A debug observer borrows the backtrace only for the duration of one
         // callback. Reuse one buffer across stops so stepping through a large
         // function does not allocate once per instruction. The non-debug
@@ -422,13 +437,31 @@ impl Vm<'_> {
                 self.run_pending_drop(module, frames)?;
                 continue;
             }
+            if self.heap.owes_native_state() {
+                self.settle_native_state()?;
+                // The last state owner may hold a capture cell. Releasing the
+                // state queues that cell through the host-safe release channel;
+                // drain it now because a completed program has no next
+                // instruction whose prologue could do so.
+                self.heap.drain_released_cells();
+            }
             // Only once nothing is left to dispatch: a `Drop` body entered
             // after the entry function returned is still a frame, and it has
             // not run yet.
             if let Some(value) = completed
                 && frames.is_empty()
             {
-                return Ok(value);
+                return Ok(Dispatched::Completed(value));
+            }
+            // Suspend between instructions, with the frame stack and operand
+            // stack in the state the next one expects. Checked after the drop
+            // and completion tests so a slice never stops holding work the
+            // heap is owed.
+            if let Some(budget) = self.slice_budget.as_mut() {
+                if *budget == 0 {
+                    return Ok(Dispatched::Suspended);
+                }
+                *budget -= 1;
             }
             let depth = frames.len() - 1;
             let function_id = frames[depth].func;
@@ -887,7 +920,7 @@ fn foreign_scalar_value(ty: kira_runtime_abi::ForeignType, word: [u8; 8]) -> Val
         ForeignType::U16 => Value::Int(i64::from(raw as u16)),
         ForeignType::U32 => Value::Int(i64::from(raw as u32)),
         ForeignType::U64 => Value::Int(raw as i64),
-        ForeignType::Bool => Value::Bool(raw != 0),
+        ForeignType::Bool => Value::Bool(kira_runtime_abi::c_storage::bool_from_c_byte(raw as u8)),
         ForeignType::F32 => Value::Float(f64::from(f32::from_bits(raw as u32))),
         ForeignType::F64 => Value::Float(f64::from_bits(raw)),
         ForeignType::RawPtr | ForeignType::CString => Value::RawPtr(raw),
@@ -911,9 +944,15 @@ fn write_seam_scalar(
         expected: "an array element the C seam can carry",
     };
     match (ty, value) {
-        (ForeignType::I8, Value::Int(n)) => out.push(n as u8),
-        (ForeignType::U8 | ForeignType::Bool, Value::Int(n)) => out.push(n as u8),
-        (ForeignType::Bool, Value::Bool(flag)) => out.push(u8::from(flag)),
+        (ForeignType::I8 | ForeignType::U8, Value::Int(n)) => out.push(n as u8),
+        // Both fills of a `Bool` element write the seam's canonical byte: the
+        // C object a `_Bool` names holds 0 or 1 and nothing else.
+        (ForeignType::Bool, Value::Int(n)) => {
+            out.push(kira_runtime_abi::c_storage::c_bool_byte(n != 0));
+        }
+        (ForeignType::Bool, Value::Bool(flag)) => {
+            out.push(kira_runtime_abi::c_storage::c_bool_byte(flag));
+        }
         (ForeignType::I16 | ForeignType::U16, Value::Int(n)) => {
             out.extend_from_slice(&(n as u16).to_le_bytes());
         }

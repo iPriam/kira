@@ -61,7 +61,7 @@ construct FesBorrowMutStructEnumWritebackLoop() extends Test {
         return total
     }
     // Per seed: seed + 5 + Warm(2). Sum 0..19 + 7*20 = 190 + 140.
-    expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(330) return e }
 }
 
 construct FesBorrowMutStructEnumRewriteLoop() extends Test {
@@ -75,5 +75,5 @@ construct FesBorrowMutStructEnumRewriteLoop() extends Test {
         return total
     }
     // Per seed: seed + 7 + Hot(3). Sum 0..19 + 10*20 = 190 + 200.
-    expect { let e: Result<Int, TestFailure> = .Ok(390); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(390) return e }
 }

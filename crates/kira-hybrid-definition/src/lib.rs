@@ -10,7 +10,9 @@
 //! append-only once fixed.
 
 pub mod manifest;
+mod sanitizer;
 
 pub use manifest::{
     HybridForeign, HybridFunction, HybridManifest, HybridParam, MAGIC, ManifestDecodeError,
 };
+pub use sanitizer::HybridSanitizer;

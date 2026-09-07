@@ -189,7 +189,7 @@ function f() -> Int {
 (source_file
   (macro_invocation
     name: (identifier)
-    arguments: (arguments
+    arguments: (macro_arguments
       (identifier)
       (identifier)))
   (function_definition
@@ -201,9 +201,27 @@ function f() -> Int {
       (expression_statement
         (macro_invocation
           name: (identifier)
-          arguments: (arguments)))
+          arguments: (macro_arguments)))
       (return_statement
         value: (macro_invocation
           name: (identifier)
-          arguments: (arguments
-            (integer_literal)))))))
+          arguments: (macro_arguments
+           (integer_literal)))))))
+
+================================================================================
+A macro invocation accepts a declaration fragment
+================================================================================
+
+mxMarkerText!(let marker = 7 + 2)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (macro_invocation
+    name: (identifier)
+    arguments: (macro_arguments
+      (variable_declaration
+        name: (identifier)
+        value: (binary_expression
+          left: (integer_literal)
+          right: (integer_literal))))))

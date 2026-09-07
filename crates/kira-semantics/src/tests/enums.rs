@@ -146,9 +146,9 @@ fn pointer_payloads_are_admitted() {
     );
     assert!(
         codes(
-            "@FFI.Struct { layout: c; }\n\
+            "@FFI.Struct { layout: c }\n\
              struct Event { let kind: I32 }\n\
-             @FFI.Pointer { target: Event; ownership: borrowed; }\n\
+             @FFI.Pointer { target: Event, ownership: borrowed }\n\
              struct EventPtr {}\n\
              enum E { Wrap(EventPtr) }\n\
              @Main function main() { return }"

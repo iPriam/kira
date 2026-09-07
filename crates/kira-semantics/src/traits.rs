@@ -38,9 +38,11 @@ pub(crate) mod markers;
 
 use std::collections::{BTreeMap, HashSet};
 
-use kira_semantics_model::StructId;
+use kira_semantics_model::Type;
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::Function;
+use kira_syntax_model::ast::{Function, TypeParamDecl, TypeRefId};
+
+use crate::analyze::Analyzer;
 
 /// The compiler-known trait asserting that a type copies rather than moves.
 pub(crate) const COPYABLE: &str = "Copyable";
@@ -80,6 +82,13 @@ pub(crate) struct TraitInfo<'a> {
     /// Its package is one of the two that may declare a conformance to this
     /// trait, and it is the scope the member signatures resolve against.
     pub(crate) source: SourceId,
+    /// The parameters on the trait declaration. Empty for an ordinary trait;
+    /// a non-empty list marks this row as a template until a concrete trait
+    /// instance is minted under its mangled name.
+    pub(crate) type_params: Vec<TypeParamDecl>,
+    /// Substitutions active while resolving this concrete trait instance's
+    /// members. The template row carries an empty frame.
+    pub(crate) type_bindings: crate::generics::TypeBindings,
     /// The traits this one *requires*, written `trait Ord: Eq { … }`.
     ///
     /// A supertrait is an obligation rather than an inheritance: a type
@@ -95,6 +104,8 @@ pub(crate) struct TraitInfo<'a> {
 pub(crate) struct SupertraitRef {
     /// The required trait's name, as written.
     pub(crate) name: String,
+    /// Type arguments written on the supertrait, if any.
+    pub(crate) args: Vec<TypeRefId>,
     /// Span of the name at the clause, for the diagnostics that point at it.
     pub(crate) span: Span,
 }
@@ -144,7 +155,7 @@ pub(crate) struct Conformance {
     /// The contract kept.
     pub(crate) contract: Contract,
     /// The conforming type.
-    pub(crate) ty: StructId,
+    pub(crate) ty: Type,
     /// The file the conformance was declared in, whose package coherence is
     /// measured against.
     pub(crate) source: SourceId,
@@ -170,3 +181,25 @@ pub(crate) struct Conformance {
 
 /// Every trait a program declares, keyed by name.
 pub(crate) type TraitTable<'a> = BTreeMap<String, TraitInfo<'a>>;
+
+impl<'a> Analyzer<'a> {
+    /// The key under which `name`, written in the current file, finds a
+    /// declared trait: the file's own package first, then the program's own
+    /// declarations, then the packages the file imports. A trait is filed
+    /// under its declaring package (`Pkg::Name`), so two packages may each
+    /// declare a `Named`.
+    pub(crate) fn visible_trait_key(&self, name: &str) -> Option<String> {
+        let home = self.template_key(self.source, name);
+        if self.traits.contains_key(&home) {
+            return Some(home);
+        }
+        if self.traits.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .map(|package| format!("{package}::{name}"))
+            .find(|key| self.traits.contains_key(key))
+    }
+}

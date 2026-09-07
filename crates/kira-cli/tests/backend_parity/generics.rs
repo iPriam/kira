@@ -375,3 +375,88 @@ function main() {{
     ));
     assert_eq!(output, "10\n101\n");
 }
+
+#[test]
+fn generic_aggregates_traits_and_functions_agree() {
+    // Structs and classes become ordinary struct rows, while a generic trait
+    // becomes an ordinary conformance contract and a generic function becomes
+    // an ordinary callable. This exercises all four monomorphization paths in
+    // one VM/LLVM/hybrid run, including inference through a nested constructor.
+    let output = assert_parity(
+        r#"
+trait Scored {
+    function score(borrow self) -> Int
+}
+
+struct Score: Scored {
+    let value: Int
+    function score(borrow self) -> Int { return self.value }
+}
+
+trait Provider<Value: Scored> {
+    function get(borrow self) -> Value
+    function scoreValue(borrow self) -> Int { return self.get().score() }
+}
+
+struct ProviderBox: Provider<Score> {
+    let value: Score
+    function get(borrow self) -> Score { return self.value }
+}
+
+struct Box<Value: Scored> {
+    let value: Value
+    function score(borrow self) -> Int { return self.value.score() }
+}
+
+class Holder<Value: Scored> {
+    let value: Value
+    function score(borrow self) -> Int { return self.value.score() }
+}
+
+function identity<Value>(value: Value) -> Value { return value }
+function unbox<Value: Scored>(value: Box<Value>) -> Value { return value.value }
+
+@Main
+function main() {
+    let boxed = Box(value: Score(value: 5))
+    let held = Holder(Score(value: 7))
+    let inferred = unbox(Box(value: Score(value: 9)))
+    let provider = ProviderBox(value: Score(value: 10))
+    print(boxed.score())
+    print(held.score())
+    print(inferred.score())
+    print(provider.scoreValue())
+    print(identity(11))
+    print(identity<Int>(12))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "5\n7\n9\n10\n11\n12\n");
+}
+
+#[test]
+fn parameterized_generic_class_inheritance_agrees() {
+    let output = assert_parity(
+        r#"
+class Grand<Value> {
+    let value: Value
+    function get(borrow self) -> Value { return self.value }
+}
+
+class Parent<Value> extends Grand<Value> {}
+
+class Child<Value> extends Parent<Value> {
+    override function get(borrow self) -> Value { return self.value }
+}
+
+@Main
+function main() {
+    let child = Child(value: 17)
+    print(child.get())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "17\n");
+}

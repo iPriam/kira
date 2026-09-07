@@ -180,8 +180,8 @@ extend JpegDecoder {
             y = y + 1
         }
         return Image {
-            width: self.width
-            height: self.height
+            width: self.width,
+            height: self.height,
             pixels: move self.output
         }
     }

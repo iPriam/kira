@@ -1,73 +1,108 @@
 ---
 title: Basic Operators
-description: Unary, arithmetic, comparison, logical, member, call, and assignment operators in the current Kira implementation.
+description: Arithmetic, comparison, logical, conditional, and bitwise operators, the fixed-width scalar spellings that decide signedness, and the C precedence ladder.
 ---
 
-Kira's parser accepts a familiar operator ladder.
-
-## Operator Families
+## The Operator Families
 
 | Family | Forms |
 | --- | --- |
-| Unary | `-x`, `!x` |
+| Unary | `-x`, `!x`, `~x` |
 | Multiplicative | `*`, `/`, `%` |
 | Additive | `+`, `-` |
-| Comparison | `==`, `!=`, `<`, `<=`, `>`, `>=` |
-| Logical | `&&`, `||` |
-| Conditional | `condition ? then : else` |
-| Structural | member access with `.`, calls with `(...)`, assignment with `=` |
+| Shift | `<<`, `>>` |
+| Comparison | `<`, `<=`, `>`, `>=` |
+| Equality | `==`, `!=` |
+| Bitwise | `&`, `^`, `\|` |
+| Logical | `&&`, `\|\|` |
+| Conditional | `c ? a : b` |
 
-## Arithmetic and Comparison Rules
+Arithmetic and comparison require both sides to agree on a type. Logical operators require `Bool` on both sides; there is no truthiness.
 
-The current semantics layer enforces:
+## Fixed-Width Scalars
 
-- arithmetic operators require both sides to have the same numeric type
-- comparison operators require both sides to have the same type
-- logical operators require `Bool` on both sides
+`I8`, `I16`, `I32`, `U8`, `U16`, `U32`, `U64`, and `F32` name narrower types alongside bare `Int` and `Float`. Every engine stores an integer as one 64-bit word and every float as one 64-bit IEEE-754 value, but the written width is the type's whole contract: its range in type checking, overflow, formatting, serialization, and FFI. `Int32` is accepted as an alias for `I32`.
 
-Examples already checked into the repo:
+There is no `I64` and no `F64`. `Int` is the 64-bit signed integer and `Float` the 64-bit float, so a second spelling for either would be one type wearing two names. `U64` has no bare counterpart to collapse into, so it stays.
 
-```ts
-let totalRevenue = baseRevenue + recurringRevenue;
-let containsPoint = point.x <= x + width;
-let hidden = isCompact || isCollapsed;
+**Distinctness.** Two written widths must match exactly. `u8Value + u32Value` is `KSEM071`, because the language has no implicit widening between written widths. Bare `Int` and `Float` are the exception: each pairs with any width in its kind, which is what lets an integer literal be written at any width, and lets an `Int` value flow into narrower storage through a checked conversion.
+
+```kira
+let small: U8 = 5      // a literal adapts to the width it is written into
+let plain: Int = small // a width flows into `Int`, which holds every U8
+let back: U8 = plain   // checked: traps if the value no longer fits
+let never: U8 = 300    // KSEM350: the literal does not fit `U8`
 ```
 
-## Conditional Expressions
+A literal that cannot fit its slot is refused at compile time. Any other value that moves between `Int` and a written width, or between two widths through an explicit conversion such as `I32(small)`, converts at that point: nothing happens when every value of the source fits the destination (`U8` into `Int`, `I8` into `I16`), and the value is range-checked otherwise (`Int` into `U8`, `U64` into `Int`, `I32` into `U32`). A value the destination cannot hold is a trap, on every engine. A `U64` above the signed range is written in hexadecimal, `0xffffffffffffffff`, which as a `U64` names the unsigned value of those bits.
 
-The current lowered subset supports the ternary form:
+**The written width decides.** When one side is a plain `Int` or `Float` and the other carries a width, the operation takes its type and its signedness from the written width, whichever side wrote it. A `U` spelling selects the unsigned form of `/`, `%`, `>>`, and the four orderings.
 
-```ts
-condition ? thenValue : elseValue
+```kira
+let big: U64 = 18446744073709551615
+let two: U64 = 2
+print(big > two)   // true; signed this would be false
+print(big / two)   // 9223372036854775807; signed this would be 0
 ```
 
-`condition ? thenValue : elseValue` is now parsed, semantically checked, and lowered in the current scalar/pointer executable subset.
+**Overflow traps.** `+`, `-`, `*`, unary `-`, and `/` trap when the result leaves the range of the written width: `U8(250) + 10` is a trap, not `260` and not `4`, and `Int` traps past 64 bits. A fold that wants the wrap, a hash, a checksum, a pseudo-random step, spells it:
 
-## Member Access, Calls, and Assignment
-
-Member access and calls are heavily used:
-
-```ts
-callbacks.kira_invoke_callback(add_two, 0, 5)
-Rect(x: 0.0, y: 0.0, width: 0.0, height: 0.0)
-state.viewport_width = 128
+```kira
+let mixed = wrappingMul(acc ^ part, 1099511628211)   // FNV, wrapping at 64 bits
+let low: U8 = wrappingAdd(byte, 1)                    // wraps at 8 bits: U8(255) + 1 is 0
 ```
 
-Assignments are statements, not general expressions. Current semantic validation only allows the left side to be:
+`wrappingAdd`, `wrappingSub`, and `wrappingMul` take two integers of one spelling and wrap at that spelling's width.
 
-- a local name
-- a field reference
+**Division.** `/` truncates toward zero and `%` takes the dividend's sign. A zero divisor traps, and so does `MIN / -1`, the one signed division whose answer does not fit.
 
-## Runnable Boundary
+**Shifts.** `<<` and `>>` take their type from the left operand; the count may be any integer spelling, and must lie in `0..width` or the shift traps. `>>` is arithmetic on a signed spelling and logical on an unsigned one; `<<` discards the bits it pushes past the width.
 
-The parser and semantics layers understand more than the currently proven lowering boundary.
+**Conversions between kinds.** `Float(i)` rounds to nearest, ties to even. `Int(f)` truncates toward zero and traps for NaN, an infinity, or a value outside the destination's range.
 
-The current lowered executable subset is broader than the earliest bootstrap core. It includes:
+`%` on floats is the truncated remainder, so the sign follows the dividend and `(0.0 - 9.0) % 4.0` is `-1.0`.
 
-- integer `+`, `-`, `*`, `/`, `%`
-- float `+`, `-`, `*`, `/`, `%`
-- unary `-` on integers and floats
-- unary `!` on booleans
-- integer, float, and boolean comparisons
-- short-circuit `&&` and `||` on booleans
-- conditional `?:` in the lowered scalar/pointer subset
+`Byte` is not a builtin. Foundation spells it as an alias, `type Byte = U8`, which is why it behaves exactly as `U8` does. There is no `I128`, no `U128`, and no `Char`.
+
+## The Conditional Operator
+
+`c ? a : b` is the language's only expression that is control flow: exactly one branch is evaluated. No backend lowers it to a `select`, because a select evaluates both.
+
+```kira
+function safeDivide(numerator: Int, divisor: Int) -> Int {
+    return divisor == 0 ? 0 : numerator / divisor
+}
+```
+
+The condition must be `Bool`. Both branches must agree on a type, with a bare literal acting as the wildcard it is elsewhere, so `flag ? 0 : u8Value` is a `U8` and `flag ? 1 : 2.5` is a `Float`. A value that already has a type still does not meet a different one: `flag ? n : 2.5` on an `Int` `n` is `KSEM132`, exactly as `let f: Float = 1` is refused. Two `Void` branches are rejected, because a `? :` has to leave a value behind. The form nests to the right, so `a ? 1 : b ? 2 : 3` reads as a chain of tests without parentheses.
+
+## Bitwise Operators
+
+`&`, `|`, `^`, `~`, `<<`, and `>>` act on the raw 64 bits of an integer. `&`, `|`, `^`, and `<<` need no unsigned twin, because a bit has no sign. `>>` does, and takes its form from the **left** operand's spelling: signed propagates the sign bit, unsigned fills with zeros.
+
+```kira
+let signed: Int = -1
+var unsigned: U64 = 0
+unsigned = unsigned - 1   // the same 64 bits
+print(signed >> 60)       // -1
+print(unsigned >> 60)     // 15
+```
+
+A shift count must lie in `0..width` of the shifted value's spelling, so `1 << 64` on an `Int` and `byte << 8` on a `U8` both trap. Nothing is undefined: LLVM's shifts would be poison here, so the native backend checks the count before shifting, exactly as the VM and wasm do.
+
+## Precedence
+
+The ladder is exactly C's, loosest to tightest:
+
+```text
+? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
+```
+
+Two rungs surprise people, because Go and Swift moved them.
+
+- The bitwise operators bind **looser than equality**, so `flags & 8 == 8` groups as `flags & (8 == 8)`, a type error here since `&` wants two integers. Write `(flags & 8) == 8`.
+- The shifts bind **tighter than the orderings but looser than `+`**, so `1 + 2 << 3` is `(1 + 2) << 3`, which is 24.
+
+## Assignment
+
+Assignment is a statement, not an expression. The left side names a place: a local, a field path, or an index. Writing through a path requires `var` at every step, not just the last, because `b.origin.x = 1` rewrites the contents of `origin`.

@@ -265,14 +265,11 @@ impl Hasher {
             self.buffered = 0;
         }
 
-        let mut chunks = bytes.chunks_exact(64);
-        for chunk in &mut chunks {
-            let mut block = [0_u8; 64];
-            block.copy_from_slice(chunk);
-            self.compress(&block);
+        let (blocks, remainder) = bytes.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
         }
 
-        let remainder = chunks.remainder();
         self.buffer[..remainder.len()].copy_from_slice(remainder);
         self.buffered = remainder.len();
     }

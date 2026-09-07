@@ -9,9 +9,9 @@
 //! about what a payload word means.
 //!
 //! These sit on [`Codegen`] rather than on one function's lowering because a box
-//! is built in three places that are not all inside a body: an expression
-//! ([`super::lower::FunctionLowering`]), and the generated widen leaf
-//! ([`super::widening`]), which has no Kira function in scope at all.
+//! is built from generated glue as well as from an expression
+//! ([`super::lower::FunctionLowering`]), and glue has no Kira function in
+//! scope at all.
 
 use kira_runtime_abi::EnumPayloadKind;
 use kira_semantics_model::{ErasedTypeId, Type};
@@ -69,12 +69,9 @@ impl Codegen<'_> {
         &mut self,
         value: LLVMValueRef,
         from: Type,
+        identity: ErasedTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let tag = self.const_int(
-            ErasedTypeId::of(from)
-                .ok_or(LlvmError::internal("an erasure of a type with no value"))?
-                .as_i64(),
-        );
+        let tag = self.const_int(identity.as_i64());
         // A struct is wider than one word, and an array's clone and free are
         // type-specific, so both take the runtime's erased aggregate payload —
         // the same one an aggregate enum payload already uses. Everything else fits
@@ -170,7 +167,10 @@ impl Codegen<'_> {
                 // no conversion when it does.
                 // A task handle is a word naming a row in the running
                 // program's task table, so it is already the box's word too.
-                Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => value,
+                // A runtime type descriptor is a word naming a table row, so it
+                // is already the box.s word too: the `Mismatch` payload of a
+                // failed cast is one.
+                Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) | Type::RuntimeType => value,
                 // A nested enum is a handle exactly as a `String` is, so it
                 // encodes the same way; only the kind the box records differs,
                 // which is what makes its clone/free recurse.
@@ -206,7 +206,11 @@ impl Codegen<'_> {
         // there by `encode_box_payload`, and the builder is on a live block.
         unsafe {
             Ok(match ty {
-                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) | Type::Task(_) => word,
+                Type::Int(_)
+                | Type::RawPtr
+                | Type::ForeignPtr(_)
+                | Type::Task(_)
+                | Type::RuntimeType => word,
                 Type::Float(_) => {
                     LLVMBuildBitCast(builder, word, types.f64, c"enum.payload.float".as_ptr())
                 }

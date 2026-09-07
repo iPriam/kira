@@ -249,3 +249,29 @@ trait Ordered: Equated {
             type: (type_identifier)))
         return_type: (return_type
           (type_identifier))))))
+
+================================================================================
+A generic trait declaration
+================================================================================
+
+trait Provider<Value: Scored> {
+    function get(borrow self) -> Value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)
+        bounds: (bound_traits
+          (type_identifier))))
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier))))))

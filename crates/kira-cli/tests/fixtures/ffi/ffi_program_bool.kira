@@ -1,0 +1,64 @@
+// What a `Bool` is at the C seam, proven in both directions.
+//
+// A C `_Bool` is one byte holding 0 or 1. Two facts have to hold on every
+// engine, and neither is visible from a program that only round-trips `true`:
+//
+//   * the byte Kira hands C is exactly 0 or 1, which `ffiBoolByte` reads back
+//     out of the parameter object itself;
+//   * a byte C wrote outside that set reads as `true`, because nonzero is what
+//     `if (b)` means in C. Reading the low bit instead answers `false` for a
+//     byte of 2, and an engine that does so disagrees with every other one
+//     while both compile and both run.
+//
+// `odd` is that byte. It crosses three ways here — returned inside a struct,
+// read through a pointer, and handed back to C from a struct Kira built —
+// because each is a different piece of marshalling code.
+
+@FFI.Struct { layout: c }
+struct Flags {
+    let set: Bool = false
+    let odd: Bool = false
+    let tag: I8 = 0
+}
+
+@FFI.Pointer { target: Flags, ownership: borrowed }
+struct FlagsPtr {}
+
+@FFI.Extern { library: ffifixture, symbol: ffi_not, abi: c }
+function notBool(b: Bool) -> Bool
+
+@FFI.Extern { library: ffifixture, symbol: ffi_bool_byte, abi: c }
+function boolByte(b: Bool) -> U8
+
+@FFI.Extern { library: ffifixture, symbol: ffi_flags_current, abi: c }
+function flagsCurrent() -> Flags
+
+@FFI.Extern { library: ffifixture, symbol: ffi_flags_at, abi: c }
+function flagsAt() -> FlagsPtr
+
+@FFI.Extern { library: ffifixture, symbol: ffi_flags_bytes, abi: c }
+function flagsBytes(f: Flags) -> I32
+
+@Main function main() {
+    print(notBool(true))
+    print(notBool(false))
+    // The byte that crossed, not the value Kira thought it sent.
+    print(boolByte(true))
+    print(boolByte(false))
+
+    let byValue = flagsCurrent()
+    print(byValue.set)
+    print(byValue.odd)
+    print(byValue.tag)
+
+    let byAddress = flagsAt()
+    print(byAddress.set)
+    print(byAddress.odd)
+    print(byAddress.tag)
+
+    // Kira's own struct going the other way: 1 in the low byte, 0 in the next,
+    // 3 in the third, so a member written as anything but 0 or 1 shows up as a
+    // wrong number rather than as a wrong flag.
+    print(flagsBytes(Flags { set: true, odd: false, tag: 3 }))
+    return
+}

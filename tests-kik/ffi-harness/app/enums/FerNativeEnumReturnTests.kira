@@ -59,7 +59,7 @@ construct FerNativeReturnsKindB() extends Test {
         let k = ferMakeKind(1)
         return ferKindCode(k)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct FerNativeReturnsKindC() extends Test {
@@ -68,7 +68,7 @@ construct FerNativeReturnsKindC() extends Test {
         return ferKindCode(k)
     }
     // C -> 3
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ── Group B: @Native returns an enum WITH a payload ──────────────────────────
@@ -79,7 +79,7 @@ construct FerNativeReturnsLoadedPayload() extends Test {
         return ferValSum(move v)
     }
     // Loaded(50)
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 construct FerNativeReturnsEmpty() extends Test {
@@ -87,7 +87,7 @@ construct FerNativeReturnsEmpty() extends Test {
         let v = ferMakeVal(0)
         return ferValSum(move v)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 @Runtime
@@ -104,7 +104,7 @@ construct FerNativePayloadReadInVm() extends Test {
         return ferValReadInVm(v)
     }
     // Loaded(70) -> 71 (enum returned from @Native, matched in a @Runtime fn)
-    expect { let e: Result<Int, TestFailure> = .Ok(71); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(71) return e }
 }
 
 // ── Group C: round-trip churn — return from native, pass back to native ──────
@@ -121,7 +121,7 @@ construct FerNativeEnumRoundTripLoop() extends Test {
         // ferKindCode over i%3 = 0,1,2 -> 1,2,3 repeating; sum per 3 = 6; 10 cycles = 60
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct FerNativePayloadRoundTripLoop() extends Test {
@@ -136,5 +136,5 @@ construct FerNativePayloadRoundTripLoop() extends Test {
         // sum of i*10 for i in 1..10 = 10 * 55 = 550
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(550); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(550) return e }
 }

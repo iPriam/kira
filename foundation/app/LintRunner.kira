@@ -371,23 +371,40 @@ comptime macro LintRunner {
                         continue
                     }
                     let reportAt = prevAt.through(statement)
+                    // The replacement is the run itself, edited line by line:
+                    // the counter's declaration and the hand-written step are
+                    // whole lines and go with their indentation, and the
+                    // `while` header becomes the `for`. The first surviving
+                    // line is trimmed because the replacement lands at the
+                    // declaration's own column; every later line keeps the
+                    // absolute indentation it was written with.
+                    var fixText = ""
+                    var firstKept = true
+                    for line in String(reportAt).split("\n") {
+                        let content = line.trim()
+                        if content == "var " + counter + " = 0" {
+                            continue
+                        }
+                        if content == counter + " = " + counter + " + 1" {
+                            continue
+                        }
+                        let kept = line.replace(
+                            "while " + counter + " < " + bound + " {",
+                            "for " + counter + " in 0.." + bound + " {"
+                        )
+                        if firstKept {
+                            firstKept = false
+                            fixText = kept.trim()
+                        } else {
+                            fixText = fixText + "\n" + kept
+                        }
+                    }
                     Diagnostics.warning(
                         "this `while` counts an index by hand; `for " + counter +
                             " in 0.." + bound + "` does it for you, and the counter is not read after the loop",
                         at: reportAt,
                         code: "KLINT002",
-                        // The replacement is the run itself, edited: the
-                        // declaration and the `while` header collapse into
-                        // the `for`, and the hand-written step goes. Built
-                        // from the real source, so every line inside keeps
-                        // the indentation it was written with.
-                        fix: reportAt
-                            .replace("var " + counter + " = 0\n", "")
-                            .replace(
-                                "while " + counter + " < " + bound + " {",
-                                "for " + counter + " in 0.." + bound + " {"
-                            )
-                            .replace(counter + " = " + counter + " + 1\n", "")
+                        fix: fixText
                     )
                 }
             }

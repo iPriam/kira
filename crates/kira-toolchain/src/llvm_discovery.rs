@@ -55,6 +55,207 @@ impl LlvmInstallation {
     pub fn llvm_ar(&self) -> PathBuf {
         self.bin_dir.join(crate::executable_name("llvm-ar"))
     }
+
+    /// The Address Sanitizer runtime this installation ships for a target
+    /// operating system, or an error naming exactly what is missing.
+    ///
+    /// From this tree and nowhere else. A host's Xcode or distro clang carries
+    /// its own ASan runtime, and binding to it would sanitize with one
+    /// compiler's contract what another compiler instrumented — the rule that
+    /// keeps discovery off `PATH` keeps it out of `/Applications` too. A
+    /// bundle built before compiler-rt was added answers with the path it
+    /// looked at, which is the fact the user needs to update the bundle.
+    pub fn asan_runtime(&self, target_os: AsanTargetOs) -> Result<PathBuf, LlvmDiscoveryError> {
+        let (clang_lib, resource) = self.clang_resource_dir()?;
+        let candidates: Vec<PathBuf> = match target_os {
+            // Every Apple platform's runtime lives in one `darwin` directory,
+            // distinguished by the platform infix Apple's own driver uses.
+            AsanTargetOs::Apple { platform } => {
+                vec![resource.join("lib").join("darwin").join(format!(
+                    "libclang_rt.asan_{}_dynamic.dylib",
+                    platform.runtime_infix()
+                ))]
+            }
+            AsanTargetOs::LinuxGnu { triple } => vec![
+                // Per-target runtime directory, the layout a runtimes build
+                // installs by default.
+                resource
+                    .join("lib")
+                    .join(&triple)
+                    .join("libclang_rt.asan.a"),
+                // The flat legacy layout, for a bundle configured without it.
+                resource.join("lib").join("linux").join(format!(
+                    "libclang_rt.asan-{}.a",
+                    triple.split('-').next().unwrap_or(triple.as_str())
+                )),
+            ],
+            AsanTargetOs::WindowsMsvc { arch } => vec![
+                resource
+                    .join("lib")
+                    .join("windows")
+                    .join(format!("clang_rt.asan_dynamic-{arch}.lib")),
+            ],
+            AsanTargetOs::Android { triple } => vec![
+                // Per-target runtime directory, as for linux-gnu.
+                resource
+                    .join("lib")
+                    .join(&triple)
+                    .join("libclang_rt.asan.so"),
+                // The flat NDK-style layout files Android under `linux` with
+                // an `-android` suffix on the architecture.
+                resource.join("lib").join("linux").join(format!(
+                    "libclang_rt.asan-{}-android.so",
+                    triple.split('-').next().unwrap_or(triple.as_str())
+                )),
+            ],
+        };
+        candidates
+            .iter()
+            .find(|path| path.is_file())
+            .cloned()
+            .ok_or_else(|| LlvmDiscoveryError::AsanRuntimeMissing {
+                looked_at: candidates
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| clang_lib.clone()),
+            })
+    }
+
+    /// The dynamic AddressSanitizer runtime a host must load before a sanitized
+    /// hybrid library, or an error naming exactly what the bundle lacks.
+    pub fn asan_preload_runtime(
+        &self,
+        target_os: AsanTargetOs,
+    ) -> Result<PathBuf, LlvmDiscoveryError> {
+        let (clang_lib, resource) = self.clang_resource_dir()?;
+        let candidates: Vec<PathBuf> = match target_os {
+            AsanTargetOs::Apple { platform } => {
+                vec![resource.join("lib").join("darwin").join(format!(
+                    "libclang_rt.asan_{}_dynamic.dylib",
+                    platform.runtime_infix()
+                ))]
+            }
+            AsanTargetOs::LinuxGnu { triple } => vec![
+                resource
+                    .join("lib")
+                    .join(&triple)
+                    .join("libclang_rt.asan.so"),
+                resource.join("lib").join("linux").join(format!(
+                    "libclang_rt.asan-{}.so",
+                    triple.split('-').next().unwrap_or(triple.as_str())
+                )),
+            ],
+            AsanTargetOs::WindowsMsvc { arch } => vec![
+                resource
+                    .join("lib")
+                    .join("windows")
+                    .join(format!("clang_rt.asan_dynamic-{arch}.dll")),
+            ],
+            AsanTargetOs::Android { triple } => vec![
+                resource
+                    .join("lib")
+                    .join(&triple)
+                    .join("libclang_rt.asan.so"),
+                resource.join("lib").join("linux").join(format!(
+                    "libclang_rt.asan-{}-android.so",
+                    triple.split('-').next().unwrap_or(triple.as_str())
+                )),
+            ],
+        };
+        candidates
+            .iter()
+            .find(|path| path.is_file())
+            .cloned()
+            .ok_or_else(|| LlvmDiscoveryError::AsanRuntimeMissing {
+                looked_at: candidates
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| clang_lib.clone()),
+            })
+    }
+
+    fn clang_resource_dir(&self) -> Result<(PathBuf, PathBuf), LlvmDiscoveryError> {
+        let clang_lib = self.home.join("lib").join("clang");
+        let resource = std::fs::read_dir(&clang_lib)
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .find(|path| path.is_dir())
+            })
+            .ok_or_else(|| LlvmDiscoveryError::AsanRuntimeMissing {
+                looked_at: clang_lib.clone(),
+            })?;
+        Ok((clang_lib, resource))
+    }
+}
+
+/// The operating systems `--sanitize address` can target.
+///
+/// A closed list rather than a triple string, so a platform the runtime lookup
+/// has no layout for is refused at the call rather than answered with a path
+/// that cannot exist. The list covers every platform Kira emits native code
+/// for; what a given bundle actually *ships* is answered by the lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AsanTargetOs {
+    /// An Apple platform build, served by its darwin dynamic runtime.
+    Apple {
+        /// Which Apple platform, which names the runtime file.
+        platform: ApplePlatform,
+    },
+    /// A `*-linux-gnu` build, served by the static runtime archive.
+    LinuxGnu {
+        /// The full target triple, which names the per-target runtime dir.
+        triple: String,
+    },
+    /// An `*-windows-msvc` build, served by the dynamic thunk import library
+    /// (the runtime DLL travels beside it).
+    WindowsMsvc {
+        /// The architecture infix in compiler-rt's Windows file names.
+        arch: String,
+    },
+    /// An `*-linux-android` build, served by the dynamic runtime the app
+    /// bundles beside its own libraries.
+    Android {
+        /// The full target triple, which names the per-target runtime dir.
+        triple: String,
+    },
+}
+
+/// The Apple platforms Kira builds for, spelled the way compiler-rt names
+/// their runtime slices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplePlatform {
+    /// macOS.
+    Macos,
+    /// iOS on device.
+    Ios,
+    /// The iOS simulator.
+    IosSimulator,
+    /// tvOS on device.
+    Tvos,
+    /// The tvOS simulator.
+    TvosSimulator,
+    /// visionOS on device.
+    Visionos,
+    /// The visionOS simulator.
+    VisionosSimulator,
+}
+
+impl ApplePlatform {
+    /// The infix in `libclang_rt.asan_<infix>_dynamic.dylib`.
+    pub fn runtime_infix(self) -> &'static str {
+        match self {
+            ApplePlatform::Macos => "osx",
+            ApplePlatform::Ios => "ios",
+            ApplePlatform::IosSimulator => "iossim",
+            ApplePlatform::Tvos => "tvos",
+            ApplePlatform::TvosSimulator => "tvossim",
+            ApplePlatform::Visionos => "xros",
+            ApplePlatform::VisionosSimulator => "xrossim",
+        }
+    }
 }
 
 /// Which discovery rule produced an [`LlvmInstallation`].
@@ -71,6 +272,17 @@ pub enum DiscoverySource {
 /// Why LLVM discovery failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LlvmDiscoveryError {
+    /// The installed LLVM bundle carries no Address Sanitizer runtime.
+    #[error(
+        "the installed LLVM bundle has no Address Sanitizer runtime (looked at \
+         `{looked_at}`); `--sanitize address` links the runtime from the managed \
+         bundle and never from a host compiler, so update the pinned LLVM bundle \
+         to one built with compiler-rt"
+    )]
+    AsanRuntimeMissing {
+        /// The path inside the bundle where the runtime was expected.
+        looked_at: PathBuf,
+    },
     /// `KIRA_LLVM_HOME` was set but does not name a usable LLVM tree.
     #[error(
         "KIRA_LLVM_HOME is set to `{path}` but that is not a usable LLVM install \

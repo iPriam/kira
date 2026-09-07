@@ -4,7 +4,8 @@ use crate::graph::{ResolvedDependency, ResolvedPackage, ResolvedPackageGraph};
 use crate::lockfile_check;
 use kira_diagnostic_messages::package_messages::{
     conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
-    missing_dependency_package, unreadable_dependency_manifest,
+    missing_dependency_package, unavailable_git_dependency, unavailable_registry_dependency,
+    unreadable_dependency_manifest,
 };
 use kira_diagnostics::Diagnostic;
 use kira_manifest::{
@@ -285,6 +286,23 @@ fn prepare_dependencies(
                 name: dependency.name.clone(),
                 candidate_dir: package_dir.join(&path_source.path),
             });
+        } else {
+            match &dependency.source {
+                kira_manifest::DependencySource::Registry(source) => diagnostics.push(
+                    unavailable_registry_dependency(&dependency.name, &source.version),
+                ),
+                kira_manifest::DependencySource::Git(source) => {
+                    diagnostics.push(unavailable_git_dependency(
+                        &dependency.name,
+                        &source.url,
+                        source.rev.as_deref(),
+                        source.tag.as_deref(),
+                    ))
+                }
+                kira_manifest::DependencySource::Path(_) => {
+                    unreachable!("a path dependency was handled before source diagnostics")
+                }
+            }
         }
     }
     (names, pending)
@@ -622,6 +640,43 @@ mod tests {
             ["B"]
         );
         assert_eq!(graph.packages.len(), 2);
+    }
+
+    #[test]
+    fn registry_and_git_dependencies_are_reported_instead_of_dropped() {
+        let temp = TempDir::new("deferred-sources");
+        let root = temp.path().join("Root");
+        fs::create_dir_all(root.join("app")).expect("create package source directory");
+        fs::write(
+            root.join("package.kira"),
+            r#"Package Root {
+                let dependencies = [
+                    Dependency { name: "Registry", version: "1.2.3" },
+                    Dependency { name: "Git", url: "https://example.test/repo.git", rev: "abc123" }
+                ]
+            }"#,
+        )
+        .expect("write root manifest");
+
+        let graph = resolve(&root).expect("the readable root resolves");
+
+        assert_eq!(graph.packages.len(), 1);
+        assert_eq!(
+            graph
+                .packages
+                .first()
+                .expect("root package")
+                .dependency_names()
+                .collect::<Vec<_>>(),
+            ["Registry", "Git"]
+        );
+        assert_eq!(diagnostic_codes(&graph), ["KPK028", "KPK029"]);
+        assert!(
+            graph
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity == Severity::Error)
+        );
     }
 
     #[test]

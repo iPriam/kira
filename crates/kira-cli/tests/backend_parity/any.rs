@@ -14,7 +14,7 @@
 //! returned, and released on all three engines with the same output and the
 //! same exit status.
 //!
-use crate::assert_parity_with_heap_balance;
+use crate::{assert_parity, assert_parity_with_heap_balance, assert_trap_parity};
 
 /// A scalar of each kind crosses in.
 ///
@@ -42,12 +42,12 @@ function main() {
 fn a_foreign_pointer_crosses_into_any() {
     let output = assert_parity_with_heap_balance(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Byte {
     let value: U8
 }
 
-@FFI.Pointer { target: Byte; ownership: borrowed; }
+@FFI.Pointer { target: Byte, ownership: borrowed }
 struct BytePtr {}
 
 @Main
@@ -463,16 +463,15 @@ function main() {
     assert_eq!(output, "false\nfalse\nfalse\n");
 }
 
-/// A widened payload compares equal to a directly erased one.
+/// A payload erased by a rebuild compares equal to a directly erased one.
 ///
 /// `Result<Int, E>` -> `Result<Any, E>` is the path a test runner's `expect`
-/// takes, and it is the one erasure boxing broke: the widened payload has to
-/// become the same erasure box a direct crossing produces, or the two compare
-/// unequal while holding the same value. The VM rebuilds through a synthesized
-/// helper and the LLVM backend through a generated leaf, which is exactly the
-/// kind of difference this suite exists to hold to one behavior.
+/// takes, and it is written rather than implied: the program unpacks one
+/// specialization and builds the other, erasing the payload where it writes
+/// it. The rebuilt payload has to be the same erasure box a direct crossing
+/// produces, or the two compare unequal while holding the same value.
 #[test]
-fn a_widened_payload_equals_a_directly_erased_one() {
+fn a_rebuilt_payload_equals_a_directly_erased_one() {
     let output = assert_parity_with_heap_balance(
         r#"
 enum AppError { NotFound }
@@ -483,12 +482,18 @@ struct Point { var x: Int = 0
 
 function wrapInt() -> Result<Any, AppError> {
     let narrow: Result<Int, AppError> = .Ok(10)
-    return narrow
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
 }
 
 function wrapPoint() -> Result<Any, AppError> {
     let narrow: Result<Point, AppError> = .Ok(Point(x: 1, y: 2))
-    return narrow
+    match narrow {
+        Ok(value) -> { return .Ok(value) }
+        Error(failure) -> { return .Error(failure) }
+    }
 }
 
 @Main
@@ -545,9 +550,12 @@ function erase(value: Envelope) -> Any {
     return move value
 }
 
-function widened() -> Carrier<Any> {
+function rebuilt() -> Carrier<Any> {
     let narrow: Carrier<Record> = .Some(Record { code: 7, name: "kept" })
-    return narrow
+    match narrow {
+        Some(value) -> { return .Some(value) }
+        None -> { return .None }
+    }
 }
 
 function project(value: Carrier<Any>) -> Bool {
@@ -589,7 +597,7 @@ function main() {
     print(keep(move first) == same)
     print(nested == nestedSame)
     print(erase(Envelope.Record(Record { code: 7, name: "kept" })) == erased)
-    print(project(widened()))
+    print(project(rebuilt()))
     print(projectEnvelope(Envelope.Record(Record { code: 7, name: "kept" })))
     return
 }
@@ -629,12 +637,15 @@ function erase(value: Batch) -> Any {
     return move value
 }
 
-function widened() -> Carrier<Any> {
+function rebuilt() -> Carrier<Any> {
     let narrow: Carrier<[[Point]]> = .Some([
         [Point { x: 1, label: "a" }],
         [Point { x: 2, label: "b" }]
     ])
-    return narrow
+    match narrow {
+        Some(value) -> { return .Some(value) }
+        None -> { return .None }
+    }
 }
 
 function project(value: Carrier<Any>) -> Bool {
@@ -686,7 +697,7 @@ function main() {
     print(first == changed)
     print(nested == nestedSame)
     print(erase(Batch.Rows([[1, 2], [3]])) == rows)
-    print(project(widened()))
+    print(project(rebuilt()))
     print(projectBatch(Batch.Points([
         Point { x: 1, label: "a" },
         Point { x: 2, label: "b" }
@@ -696,4 +707,201 @@ function main() {
 "#,
     );
     assert_eq!(output, "true\nfalse\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+/// `is` answers by runtime identity and `as` hands the held value back, on
+/// every backend.
+#[test]
+fn is_and_as_read_an_erased_value_back() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = Point(x: 41)
+    let number: Any = 8
+    print(boxed is Point)
+    print(boxed is Int)
+    print(number is Int)
+    print((boxed as Point).x + (number as Int))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\nfalse\ntrue\n49\n");
+}
+
+/// A cast to a type the `Any` does not hold traps, after the output before it.
+#[test]
+fn a_cast_to_the_wrong_type_traps() {
+    assert_trap_parity(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = 8
+    print(boxed is Point)
+    let point = boxed as Point
+    print(point.x)
+    return
+}
+"#,
+        "false\n",
+    );
+}
+
+/// `value.type` answers the same identity, name, kind, arguments, and
+/// conformances on every backend.
+///
+/// The two engines answer from different places — the VM reads the descriptor
+/// table its module carries, native code runs a generated reader over the same
+/// rows — so this is exactly the kind of split that has to produce one answer.
+#[test]
+fn a_runtime_type_descriptor_agrees_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+trait Greets {
+    function greet(borrow self) -> String
+}
+
+struct Point {
+    let x: Int
+}
+
+struct Other {
+    let x: Int
+}
+
+extend Point: Greets {
+    function greet(borrow self) -> String { return "hi" }
+}
+
+enum Crate<Held> {
+    Full(Held)
+    Empty
+}
+
+@Main
+function main() {
+    let point = Point(x: 1)
+    let other = Other(x: 1)
+    print(point.type == point.type)
+    print(point.type == other.type)
+    let erased: Any = Point(x: 2)
+    print(erased.type == point.type)
+
+    print(point.type.name)
+    print(point.type.kind)
+    print(point.type.package.count)
+    print(point.type.conformances.count)
+    print(point.type.conformances[0])
+
+    let held: Crate<Int> = .Full(3)
+    print(held.type.name)
+    print(held.type.arguments.count)
+    print(held.type.arguments[0].name)
+
+    let words = ["a"]
+    print(words.type.kind)
+    print(words.type.arguments[0].name)
+
+    let plain: Int = 3
+    let narrow: U8 = 3
+    print(plain.type == narrow.type)
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\nPoint\nstruct\n0\n1\nGreets\nCrate\n1\nInt\narray\nString\ntrue\n"
+    );
+}
+
+/// A failed cast written under `try` is a value the handler answers, and the
+/// same cast without one still traps.
+///
+/// The two engines build the result differently — the VM branches over a stack
+/// answer, native code branches over the same box tag in generated blocks — so
+/// the payload, the failure, and the heap accounting all have to agree.
+#[test]
+fn a_tried_cast_answers_its_failure_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Point {
+    let x: Int
+}
+
+@Main
+function main() {
+    let boxed: Any = Point(x: 7)
+    attempt {
+        let p = try boxed as Point
+        print(p.x)
+    } handle {
+        Mismatch(actual) { print("unreachable: " + actual.name) }
+    }
+
+    let text: Any = "text"
+    attempt {
+        let q = try text as Point
+        print(q.x)
+    } handle {
+        Mismatch(actual) { print(actual.name) }
+    }
+
+    let held: Any = 3
+    attempt {
+        let n = try held as Int
+        print(n * 2)
+    } handle {
+        Mismatch(actual) { print(actual.name) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\nString\n6\n");
+}
+
+/// Serde arrays round-trip identically on every backend, nested and empty
+/// included, with the heap balanced: every box the reader builds is released
+/// with the value that holds it.
+#[test]
+fn serde_arrays_balance_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+@Derive(Serializable)
+struct Record {
+    var code: Int
+}
+
+@Derive(Serializable)
+struct Batch {
+    var xs: [Int]
+    var matrix: [[U8]]
+    var records: [Record]
+}
+
+@Main
+function main() {
+    let batch = Batch(xs: [1, 2], matrix: [[U8(3)], []], records: [Record(code: 7)])
+    let back = deserialize_Batch(serialize_Batch(batch))
+    print(back.xs[1])
+    print(back.matrix[0][0])
+    print(back.matrix[1].count)
+    print(back.records[0].code)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n3\n0\n7\n");
 }

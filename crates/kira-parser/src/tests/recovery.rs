@@ -9,7 +9,7 @@ use super::{first_stmt, parse_text};
 #[test]
 fn deeply_nested_parens_are_refused_not_crashed() {
     let text = format!(
-        "function f() {{ let x = {}0{}; }}",
+        "function f() {{ let x = {}0{} }}",
         "(".repeat(5_000),
         ")".repeat(5_000)
     );
@@ -36,7 +36,7 @@ fn deeply_nested_parens_are_refused_not_crashed() {
 
 #[test]
 fn deeply_nested_unary_operators_are_refused_not_crashed() {
-    let text = format!("function f() {{ let x = {}1; }}", "-".repeat(5_000));
+    let text = format!("function f() {{ let x = {}1 }}", "-".repeat(5_000));
     let result = parse_text(&text);
     assert!(
         result
@@ -51,7 +51,7 @@ fn deeply_nested_unary_operators_are_refused_not_crashed() {
 #[test]
 fn normal_nesting_still_parses_clean() {
     let text = format!(
-        "function f() {{ let x = {}1{}; }}",
+        "function f() {{ let x = {}1{} }}",
         "(".repeat(100),
         ")".repeat(100)
     );

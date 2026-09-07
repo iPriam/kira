@@ -370,40 +370,35 @@ impl RunnerClient {
             return Ok(true);
         }
         let socket = self.reader.get_ref();
-        socket.set_nonblocking(true)?;
+        // Every step below can meet the peer's departure, and all three answer
+        // it the same way: waiting is over, and the read that follows reports
+        // the disconnect properly. Only the peek used to say so — a departure
+        // that landed on either mode change was raised as a socket failure
+        // instead, which is a runner exiting non-zero for a session that ran.
+        if let Err(error) = socket.set_nonblocking(true) {
+            return if a_departed_peer(&error) {
+                Ok(true)
+            } else {
+                Err(ClientError::Io(error))
+            };
+        }
         let mut byte = [0u8; 1];
         let spoken = match socket.peek(&mut byte) {
             // Zero bytes is the peer having closed, which the read that follows
             // reports as a disconnect — this only has to say that waiting is over.
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
-            // A peer that went away *without* a graceful shutdown is the same
-            // situation as the zero-byte read above, and it is what a host
-            // exiting normally looks like on Windows: the clean FIN a Unix host
-            // sends arrives here as `ConnectionAborted` or `ConnectionReset`.
-            // Reporting it as a socket failure made the runner exit non-zero for
-            // a session that ran to completion, depending on which the OS chose.
-            //
-            // macOS adds a third spelling: a reset that lands between this
-            // peek and the kernel reaping the connection makes `peek` answer
-            // `EINVAL`. Nothing else in this call can produce one — the buffer
-            // is ours — so it is the same "the peer is gone" event, and the
-            // read that follows reports it properly.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::ConnectionAborted
-                        | std::io::ErrorKind::ConnectionReset
-                        | std::io::ErrorKind::BrokenPipe
-                ) || cfg!(target_os = "macos")
-                    && error.raw_os_error() == Some(22) =>
-            {
-                Ok(true)
-            }
+            Err(error) if a_departed_peer(&error) => Ok(true),
             Err(error) => Err(ClientError::Io(error)),
         };
-        socket.set_nonblocking(false)?;
-        spoken
+        // The restore is attempted whatever the peek said, because a socket
+        // left non-blocking would turn every later read into a spin. Its own
+        // failure is only news when it is not the departure again.
+        match socket.set_nonblocking(false) {
+            Ok(()) => spoken,
+            Err(error) if a_departed_peer(&error) => Ok(true),
+            Err(error) => Err(ClientError::Io(error)),
+        }
     }
 
     /// Sets how long a read waits, or `None` to wait indefinitely.
@@ -603,10 +598,60 @@ impl RunnerClient {
     }
 }
 
+/// Whether an error on a connected socket is the peer having gone away.
+///
+/// A peer that went away *without* a graceful shutdown is the same event as a
+/// zero-byte read, and it is what a host exiting normally looks like on
+/// Windows: the clean FIN a Unix host sends arrives as `ConnectionAborted` or
+/// `ConnectionReset`. Reporting either as a socket failure made the runner exit
+/// non-zero for a session that ran to completion, depending on which the OS
+/// chose.
+///
+/// macOS adds a spelling of its own. Once a reset has landed and before the
+/// kernel has reaped the connection, calls on that socket answer `EINVAL` —
+/// the peek, and the mode changes around it alike. Nothing else those calls do
+/// has an invalid argument to report: the buffer and the flag are this
+/// module's own, and the socket came from a completed connect. So on macOS it
+/// is the departure under another name.
+fn a_departed_peer(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+    ) || (cfg!(target_os = "macos") && error.raw_os_error() == Some(DARWIN_EINVAL))
+}
+
+/// `EINVAL` as Darwin numbers it.
+const DARWIN_EINVAL: i32 = 22;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+
+    /// The three kinds every platform can answer with, and the errno macOS
+    /// adds — read as a departure there and as news anywhere else.
+    #[test]
+    fn a_departure_is_recognised_in_every_spelling_the_hosts_use() {
+        for kind in [
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::BrokenPipe,
+        ] {
+            assert!(a_departed_peer(&std::io::Error::from(kind)), "{kind:?}");
+        }
+        assert_eq!(
+            a_departed_peer(&std::io::Error::from_raw_os_error(DARWIN_EINVAL)),
+            cfg!(target_os = "macos")
+        );
+        assert!(!a_departed_peer(&std::io::Error::from(
+            std::io::ErrorKind::WouldBlock
+        )));
+        assert!(!a_departed_peer(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+    }
 
     /// A host that is never asked to do anything: these are tests about the
     /// protocol, not about what a bundle means on a platform.

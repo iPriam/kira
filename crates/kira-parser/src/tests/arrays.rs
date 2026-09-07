@@ -122,16 +122,26 @@ fn borrow_mut_is_recognized_before_an_array_type() {
     assert_eq!(type_spelling(&result, params[0].ty), "[Int]");
 }
 
-/// Commas are optional separators, not required ones: newlines are
-/// insignificant, so nothing may depend on a comma being written.
+/// Commas separate elements and a trailing one is fine; newlines are
+/// whitespace, so a comma is what tells one element from the next.
 #[test]
-fn array_literal_commas_are_optional_and_a_trailing_one_is_fine() {
+fn array_literal_commas_are_required_and_a_trailing_one_is_fine() {
     for text in [
-        "function f() { return [1, 2, 3] }",
         "function f() { return [1 2 3] }",
-        "function f() { return [1, 2, 3,] }",
         "function f() { return [\n  1\n  2\n  3\n] }",
         "function f() { return [1, 2 3,] }",
+    ] {
+        let result = parse_text(text);
+        assert!(
+            result.diagnostics.iter().any(|d| d.has_code("KPAR002")),
+            "{text}: {:?}",
+            result.diagnostics
+        );
+    }
+    for text in [
+        "function f() { return [1, 2, 3] }",
+        "function f() { return [1, 2, 3,] }",
+        "function f() { return [\n  1,\n  2,\n  3,\n] }",
     ] {
         let result = parse_text(text);
         assert!(
