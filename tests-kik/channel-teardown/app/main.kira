@@ -1,0 +1,66 @@
+// A run that ends with payloads still queued, and nothing to take them.
+//
+// A queued payload that owns storage crosses as a token naming that storage,
+// so a run that returns with values still waiting owns storage nobody will
+// collect. Ending the run is the last thing that can release it.
+//
+// This case cannot be a `Test` construct: it prints the right answer and exits
+// zero whether the storage came back or not, so what proves it is the runtime's
+// own heap balance rather than a value. `kik_harness.rs` runs it under
+// `KIRA_HEAP_REPORT` and pins `imbalance=+0`.
+//
+//   KIRA_HEAP_REPORT=1 kira run --backend llvm tests-kik/channel-teardown
+//   KIRA_HEAP_REPORT=1 kira run --backend hybrid tests-kik/channel-teardown
+
+import Foundation
+
+// Filled by a task, so the values are queued from a context that has finished
+// by the time `@Main` returns.
+async function ctdFill(tx: Sender<String>) -> Int {
+    tx.send("one")
+    tx.send("two")
+    tx.send("three")
+    return 1
+}
+
+struct CtdNote {
+    var title: String
+    var rank: Int
+}
+
+async function ctdFillNotes(tx: Sender<CtdNote>) -> Int {
+    tx.send(CtdNote(title: "boxed", rank: 41))
+    return 1
+}
+
+@Main
+function main() {
+    // Three strings queued and never received: nothing closes the receiver and
+    // nothing takes a value, so the end of the run is the only thing left.
+    let strings = Channel<String>()
+    let waiting = strings.receiver
+    var filling = Task { ctdFill(strings) }
+    print(filling.await)
+
+    // The same for a payload with storage inside it rather than being storage.
+    let notes = Channel<CtdNote>()
+    let unread = notes.receiver
+    var noting = Task { ctdFillNotes(notes) }
+    print(noting.await)
+
+    // One channel drained on the way out, so the case still proves that a
+    // delivered payload is released exactly once and not twice.
+    let drained = Channel<String>()
+    let taking = drained.receiver
+    var draining = Task { ctdFill(drained) }
+    print(draining.await)
+    attempt {
+        let first = try taking.receive()
+        let second = try taking.receive()
+        print(first)
+        print(second)
+    } handle {
+        Closed { print("closed") }
+    }
+    return
+}

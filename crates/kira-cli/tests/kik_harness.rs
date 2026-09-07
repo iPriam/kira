@@ -53,6 +53,137 @@ fn main_thread_lifecycle_harness() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/main-thread-lifecycle")
 }
 
+/// A package under `tests-kik`, by directory name.
+fn kik(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests-kik")
+        .join(name)
+}
+
+/// A macro is a name a file writes, so an import is what makes it nameable.
+///
+/// The allowed half of the rule, as a program: every file that calls the
+/// dependency's macro imports the package that declares it, one of them under
+/// an alias. The refused half cannot be a running program at all, so it lives
+/// in the package below.
+#[test]
+fn a_macro_is_reachable_through_the_import_that_names_its_package() {
+    let path = kik("macro-imports");
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the macro import harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "42\n8\n26\n",
+            "the macro import harness diverged on {backend}"
+        );
+    }
+}
+
+/// The programs the language refuses, and the codes it refuses them under.
+///
+/// A harness of runnable cases cannot hold a refusal — the point of each one is
+/// that it never becomes a program — so they are one package that must not
+/// build, and the codes it reports are pinned here. Asserted by count, because
+/// a rule that stopped applying to three of four nested shapes would still
+/// report one.
+#[test]
+fn the_refusal_harness_refuses_every_program_in_it() {
+    let path = kik("refusals");
+    let path = path.to_str().expect("a utf-8 path");
+    let output = kira(&["build", "--backend", "vm", path]);
+    assert!(
+        !output.status.success(),
+        "the refusal harness built, so nothing in it is being refused"
+    );
+    let reported = String::from_utf8_lossy(&output.stderr).into_owned()
+        + &String::from_utf8_lossy(&output.stdout);
+    let count = |code: &str| reported.matches(code).count();
+    // A pointer inside the value is the same pointer: the payload itself, a
+    // struct field, an enum variant's payload, and an array element.
+    assert_eq!(
+        count("KSEM365"),
+        4,
+        "a channel payload carrying a pointer must be refused at every depth:\n{reported}"
+    );
+    // Importing `RfxOuter` does not lend you `RfxInner`.
+    assert!(
+        reported.contains("KMAC001"),
+        "a macro from a package the file never imported must not expand:\n{reported}"
+    );
+}
+
+/// A run that ends with payloads still queued releases the storage they name.
+///
+/// Not a `Test` construct, and it could not be one: the program prints the same
+/// bytes and exits zero whether the storage came back or not. The runtime's own
+/// heap balance is the only thing that can tell, so it is what is asserted —
+/// and the allocation count with it, because a case that allocated nothing
+/// balances trivially and proves nothing.
+#[test]
+fn a_run_that_ends_with_payloads_queued_leaves_the_native_heap_balanced() {
+    let path = kik("channel-teardown");
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+            .env(
+                "KIRA_FOUNDATION_HOME",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../foundation")
+                    .canonicalize()
+                    .expect("the checkout's foundation"),
+            )
+            .env("KIRA_HEAP_REPORT", "1")
+            .args(["run", "--backend", backend, path])
+            .output()
+            .expect("run kira");
+        assert!(
+            output.status.success(),
+            "the teardown harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "1\n1\n1\none\ntwo\n",
+            "the teardown harness diverged on {backend}"
+        );
+        let reported = String::from_utf8_lossy(&output.stderr).into_owned();
+        if backend == "vm" {
+            // The VM keeps its own heap and reports no native counters; what it
+            // contributes is that the same program means the same thing there.
+            continue;
+        }
+        assert!(
+            reported.contains("imbalance=+0"),
+            "the native heap did not balance on {backend}:\n{reported}"
+        );
+    }
+    // The engine that does the allocating for this program is the native one,
+    // so it is the one that has to show the case is not balancing trivially.
+    let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .env(
+            "KIRA_FOUNDATION_HOME",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../foundation")
+                .canonicalize()
+                .expect("the checkout's foundation"),
+        )
+        .env("KIRA_HEAP_REPORT", "1")
+        .args(["run", "--backend", "llvm", path])
+        .output()
+        .expect("run kira");
+    let reported = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !reported.contains("allocated=0"),
+        "the teardown case allocated nothing, so its balance proves nothing:\n{reported}"
+    );
+}
+
 #[test]
 fn main_thread_lifecycle_runs_across_every_executable_backend() {
     let path = main_thread_lifecycle_harness();

@@ -1,0 +1,7 @@
+import Foundation
+import MikInner
+
+// A package using its own dependency's macro, which its own import gates.
+function mikOuterHelper() -> Int {
+    return mikInnerDouble!(10) + mikInnerHelper()
+}

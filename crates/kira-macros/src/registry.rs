@@ -32,19 +32,55 @@ pub(crate) use model::{
 };
 pub(crate) use scan::collect_file;
 
+/// One declaration, whatever kind it is, with the scope that declared it.
+///
+/// A name is one declaration, and the three kinds are three ways of writing
+/// one — not three namespaces. Keeping them apart made `@Name` reach a
+/// dependency's attribute macro after an application's declarative `Name` had
+/// taken the name, because the lookups are by kind and only one map had been
+/// corrected.
+#[derive(Debug, Clone, PartialEq)]
+enum Declared {
+    Declarative(Declarative),
+    Procedural(Procedural),
+    Comptime(ComptimeFunction),
+}
+
+impl Declared {
+    /// The file the declaration was written in.
+    fn source(&self) -> SourceId {
+        match self {
+            Declared::Declarative(declared) => declared.source,
+            Declared::Procedural(declared) => declared.source,
+            Declared::Comptime(declared) => declared.source,
+        }
+    }
+}
+
+/// One claim on a name: who declared it and what they declared.
+#[derive(Debug, Clone, PartialEq)]
+struct Claim {
+    /// The package that declared it, or `None` for the program's own scope.
+    owner: Option<String>,
+    declared: Declared,
+}
+
 /// Every macro a program declares.
+///
+/// Two views of the same declarations. `claims` is every one of them in file
+/// order, which is what a per-file view has to filter; the three kind maps are
+/// the *resolved* view — the one declaration each name means here — which is
+/// what every lookup reads. Resolving after filtering rather than before is
+/// what keeps one loaded package from taking a name away from another that a
+/// file actually imports.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Registry {
+    /// Every claim on every name, in the order the files were merged.
+    claims: HashMap<String, Vec<Claim>>,
     declarative: HashMap<String, Declarative>,
     procedural: HashMap<String, Procedural>,
     comptime_functions: HashMap<String, ComptimeFunction>,
     enums: HashMap<String, Vec<String>>,
-    /// Which package declared the macro now holding each name.
-    ///
-    /// A name is one declaration inside one scope, and this is what says
-    /// whether the declaration about to take a name is in the same scope as
-    /// the one already holding it.
-    owners: HashMap<String, Option<String>>,
 }
 
 impl Registry {
@@ -68,63 +104,33 @@ impl Registry {
         conflicts: &mut Vec<Diagnostic>,
     ) {
         for declared in &file.declarative {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.declarative
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Declarative(declared.clone()), conflicts);
         }
         for declared in &file.procedural {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.procedural
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Procedural(declared.clone()), conflicts);
         }
         for declared in &file.comptime_functions {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.comptime_functions
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Comptime(declared.clone()), conflicts);
         }
         for (name, variants) in &file.enums {
             self.enums.insert(name.clone(), variants.clone());
         }
+        self.resolve();
     }
 
-    /// Records `name` as declared by `owner`, answering whether the
-    /// declaration takes the name.
+    /// Records one declaration's claim on its name.
     ///
-    /// It does not when its own scope already declared that name: the first
-    /// declaration keeps it, so which file was read first cannot change what
-    /// the program means, and the second is reported.
-    fn claim(
-        &mut self,
-        name: &str,
-        owner: Option<&str>,
-        source: SourceId,
-        span: Span,
-        conflicts: &mut Vec<Diagnostic>,
-    ) -> bool {
-        if let Some(held) = self.owners.get(name)
-            && held.as_deref() == owner
-        {
+    /// It is not recorded when its own scope already declared that name: the
+    /// first declaration keeps it, so which file was read first cannot change
+    /// what the program means, and the second is reported.
+    fn claim(&mut self, owner: Option<&str>, declared: Declared, conflicts: &mut Vec<Diagnostic>) {
+        let (name, source, span) = match &declared {
+            Declared::Declarative(item) => (item.name.clone(), item.source, item.span),
+            Declared::Procedural(item) => (item.name.clone(), item.source, item.span),
+            Declared::Comptime(item) => (item.name.clone(), item.source, item.span),
+        };
+        let claims = self.claims.entry(name.clone()).or_default();
+        if claims.iter().any(|claim| claim.owner.as_deref() == owner) {
             let scope = match owner {
                 Some(package) => format!("package `{package}`"),
                 None => "this program".to_owned(),
@@ -139,27 +145,42 @@ impl Registry {
                      program mean whichever file was read first"
                 ),
             ));
-            return false;
+            return;
         }
-        // A name is one declaration, so the one being shadowed leaves every
-        // kind and not just the one the new declaration happens to be. A
-        // declarative `Name` taking the name from a dependency's attribute
-        // macro otherwise leaves that attribute reachable as `@Name`: the
-        // lookups are by kind, and only the kind map that was written to would
-        // have been corrected.
-        if self
-            .owners
-            .insert(name.to_owned(), owner.map(str::to_owned))
-            .is_some()
-        {
-            self.declarative.remove(name);
-            self.procedural.remove(name);
-            self.comptime_functions.remove(name);
-        }
-        true
+        claims.push(Claim {
+            owner: owner.map(str::to_owned),
+            declared,
+        });
     }
 
-    /// This registry with only the declarations `visible` names left in it.
+    /// Rebuilds the resolved view from the claims.
+    ///
+    /// The last claim on a name wins, whatever kind it is, and lands in
+    /// exactly one of the three maps — so a name resolved as a declarative
+    /// macro is not also reachable as an attribute one.
+    fn resolve(&mut self) {
+        self.declarative.clear();
+        self.procedural.clear();
+        self.comptime_functions.clear();
+        for (name, claims) in &self.claims {
+            let Some(winner) = claims.last() else {
+                continue;
+            };
+            match &winner.declared {
+                Declared::Declarative(item) => {
+                    self.declarative.insert(name.clone(), item.clone());
+                }
+                Declared::Procedural(item) => {
+                    self.procedural.insert(name.clone(), item.clone());
+                }
+                Declared::Comptime(item) => {
+                    self.comptime_functions.insert(name.clone(), item.clone());
+                }
+            }
+        }
+    }
+
+    /// This registry as one file sees it.
     ///
     /// A macro is a name a file writes, so it is gated exactly as every other
     /// name a file writes is: the program's own flat scope, the file's own
@@ -168,20 +189,35 @@ impl Registry {
     /// into one environment made a dependency's dependency's macros callable
     /// from an application that never imported it.
     ///
+    /// The claims are filtered and the winner picked afterwards, never the
+    /// other way round. Resolving first and filtering second let a package the
+    /// file has nothing to do with take the name and then vanish, leaving the
+    /// file's own valid call answered with "is not a macro".
+    ///
     /// Enum cases are not filtered. They are not macro names: they are what an
     /// evaluator needs to read `Backend.Glsl` in a template that is already
     /// visible, and the template's own visibility is what decides whether it
     /// runs at all.
     pub(crate) fn visible_to(&self, visible: &HashSet<SourceId>) -> Registry {
-        Registry {
-            declarative: retain_visible(&self.declarative, visible, |item| item.source),
-            procedural: retain_visible(&self.procedural, visible, |item| item.source),
-            comptime_functions: retain_visible(&self.comptime_functions, visible, |item| {
-                item.source
-            }),
+        let claims: HashMap<String, Vec<Claim>> = self
+            .claims
+            .iter()
+            .filter_map(|(name, claims)| {
+                let kept: Vec<Claim> = claims
+                    .iter()
+                    .filter(|claim| visible.contains(&claim.declared.source()))
+                    .cloned()
+                    .collect();
+                (!kept.is_empty()).then(|| (name.clone(), kept))
+            })
+            .collect();
+        let mut narrowed = Registry {
+            claims,
             enums: self.enums.clone(),
-            owners: self.owners.clone(),
-        }
+            ..Registry::default()
+        };
+        narrowed.resolve();
+        narrowed
     }
 
     /// Whether the program declares no macros at all.
@@ -189,9 +225,7 @@ impl Registry {
     /// The whole expansion pass is skipped when this holds, which is what keeps
     /// a program that never mentions a macro byte-identical to its own source.
     pub(crate) fn is_empty(&self) -> bool {
-        self.declarative.is_empty()
-            && self.procedural.is_empty()
-            && self.comptime_functions.is_empty()
+        self.claims.is_empty()
     }
 
     /// Every enum the program declares, by name, with its case names.
@@ -277,17 +311,4 @@ impl FileRegistry {
             && self.procedural.is_empty()
             && self.comptime_functions.is_empty()
     }
-}
-
-/// The entries of `declarations` declared in a file `visible` names.
-fn retain_visible<T: Clone>(
-    declarations: &HashMap<String, T>,
-    visible: &HashSet<SourceId>,
-    source_of: impl Fn(&T) -> SourceId,
-) -> HashMap<String, T> {
-    declarations
-        .iter()
-        .filter(|(_, declared)| visible.contains(&source_of(declared)))
-        .map(|(name, declared)| (name.clone(), declared.clone()))
-        .collect()
 }

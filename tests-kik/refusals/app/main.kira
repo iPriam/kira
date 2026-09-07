@@ -1,0 +1,63 @@
+// Programs this language refuses, and the codes it refuses them under.
+//
+// A harness of runnable cases cannot hold a refusal: the point of each one is
+// that it never becomes a program. They are gathered here instead, one package
+// that must not build, and `kik_harness.rs` pins the codes the build reports.
+// Every case is a behavior an author can reach from source, so it belongs in
+// `tests-kik` like every other one.
+//
+//   kira build --backend vm tests-kik/refusals   # must fail
+//
+// The allowed halves live in `tests-kik/macro-imports` and `tests-kik/harness`.
+
+import Foundation
+import RfxOuter
+
+// KSEM365 — a channel cannot carry a pointer, and a pointer inside the value
+// is the same pointer. `RfxEnvelope` is a struct one field deep, `RfxCarried`
+// reaches it through an enum payload, and `[RfxEnvelope]` through an array: the
+// refusal is about what would arrive, so it is asked of the whole value.
+struct RfxEnvelope {
+    let at: RawPtr
+}
+
+enum RfxCarried {
+    Plain
+    Wrapped(RfxEnvelope)
+}
+
+function rfxDirectPointerChannel() -> Int {
+    let tx = Channel<RawPtr>()
+    return 1
+}
+
+function rfxStructPointerChannel() -> Int {
+    let tx = Channel<RfxEnvelope>()
+    return 2
+}
+
+function rfxEnumPointerChannel() -> Int {
+    let tx = Channel<RfxCarried>()
+    return 3
+}
+
+function rfxArrayPointerChannel() -> Int {
+    let tx = Channel<[RfxEnvelope]>()
+    return 4
+}
+
+// KMAC001 — importing `RfxOuter` does not lend you `RfxInner`. Visibility does
+// not compose, and a macro is a name this file writes like any other.
+function rfxTransitiveMacro() -> Int {
+    return rfxInnerDouble!(21)
+}
+
+@Main
+function main() {
+    print(rfxDirectPointerChannel())
+    print(rfxStructPointerChannel())
+    print(rfxEnumPointerChannel())
+    print(rfxArrayPointerChannel())
+    print(rfxTransitiveMacro())
+    return
+}

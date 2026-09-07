@@ -1,0 +1,9 @@
+Package MikImports {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "MikImports"
+    let dependencies = [
+        Dependency { name: "MikOuter", path: "outer" },
+        Dependency { name: "MikInner", path: "inner" }
+    ]
+}

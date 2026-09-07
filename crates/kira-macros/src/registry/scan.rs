@@ -409,7 +409,18 @@ fn scan_procedural(
     let mut index = open_body + 1;
     while index < close_body {
         if file.is_word(index, "expand") && file.kind(index + 1) == TokenKind::LParen {
-            let close_parameters = file.match_close(index + 1)?;
+            let Some(close_parameters) = file.match_close(index + 1) else {
+                reporter.error(
+                    file.source,
+                    file.span(index + 1),
+                    diagnostics::EXPAND_SIGNATURE,
+                    format!(
+                        "`comptime macro {name}` has an unclosed `expand( … )` parameter list; \
+                         the rest of this file was skipped"
+                    ),
+                );
+                return None;
+            };
             parameters = file
                 .split_group(index + 1, close_parameters)
                 .into_iter()
@@ -419,7 +430,18 @@ fn scan_procedural(
             while brace < close_body && file.kind(brace) != TokenKind::LBrace {
                 brace += 1;
             }
-            let close_expand = file.match_close(brace)?;
+            let Some(close_expand) = file.match_close(brace) else {
+                reporter.error(
+                    file.source,
+                    file.span(brace.min(close_body)),
+                    diagnostics::EXPAND_SIGNATURE,
+                    format!(
+                        "`comptime macro {name}` has an unclosed `expand {{ … }}` body; the \
+                         rest of this file was skipped"
+                    ),
+                );
+                return None;
+            };
             let body_span =
                 Span::from_bounds(file.span(brace).end(), file.span(close_expand).start);
             body = Some((file.slice(body_span).to_owned(), body_span));
@@ -428,7 +450,18 @@ fn scan_procedural(
         }
         if file.is_ident(index) && file.kind(index + 1) == TokenKind::LBrace {
             let member = file.text_at(index);
-            let close_member = file.match_close(index + 1)?;
+            let Some(close_member) = file.match_close(index + 1) else {
+                reporter.error(
+                    file.source,
+                    file.span(index + 1),
+                    diagnostics::BAD_KIND,
+                    format!(
+                        "`comptime macro {name}` has an unclosed `{member} {{ … }}`; the rest \
+                         of this file was skipped"
+                    ),
+                );
+                return None;
+            };
             // `function`, `struct`, `enum`, `class`, and `true` are all real
             // keywords, so a member's words are read by *text* rather than by
             // token kind: `kind { function }` names a macro form, not a
