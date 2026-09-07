@@ -47,7 +47,11 @@ pub fn execute_with_debug(
 fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
-    let result = vm.enter(module, main, &[])?;
+    let outcome = vm.enter(module, main, &[]);
+    // Whether the run finished or trapped: a trapped run still owns the
+    // storage its undelivered payloads name, exactly as it still owns its heap.
+    vm.release_undelivered_channel_payloads();
+    let result = outcome?;
     // The program's result is no longer referenced by anything; drop it — and
     // the module constants with it — so heap accounting reflects a fully
     // reclaimed program.
@@ -66,7 +70,9 @@ fn run_entry_with_debug(
 ) -> Result<RunOutcome, VmError> {
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
-    let result = vm.enter_values_with_debug(module, main, Vec::new(), observer)?;
+    let outcome = vm.enter_values_with_debug(module, main, Vec::new(), observer);
+    vm.release_undelivered_channel_payloads();
+    let result = outcome?;
     vm.heap.drop_value(result);
     vm.release_constants();
     Ok(RunOutcome {

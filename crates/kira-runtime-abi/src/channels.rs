@@ -56,6 +56,15 @@ pub enum ChannelTrap {
     Deadlock,
 }
 
+/// The `Create` operand that says a queued word will be a native-state token.
+///
+/// Zero — every other value — is a channel whose queued word is the value
+/// itself, which is what a primitive's unused operands are already passed as.
+/// It travels in `Create`'s first operand because the table has to know it
+/// before anything is sent: a run that ends with values still queued has to
+/// release the storage they name, and there is no send left to ask by then.
+pub const BOXED_PAYLOAD: i64 = 1;
+
 /// One primitive of the channel table's runtime interface.
 ///
 /// The discriminants are a wire contract: they will travel in the operand
@@ -163,6 +172,14 @@ struct Channel {
     sender_live: bool,
     /// Whether the receiver end is still live.
     receiver_live: bool,
+    /// Whether a queued word is a native-state token rather than a value.
+    ///
+    /// The table never reads a queued word, but it has to know this one thing
+    /// about it: a run that ends with values still queued owns storage nobody
+    /// will take, and the engine tearing the table down is the last chance to
+    /// release it. By then the sends are long over, so the answer is recorded
+    /// when the channel is made.
+    boxed: bool,
 }
 
 /// One reusable channel-table position.
@@ -204,7 +221,11 @@ impl ChannelExecutor {
     }
 
     /// Creates a channel, answering its `(sender, receiver)` handles.
-    pub fn create(&mut self) -> Result<(i64, i64), ChannelTrap> {
+    ///
+    /// `boxed` says whether a queued word will be a native-state token, which
+    /// is what makes an undelivered value storage to release rather than a
+    /// number to forget.
+    pub fn create(&mut self, boxed: bool) -> Result<(i64, i64), ChannelTrap> {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
@@ -224,6 +245,7 @@ impl ChannelExecutor {
             queue: VecDeque::new(),
             sender_live: true,
             receiver_live: true,
+            boxed,
         });
         let generation = slot.generation;
         Ok((
@@ -330,7 +352,7 @@ impl ChannelExecutor {
     ) -> Result<i64, ChannelTrap> {
         match prim {
             ChannelPrim::Create => {
-                let (sender, _) = self.create()?;
+                let (sender, _) = self.create(a == BOXED_PAYLOAD)?;
                 Ok(sender)
             }
             ChannelPrim::Send => {
@@ -394,6 +416,32 @@ impl ChannelExecutor {
         channel.queue.pop_front().ok_or(ChannelTrap::NotReady)
     }
 
+    /// Empties the table, answering every undelivered token it was holding.
+    ///
+    /// A run can end with values still queued: an early return, a trap, a
+    /// receiver that stopped taking. A queued word of a boxed channel names
+    /// storage in a store that outlives the run — in a hybrid session, one
+    /// that outlives the process — so the engine tearing the table down
+    /// releases what it finds here. A receiver that closes is drained by
+    /// generated code first, so what is left is exactly what nobody took.
+    ///
+    /// Words of unboxed channels are not answered: they are the values
+    /// themselves and own nothing.
+    pub fn take_undelivered_tokens(&mut self) -> Vec<i64> {
+        let mut tokens = Vec::new();
+        for slot in &mut self.channels {
+            let Some(channel) = slot.channel.take() else {
+                continue;
+            };
+            if channel.boxed {
+                tokens.extend(channel.queue);
+            }
+        }
+        self.channels.clear();
+        self.free.clear();
+        tokens
+    }
+
     /// Reclaims one channel whose ends are both gone and advances its generation.
     fn reclaim(&mut self, index: usize, generation: u32) -> Result<(), ChannelTrap> {
         let slot = self
@@ -453,7 +501,9 @@ mod tests {
 
     /// Creates a channel and returns its ends.
     fn channel(executor: &mut ChannelExecutor) -> (i64, i64) {
-        executor.create().expect("table has room for one channel")
+        executor
+            .create(false)
+            .expect("table has room for one channel")
     }
 
     #[test]
