@@ -348,7 +348,15 @@ impl Vm<'_> {
                 let third = self.pop_int()?;
                 let second = self.pop_int()?;
                 let first = self.pop_int()?;
-                let answer = self.channels.perform(*prim, first, second, third)?;
+                // The host's table when it has one, which is a hybrid session:
+                // both halves of a hybrid program must reach one table, since
+                // a channel end created on either side is an ordinary value
+                // the other side can be handed. Every other host has none and
+                // this run's own table answers.
+                let answer = match self.host.channel_op(*prim, first, second, third) {
+                    Some(answer) => answer?,
+                    None => self.channels.perform(*prim, first, second, third)?,
+                };
                 self.stack.push(Value::Int(answer));
             }
             Instruction::MainThreadCall {

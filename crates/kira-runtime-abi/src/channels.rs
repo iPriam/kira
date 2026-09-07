@@ -56,6 +56,42 @@ pub enum ChannelTrap {
     Deadlock,
 }
 
+impl ChannelTrap {
+    /// Every trap, in wire order.
+    ///
+    /// The one place the set is written down. A trap crosses the C ABI as a
+    /// code because the symbol that carries a primitive answers an `i64` and
+    /// has nowhere else to put one, and indexing this rather than repeating a
+    /// match is what stops a new trap from being added to the enum and
+    /// forgotten by the decoder.
+    pub const ALL: [ChannelTrap; 5] = [
+        ChannelTrap::UnknownHandle,
+        ChannelTrap::ReceiverGone,
+        ChannelTrap::WrongDirection,
+        ChannelTrap::NotReady,
+        ChannelTrap::Deadlock,
+    ];
+
+    /// The code this trap travels as. Zero is reserved for "no trap".
+    ///
+    /// **Append-only**: a new trap takes the next free number and no existing
+    /// one ever moves.
+    #[must_use]
+    pub fn as_code(self) -> i64 {
+        Self::ALL
+            .iter()
+            .position(|trap| *trap == self)
+            .map_or(0, |index| index as i64 + 1)
+    }
+
+    /// The trap a code names, or `None` for zero and for anything unknown.
+    #[must_use]
+    pub fn from_code(code: i64) -> Option<Self> {
+        let index = usize::try_from(code).ok()?.checked_sub(1)?;
+        Self::ALL.get(index).copied()
+    }
+}
+
 /// The `Create` operand that says a queued word will be a native-state token.
 ///
 /// Zero — every other value — is a channel whose queued word is the value
@@ -598,6 +634,27 @@ mod tests {
         let mut executor = ChannelExecutor::new();
         assert_eq!(executor.receive(0), Err(ChannelTrap::UnknownHandle));
         assert_eq!(executor.send(0, 1), Err(ChannelTrap::UnknownHandle));
+    }
+
+    /// The trap codes are a wire contract, so they are pinned like the
+    /// primitive bytes are, and zero stays reserved for "no trap".
+    #[test]
+    fn the_trap_wire_codes_are_pinned() {
+        assert_eq!(ChannelTrap::UnknownHandle.as_code(), 1);
+        assert_eq!(ChannelTrap::ReceiverGone.as_code(), 2);
+        assert_eq!(ChannelTrap::WrongDirection.as_code(), 3);
+        assert_eq!(ChannelTrap::NotReady.as_code(), 4);
+        assert_eq!(ChannelTrap::Deadlock.as_code(), 5);
+        assert_eq!(ChannelTrap::from_code(0), None);
+    }
+
+    #[test]
+    fn every_trap_round_trips_through_its_code() {
+        for trap in ChannelTrap::ALL {
+            assert_eq!(ChannelTrap::from_code(trap.as_code()), Some(trap));
+        }
+        assert_eq!(ChannelTrap::from_code(-1), None);
+        assert_eq!(ChannelTrap::from_code(6), None);
     }
 
     #[test]
