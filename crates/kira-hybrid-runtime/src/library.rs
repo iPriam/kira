@@ -1,4 +1,5 @@
 //! The loaded native half: `dlopen`, symbol binding, and the string helpers the
+//! The loaded native half: `dlopen`, symbol binding, and the string helpers the
 //! host reaches the library's heap through.
 //!
 //! # Why nothing here links against the runtime
@@ -75,6 +76,14 @@ type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type HeapReportFn = unsafe extern "C" fn();
+type TaskResetFn = unsafe extern "C" fn();
+type MainThreadRunFn = unsafe extern "C" fn(extern "C" fn() -> i32) -> i32;
+type MainThreadInstallDispatcherFn = unsafe extern "C" fn(*mut c_void);
+type MainThreadDispatcherFn = unsafe extern "C" fn(u32, *mut BridgeValue, u32, *mut BridgeValue);
+type MainThreadLifecycleResolverFn = unsafe extern "C" fn(u32) -> *mut c_void;
+type MainThreadLifecycleStartFn = unsafe extern "C" fn(u32) -> u8;
+type MainThreadLifecyclePumpFn = unsafe extern "C" fn(u64) -> u8;
+type MainThreadLifecycleResetFn = unsafe extern "C" fn();
 type LiveReloadMarkFn = unsafe extern "C" fn();
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
 type StateNode = *mut c_void;
@@ -111,7 +120,7 @@ type StateNodeFreeFn = unsafe extern "C" fn(StateNode);
 type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
 type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
 type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
-type StateFreeFn = unsafe extern "C" fn(u64) -> u32;
+type StateCountFn = unsafe extern "C" fn(u64) -> u32;
 type CBlockReleaseRetainedFn = unsafe extern "C" fn();
 /// The loaded library lease carried by a decoded cell's release closure.
 struct CellReleaseOwner<L> {
@@ -145,6 +154,17 @@ const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
 const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 /// Optional, unlike the rest: an older library simply has no accounting.
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
+const TASK_RESET: &[u8] = b"kira_rt_task_reset\0";
+const CHANNEL_RESET: &[u8] = b"kira_rt_channel_reset\0";
+const MAIN_THREAD_RUN: &[u8] = b"kira_rt_main_thread_run\0";
+const MAIN_THREAD_INSTALL_DISPATCHER: &[u8] = b"kira_rt_main_thread_install_dispatcher\0";
+const MAIN_THREAD_DISPATCHER: &[u8] = b"kira_main_thread_dispatch\0";
+const MAIN_THREAD_INSTALL_LIFECYCLE_RESOLVER: &[u8] =
+    b"kira_rt_main_thread_install_lifecycle_resolver\0";
+const MAIN_THREAD_LIFECYCLE_RESOLVER: &[u8] = b"kira_main_thread_lifecycle_resolve\0";
+const MAIN_THREAD_LIFECYCLE_START: &[u8] = b"kira_rt_main_thread_lifecycle_start_local\0";
+const MAIN_THREAD_LIFECYCLE_PUMP: &[u8] = b"kira_rt_main_thread_lifecycle_pump_local\0";
+const MAIN_THREAD_LIFECYCLE_RESET: &[u8] = b"kira_rt_main_thread_lifecycle_reset_local\0";
 const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
 const STATE_VALUE_ANY: &[u8] = b"kira_rt_native_value_any\0";
 const STATE_VALUE_READ_ANY_TYPE: &[u8] = b"kira_rt_native_value_read_any_type\0";
@@ -178,7 +198,8 @@ const STATE_VALUE_FREE: &[u8] = b"kira_rt_native_value_free\0";
 const STATE_NEW: &[u8] = b"kira_rt_native_state_new\0";
 const STATE_RECOVER: &[u8] = b"kira_rt_native_state_recover\0";
 const STATE_REPLACE: &[u8] = b"kira_rt_native_state_replace\0";
-const STATE_FREE: &[u8] = b"kira_rt_native_state_free\0";
+const STATE_RETAIN: &[u8] = b"kira_rt_native_state_retain\0";
+const STATE_RELEASE: &[u8] = b"kira_rt_native_state_release\0";
 const CBLOCK_RELEASE_RETAINED: &[u8] = b"kira_rt_cblock_release_retained\0";
 
 /// The native half of a hybrid program, loaded and bound.
@@ -204,6 +225,18 @@ pub struct NativeLibrary {
     str_new: StrNewFn,
     /// Reports the native half.s heap balance; absent in an older library.
     heap_report: Option<HeapReportFn>,
+    /// Starts and ends the native task table's per-run scope.
+    task_reset: TaskResetFn,
+    /// Starts and ends the native channel table's per-run scope.
+    channel_reset: TaskResetFn,
+    main_thread_run: MainThreadRunFn,
+    main_thread_install_dispatcher: MainThreadInstallDispatcherFn,
+    main_thread_dispatcher: Option<MainThreadDispatcherFn>,
+    main_thread_install_lifecycle_resolver: MainThreadInstallDispatcherFn,
+    main_thread_lifecycle_resolver: MainThreadLifecycleResolverFn,
+    main_thread_lifecycle_start: MainThreadLifecycleStartFn,
+    main_thread_lifecycle_pump: MainThreadLifecyclePumpFn,
+    main_thread_lifecycle_reset: MainThreadLifecycleResetFn,
     str_free: StrFreeFn,
     str_data: StrDataFn,
     str_len: StrLenFn,
@@ -242,7 +275,8 @@ pub struct NativeLibrary {
     state_new: StateNewFn,
     state_recover: StateRecoverFn,
     state_replace: StateReplaceFn,
-    state_free: StateFreeFn,
+    state_retain: StateCountFn,
+    state_release: StateCountFn,
     cblock_release_retained: CBlockReleaseRetainedFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
@@ -307,6 +341,17 @@ impl NativeLibrary {
         // Optional: a library built before heap accounting existed simply has
         // no such symbol, and that is not a reason to refuse to load it.
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
+        let task_reset = bind(&library, path, TASK_RESET)?;
+        let channel_reset = bind(&library, path, CHANNEL_RESET)?;
+        let main_thread_run = bind(&library, path, MAIN_THREAD_RUN)?;
+        let main_thread_install_dispatcher = bind(&library, path, MAIN_THREAD_INSTALL_DISPATCHER)?;
+        let main_thread_dispatcher = bind(&library, path, MAIN_THREAD_DISPATCHER).ok();
+        let main_thread_install_lifecycle_resolver =
+            bind(&library, path, MAIN_THREAD_INSTALL_LIFECYCLE_RESOLVER)?;
+        let main_thread_lifecycle_resolver = bind(&library, path, MAIN_THREAD_LIFECYCLE_RESOLVER)?;
+        let main_thread_lifecycle_start = bind(&library, path, MAIN_THREAD_LIFECYCLE_START)?;
+        let main_thread_lifecycle_pump = bind(&library, path, MAIN_THREAD_LIFECYCLE_PUMP)?;
+        let main_thread_lifecycle_reset = bind(&library, path, MAIN_THREAD_LIFECYCLE_RESET)?;
         let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
         let state_value_any = bind(&library, path, STATE_VALUE_ANY)?;
         let state_value_read_any_type = bind(&library, path, STATE_VALUE_READ_ANY_TYPE)?;
@@ -342,7 +387,8 @@ impl NativeLibrary {
         let state_new = bind(&library, path, STATE_NEW)?;
         let state_recover = bind(&library, path, STATE_RECOVER)?;
         let state_replace = bind(&library, path, STATE_REPLACE)?;
-        let state_free = bind(&library, path, STATE_FREE)?;
+        let state_retain = bind(&library, path, STATE_RETAIN)?;
+        let state_release = bind(&library, path, STATE_RELEASE)?;
         let cblock_release_retained = bind(&library, path, CBLOCK_RELEASE_RETAINED)?;
 
         let mut trampolines = vec![None; functions.len()];
@@ -390,6 +436,16 @@ impl NativeLibrary {
             callbacks: callback_entries,
             str_new,
             heap_report,
+            task_reset,
+            channel_reset,
+            main_thread_run,
+            main_thread_install_dispatcher,
+            main_thread_dispatcher,
+            main_thread_install_lifecycle_resolver,
+            main_thread_lifecycle_resolver,
+            main_thread_lifecycle_start,
+            main_thread_lifecycle_pump,
+            main_thread_lifecycle_reset,
             str_free,
             str_data,
             str_len,
@@ -428,7 +484,8 @@ impl NativeLibrary {
             state_new,
             state_recover,
             state_replace,
-            state_free,
+            state_retain,
+            state_release,
             cblock_release_retained,
             _library: library,
         })
@@ -447,6 +504,67 @@ impl NativeLibrary {
         // SAFETY: the symbol was bound from this library, which is still
         // loaded, and it takes and returns nothing.
         unsafe { report() };
+    }
+
+    /// Starts or ends the task scope associated with the current host thread.
+    pub fn reset_tasks(&self) {
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self` and has no arguments or return value.
+        unsafe { (self.task_reset)() };
+    }
+
+    /// Starts or ends the channel scope associated with the current host thread.
+    pub fn reset_channels(&self) {
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self` and has no arguments or return value.
+        unsafe { (self.channel_reset)() };
+    }
+
+    /// Installs the generated main-thread dispatcher for this native image.
+    ///
+    /// A hybrid image may not contain one when no `@MainThread` target is
+    /// reachable; in that case the runtime is cleared rather than handed a
+    /// stale function pointer from a previous session.
+    pub fn install_main_thread_dispatcher(&self) {
+        let pointer = self
+            .main_thread_dispatcher
+            .map_or(std::ptr::null_mut(), |dispatcher| dispatcher as *mut c_void);
+        // SAFETY: the installer was resolved from this still-loaded image, and
+        // the optional dispatcher is either from that image or null.
+        unsafe { (self.main_thread_install_dispatcher)(pointer) };
+        // SAFETY: both functions were resolved from this same still-loaded
+        // image, and the resolver remains valid throughout the run.
+        unsafe {
+            (self.main_thread_install_lifecycle_resolver)(
+                self.main_thread_lifecycle_resolver as *mut c_void,
+            )
+        };
+    }
+
+    /// Runs a native entry through the image's helper-thread/main-thread loop.
+    pub fn run_main_thread(&self, entry: extern "C" fn() -> i32) -> i32 {
+        // SAFETY: `entry` is a generated C-ABI helper that remains valid for
+        // the duration of this call, and the runtime owns the helper thread.
+        unsafe { (self.main_thread_run)(entry) }
+    }
+
+    /// Starts one native lifecycle in a host-owned main-thread loop.
+    pub fn start_main_thread_lifecycle(&self, function: u32) -> bool {
+        // SAFETY: this image's resolver was installed before the host loop
+        // started, and the bound function remains live with the library.
+        unsafe { (self.main_thread_lifecycle_start)(function) != 0 }
+    }
+
+    /// Advances native lifecycles scheduled in a host-owned loop.
+    pub fn pump_main_thread_lifecycles(&self, budget: u64) -> bool {
+        // SAFETY: the bound function owns its thread-local scheduler state.
+        unsafe { (self.main_thread_lifecycle_pump)(budget) != 0 }
+    }
+
+    /// Releases native lifecycle stacks at a host-run boundary.
+    pub fn reset_main_thread_lifecycles(&self) {
+        // SAFETY: the bound function takes no borrowed state.
+        unsafe { (self.main_thread_lifecycle_reset)() };
     }
 
     /// Marks the next graphics callback as a VM reload boundary.

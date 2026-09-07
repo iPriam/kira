@@ -402,7 +402,7 @@ fn a_raw_pointer_may_be_captured() {
                 let boxed = nativeState(Host { seed: 1 }) \
                 let handle = nativeUserData(boxed) \
                 let f: () -> Int = { in var h = nativeRecover<Host>(handle) return h.seed } \
-                print(f()) nativeStateFree(boxed) return }";
+                print(f()) nativeUserDataRelease(handle) return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
@@ -440,7 +440,7 @@ fn callback_state_may_hold_a_function_value() {
                 let boxed = nativeState(AppState { count: 1, onFrame: bump }) \
                 var back = nativeRecover<AppState>(nativeUserData(boxed)) \
                 var f = Frame { n: 1 } back.onFrame(f) print(f.n) \
-                nativeStateFree(boxed) return }";
+                return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 

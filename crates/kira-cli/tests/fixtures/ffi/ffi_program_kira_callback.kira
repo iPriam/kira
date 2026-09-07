@@ -1,18 +1,18 @@
-@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
+@FFI.Callback { abi: c, params: [I32, I32], result: I32 }
 struct Adder {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Hooks { var add: Adder
 var scale: I32 }
 
-@FFI.Extern { library: ffifixture; symbol: ffi_call_adder; abi: c; }
-function callAdder(add: Adder, a: I32, b: I32) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_fold_adder; abi: c; }
-function foldAdder(add: Adder, a: I32, b: I32) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_store_adder; abi: c; }
-function storeAdder(h: Hooks) -> Void;
-@FFI.Extern { library: ffifixture; symbol: ffi_run_stored; abi: c; }
-function runStored(a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_call_adder, abi: c }
+function callAdder(add: Adder, a: I32, b: I32) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_fold_adder, abi: c }
+function foldAdder(add: Adder, a: I32, b: I32) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_store_adder, abi: c }
+function storeAdder(h: Hooks) -> Void
+@FFI.Extern { library: ffifixture, symbol: ffi_run_stored, abi: c }
+function runStored(a: I32, b: I32) -> I32
 
 // The function C calls back into. Ordinary Kira: it runs on whichever engine
 // the program was built for.
@@ -23,13 +23,13 @@ function combine(a: I32, b: I32) -> I32 {
 // A callback C enters with a `const char*`. The Kira side declares `String`:
 // the thunk copies the bytes while the pointer is still C's, so the body holds
 // owned text and C keeps its storage.
-@FFI.Callback { abi: c; params: [CString, I32]; result: I32; }
+@FFI.Callback { abi: c, params: [CString, I32], result: I32 }
 struct Labeler {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_call_labeler; abi: c; }
-function callLabeler(label: Labeler, text: CString, n: I32) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_call_labeler_null; abi: c; }
-function callLabelerNull(label: Labeler, n: I32) -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_call_labeler, abi: c }
+function callLabeler(label: Labeler, text: CString, n: I32) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_call_labeler_null, abi: c }
+function callLabelerNull(label: Labeler, n: I32) -> I32
 
 function measure(text: String, n: I32) -> I32 {
     print(text + "!")

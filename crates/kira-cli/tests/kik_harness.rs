@@ -48,6 +48,30 @@ fn ffi_harness() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/ffi-harness")
 }
 
+/// The lifecycle entry harness, separate because an application has one entry.
+fn main_thread_lifecycle_harness() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests-kik/main-thread-lifecycle")
+}
+
+#[test]
+fn main_thread_lifecycle_runs_across_every_executable_backend() {
+    let path = main_thread_lifecycle_harness();
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the lifecycle harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "main-thread-lifecycle\n42\nmanual-main-thread\n20021\n",
+            "the lifecycle call tree diverged on {backend}"
+        );
+    }
+}
+
 /// Every case in the FFI harness passes on the hybrid engine.
 ///
 /// The tally is asserted whole, as the suite above does, so a file that stops
@@ -69,7 +93,7 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         "the ffi harness reported failures: {tally}"
     );
     assert_eq!(
-        tally, "274 passed, 0 failed, 0 skipped, 274 total",
+        tally, "302 passed, 0 failed, 0 skipped, 302 total",
         "the ffi harness tally changed"
     );
 }
@@ -286,7 +310,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1325 passed, 0 failed, 0 skipped, 1325 total");
+    assert_eq!(vm, "1502 passed, 0 failed, 0 skipped, 1502 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 

@@ -32,6 +32,26 @@ fn execution_annotations_compose_with_main() {
 }
 
 #[test]
+fn main_thread_annotation_is_recorded_separately_from_main_and_execution() {
+    let result = parse_text("@MainThread @Runtime function ui() { return }");
+    let function = only_function(&result);
+    assert!(function.is_main_thread);
+    assert!(!function.is_main);
+    assert_eq!(function.execution, Execution::Runtime);
+    assert!(result.diagnostics.is_empty());
+}
+
+#[test]
+fn main_thread_lifecycle_is_recorded_as_an_entry_annotation() {
+    let result = parse_text("@MainThreadLifecycle function main() { return }");
+    let function = only_function(&result);
+    assert!(function.is_main_thread_lifecycle);
+    assert!(!function.is_main);
+    assert!(!function.is_main_thread);
+    assert!(result.diagnostics.is_empty());
+}
+
+#[test]
 fn two_engines_on_one_function_is_reported() {
     let result = parse_text("@Runtime @Native function f() { return }");
     assert!(
@@ -154,8 +174,8 @@ fn parses_a_struct_with_let_and_var_members() {
 }
 
 #[test]
-fn semicolons_separate_members_on_one_line() {
-    let result = parse_text("struct Pair { var w: Int = 0; var h: Int = 0 }");
+fn members_on_one_line_are_delimited_structurally() {
+    let result = parse_text("struct Pair { var w: Int = 0 var h: Int = 0 }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let declaration = only_struct(&result);
     assert_eq!(declaration.fields.len(), 2);

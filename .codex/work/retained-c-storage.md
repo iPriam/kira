@@ -14,7 +14,7 @@ Cross-engine crossings carry blocks as `NativeStateValue::CBlock` /
 `NativeCBlock` trees (payload + children by offset/width); the absorbing
 engine rematerializes and patches addresses.
 
-Ground truth: `kira_runtime_abi::c_storage` module docs, `docs/ffi.md`
+Ground truth: `kira_runtime_abi::c_storage` module docs, the FFI appendix's
 "Foreign lifetimes", `tests-kik/ffi-harness/app/structs/FltLifetimeTests.kira`,
 and `crates/kira-cli/tests/fixtures/ffi/ffi_program_cstring.kira`
 (stash-and-recall proof of `retains:`).

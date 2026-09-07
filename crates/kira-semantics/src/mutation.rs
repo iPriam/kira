@@ -55,6 +55,12 @@ impl<'a> Analyzer<'a> {
                 let Some(owner) = callable.receiver else {
                     continue;
                 };
+                let Some(owner) = (match owner {
+                    Type::Struct(id) => Some(id),
+                    _ => None,
+                }) else {
+                    continue;
+                };
                 if self.body_mutates_self(callable.function, owner) {
                     self.mutating_methods[index] = true;
                     changed = true;
@@ -179,6 +185,9 @@ impl<'a> Analyzer<'a> {
             }
             Expr::Unary { operand, .. } | Expr::Ownership { operand, .. } => {
                 self.expr_mutates_self(*operand, owner)
+            }
+            Expr::TypeTest { value, .. } | Expr::TypeCast { value, .. } => {
+                self.expr_mutates_self(*value, owner)
             }
             Expr::Try { value, .. } => self.expr_mutates_self(*value, owner),
             Expr::Binary { lhs, rhs, .. } => {

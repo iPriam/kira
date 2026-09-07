@@ -73,7 +73,9 @@ function main() {
     assert_eq!(output, "open\nclosing\n");
 }
 
-/// A container releases every `Drop` value it holds, in field order.
+/// A container releases every `Drop` value it holds, in reverse field order:
+/// drops run in reverse completion order, and a struct's fields complete in
+/// declaration order.
 #[test]
 fn a_container_runs_the_body_of_every_drop_it_holds() {
     let output = assert_parity(
@@ -96,7 +98,7 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "3\n1\n2\n");
+    assert_eq!(output, "3\n2\n1\n");
 }
 
 /// Churning a heap-owning `Drop` type leaves the native heap balanced: a body

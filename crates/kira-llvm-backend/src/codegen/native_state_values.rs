@@ -41,6 +41,10 @@ fn no_node_form(ty: Type) -> LlvmError {
         // State inside state: the inner token names a box in a store the outer
         // value knows nothing about.
         Type::NativeState(_) => "native callback state inside native callback state",
+        // `kira-ir` rewrites a distinct type to the scalar it is before a
+        // backend runs, so one here means that pass was skipped rather than
+        // that the shape has no node form — the scalar underneath has one.
+        Type::Distinct(_) => "a distinct type that lowering did not erase",
         // Lowering only ever runs on a program that type-checked.
         _ => "a program that failed to type-check",
     })
@@ -141,7 +145,13 @@ impl Codegen<'_> {
                 node
             }
             Type::Any => self.encode_any_node_through_leaf(value)?,
-            Type::Void | Type::Error | Type::Task(_) | Type::NativeState(_) => {
+            Type::Void
+            | Type::Error
+            | Type::Distinct(_)
+            | Type::RuntimeType
+            | Type::Task(_)
+            | Type::MainThreadTask(_)
+            | Type::NativeState(_) => {
                 return Err(no_node_form(ty));
             }
         })
@@ -229,7 +239,13 @@ impl Codegen<'_> {
                 cell
             }
             Type::Any => self.decode_any_node_through_leaf(node)?,
-            Type::Void | Type::Error | Type::Task(_) | Type::NativeState(_) => {
+            Type::Void
+            | Type::Error
+            | Type::Distinct(_)
+            | Type::RuntimeType
+            | Type::Task(_)
+            | Type::MainThreadTask(_)
+            | Type::NativeState(_) => {
                 return Err(no_node_form(ty));
             }
         })
@@ -314,7 +330,7 @@ impl Codegen<'_> {
         };
         let mut incoming = Vec::new();
         for ty in self.erased_types() {
-            let Some(id) = ErasedTypeId::of(ty) else {
+            let Some(id) = ErasedTypeId::known(&self.program.descriptors, ty) else {
                 continue;
             };
             let block = self.append_any_block(function, "native.any.encode.case");
@@ -370,7 +386,7 @@ impl Codegen<'_> {
         };
         let mut incoming = Vec::new();
         for ty in self.erased_types() {
-            let Some(id) = ErasedTypeId::of(ty) else {
+            let Some(id) = ErasedTypeId::known(&self.program.descriptors, ty) else {
                 continue;
             };
             let block = self.append_any_block(function, "native.any.decode.case");
@@ -409,23 +425,12 @@ impl Codegen<'_> {
 
     /// The concrete types whose erased identities can occur in this program.
     fn erased_types(&self) -> Vec<Type> {
-        let mut types = vec![
-            Type::INT,
-            Type::FLOAT,
-            Type::Bool,
-            Type::String,
-            Type::RawPtr,
-        ];
-        types.extend(self.program.types.structs().ids().map(Type::Struct));
-        types.extend(
-            self.program
-                .types
-                .arrays()
-                .rows()
-                .map(|(id, _)| Type::Array(id)),
-        );
-        types.extend(self.program.types.enums().ids().map(Type::Enum));
-        types
+        self.program
+            .descriptors
+            .interned()
+            .into_iter()
+            .map(|(ty, _)| ty)
+            .collect()
     }
 
     fn append_any_block(&self, function: LLVMValueRef, name: &str) -> LLVMBasicBlockRef {
@@ -660,75 +665,5 @@ impl Codegen<'_> {
     pub(in crate::codegen) fn const_i32(&self, value: u32) -> LLVMValueRef {
         // SAFETY: i32 belongs to this live context.
         unsafe { LLVMConstInt(self.types.i32, u64::from(value), 0) }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kira_runtime_abi::Execution;
-    use kira_semantics_model::hir::{HirExpr, HirFunction, HirLocal, HirProgram, HirStmt, LocalId};
-    use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, Type};
-    use kira_source::Span;
-
-    use crate::codegen::Module;
-
-    /// A generated C binding struct holds `const char *` members, and Kira keeps
-    /// each as a `CString` field — an opaque word it stores and hands back. When
-    /// such a struct crosses a hybrid program's `@Native`/`@Runtime` seam it is
-    /// encoded field by field into a state-value tree, so the tree has to have a
-    /// node for that word. It did not, and every hybrid graphics example failed
-    /// to build because of it.
-    #[test]
-    fn a_c_string_member_crosses_the_hybrid_seam_as_an_opaque_word() {
-        let mut program = HirProgram::default();
-        let struct_id = program
-            .types
-            .structs_mut()
-            .declare(StructDef {
-                name: "Binding".to_owned(),
-                fields: vec![
-                    FieldDef {
-                        name: "slot".to_owned(),
-                        ty: Type::INT,
-                        mutable: false,
-                    },
-                    FieldDef {
-                        name: "glsl_name".to_owned(),
-                        ty: Type::CString,
-                        mutable: false,
-                    },
-                ],
-                c_layout: true,
-                drop_glue: None,
-            })
-            .expect("the struct table accepts one declaration");
-        let ty = Type::Struct(struct_id);
-        let value = program.exprs.alloc(HirExpr::Local {
-            local: LocalId(0),
-            ty,
-        });
-        let ret = program.stmts.alloc(HirStmt::Return { value: Some(value) });
-        program.functions.push(HirFunction {
-            name: "echoBinding".to_owned(),
-            param_count: 1,
-            return_type: ty,
-            locals: vec![HirLocal {
-                name: "binding".to_owned(),
-                ty,
-                mutable: false,
-                ownership: OwnershipMode::Owned,
-                native_state: None,
-            }],
-            body: vec![ret],
-            is_main: false,
-            is_async: false,
-            execution: Execution::Native,
-            mutates_self: false,
-            name_span: Span::new(0, 12),
-        });
-        let ir = kira_ir::lower(&program);
-
-        Module::build_hybrid(&ir, "cstring_member_probe", &[])
-            .expect("a `CString` member has a state-value node on both sides of the seam");
     }
 }

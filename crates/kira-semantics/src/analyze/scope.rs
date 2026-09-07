@@ -52,6 +52,13 @@ pub(crate) struct FnCtx {
     /// accidentally capture a same-named local from its construction site.
     scope_floor: usize,
     pub(crate) return_type: Type,
+    /// Whether this body is entered through a `@MainThread` function.
+    ///
+    /// The bit is lexical analysis context, not an engine choice: an
+    /// unannotated helper called by a main-thread function still runs on that
+    /// thread at runtime, while the same helper called from ordinary Kira runs
+    /// on the helper thread.
+    pub(crate) main_thread: bool,
     /// The struct this body is a method of, when it is one.
     ///
     /// A method's body may name a field bare — `return value + step` rather
@@ -118,6 +125,7 @@ impl FnCtx {
             scopes: vec![HashMap::new()],
             scope_floor: 0,
             return_type,
+            main_thread: false,
             receiver: None,
             loop_depth: 0,
             enclosing: None,
@@ -127,6 +135,11 @@ impl FnCtx {
             closure_mentions: Rc::new(HashSet::new()),
             cell_temps: HashMap::new(),
         }
+    }
+
+    /// Marks this frame as executing in the host main-thread context.
+    pub(crate) fn set_main_thread(&mut self, main_thread: bool) {
+        self.main_thread = main_thread;
     }
 
     /// Records which names this function's closure literals mention, so a `var`
@@ -239,7 +252,6 @@ impl FnCtx {
             mode: ownership,
             moved: None,
             loop_reported: false,
-            handed_out: false,
         });
         self.binding_spans.push(None);
         if let Some(scope) = self.scopes.last_mut() {
@@ -273,40 +285,6 @@ impl FnCtx {
     }
 
     /// Records that `local`'s value was moved out at `span`.
-    /// Records that a native-state handle in `local` has been handed out, so
-    /// the end-of-body check stops holding this body responsible for it.
-    pub(crate) fn mark_handed_out(&mut self, local: LocalId) {
-        if let Some(state) = self.ownership.get_mut(local.0 as usize) {
-            state.handed_out = true;
-        }
-    }
-
-    /// Every owned native-state handle this body still holds, with where it was
-    /// bound.
-    ///
-    /// Owned only: a `borrow`/`borrow mut` parameter names somebody else's
-    /// handle, and freeing it is not this body's business. Handles already
-    /// moved out, or handed out with `nativeUserData`, are somebody else's too.
-    pub(crate) fn unfreed_native_state_handles(&self) -> Vec<(LocalId, Option<Span>)> {
-        let mut found = Vec::new();
-        for (slot, state) in self.ownership.iter().enumerate() {
-            if state.mode != OwnershipMode::Owned || !state.is_live() || state.handed_out {
-                continue;
-            }
-            let Some(local) = self.locals.get(slot) else {
-                continue;
-            };
-            if !matches!(local.ty, Type::NativeState(_)) {
-                continue;
-            }
-            found.push((
-                LocalId(slot as u32),
-                self.binding_spans.get(slot).copied().flatten(),
-            ));
-        }
-        found
-    }
-
     pub(crate) fn mark_moved(&mut self, local: LocalId, span: Span) {
         self.ownership[local.0 as usize].moved = Some(span);
     }

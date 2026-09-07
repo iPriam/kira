@@ -1,0 +1,618 @@
+// Compile-time counterparts to the runtime helpers below: the macros in
+// `DeriveSerde.kira` run these while expanding, so there is one place that
+// knows how each shape travels, however deeply arrays nest.
+
+// The helpers both macros generate calls to live in `SerdeText.kira`, beside
+// this file: they are the same code for every derived type, and only the format
+// they read and write is described here.
+//
+// The five functions below are the macros' own shared logic: classifying a
+// type text, spelling an annotation for one, and writing or reading a value of
+// one. They run at compile time, take and return plain values, and recurse for
+// nested arrays — so there is one place that knows how each shape travels,
+// however deeply it nests, instead of one copy per position that names it.
+
+// The integer spelling `text` names, or `""` when it names none. The tag an
+// integer writes and the check a reader applies come from here, so the eight
+// spellings are listed once.
+comptime function __kira_serde_int_tag(text: String) -> String {
+    for sname in ["Int", "I8", "U8", "I16", "U16", "I32", "U32", "U64"] {
+        if text == sname {
+            return sname
+        }
+    }
+    return ""
+}
+
+// Whether a value of the type `text` reads as can be generated: scalars,
+// nested arrays of the same, and single identifiers addressed by name through
+// generated `serialize_`/`deserialize_` calls. Generics, qualified names, and
+// function types answer false — the generated code could not name what they
+// mean — and the caller reports them with the span only it has.
+comptime function __kira_serde_ok(text: String) -> Bool {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        if t.endsWith("]") == false {
+            return false
+        }
+        return __kira_serde_ok(t.substring(1, t.count - 1).trim())
+    }
+    if __kira_serde_int_tag(t) != "" {
+        return true
+    }
+    if t == "Float" {
+        return true
+    }
+    if t == "F32" {
+        return true
+    }
+    if t == "Bool" {
+        return true
+    }
+    if t == "String" {
+        return true
+    }
+    if t == "CBool" {
+        return true
+    }
+    if t.contains("<") {
+        return false
+    }
+    if t.contains("(") {
+        return false
+    }
+    if t.contains(")") {
+        return false
+    }
+    if t.contains(",") {
+        return false
+    }
+    if t.contains(":") {
+        return false
+    }
+    if t.contains(".") {
+        return false
+    }
+    if t.contains(" ") {
+        return false
+    }
+    if t.contains("[") {
+        return false
+    }
+    if t.contains("]") {
+        return false
+    }
+    if t == "" {
+        return false
+    }
+    return true
+}
+
+// The annotation syntax for the type `text` reads as: a plain name splices
+// directly, and an array nests. Only called on text `__kira_serde_ok`
+// accepted, so every name here resolves where the annotation lands.
+comptime function __kira_serde_ann(text: String) -> Syntax {
+    var t: String = text.trim()
+    if t.startsWith("[") {
+        var inner: Syntax = __kira_serde_ann(t.substring(1, t.count - 1).trim())
+        return quote { [#{inner}] }
+    }
+    return quote { #{Identifier(t)} }
+}
+
+// Statements serializing the value `value` reads as — of the type `typeText`
+// reads as — appended to the string `target` names. Scalars append one piece;
+// an array appends its brackets around one element per turn, recursing for the
+// element. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_write_into(typeText: String, value: Syntax, target: Syntax, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        return quote { #{target} = #{target} + #{tag} + "(" + String(#{value}) + ")" }
+    }
+    if t == "Float" {
+        return quote { #{target} = #{target} + __kira_serde_float(#{value}) }
+    }
+    if t == "F32" {
+        return quote { #{target} = #{target} + __kira_serde_float32(#{value}) }
+    }
+    if t == "Bool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "CBool" {
+        return quote { #{target} = #{target} + String(#{value}) }
+    }
+    if t == "String" {
+        return quote { #{target} = #{target} + "\"" + __kira_serde_escape(#{value}) + "\"" }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var wrote: Syntax = __kira_serde_write_into(inner, quote { #{Identifier("__e" + stem)} }, target, nest)
+        return quote {
+            #{target} = #{target} + "["
+            var #{Identifier("__n" + stem)}: Int = 0
+            for #{Identifier("__e" + stem)} in #{value} {
+                if #{Identifier("__n" + stem)} != 0 {
+                    #{target} = #{target} + ","
+                }
+                #{wrote}
+                #{Identifier("__n" + stem)} = #{Identifier("__n" + stem)} + 1
+            }
+            #{target} = #{target} + "]"
+        }
+    }
+    return quote { #{target} = #{target} + #{Identifier("serialize_" + t)}(#{value}) }
+}
+
+// Statements reading one value of the type `typeText` reads as out of the
+// string `source` reads as, binding it to the name `result` carries. Scalars
+// bind one conversion; an array carves its elements out of the brackets and
+// recurses for each. Only called on text `__kira_serde_ok` accepted.
+comptime function __kira_serde_read_value(typeText: String, source: Syntax, result: String, stem: String) -> Syntax {
+    var t: String = typeText.trim()
+    var ann: Syntax = __kira_serde_ann(t)
+    var tag: String = __kira_serde_int_tag(t)
+    if tag != "" {
+        if t == "U64" {
+            return quote { let #{Identifier(result)}: #{ann} = U64(__kira_deser_tagged_uint(#{source}, "U64")) }
+        }
+        return quote { let #{Identifier(result)}: #{ann} = #{Identifier(t)}(__kira_deser_tagged_int(#{source}, #{tag})) }
+    }
+    if t == "Float" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float(#{source}) }
+    }
+    if t == "F32" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_float32(#{source}) }
+    }
+    if t == "Bool" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_bool(#{source}) }
+    }
+    if t == "String" {
+        return quote { let #{Identifier(result)}: #{ann} = __kira_deser_unquote(#{source}) }
+    }
+    if t.startsWith("[") {
+        var inner: String = t.substring(1, t.count - 1).trim()
+        var nest: String = stem + "n"
+        var read: Syntax = __kira_serde_read_value(inner, quote { #{Identifier("__e" + stem)} }, "__v" + nest, nest)
+        return quote {
+            let #{Identifier("__a" + stem)} = #{source}
+            var #{Identifier("__o" + stem)}: #{ann} = []
+            var #{Identifier("__p" + stem)}: Int = 1
+            while #{Identifier("__p" + stem)} < #{Identifier("__a" + stem)}.count - 1 {
+                let #{Identifier("__end" + stem)}: Int = __kira_deser_scan(#{Identifier("__a" + stem)}, #{Identifier("__p" + stem)})
+                if #{Identifier("__end" + stem)} == #{Identifier("__p" + stem)} {
+                    #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                }
+                let #{Identifier("__e" + stem)}: String = #{Identifier("__a" + stem)}.substring(#{Identifier("__p" + stem)}, #{Identifier("__end" + stem)})
+                #{read}
+                #{Identifier("__o" + stem)}.append(#{Identifier("__v" + nest)})
+                #{Identifier("__p" + stem)} = #{Identifier("__end" + stem)}
+                if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 44 {
+                    #{Identifier("__p" + stem)} = #{Identifier("__p" + stem)} + 1
+                    if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) == 93 {
+                        #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+                    }
+                }
+            }
+            if #{Identifier("__a" + stem)}.charAt(#{Identifier("__p" + stem)}) != 93 {
+                #{Identifier("__p" + stem)} = __kira_deser_trap(#{Identifier("__a" + stem)})
+            }
+            let #{Identifier(result)}: #{ann} = #{Identifier("__o" + stem)}
+        }
+    }
+    return quote { let #{Identifier(result)}: #{ann} = #{Identifier("deserialize_" + t)}(#{source}) }
+}
+
+// The reader and writer helpers Foundation's Serde derives generate calls to.
+//
+// Beside the macros rather than inside them: a generated function is emitted
+// once per derived type, and these are the same code for every one of them. The
+// wire format itself is described where the macros are, in `DeriveSerde.kira`.
+//
+// Every name here carries a reserved prefix — `__kira_deser_` for the reading
+// half, `__kira_serde_` for the writing half — so a program that derives Serde
+// cannot collide with them.
+//
+// Malformed input traps deterministically on every backend: a structural
+// violation drives an out-of-range `charAt` or an inverted `substring`, both of
+// which the runtime turns into a hard trap. A value either round-trips or the
+// program stops; there is no partial parse and no sentinel.
+
+// A deterministic hard trap in Int context: one past the last byte is always
+// out of range.
+function __kira_deser_trap(s: borrow String) -> Int {
+    return s.charAt(s.count)
+}
+
+// The same trap in String context: an inverted substring always traps.
+function __kira_deser_trap_str(s: borrow String) -> String {
+    return s.substring(s.count + 1, s.count)
+}
+
+// Scan forward from `start` over one field VALUE and return the exclusive end
+// index — the position of the top-level `,` or `}` that terminates it.
+// Depth-aware, so a nested value carrying its own delimiters is consumed
+// whole: a struct's braces, an array's brackets, an enum payload's parentheses,
+// or a quoted region. A scalar has no brackets and stops at the first
+// delimiter, which is why one scanner serves every field type.
+//
+// One counter for all three bracket kinds rather than one each: values nest
+// properly, so every opener the scan passes has its closer before the value
+// ends. Malformed input still traps deterministically — just further along,
+// where the structure no longer parses — because every path out of the value
+// runs through a range check downstream.
+function __kira_deser_scan(s: borrow String, start: Int) -> Int {
+    var pos: Int = start
+    var depth: Int = 0
+    // Inside a quoted value every byte is content, delimiters included: a
+    // `String` holding `,` or `}` is written as itself, and a scanner that read
+    // it as structure would end the field early and parse the rest of the text
+    // as fields. A `\` skips the byte after it, which is what makes a `\"`
+    // inside a value stay inside it.
+    var quoted: Bool = false
+    let n: Int = s.count
+    while pos < n {
+        let c: Int = s.charAt(pos)
+        if quoted {
+            if c == 92 {
+                pos = pos + 1
+            } else if c == 34 {
+                quoted = false
+            }
+        } else if c == 34 {
+            quoted = true
+        } else if c == 123 || c == 91 || c == 40 {
+            depth = depth + 1
+        } else if c == 125 || c == 93 || c == 41 {
+            if depth == 0 {
+                // `,` and `}` end a struct field's scan and `,` and `]` an
+                // array element's; one scanner serves both because a value
+                // never holds the other's closer at depth zero — brackets are
+                // tracked, so a `]` here closes the array being read and a `}`
+                // closes the struct. A `)` at depth zero is malformed input,
+                // and falling through to keep scanning ends it at a range trap
+                // downstream rather than a wrong value here.
+                if c == 44 || c == 125 || c == 93 {
+                    return pos
+                }
+            } else {
+                depth = depth - 1
+            }
+        } else if c == 44 {
+            if depth == 0 {
+                return pos
+            }
+        }
+        pos = pos + 1
+    }
+    return pos
+}
+
+// Parse a signed decimal integer, trapping on empty text, a lone `-`, or any
+// non-digit byte.
+function __kira_deser_int(s: borrow String) -> Int {
+    let n: Int = s.count
+    if n == 0 {
+        return __kira_deser_trap(s)
+    }
+    var i: Int = 0
+    var neg: Bool = false
+    let first: Int = s.charAt(0)
+    if first == 45 {
+        neg = true
+        i = 1
+    }
+    if i >= n {
+        return __kira_deser_trap(s)
+    }
+    var acc: Int = 0
+    while i < n {
+        let d: Int = s.charAt(i)
+        var digit: Int = 0
+        if d < 48 {
+            digit = __kira_deser_trap(s)
+        } else {
+            if d > 57 {
+                digit = __kira_deser_trap(s)
+            } else {
+                digit = d - 48
+            }
+        }
+        // Accumulated downward, toward the negative side. The magnitude of the
+        // most negative Int is one past the most positive one, so building the
+        // positive magnitude first cannot represent it: `-9223372036854775808`
+        // overflowed on the way in, on its own round trip. Every value of the
+        // type is reachable from this side, and a positive one too large to
+        // hold still traps — on the negation below, where it belongs.
+        acc = acc * 10 - digit
+        i = i + 1
+    }
+    if !neg {
+        acc = 0 - acc
+    }
+    return acc
+}
+
+// Parse a Bool from exactly "true" / "false"; trap on anything else.
+function __kira_deser_bool(s: borrow String) -> Bool {
+    if s == "true" {
+        return true
+    }
+    if s == "false" {
+        return false
+    }
+    return __kira_deser_trap(s) == 0
+}
+
+// Strip the surrounding `"` from a serialized String value and undo the
+// escapes the writer applied; trap when the quotes are absent or an escape is
+// not one this format defines.
+//
+// The escapes are the format's whole answer to a value that contains its own
+// delimiters: without them a `String` holding `"`, `,`, or `}` ends the field
+// early and the rest of the value is read as structure. That is silent
+// corruption — the parse succeeds and answers something else — which is the
+// one failure a wire format must not have.
+function __kira_deser_unquote(s: borrow String) -> String {
+    let n: Int = s.count
+    if n < 2 {
+        return __kira_deser_trap_str(s)
+    }
+    if s.charAt(0) != 34 {
+        return __kira_deser_trap_str(s)
+    }
+    if s.charAt(n - 1) != 34 {
+        return __kira_deser_trap_str(s)
+    }
+    return __kira_deser_unescape(s.substring(1, n - 1))
+}
+
+// Undo one escaped body: `\"`, `\\`, `\n`, `\r`, `\t`, and `\0`. Any other
+// escape is malformed input and traps, because a reader that passed an unknown
+// escape through would answer with text nothing wrote.
+function __kira_deser_unescape(s: borrow String) -> String {
+    var out: String = ""
+    var i: Int = 0
+    let n: Int = s.count
+    while i < n {
+        let c: Int = s.charAt(i)
+        if c != 92 {
+            out = out + scalarText(Int(c))
+            i = i + 1
+        } else {
+            if i + 1 >= n {
+                return __kira_deser_trap_str(s)
+            }
+            let e: Int = s.charAt(i + 1)
+            if e == 34 {
+                out = out + "\""
+            } else {
+                if e == 92 {
+                    out = out + "\\"
+                } else {
+                    if e == 110 {
+                        out = out + "\n"
+                    } else {
+                        if e == 114 {
+                            out = out + "\r"
+                        } else {
+                            if e == 116 {
+                                out = out + "\t"
+                            } else {
+                                if e == 48 {
+                                    out = out + scalarText(0)
+                                } else {
+                                    return __kira_deser_trap_str(s)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            i = i + 2
+        }
+    }
+    return out
+}
+
+// A `Float` as the exact bits it is: `Float(0x` and sixteen hex digits.
+//
+// Not a decimal rendering: `String(0.1)` is a reading of the value, and reading
+// it back is a second rounding, so a decimal wire format loses the low bits of
+// almost every float and cannot carry a signed zero, an infinity, or a NaN
+// payload at all. The bits are the value, and they read back as themselves.
+// The tag names which width they are the bits of, so a 32-bit float is never
+// read as a 64-bit one.
+function __kira_serde_float(v: Float) -> String {
+    return "Float(0x" + __kira_serde_hex(floatToBits(v), 16) + ")"
+}
+
+// An `F32` the same way, in eight digits: the value narrows to 32 bits first,
+// because the same bits mean a different number at the two widths.
+function __kira_serde_float32(v: Float) -> String {
+    return "F32(0x" + __kira_serde_hex(U64(floatToBits32(v)), 8) + ")"
+}
+
+// `digits` hex digits of `bits`, most significant first, zero-padded.
+function __kira_serde_hex(bits: U64, digits: Int) -> String {
+    let table: String = "0123456789abcdef"
+    var out: String = ""
+    var index: Int = digits - 1
+    while index >= 0 {
+        let shift: U64 = U64(index * 4)
+        let nibble: Int = Int((bits >> shift) & U64(15))
+        out = out + table.substring(nibble, nibble + 1)
+        index = index - 1
+    }
+    return out
+}
+
+// The `Float` a `Float(0x`-prefixed sixteen-digit body names, trapping on
+// anything that is not exactly that: a missing tag, a wrong length, or a byte
+// that is not a hex digit is a number nothing wrote.
+function __kira_deser_float(s: borrow String) -> Float {
+    if s.count != 25 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.substring(0, 8) != "Float(0x" {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.charAt(24) != 41 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    return bitsToFloat(__kira_deser_hex(s.substring(6, 24), 16))
+}
+
+// The `F32` a `F32(0x`-prefixed eight-digit body names, the same contract at
+// the other width.
+function __kira_deser_float32(s: borrow String) -> Float {
+    if s.count != 15 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.substring(0, 6) != "F32(0x" {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    if s.charAt(14) != 41 {
+        return bitsToFloat(U64(__kira_deser_trap(s)))
+    }
+    return bitsToFloat32(U32(__kira_deser_hex(s.substring(4, 14), 8)))
+}
+
+// The unsigned integer a `tag(`-prefixed decimal body names: `U64(7)`.
+//
+// The unsigned path exists because the signed one cannot reach the top half of
+// the `U64` range: digits past `Int`'s maximum trap a signed accumulation, and
+// a `U64` holding such a value is still a value that must round-trip. Digits
+// only — a `-` is not an unsigned value — and the accumulation traps past the
+// maximum exactly as the signed one traps past its own.
+function __kira_deser_tagged_uint(s: borrow String, tag: borrow String) -> U64 {
+    let open: Int = tag.count + 1
+    if s.count < open + 2 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.substring(0, tag.count) != tag {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(tag.count) != 40 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(s.count - 1) != 41 {
+        return U64(__kira_deser_trap(s))
+    }
+    let body: String = s.substring(open, s.count - 1)
+    if body.count == 0 {
+        return U64(__kira_deser_trap(s))
+    }
+    var acc: U64 = U64(0)
+    var i: Int = 0
+    while i < body.count {
+        let d: Int = Int(body.charAt(i))
+        if (d < 48) || (d > 57) {
+            return U64(__kira_deser_trap(s))
+        }
+        acc = acc * U64(10) + U64(d - 48)
+        i = i + 1
+    }
+    return acc
+}
+
+// The integer a `tag(`-prefixed decimal body names: `Int(42)`, `U8(7)`.
+//
+// The tag is checked exactly, and the digits are range-checked by what the
+// caller builds from the answer: a value that does not fit the caller's width
+// traps in the narrowing conversion, so `U8(300)` never becomes a `U8`. A tag
+// naming another width is a different type's value and is refused here rather
+// than range-checked into this one.
+function __kira_deser_tagged_int(s: borrow String, tag: borrow String) -> Int {
+    let open: Int = tag.count + 1
+    if s.count < open + 2 {
+        return __kira_deser_trap(s)
+    }
+    if s.substring(0, tag.count) != tag {
+        return __kira_deser_trap(s)
+    }
+    if s.charAt(tag.count) != 40 {
+        return __kira_deser_trap(s)
+    }
+    if s.charAt(s.count - 1) != 41 {
+        return __kira_deser_trap(s)
+    }
+    return __kira_deser_int(s.substring(open, s.count - 1))
+}
+
+// The bits a `0x` body names. Traps on a missing prefix, a wrong length, or a
+// byte that is not a hex digit: a float read from malformed text would be a
+// number nothing wrote.
+function __kira_deser_hex(s: borrow String, digits: Int) -> U64 {
+    if s.count != digits + 2 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(0) != 48 {
+        return U64(__kira_deser_trap(s))
+    }
+    if s.charAt(1) != 120 {
+        return U64(__kira_deser_trap(s))
+    }
+    var bits: U64 = U64(0)
+    var index: Int = 2
+    while index < s.count {
+        let c: Int = Int(s.charAt(index))
+        var value: Int = 0
+        if c >= 48 && c <= 57 {
+            value = c - 48
+        } else {
+            if c >= 97 && c <= 102 {
+                value = c - 87
+            } else {
+                value = __kira_deser_trap(s)
+            }
+        }
+        bits = (bits << U64(4)) | U64(value)
+        index = index + 1
+    }
+    return bits
+}
+
+// The escaped body of a `String` value, without its surrounding quotes.
+//
+// Only the bytes that would otherwise be read as structure, plus the ones no
+// single line can carry: a quote, a backslash, the two line endings, a tab, and
+// a NUL. Everything else is written through, so ordinary text stays readable on
+// the wire.
+function __kira_serde_escape(s: borrow String) -> String {
+    var out: String = ""
+    var i: Int = 0
+    let n: Int = s.count
+    while i < n {
+        let c: Int = s.charAt(i)
+        if c == 34 {
+            out = out + "\\\""
+        } else {
+            if c == 92 {
+                out = out + "\\\\"
+            } else {
+                if c == 10 {
+                    out = out + "\\n"
+                } else {
+                    if c == 13 {
+                        out = out + "\\r"
+                    } else {
+                        if c == 9 {
+                            out = out + "\\t"
+                        } else {
+                            if c == 0 {
+                                out = out + "\\0"
+                            } else {
+                                out = out + scalarText(Int(c))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+

@@ -23,7 +23,8 @@ pub use dap::{
     TransportError, decode_base64, parse_address,
 };
 pub use engine::{
-    Engine, LLDB_DAP_VARIABLE, LLDB_VARIABLE, configure as configure_engine, support_directories,
+    ENABLE_DEBUGGING_HINT, Engine, LLDB_DAP_VARIABLE, LLDB_VARIABLE, configure as configure_engine,
+    debugging_unauthorized, support_directories,
 };
 pub use lldb::{LldbError, LldbLaunch, LldbOutput, target_label};
 pub use model::{Backend, DebugFunction, DebugInfo, DebugSource, function_symbol};

@@ -43,16 +43,21 @@ mod tests {
                 native_state_locals: vec![None; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
+                is_main_thread: false,
                 by_reference_params: Vec::new(),
                 by_pointer_params: Vec::new(),
                 body,
             }],
             types: Default::default(),
+            descriptors: Default::default(),
             main: Some(0),
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
+
             exprs,
         }
     }
@@ -77,6 +82,7 @@ mod tests {
             native_state_locals: Vec::new(),
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
+            is_main_thread: false,
             by_reference_params: Vec::new(),
             by_pointer_params: Vec::new(),
             body: Vec::new(),
@@ -103,6 +109,24 @@ mod tests {
         assert!(!vm.functions[1].is_native());
         assert!(!vm.functions[1].code.is_empty());
         vm.validate().expect("a vm module is well-formed");
+    }
+
+    #[test]
+    fn main_thread_lifecycle_marks_instruction_zero_of_its_own_function() {
+        let mut program = single_main(
+            vec![IrStmt::Return { value: None }],
+            la_arena::Arena::new(),
+            0,
+        );
+        program.main_thread_lifecycles = vec![0];
+
+        let module = compile(&program).expect("compile lifecycle entry");
+        assert_eq!(module.main_thread_lifecycles(), vec![0]);
+        assert!(matches!(
+            module.functions[0].code.first(),
+            Some(Instruction::MainThreadLifecycle)
+        ));
+        assert_eq!(Module::from_bytes(&module.to_bytes()).unwrap(), module);
     }
 
     /// A writeback call whose callee is native compiles to the native form of
@@ -140,6 +164,7 @@ mod tests {
             native_state_locals: vec![None],
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
+            is_main_thread: false,
             by_reference_params: Vec::new(),
             by_pointer_params: Vec::new(),
             body: Vec::new(),
@@ -229,16 +254,21 @@ mod tests {
                 native_state_locals: vec![None],
                 return_type: Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
+                is_main_thread: false,
                 by_reference_params: Vec::new(),
                 by_pointer_params: Vec::new(),
                 body: vec![IrStmt::Return { value: None }],
             }],
             types: Default::default(),
+            descriptors: Default::default(),
             main: None,
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
+
             exprs: la_arena::Arena::new(),
         };
         let button = program
@@ -321,6 +351,7 @@ mod tests {
             &program.functions[0],
             &program.types,
             kira_ir::mid::Lending::BY_VALUE,
+            kira_ir::mid::HeapModel::Boxed,
             false,
         )
         .expect("a plan");

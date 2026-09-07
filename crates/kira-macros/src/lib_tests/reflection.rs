@@ -44,6 +44,41 @@ fn a_macro_can_give_a_family_a_lifecycle_it_did_not_write() {
 /// ordinary Kira, and what makes the case usable at compile time is that the
 /// scan reads the program's declarations.
 #[test]
+fn a_macro_body_slices_text_with_substring() {
+    // The Serde case this exists for: an array type's element is the text
+    // between its brackets, and no combination of contains, split, and trim
+    // can carve a nested `[[Int]]` down to its `[Int]` without it.
+    let expansion = expand_one(
+        r#"
+comptime macro Slices {
+kind { derive }
+appliesTo { struct }
+expand(target: Declaration) -> Syntax {
+    var inner: String = "[Int]".substring(1, 4)
+    var nested: String = "[[Int]]".substring(1, 6)
+    return quote { function sliced() -> String { return #{inner} + #{nested} } }
+}
+}
+
+@Derive(Slices)
+struct Holder {
+var items: [Int]
+}
+"#,
+    );
+    assert!(
+        expansion.diagnostics.is_empty(),
+        "{:?}",
+        expansion.diagnostics
+    );
+    assert!(
+        expansion.texts[0].contains("return \"Int\" + \"[Int]\""),
+        "{}",
+        expansion.texts[0]
+    );
+}
+
+#[test]
 fn a_macro_body_names_a_case_of_a_program_enum() {
     let expansion = expand_one(
         "enum Backend { Msl Glsl }

@@ -26,6 +26,7 @@ use kira_toolchain::{
     Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name, static_archive_name,
 };
 
+use crate::APPLE_RUNNER_TARGETS;
 use crate::cli::VersionSpec;
 use crate::source::{ReleaseSource, ReleaseSourceError};
 
@@ -460,6 +461,15 @@ pub(crate) fn validate(payload: &Path) -> Result<(), InstallError> {
 
     for name in runtime_archive_names() {
         let archive = payload.join("bin").join(name);
+        if !archive.is_file() {
+            return Err(InstallError::MissingRuntimeArchive { expected: archive });
+        }
+    }
+    for target in APPLE_RUNNER_TARGETS {
+        let archive = payload
+            .join("bin")
+            .join(target)
+            .join("libkira_app_runner.a");
         if !archive.is_file() {
             return Err(InstallError::MissingRuntimeArchive { expected: archive });
         }

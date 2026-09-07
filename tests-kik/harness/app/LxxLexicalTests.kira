@@ -1,0 +1,102 @@
+﻿import Foundation
+
+// LxxLexicalTests.kira — what the lexer and the grammar's delimiters mean:
+// this file opens with a UTF-8 byte-order mark (skipped), block comments nest,
+// newlines are whitespace, and lists are comma-separated with a trailing comma
+// allowed.
+// PREFIX: lxx / Lxx  (all top-level names use this prefix).
+
+/* A block comment at the top level, /* with one nested inside it, */ and text
+   after the nested one that is still comment. */
+
+struct LxxPoint {
+    let x: Int
+    let y: Int
+}
+
+// --- comments ---------------------------------------------------------------
+
+construct LxxBlockCommentsNest() extends Test {
+    test {
+        let a = /* inline /* nested */ still comment */ 40
+        return a + /* before */ 2 /* after */
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// --- newlines are whitespace ------------------------------------------------
+
+// Two statements on one line, delimited by the grammar alone.
+construct LxxStatementsShareALine() extends Test {
+    test { var a = 1 a = a + 1 let b = a * 10 return b }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
+}
+
+// An expression continues onto the next line when the next token can continue
+// it: the `- 2` below is part of the initializer, not a statement of its own.
+construct LxxAnOperatorContinuesAcrossALine() extends Test {
+    test {
+        let a = 5
+            - 2
+        return a
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
+}
+
+// A member access on the next line continues the chain.
+construct LxxAMemberAccessContinuesAcrossALine() extends Test {
+    test {
+        let p = LxxPoint(x: 7, y: 8)
+        let v = p
+            .x
+        return v
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
+}
+
+// --- comma-separated lists --------------------------------------------------
+
+construct LxxTrailingCommaInAnArrayLiteral() extends Test {
+    test {
+        let xs = [
+            1,
+            2,
+            3,
+        ]
+        return xs.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
+}
+
+construct LxxTrailingCommaInAStructLiteral() extends Test {
+    test {
+        let p = LxxPoint {
+            x: 3,
+            y: 4,
+        }
+        return p.x * 10 + p.y
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(34) return e }
+}
+
+function lxxSum(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+construct LxxTrailingCommaInAnArgumentList() extends Test {
+    test {
+        return lxxSum(
+            30,
+            12,
+        )
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// --- escapes ----------------------------------------------------------------
+
+// `\e` is the escape character, one byte.
+construct LxxEscapeCharacterIsOneByte() extends Test {
+    test { return "\e[2K".count }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}

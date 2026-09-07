@@ -13,32 +13,32 @@
 // mirror per extension, each of which stops matching the header the moment it
 // changes.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiChain {
     var next: FfiChainPtr
     var kind: I32
 }
 
-@FFI.Pointer { target: FfiChain; ownership: borrowed; }
+@FFI.Pointer { target: FfiChain, ownership: borrowed }
 struct FfiChainPtr {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiChainScale {
     var chain: FfiChain
     var factor: I32
 }
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FfiChainedDescriptor {
     var nextInChain: FfiChainPtr
     var base: I32
 }
 
-@FFI.Pointer { target: FfiChainedDescriptor; ownership: borrowed; }
+@FFI.Pointer { target: FfiChainedDescriptor, ownership: borrowed }
 struct FfiChainedDescriptorPtr {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_chained_total; abi: c; }
-function ffiChainedTotal(descriptor: FfiChainedDescriptorPtr): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_chained_total, abi: c }
+function ffiChainedTotal(descriptor: FfiChainedDescriptorPtr): I32
 
 // No extension. The omitted pointer member is `NULL`, so C walks nothing.
 @Native
@@ -52,9 +52,9 @@ function totalWithNoChain() -> Int {
 function totalWithOneLink() -> Int {
     return Int(ffiChainedTotal(FfiChainedDescriptor {
         nextInChain: FfiChainScale {
-            chain: FfiChain { kind: 1 }
+            chain: FfiChain { kind: 1 },
             factor: 3
-        }
+        },
         base: 7
     }))
 }
@@ -67,13 +67,13 @@ function totalWithTwoLinks() -> Int {
         nextInChain: FfiChainScale {
             chain: FfiChain {
                 next: FfiChainScale {
-                    chain: FfiChain { kind: 1 }
+                    chain: FfiChain { kind: 1 },
                     factor: 5
-                }
+                },
                 kind: 1
-            }
+            },
             factor: 3
-        }
+        },
         base: 7
     }))
 }
@@ -83,7 +83,7 @@ function totalWithTwoLinks() -> Int {
 @Native
 function totalWithAnUnknownLink() -> Int {
     return Int(ffiChainedTotal(FfiChainedDescriptor {
-        nextInChain: FfiChain { kind: 9 }
+        nextInChain: FfiChain { kind: 9 },
         base: 7
     }))
 }

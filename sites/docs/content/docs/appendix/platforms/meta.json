@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "live-and-hot-reload",
+    "live-bundles-and-reload",
     "exports",
     "web-and-wasm"
   ]

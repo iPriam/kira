@@ -1,0 +1,5 @@
+Package MainThreadLifecycleHarness {
+    let version = "0.1.0"
+    let kind = .App
+    let moduleRoot = "MainThreadLifecycleHarness"
+}

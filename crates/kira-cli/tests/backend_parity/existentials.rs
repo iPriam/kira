@@ -197,3 +197,56 @@ function main() {
     );
     assert_eq!(output, "12\n4\n43\n");
 }
+
+/// Mutable trait and construct-family receivers rebuild their erased payload
+/// before the caller reads them again. Running all three engines here covers
+/// the VM's explicit writeback, LLVM's pointer ABI, and the hybrid bridge.
+#[test]
+fn mutable_existentials_write_back_the_selected_payload_on_every_backend() {
+    let output = assert_parity(
+        r#"
+trait Counter {
+    function bump(borrow mut self, by: Int) -> Int
+    function value(borrow self) -> Int
+}
+
+struct Meter: Counter {
+    var value: Int
+
+    function bump(borrow mut self, by: Int) -> Int {
+        self.value = self.value + by
+        return self.value
+    }
+
+    function value(borrow self) -> Int {
+        return self.value
+    }
+}
+
+construct Node {
+    @Required let value: Int
+    @Required function bump(borrow mut self, by: Int) -> Int
+}
+
+construct Leaf(value: Int) extends Node {
+    function bump(borrow mut self, by: Int) -> Int {
+        self = Leaf(value: self.value + by)
+        return self.value
+    }
+}
+
+@Main
+function main() {
+    var counter: Counter = Meter(value: 2)
+    print(counter.bump(by: 3))
+    print(counter.value())
+
+    var node: some Node = Leaf(value: 4)
+    print(node.bump(by: 5))
+    print(node.value)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "5\n5\n9\n9\n");
+}

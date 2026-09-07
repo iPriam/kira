@@ -3,11 +3,11 @@
 //! The two features that most easily drift apart between backends, for opposite
 //! reasons. A conditional is control flow that LLVM would happily lower as a
 //! `select` — which evaluates both arms — and shifts are the one arithmetic
-//! where LLVM's answer for an out-of-range count is *poison* while the VM and
-//! wasm both take it modulo 64. Both divergences are silent, and both are what
-//! these cases exist to catch.
+//! where LLVM's answer for an out-of-range count is *poison* while the
+//! language traps. Both divergences are silent, and both are what these cases
+//! exist to catch.
 
-use crate::assert_parity;
+use crate::{assert_parity, assert_trap_parity};
 
 #[test]
 fn a_conditional_expression_agrees() {
@@ -143,8 +143,7 @@ fn an_unsigned_shift_right_zero_fills() {
 @Main
 function main() {
     let signed: Int = -1
-    var unsigned: U64 = 0
-    unsigned = unsigned - 1
+    let unsigned: U64 = 0xffffffffffffffff
     print(signed >> 60)
     print(unsigned >> 60)
     return
@@ -154,48 +153,46 @@ function main() {
     assert_eq!(output, "-1\n15\n");
 }
 
-/// Which branch decides a conditional's width is observable, because the width
-/// picks signed or unsigned `>>`. The rule is that the **then** branch decides,
-/// mirroring the left-operand rule for `+`, so the same bits shift two
-/// different ways depending on the order they are written in. Pinned here
-/// rather than left to a semantics assertion that only checks for silence: a
-/// future change to branch-type selection has to fail a test instead of quietly
+/// A conditional's width is observable, because the width picks signed or
+/// unsigned `>>`. The written width decides, from whichever branch wrote it,
+/// so the same bits shift the same way in either order. Pinned here rather
+/// than left to a semantics assertion that only checks for silence: a future
+/// change to branch-type selection has to fail a test instead of quietly
 /// flipping shift signedness.
 #[test]
-fn a_conditional_takes_its_width_from_the_then_branch() {
+fn a_conditional_takes_the_written_width_from_either_branch() {
     let output = assert_parity(
         r#"
 @Main
 function main() {
-    var wide: U64 = 0
-    wide = wide - 1
+    let wide: U64 = 0xffffffffffffffff
     print((true ? wide : 0) >> 60)
     print((false ? 0 : wide) >> 60)
     return
 }
 "#,
     );
-    assert_eq!(output, "15\n-1\n");
+    assert_eq!(output, "15\n15\n");
 }
 
-/// A shift count of 64 or more is defined, not undefined: every backend takes
-/// it modulo 64. LLVM would emit poison here without an explicit mask, so this
-/// is the case that pins the mask.
+/// A shift count of 64 or more is a trap, not poison and not a wrap: LLVM
+/// would emit poison here without a check, so this is the case that pins the
+/// check.
 #[test]
-fn an_oversized_shift_count_wraps_modulo_sixty_four() {
-    let output = assert_parity(
+fn an_oversized_shift_count_traps() {
+    assert_trap_parity(
         r#"
 @Main
 function main() {
-    var count = 64
+    var count = 63
     print(1 << count)
-    print(1 << (count + 1))
-    print(256 >> count)
+    count = count + 1
+    print(1 << count)
     return
 }
 "#,
+        "-9223372036854775808\n",
     );
-    assert_eq!(output, "1\n2\n256\n");
 }
 
 /// The precedence ladder, run rather than merely parsed. `&` binds tighter than

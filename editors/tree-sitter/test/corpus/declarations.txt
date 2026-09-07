@@ -170,7 +170,7 @@ enum Message {
         default: (string_literal)))))
 
 ================================================================================
-The enum is the one declaration that takes type parameters
+A generic enum declaration
 ================================================================================
 
 enum Result<Value, Failure> {
@@ -195,6 +195,26 @@ enum Result<Value, Failure> {
       (enum_variant
         name: (identifier)
         payload: (type_identifier)))))
+
+================================================================================
+An enum may claim one or more traits
+================================================================================
+
+enum Tag: Scored, Displayable { Red Blue }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    name: (identifier)
+    conforms: (conformance_list
+      (type_identifier)
+      (type_identifier))
+    body: (enum_body
+      (enum_variant
+        name: (identifier))
+      (enum_variant
+        name: (identifier)))))
 
 ================================================================================
 A type parameter may carry trait bounds joined by `+`
@@ -227,6 +247,60 @@ enum Boxed<Value: Scored + Send, Rest> {
         payload: (type_identifier)))))
 
 ================================================================================
+Generic aggregate declarations and a generic trait reference
+================================================================================
+
+trait Provider<Value> {
+    function get(borrow self) -> Value
+}
+
+struct Box<Value>: Provider<Value> {
+    let value: Value
+}
+
+class Holder<Value> {
+    let value: Value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (trait_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (trait_body
+      (function_definition
+        name: (identifier)
+        parameters: (parameters
+          (self_parameter))
+        return_type: (return_type
+          (type_identifier)))))
+  (struct_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    conforms: (conformance_list
+      (type_identifier)
+      (type_arguments
+        (type_identifier)))
+    body: (struct_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))))
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)))))
+
+================================================================================
 Type alias
 ================================================================================
 
@@ -255,6 +329,36 @@ type Matrix = [[Count]]
         (type_identifier)))))
 
 ================================================================================
+Distinct type over a fixed-width scalar
+================================================================================
+
+distinct TabId = U32
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier)))
+
+================================================================================
+Two distinct types over one representation
+================================================================================
+
+distinct TabId = U32
+distinct BookmarkId = U32
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier))
+  (distinct_declaration
+    name: (identifier)
+    representation: (type_identifier)))
+
+================================================================================
 Package declaration
 ================================================================================
 
@@ -276,3 +380,72 @@ Package KikHarness {
         name: (identifier)
         value: (dot_member_expression
           name: (identifier))))))
+
+================================================================================
+Module constant
+================================================================================
+
+let answer = 6 * 7
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (constant_declaration
+    name: (identifier)
+    value: (binary_expression
+      left: (integer_literal)
+      right: (integer_literal))))
+
+================================================================================
+Module constant with a type annotation and a call
+================================================================================
+
+let greeting: String = audience()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (constant_declaration
+    name: (identifier)
+    type: (type_identifier)
+    value: (call_expression
+      function: (identifier)
+      arguments: (arguments))))
+
+================================================================================
+A generic class extends a concrete generic parent
+================================================================================
+
+class Parent<Value> {
+    let value: Value
+}
+
+class Child<Value> extends Parent<Value> {
+    let extra: Int
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier))))
+  (class_declaration
+    name: (identifier)
+    type_parameters: (type_parameters
+      (type_parameter
+        name: (identifier)))
+    extends: (extends_list
+      (type_identifier)
+      (type_arguments
+        (type_identifier)))
+    body: (class_body
+      (field_declaration
+        name: (identifier)
+        type: (type_identifier)))))

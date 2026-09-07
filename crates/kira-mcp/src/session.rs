@@ -14,7 +14,11 @@ use serde_json::Value;
 /// How many saved runs are kept before the oldest are removed.
 const KEEP: usize = 32;
 
-/// Distinguishes two runs saved in the same millisecond.
+/// Distinguishes two runs saved by this process in the same millisecond.
+///
+/// Only within this process: it starts at zero in every one of them, so it
+/// cannot tell two processes apart. That is what the process id in the
+/// identifier is for.
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Why a saved run could not be written or read.
@@ -60,7 +64,7 @@ pub fn store(kind: &str, value: &Value) -> Result<String, SessionError> {
         .map(|elapsed| elapsed.as_millis())
         .unwrap_or_default();
     let ordinal = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let id = format!("{kind}-{stamp:013}-{ordinal:04}");
+    let id = identifier(kind, stamp, std::process::id(), ordinal);
 
     let directory = directory();
     std::fs::create_dir_all(&directory).map_err(|source| SessionError::Io {
@@ -79,6 +83,19 @@ pub fn store(kind: &str, value: &Value) -> Result<String, SessionError> {
     })?;
     prune();
     Ok(id)
+}
+
+/// The name a run saved at `stamp` by process `pid` is written under.
+///
+/// The process id is part of the name because the directory is shared and the
+/// server is run more than once at a time — a test run puts one process per
+/// test in it. Without it two processes that save a run of the same kind in the
+/// same millisecond both start their counter at zero, agree on a name, and
+/// write over each other: one caller is handed an identifier that now resolves
+/// to somebody else's run, and a reader that arrives mid-write sees a truncated
+/// file rather than a result.
+fn identifier(kind: &str, stamp: u128, pid: u32, ordinal: u64) -> String {
+    format!("{kind}-{stamp:013}-{pid:07}-{ordinal:04}")
 }
 
 /// Reads back a saved run.
@@ -126,7 +143,7 @@ fn prune() {
     let Ok(entries) = std::fs::read_dir(directory()) else {
         return;
     };
-    let mut saved: Vec<(u128, u64, PathBuf)> = entries
+    let mut saved: Vec<(Issued, PathBuf)> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
@@ -134,31 +151,42 @@ fn prune() {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| {
-            let (stamp, ordinal) = path
+            let issued = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .and_then(issued_at)?;
-            Some((stamp, ordinal, path))
+            Some((issued, path))
         })
         .collect();
     if saved.len() <= KEEP {
         return;
     }
-    saved.sort_by_key(|(stamp, ordinal, _)| (*stamp, *ordinal));
-    for (_, _, path) in &saved[..saved.len() - KEEP] {
+    saved.sort_by_key(|(issued, _)| *issued);
+    for (_, path) in &saved[..saved.len() - KEEP] {
         let _ = std::fs::remove_file(path);
     }
 }
 
-/// When an identifier this server issued was issued: its stamp and its ordinal.
+/// When an identifier this server issued was issued, and by whom.
+///
+/// Ordered stamp first, so age decides; the process id and the ordinal only
+/// separate two runs saved in the same millisecond.
+type Issued = (u128, u32, u64);
+
+/// Reads [`Issued`] back out of an identifier this server issued.
 ///
 /// `None` for anything else, which is what keeps a foreign file out of the
 /// pruning entirely. Read from the right because a kind is free to contain a
-/// dash and the two trailing fields never do.
-fn issued_at(stem: &str) -> Option<(u128, u64)> {
+/// dash and the three trailing fields never do.
+fn issued_at(stem: &str) -> Option<Issued> {
     let (head, ordinal) = stem.rsplit_once('-')?;
+    let (head, pid) = head.rsplit_once('-')?;
     let (_kind, stamp) = head.rsplit_once('-')?;
-    Some((stamp.parse().ok()?, ordinal.parse().ok()?))
+    Some((
+        stamp.parse().ok()?,
+        pid.parse().ok()?,
+        ordinal.parse().ok()?,
+    ))
 }
 
 #[cfg(test)]
@@ -195,8 +223,8 @@ mod tests {
     /// opposite — which is how a just-saved run came to be the one pruned.
     #[test]
     fn a_runs_age_is_its_stamp_and_not_its_name() {
-        let fresh = "build-1786041435682-0000";
-        let stale = "validate-1786000000000-0000";
+        let fresh = "build-1786041435682-0000042-0000";
+        let stale = "validate-1786000000000-0000042-0000";
         assert!(
             fresh < stale,
             "by name the fresh run sorts first, which is what made it the one pruned"
@@ -207,13 +235,51 @@ mod tests {
         );
         // Two runs in the same millisecond are ordered by the ordinal that
         // separates them, so pruning never has to pick between them arbitrarily.
-        assert!(issued_at("test-1786041435682-0001") > issued_at("test-1786041435682-0000"));
+        assert!(
+            issued_at("test-1786041435682-0000042-0001")
+                > issued_at("test-1786041435682-0000042-0000")
+        );
+    }
+
+    /// Two processes saving in the same millisecond do not agree on a name.
+    ///
+    /// The counter that separates two runs is per-process and starts at zero in
+    /// each of them, so the stamp and the ordinal together are not enough: a
+    /// test run gives every test its own process, and two of them saving a
+    /// `validate` run in the same millisecond used to write the same file. The
+    /// first one to read it back got the other one's run, or a truncated file.
+    #[test]
+    fn two_processes_saving_in_the_same_millisecond_get_different_identifiers() {
+        let stamp = 1_786_041_435_682;
+        let mine = identifier("validate", stamp, 4321, 0);
+        let theirs = identifier("validate", stamp, 8765, 0);
+        assert_ne!(mine, theirs);
+        // Still the same age, so neither is preferred over the other by pruning
+        // for having been saved by a lower-numbered process.
+        assert_eq!(
+            issued_at(&mine).expect("ours").0,
+            issued_at(&theirs).expect("theirs").0
+        );
+    }
+
+    /// An identifier survives being read back into its parts.
+    #[test]
+    fn an_identifier_reads_back_as_what_it_was_made_from() {
+        let id = identifier("validate", 1_786_041_435_682, 4321, 7);
+        assert_eq!(issued_at(&id), Some((1_786_041_435_682, 4321, 7)));
+        assert!(well_formed(&id));
     }
 
     /// A file this server did not write is not this server's to delete.
     #[test]
     fn a_foreign_file_is_not_a_saved_run() {
-        for stem in ["notes", "test-nonsense-0000", "test-1786041435682-x"] {
+        for stem in [
+            "notes",
+            "test-nonsense-0000",
+            "test-1786041435682-x",
+            "test-nonsense-0000042-0000",
+            "test-1786041435682-0000",
+        ] {
             assert_eq!(
                 issued_at(stem),
                 None,

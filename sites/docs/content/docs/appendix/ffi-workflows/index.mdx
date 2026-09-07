@@ -1,66 +1,38 @@
 ---
 title: FFI Overview
-description: "The current native library system: C ABI only, static-linking first, generated bindings, and hybrid/native support."
+description: What the seam carries, how a package declares a native library, and where each part of the workflow is documented.
 ---
 
-Kira currently provides a focused native interop model with clearly defined boundaries.
+Kira calls prebuilt C functions with no `@Native` and no glue, on every engine. [Interop and FFI](/docs/language-guide/interop-and-ffi) is the language surface; this section is the workflow around it.
 
-## Current Contract
+## The Contract
 
-The supported path today is:
+- C ABI only. `abi: c` is the one accepted value.
+- A package lists its native libraries in `package.kira` or in `NativeLibs/<name>.toml` beside it.
+- Target selection is exact and structural: a host build picks the row whose triple matches this machine, and a wasm device picks the wasm row.
+- Bindings may be hand-written or generated from headers by the managed `libclang`, and a generated binding is ordinary Kira source in the same dialect.
+- Every backend reaches C through one generated adapter per import, so one declaration serves all of them.
 
-- C ABI only
-- static linking first
-- per-library TOML manifests under nearby `native_libs/`
-- Clang-driven autobinding generation
-- generated bindings emitted as real Kira source files
-- direct extern calls from explicitly marked `@Native` Kira declarations
-- explicit callback support
-- LLVM/native and hybrid as the intended FFI-capable pipelines
+## In This Section
 
-## Native Edge Discipline
+| Page | Covers |
+| --- | --- |
+| [Native Library Manifests](/docs/appendix/ffi-workflows/manifests) | The two manifest spellings, target rows, link attributes, and runtime files. |
+| [C-Layout Values](/docs/appendix/ffi-workflows/c-layout-values) | Structs by value and by address, member reads through a pointer, inline arrays, and arrays as C buffers. |
+| [Callbacks](/docs/appendix/ffi-workflows/callbacks) | `@FFI.Callback`, Kira functions as C callbacks, and a struct C passes by value. |
+| [Generated Bindings](/docs/appendix/ffi-workflows/autobindings) | `autobind`, what is bound and what is not, caching, and the `bind-types/` convention. |
+| [System Calls](/docs/appendix/ffi-workflows/syscalls) | `@FFI.Syscall`, the calls the compiler has numbers for, and what a host may serve. |
+| [Wasm](/docs/appendix/ffi-workflows/wasm) | What the Web target links and what it proves. |
 
-Kira keeps the native boundary explicit:
+## The Worked Example
 
-- a declaration that directly calls or references an `@FFI.Extern` symbol must be `@Native`
-- a declaration that only calls another Kira declaration marked `@Native` does not itself need `@Native`
-- storing opaque handles or passing values returned by native helpers through ordinary Kira logic does not create a transitive native requirement by itself
+`examples/ffi` is a package with one C source, one manifest, and one Kira file. The archives are not checked in; build them from `NativeLibs/ffimath.c` with the managed toolchain, then run the same program on every engine.
 
-This distinction matters for Kira Graphics-style packages. Sokol-facing helpers should be small `@Native` declarations that touch generated bindings directly. Higher-level graphics API code can call those helpers, keep ordinary Kira execution semantics, and stay available to hybrid/debug/live-runtime workflows.
+```bash
+clang -c NativeLibs/ffimath.c -o NativeLibs/lib/ffimath.o
+llvm-ar crs NativeLibs/lib/libffimath.a NativeLibs/lib/ffimath.o
 
-The VM does not execute FFI directly. In hybrid mode, runtime bytecode crosses to native code through the bridge/trampoline path; it does not magically invoke C ABI functions from the VM.
-
-## Current Scope
-
-The following capabilities are outside the current FFI scope:
-
-- libffi-backed runtime interop
-- dynamic linking as the primary documented workflow
-- a stable Kira ABI for third-party binary integration
-- non-C ABIs
-- variadics
-- captured closures crossing the boundary
-
-The supported and tested workflow is the contract described in the previous section.
-
-## Where FFI Lives In The Repo
-
-The current split is deliberate:
-
-- `kira_native_lib_definition`: native library contracts
-- `kira_manifest`: TOML parsing
-- `kira_build`: manifest discovery, host resolution, archive building, and autobinding generation
-- `kira_llvm_backend`: direct extern lowering and native/hybrid bridge wrapper emission
-- `kira_native_bridge` and `kira_hybrid_runtime`: runtime/native marshalling
-
-## Proof Targets
-
-The repository includes checked-in proof targets for:
-
-- native callbacks
-- hybrid callbacks
-- generated Sokol graphics bindings
-- a native triangle program
-- a hybrid Sokol call proof
-
-Read [Examples Overview](/docs/appendix/examples) and [Sokol Triangle](/docs/appendix/examples/sokol-triangle) after this page if you want the end-to-end examples.
+kira run --backend vm main.kira
+kira run --backend llvm main.kira
+kira run --backend hybrid main.kira
+```

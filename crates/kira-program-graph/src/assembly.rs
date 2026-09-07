@@ -56,7 +56,28 @@ pub enum AssemblyError {
     /// The governing package's dependency graph could not be resolved.
     #[error(transparent)]
     Resolution(#[from] ResolveError),
+    /// The program reaches more modules than one compilation admits.
+    ///
+    /// Reported rather than truncated: a graph quietly cut short compiles a
+    /// program the author did not write, and the missing files show up as
+    /// undefined names somewhere far from the cause.
+    #[error(
+        "this program reaches {reached} modules, and one compilation admits {}",
+        MAX_MODULES
+    )]
+    TooManyModules {
+        /// How many the walk found.
+        reached: usize,
+    },
 }
+
+/// The most modules one compilation admits, the entry file included.
+///
+/// A stated limit rather than an emergent one: every module takes a `SourceId`,
+/// a diagnostic points through it, and the walk that finds them is quadratic in
+/// the worst case. A program at this size has a structure problem the compiler
+/// should name, not absorb.
+pub const MAX_MODULES: usize = 1024;
 
 /// Every source file the program entered at one path is built from.
 #[derive(Debug)]
@@ -168,6 +189,15 @@ pub fn load_program_with(
         add_package_linter(found, &mut modules);
     }
 
+    // The entry file is a module of the program too, so it counts against the
+    // limit even though it is not in this list. A walk that stopped at the
+    // limit reports through `overflowed`, because the modules it did not read
+    // are exactly the ones missing from this count.
+    let reached = modules.len() + 1;
+    if reached > MAX_MODULES || walk.overflowed() {
+        return Err(AssemblyError::TooManyModules { reached });
+    }
+
     let build_kind = match package.as_ref().map(Manifest::kind) {
         Some(kira_manifest::PackageKind::Library) => BuildKind::Library,
         Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
@@ -205,7 +235,14 @@ fn resolve_packages(package: Option<&Manifest>) -> Result<ResolvedDependencies, 
     let roots = graph
         .packages
         .iter()
-        .map(|resolved| PackageRoot::new(resolved.name.clone(), resolved.source_dir.clone()))
+        .map(|resolved| {
+            PackageRoot::resolved(
+                resolved.name.clone(),
+                resolved.source_dir.clone(),
+                resolved.version.clone(),
+                resolved.root_dir.to_string_lossy().into_owned(),
+            )
+        })
         .collect();
     let diagnostics = graph.diagnostics.clone();
     Ok(ResolvedDependencies {

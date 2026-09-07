@@ -16,7 +16,7 @@
 
 use std::env;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     // The override first, so a hand-built archive needs no install and no
@@ -34,6 +34,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // can name what was wanted.
     let Some(target_key) = kira_toolchain::libffi_vendor_target(&os, &arch) else {
         println!("cargo:rustc-cfg=kira_libffi_unavailable");
+        // The crate includes this file unconditionally, so it has to exist even
+        // where there is no archive to name. Empty, because on such a target
+        // there is genuinely nothing to link — wasm being the one that reaches
+        // here — and an absent file would fail as a missing include rather than
+        // as the unavailability it is.
+        write_link_declaration(String::new())?;
         return Ok(());
     };
 
@@ -60,10 +66,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("the libffi archive has no parent directory")?
             .display()
     );
-    println!(
-        "cargo:rustc-link-lib=static={}",
-        kira_toolchain::link_name_for(&os, &target_env)
-    );
+    let name = kira_toolchain::link_name_for(&os, &target_env);
+    // Written into the crate as well as emitted as a directive, for the reason
+    // `kira-llvm-backend` does the same: `cargo:rustc-link-lib` names a library
+    // for the artifacts cargo links this crate into *as a dependency*, and does
+    // not reach a link that includes this rlib from somewhere else — another
+    // crate's build-script executable, where the search path arrives and the
+    // library name does not. A `#[link]` attribute is recorded in the crate's
+    // own metadata and travels with the rlib wherever it goes.
+    write_link_declaration(format!(
+        "#[link(name = \"{name}\", kind = \"static\")]\nunsafe extern \"C\" {{}}\n"
+    ))?;
+    println!("cargo:rustc-link-lib=static={name}");
+    Ok(())
+}
+
+/// Writes what the crate includes to declare the archive it links against.
+fn write_link_declaration(contents: String) -> Result<(), Box<dyn Error>> {
+    let out_dir = env::var("OUT_DIR")?;
+    std::fs::write(Path::new(&out_dir).join("libffi_link.rs"), contents)?;
     Ok(())
 }
 

@@ -5,7 +5,7 @@ struct BrowserState {
 
 @Main
 function main() {
-    let boxed = nativeState(BrowserState { title: "Harmony Browser" clicks: 1 })
+    let boxed = nativeState(BrowserState { title: "Harmony Browser", clicks: 1 })
     let handle = nativeUserData(boxed)
     var state = nativeRecover<BrowserState>(handle)
     print(state.title)
@@ -13,6 +13,6 @@ function main() {
     state.clicks = state.clicks + 2
     var after = nativeRecover<BrowserState>(handle)
     print(after.clicks)
-    nativeStateFree(boxed)
+    nativeUserDataRelease(handle)
     return
 }

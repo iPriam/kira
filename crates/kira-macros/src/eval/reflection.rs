@@ -156,6 +156,32 @@ pub(super) fn method_on(value: &Value, method: &str, args: &[Value]) -> Result<V
         (Value::Identifier(name), "asString", []) => Ok(Value::Str(name.clone())),
         (Value::TypeRef(written), "asSyntax", []) => Ok(Value::built(written.clone())),
         (Value::Str(text), "asString", []) => Ok(Value::Str(text.clone())),
+        // Slicing text at compile time, for macros that take apart what
+        // reflection spells: an array type's element, a qualified name's last
+        // segment. Byte offsets, like the runtime `substring` — and for the
+        // same reason, since the texts macros slice are spellings the compiler
+        // wrote, which are ASCII. Deliberately outside `StringOp`: those travel
+        // the runtime wire format, and slicing source text needs no backend.
+        (receiver, "substring", [Value::Int(from), Value::Int(to)]) => {
+            let Some(text) = as_text(receiver) else {
+                return Err(EvalError::unsupported(format!(
+                    "`substring` on a `{}`, which carries no text",
+                    receiver.type_name()
+                )));
+            };
+            let len = text.len() as i64;
+            if *from < 0 || *to < *from || *to > len {
+                return Err(EvalError::unsupported(format!(
+                    "substring({from}, {to}) of {len} bytes of text"
+                )));
+            }
+            match text.get(*from as usize..*to as usize) {
+                Some(slice) => Ok(Value::Str(slice.to_owned())),
+                None => Err(EvalError::unsupported(format!(
+                    "substring({from}, {to}), which splits a character"
+                ))),
+            }
+        }
         // The same string surface a program has, so a macro body and the code
         // it generates agree on what text can do. Reached on every value that
         // carries text — a `Syntax` is exactly as searchable as a `String`,

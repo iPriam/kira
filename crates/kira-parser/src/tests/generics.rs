@@ -1,5 +1,5 @@
-//! Type-parameter lists on an enum declaration and type-argument lists on a
-//! use, plus the recovery each malformed form falls back to.
+//! Type-parameter lists on declarations and type-argument lists on a use, plus
+//! the recovery each malformed form falls back to.
 //!
 //! The one shape worth pinning here is the **shifted right angle**: the lexer
 //! knows nothing about types, so a nested instantiation closes on a single
@@ -95,25 +95,90 @@ fn an_array_of_an_instantiation_parses() {
 }
 
 #[test]
-fn a_generic_struct_class_and_function_are_refused_by_name() {
-    for text in [
-        "struct Box<Value> { let v: Int }",
-        "class Box<Value> { let v: Int = 1 }",
-        "function id<Value>(v: Int) -> Int { return v }",
-    ] {
-        let result = parse_text(text);
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.has_code("KPAR047")),
-            "`{text}` must be refused by name, got {:?}",
-            result.diagnostics,
-        );
-        // The list is consumed so the rest of the declaration still parses:
-        // one mistake, not a cascade.
-        assert_eq!(result.tree.items().len(), 1);
-    }
+fn generic_struct_class_and_function_declarations_keep_their_parameters() {
+    let struct_result = parse_text("struct Box<Value> { let v: Value }");
+    assert!(
+        struct_result.diagnostics.is_empty(),
+        "{:?}",
+        struct_result.diagnostics
+    );
+    let [Item::Struct(declaration)] = struct_result.tree.items() else {
+        panic!("expected one generic struct");
+    };
+    assert_eq!(declaration.type_params.len(), 1);
+    assert_eq!(
+        struct_result
+            .interner
+            .resolve(declaration.type_params[0].name),
+        "Value"
+    );
+
+    let class_result = parse_text("class Box<Value> { let v: Value }");
+    assert!(
+        class_result.diagnostics.is_empty(),
+        "{:?}",
+        class_result.diagnostics
+    );
+    let [Item::Class(declaration)] = class_result.tree.items() else {
+        panic!("expected one generic class");
+    };
+    assert_eq!(declaration.type_params.len(), 1);
+    assert_eq!(
+        class_result
+            .interner
+            .resolve(declaration.type_params[0].name),
+        "Value"
+    );
+
+    let function_result = parse_text("function id<Value>(value: Value) -> Value { return value }");
+    assert!(
+        function_result.diagnostics.is_empty(),
+        "{:?}",
+        function_result.diagnostics
+    );
+    let [Item::Function(function)] = function_result.tree.items() else {
+        panic!("expected one generic function");
+    };
+    assert_eq!(function.type_params.len(), 1);
+    assert_eq!(
+        function_result
+            .interner
+            .resolve(function.type_params[0].name),
+        "Value"
+    );
+}
+
+#[test]
+fn a_class_parent_records_explicit_generic_arguments() {
+    let result = parse_text("class Child<Value> extends Parent<Value> {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let [Item::Class(declaration)] = result.tree.items() else {
+        panic!("expected one class");
+    };
+    assert_eq!(declaration.parents.len(), 1);
+    assert_eq!(declaration.parents[0].type_args.len(), 1);
+    assert_eq!(
+        type_spelling(&result, declaration.parents[0].type_args[0]),
+        "Value"
+    );
+}
+
+#[test]
+fn a_member_function_cannot_own_a_second_type_parameter_list() {
+    let result =
+        parse_text("struct Box { function get<Value>(value: Value) -> Value { return value } }\n");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.has_code("KPAR047")),
+        "{:?}",
+        result.diagnostics
+    );
+    let [Item::Struct(declaration)] = result.tree.items() else {
+        panic!("expected a struct");
+    };
+    assert!(declaration.methods[0].type_params.is_empty());
 }
 
 #[test]

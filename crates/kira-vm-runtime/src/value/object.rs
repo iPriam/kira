@@ -244,12 +244,24 @@ impl Heap {
         };
         self.freed += 1;
         self.free_list.push(id.0);
+        // The glue is keyed by slot, and the slot was just recycled: a stale
+        // entry would hand this type's `Drop` body to whatever unrelated
+        // object the free list places here next. Only the non-last holder of
+        // a dropping struct reaches this line — the last holder parked above —
+        // and a non-last holder's slot still carries its own entry. The empty
+        // test keeps the no-`Drop` program paying one length check, as the
+        // registry promises.
+        if !self.drop_glue.is_empty() {
+            self.drop_glue.remove(&id.0);
+        }
         // Only the last holder of the block owns what is in it. Another handle
         // still reading these fields would find them freed underneath it.
         let Ok(fields) = Rc::try_unwrap(fields) else {
             return;
         };
-        for field in fields {
+        // Fields release in reverse declaration order, the language's rule
+        // for every engine.
+        for field in fields.into_iter().rev() {
             self.drop_value(field);
         }
     }
@@ -273,13 +285,76 @@ impl Heap {
             allocated: self.allocated,
             freed: self.freed,
             current: self.allocated - self.freed,
-            retained: self.retained.len() as u64,
+            retained: self.retained_slot_count(),
+        }
+    }
+
+    /// How many heap slots the retained registry owns, transitively.
+    ///
+    /// `current` counts slots, so this must too: a retained C-layout struct
+    /// is a parent block *and* the member blocks its payload points into —
+    /// several slots for one registry entry. Counting entries instead read a
+    /// balanced exit as a leak of exactly the retained values' children.
+    /// Walked at accounting time rather than tracked at transfer time because
+    /// the registry only grows, and `stats` runs at exits and in tests, never
+    /// on the dispatch path.
+    fn retained_slot_count(&self) -> u64 {
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for value in &self.retained {
+            self.count_owned_slots(*value, &mut seen);
+        }
+        seen.len() as u64
+    }
+
+    /// Adds every slot `value` owns — itself and everything under it — to
+    /// `seen`. A shared object is counted once, which is what a slot table
+    /// count needs.
+    fn count_owned_slots(&self, value: Value, seen: &mut std::collections::HashSet<u32>) {
+        let index = match value {
+            Value::Str(id) => id.0,
+            Value::Struct(id) => id.0,
+            Value::Array(id) => id.0,
+            Value::Enum(id) => id.0,
+            Value::Erased(id) => id.0,
+            Value::Cell(id) => id.0,
+            Value::NativeSnapshot(id) => id.0,
+            Value::CBlock(id) => id.0,
+            _ => return,
+        };
+        if !seen.insert(index) {
+            return;
+        }
+        match self.slots.get(index as usize) {
+            Some(Some(Object::Struct(fields))) | Some(Some(Object::Array(fields))) => {
+                for &field in fields.iter() {
+                    self.count_owned_slots(field, seen);
+                }
+            }
+            Some(Some(Object::Enum {
+                payload: Some(payload),
+                ..
+            })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::Erased { payload, .. })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::Cell { payload, .. })) => {
+                self.count_owned_slots(*payload, seen);
+            }
+            Some(Some(Object::CBlock { children, .. })) => {
+                for child in children {
+                    self.count_owned_slots(Value::CBlock(child.block), seen);
+                }
+            }
+            _ => {}
         }
     }
 
     /// Drops a value, freeing whatever heap storage it owns.
     pub fn drop_value(&mut self, value: Value) {
         match value {
+            Value::NativeState(token) => self.native_state_releases.push(token),
             Value::Str(id) => self.free(id),
             Value::Struct(id) => self.free_struct(id),
             Value::Array(id) => self.free_array(id),
@@ -310,6 +385,11 @@ impl Heap {
     /// reader can distinguish from copying them here. See the module header.
     pub fn copy_value(&mut self, value: Value) -> Value {
         match value {
+            // A copy of a handle is one more owner of the same state.
+            Value::NativeState(token) => {
+                self.native_state_retains.push(token);
+                value
+            }
             Value::Str(id) => {
                 let cloned = self.get(id).to_owned();
                 Value::Str(self.alloc(cloned))
@@ -423,6 +503,29 @@ mod tests {
     use kira_runtime_abi::{CBlockOffset, ForeignPointerWidth};
 
     use super::*;
+
+    #[test]
+    fn a_recycled_slot_does_not_inherit_the_previous_tenant_drop_glue() {
+        // A copy of a dropping struct shares the fields and carries the glue.
+        // Freeing the copy is a non-last-holder free: the slot goes back to
+        // the free list, and the glue entry keyed by that slot must go with
+        // it — a stale entry would run this type's `Drop` body against
+        // whatever unrelated object lands on the slot next.
+        let mut heap = Heap::new();
+        let original = heap.alloc_struct_dropping(vec![Value::Int(7)], 3);
+        let copy = heap.copy_value(Value::Struct(original));
+        let Value::Struct(copy_id) = copy else {
+            panic!("a struct copy stays a struct");
+        };
+        heap.drop_value(copy);
+
+        let recycled = heap.alloc_struct(vec![Value::Int(994_771_479)]);
+        assert_eq!(recycled, copy_id, "the free list did not recycle the slot");
+        assert_eq!(heap.glue_of(recycled.0), None);
+        // The original handle still owes its body: last holder, parked whole.
+        heap.drop_value(Value::Struct(original));
+        assert!(heap.owes_drops());
+    }
 
     #[test]
     fn a_cblock_tree_clone_rewrites_its_embedded_pointer() {

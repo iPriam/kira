@@ -267,7 +267,6 @@ fn native_recover_cannot_name_a_type_that_runs_a_body() {
          @Main function main() {{\n\
          \x20   var state = nativeState(Counter {{ n: 0 }})\n\
          \x20   var view = nativeRecover<D>(nativeUserData(state))\n\
-         \x20   nativeStateFree(state)\n\
          \x20   return\n}}\n"
     ));
     assert_eq!(codes, vec!["KSEM304"]);
@@ -277,13 +276,17 @@ fn native_recover_cannot_name_a_type_that_runs_a_body() {
 
 #[test]
 fn a_retained_foreign_argument_may_not_run_a_body() {
+    // Two fields, so the struct crosses as a C-layout aggregate rather than as
+    // its one field's scalar. A single-scalar-field handle is passed by value
+    // as that scalar and has no C storage for a callee to keep, which is
+    // `KSEM371` and a different rule from the one under test here.
     let codes = codes(
-        "@FFI.Struct { layout: c; }\n\
-         struct Handle: Drop {\n    var id: I32\n\
+        "@FFI.Struct { layout: c }\n\
+         struct Handle: Drop {\n    var id: I32\n    var slot: I32\n\
          \n    function drop(borrow mut self) { return }\n}\n\
-         @FFI.Extern { library: fixture; symbol: keep; abi: c; retains: value; }\n\
-         function keep(value: Handle): Void;\n\
-         @Main function main() { let h = Handle { id: 1 } keep(move h) return }\n",
+         @FFI.Extern { library: fixture, symbol: keep, abi: c, retains: value }\n\
+         function keep(value: Handle): Void\n\
+         @Main function main() { let h = Handle { id: 1, slot: 2 } keep(move h) return }\n",
     );
     assert_eq!(codes, vec!["KSEM305"]);
 }

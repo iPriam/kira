@@ -7,6 +7,8 @@
 
 use kira_ir::IrExprId;
 use kira_semantics_model::Type;
+use llvm_sys::LLVMIntPredicate;
+use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
 use super::FunctionLowering;
@@ -39,30 +41,129 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         value: IrExprId,
         from: Type,
+        identity: kira_semantics_model::ErasedTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
         let lowered = self.lower_expr(value)?;
-        self.codegen.erase_value(lowered, from)
+        self.codegen.erase_value(lowered, from, identity)
     }
 
-    /// Carries one generic instantiation into another whose type arguments are
-    /// `Any`.
-    ///
-    /// The rebuild itself is a generated function, memoized per type pair —
-    /// see [`super::super::widening`] for why it is a function rather than
-    /// inline code, and what it does. A pair whose runtime forms already agree
-    /// gets no leaf and no call: the value is already what the destination
-    /// wants, which is the whole of the VM's answer to this node.
-    pub(super) fn lower_widen(
+    /// `value.type` where the type is known: the value is evaluated and
+    /// released for its effects, and the answer is the id lowering interned.
+    pub(super) fn lower_type_const(
         &mut self,
         value: IrExprId,
-        from: Type,
-        to: Type,
+        id: kira_semantics_model::ErasedTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
+        let ty = self.type_of(value);
         let lowered = self.lower_expr(value)?;
-        let Some(leaf) = self.codegen.widen_leaf(from, to)? else {
-            return Ok(lowered);
+        self.drop_value(lowered, ty)?;
+        Ok(self.codegen.const_int(id.as_i64()))
+    }
+
+    /// `try value as Type`: the cast as a result rather than a trap.
+    ///
+    /// The same tag comparison [`Self::lower_type_cast`] makes, answered with a
+    /// value instead of a trap: `Ok(payload)` on the branch where the box holds
+    /// the target, `Error(Mismatch(type))` on the branch where it holds
+    /// something else. The box is released on both, exactly as the trapping
+    /// cast releases it on the one path it has.
+    pub(super) fn lower_type_cast_result(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+        result: kira_semantics_model::EnumId,
+        failure: kira_semantics_model::EnumId,
+        payload: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        use kira_semantics_model::cast_result::{ERROR_TAG, MISMATCH_TAG, OK_TAG};
+
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"cast.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        let function = self.current_function();
+        let ok_block = self.append_block(function, c"cast.ok");
+        let error_block = self.append_block(function, c"cast.error");
+        let done_block = self.append_block(function, c"cast.end");
+        let builder = self.codegen.builder;
+        // SAFETY: two `i64`s compared on a live block, branching to blocks of
+        // this function, each terminated exactly once below.
+        unsafe {
+            let holds = LLVMBuildICmp(
+                builder,
+                LLVMIntPredicate::LLVMIntEQ,
+                tag,
+                expected,
+                c"cast.holds".as_ptr(),
+            );
+            LLVMBuildCondBr(builder, holds, ok_block, error_block);
+        }
+
+        self.position_at(ok_block);
+        let decoded = self.codegen.read_box_payload(boxed, payload)?;
+        self.drop_value(boxed, value_ty)?;
+        let payload_ty = self.codegen.enum_payload_type(result, OK_TAG)?;
+        let ok_tag = self.codegen.const_int(i64::from(OK_TAG));
+        let ok_value = self
+            .codegen
+            .box_new(ok_tag, payload_ty, decoded, c"cast.ok.enum")?;
+        // SAFETY: the block is unterminated, and the exit is re-read because
+        // building the payload may itself have created blocks.
+        let ok_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
         };
-        Ok(self.call(leaf, &mut [lowered], c"widened"))
+
+        self.position_at(error_block);
+        // The descriptor the value does hold, read before the box goes.
+        let held = tag;
+        self.drop_value(boxed, value_ty)?;
+        let mismatch_payload = self.codegen.enum_payload_type(failure, MISMATCH_TAG)?;
+        let mismatch_tag = self.codegen.const_int(i64::from(MISMATCH_TAG));
+        let mismatch =
+            self.codegen
+                .box_new(mismatch_tag, mismatch_payload, held, c"cast.mismatch")?;
+        let error_payload = self.codegen.enum_payload_type(result, ERROR_TAG)?;
+        let error_tag = self.codegen.const_int(i64::from(ERROR_TAG));
+        let error_value =
+            self.codegen
+                .box_new(error_tag, error_payload, mismatch, c"cast.error.enum")?;
+        // SAFETY: as above, for the failing branch.
+        let error_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
+        };
+
+        self.position_at(done_block);
+        // SAFETY: both predecessors answer with the same enum handle type.
+        let joined = unsafe {
+            let phi = LLVMBuildPhi(builder, self.codegen.types.ptr, c"cast.result".as_ptr());
+            let mut values = [ok_value, error_value];
+            let mut blocks = [ok_exit, error_exit];
+            LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), 2);
+            phi
+        };
+        Ok(joined)
+    }
+
+    /// A property of a runtime type descriptor, through the generated reader
+    /// for that property.
+    pub(super) fn lower_type_field(
+        &mut self,
+        descriptor: IrExprId,
+        field: kira_semantics_model::TypeField,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let id = self.lower_expr(descriptor)?;
+        let reader = self.codegen.type_field_reader(field)?;
+        Ok(self.call(reader, &mut [id], c"type.field"))
+    }
+
+    /// `value.type` on an `Any`: the identity the box carries.
+    pub(super) fn lower_type_of(&mut self, value: IrExprId) -> Result<LLVMValueRef, LlvmError> {
+        let lowered = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [lowered], c"type.of");
+        self.drop_value(lowered, Type::Any)?;
+        Ok(tag)
     }
 
     /// Reads an enum value's discriminant tag as an `Int`.
@@ -97,6 +198,66 @@ impl FunctionLowering<'_, '_> {
         let enum_value = self.lower_expr(value)?;
         let decoded = self.codegen.read_box_payload(enum_value, ty)?;
         self.drop_value(enum_value, value_ty)?;
+        Ok(decoded)
+    }
+
+    /// `value is Type`: the box's tag is the erased identity, so the test is
+    /// one compare; the box is released either way.
+    pub(super) fn lower_type_test(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"any.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        // SAFETY: two `i64`s compared on a live block.
+        let holds = unsafe {
+            LLVMBuildICmp(
+                self.codegen.builder,
+                LLVMIntPredicate::LLVMIntEQ,
+                tag,
+                expected,
+                c"any.is".as_ptr(),
+            )
+        };
+        self.drop_value(boxed, value_ty)?;
+        Ok(holds)
+    }
+
+    /// `value as Type`: the tag must be the erased identity, or the runtime
+    /// traps; then the payload is read out as `ty` and the box released, as
+    /// an enum payload is.
+    pub(super) fn lower_type_cast(
+        &mut self,
+        value: IrExprId,
+        target: kira_semantics_model::ErasedTypeId,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let boxed = self.lower_expr(value)?;
+        let tag = self.call(self.codegen.runtime.enum_tag, &mut [boxed], c"any.tag");
+        let expected = self.codegen.const_int(target.as_i64());
+        // SAFETY: two `i64`s compared on a live block.
+        let mismatch = unsafe {
+            LLVMBuildICmp(
+                self.codegen.builder,
+                LLVMIntPredicate::LLVMIntNE,
+                tag,
+                expected,
+                c"any.mismatch".as_ptr(),
+            )
+        };
+        let mut args = [tag, expected];
+        self.trap_if(
+            mismatch,
+            self.codegen.runtime.trap_cast,
+            &mut args,
+            c"cast.trap",
+        )?;
+        let decoded = self.codegen.read_box_payload(boxed, ty)?;
+        self.drop_value(boxed, value_ty)?;
         Ok(decoded)
     }
 }

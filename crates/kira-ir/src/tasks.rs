@@ -146,6 +146,7 @@ impl Build<'_> {
             op: IrBinOp::EqInt,
             lhs,
             rhs,
+            ty: Type::Bool,
         })
     }
 
@@ -204,6 +205,7 @@ fn int_function(
         // the VM half under `--backend hybrid`. One table, one engine, whatever
         // the build is.
         execution: Execution::Inherited,
+        is_main_thread: false,
         by_reference_params: Vec::new(),
         by_pointer_params: Vec::new(),
         body,
@@ -437,11 +439,15 @@ mod tests {
         IrProgram {
             functions: Vec::new(),
             types: TypeTable::default(),
+            descriptors: Default::default(),
             main: None,
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
+            constants: Vec::new(),
+
             exprs: la_arena::Arena::new(),
         }
     }

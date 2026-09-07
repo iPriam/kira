@@ -14,8 +14,10 @@ name = "kira-hybrid-launcher"
 path = "src/main.rs"
 
 [dependencies]
+kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
 kira-runtime-abi.workspace = true
+kira-toolchain.workspace = true
 thiserror.workspace = true
 
 [lints]

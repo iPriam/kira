@@ -22,9 +22,9 @@ enum Shade { Light Mid Dark }
 
 function rank(s: borrow Shade) -> Int {
     match s {
-        Light -> return 1;
-        Mid -> return 2;
-        Dark -> return 3;
+        Light -> return 1
+        Mid -> return 2
+        Dark -> return 3
     }
 }
 
@@ -83,8 +83,8 @@ enum Note { Tag(String) Blank }
 
 function textOf(n: borrow Note) -> String {
     match n {
-        Tag(text) -> return text;
-        Blank -> return "none";
+        Tag(text) -> return text
+        Blank -> return "none"
     }
 }
 
@@ -112,10 +112,10 @@ enum Cell { Count(Int) Ratio(Float) Flag(Bool) Empty }
 
 function score(c: borrow Cell) -> Int {
     match c {
-        Count(n) -> return n;
+        Count(n) -> return n
         Ratio(r) -> { if r > 1.5 { return 20 } return 10 }
         Flag(b) -> { if b { return 1 } return 0 }
-        Empty -> return 0;
+        Empty -> return 0
     }
 }
 
@@ -206,8 +206,8 @@ function classify(n: Int) -> Int {
     var c: Cell = .Empty
     if n > 0 { c = .Count(n) }
     match c {
-        Count(v) -> return v * 2;
-        Empty -> return -1;
+        Count(v) -> return v * 2
+        Empty -> return -1
     }
 }
 

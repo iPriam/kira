@@ -9,6 +9,22 @@ use super::frames::{Frame, Writeback};
 use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
 
+/// The fixed inputs for one native seam call.
+struct NativeCallRequest<'a> {
+    /// The bytecode module whose native function is entered.
+    module: &'a Module,
+    /// The function index being entered.
+    id: u32,
+    /// Caller places that receive values written through by the native side.
+    writebacks: &'a [Writeback],
+    /// Active VM frames receiving writeback values.
+    frames: &'a mut [Frame],
+    /// First argument position on the operand stack.
+    first: usize,
+    /// Number of arguments on the operand stack.
+    count: usize,
+}
+
 impl Vm<'_> {
     /// Rebuilds every deferred state read sitting at or above `first` on the
     /// operand stack.
@@ -39,29 +55,6 @@ impl Vm<'_> {
         writebacks: &[Writeback],
         frames: &mut [Frame],
     ) -> Result<(), VmError> {
-        let mut scratch = std::mem::take(&mut self.native_scratch);
-        let result = self.call_native_with_scratch(module, id, writebacks, frames, &mut scratch);
-        scratch.clear();
-        self.native_scratch = scratch;
-        result
-    }
-
-    /// Executes one native crossing with its temporary vectors detached from
-    /// the VM. Keeping those buffers outside the VM during the call lets the
-    /// argument trees borrow freely while every success and error path returns
-    /// their capacity through [`Self::call_native`].
-    fn call_native_with_scratch(
-        &mut self,
-        module: &Module,
-        id: u32,
-        writebacks: &[Writeback],
-        frames: &mut [Frame],
-        scratch: &mut NativeCallScratch,
-    ) -> Result<(), VmError> {
-        let active_vm = self as *mut _;
-        let arguments = &mut scratch.arguments;
-        let trees = &mut scratch.trees;
-        let native_views = &mut scratch.native_views;
         let proto = module
             .functions
             .get(usize::try_from(id).map_err(|_| VmError::UnknownFunction(u64::from(id)))?)
@@ -73,6 +66,53 @@ impl Vm<'_> {
             .len()
             .checked_sub(count)
             .ok_or(VmError::StackUnderflow)?;
+        let mut scratch = std::mem::take(&mut self.native_scratch);
+        let result = self.call_native_with_scratch(
+            NativeCallRequest {
+                module,
+                id,
+                writebacks,
+                frames,
+                first,
+                count,
+            },
+            &mut scratch,
+        );
+        // `call_native_with_scratch` can refuse before it reaches the host: a
+        // native-state view may not recover, an aggregate may not have a seam
+        // tree, or a returned value may fail a writeback. The arguments are
+        // still owned by the operand stack in all of those cases. Remove them
+        // here, outside the fallible helper, so every path releases exactly the
+        // values that crossed (or were about to cross) the seam.
+        for value in self.stack.drain(first..first + count) {
+            self.heap.drop_value(value);
+        }
+        scratch.clear();
+        self.native_scratch = scratch;
+        result
+    }
+
+    /// Executes one native crossing with its temporary vectors detached from
+    /// the VM. Keeping those buffers outside the VM during the call lets the
+    /// argument trees borrow freely while every success and error path returns
+    /// their capacity through [`Self::call_native`].
+    fn call_native_with_scratch(
+        &mut self,
+        call: NativeCallRequest<'_>,
+        scratch: &mut NativeCallScratch,
+    ) -> Result<(), VmError> {
+        let NativeCallRequest {
+            module,
+            id,
+            writebacks,
+            frames,
+            first,
+            count,
+        } = call;
+        let active_vm = self as *mut _;
+        let arguments = &mut scratch.arguments;
+        let trees = &mut scratch.trees;
+        let native_views = &mut scratch.native_views;
         // A deferred state read becomes objects before it reaches the seam.
         // A recovered view is materialized below from the host-owned state, so
         // neither deferred reads nor native-state handles cross this call.
@@ -84,7 +124,7 @@ impl Vm<'_> {
         // every one of them, and the drop loop below is still what releases
         // them.
         arguments.clear();
-        arguments.extend_from_slice(&self.stack[first..]);
+        arguments.extend_from_slice(&self.stack[first..first + count]);
 
         // Every aggregate becomes an owned tree first. `NativeArg::Aggregate`
         // borrows, so the trees have to outlive the argument list built from
@@ -167,7 +207,11 @@ impl Vm<'_> {
                 // A deferred read is refused with them, and is unreachable:
                 // `own_arguments` above rebuilt every one on this stack, so a
                 // state read arrives as the struct, array or enum it holds.
-                Value::NativeState(_) | Value::NativeSnapshot(_) | Value::Cell(_) => {
+                Value::NativeState(_)
+                | Value::MainThreadTask(_)
+                | Value::NativeSnapshot(_)
+                | Value::Type(_)
+                | Value::Cell(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }
                 Value::Erased(_) => match &trees[index] {
@@ -181,15 +225,11 @@ impl Vm<'_> {
             });
         }
         let returned = {
-            let _active = super::ActiveVmGuard::install(active_vm, module);
+            let _active = super::active::ActiveVmGuard::install(active_vm, module);
             self.host
                 .call_native(id, &lowered)
                 .map_err(VmError::NativeCall)
         };
-
-        for value in self.stack.split_off(first) {
-            self.heap.drop_value(value);
-        }
 
         let returned = returned?;
         // The writebacks land before the result is pushed, so a failure among
@@ -338,7 +378,7 @@ impl Vm<'_> {
                 expected,
             }),
             (None, None) => {
-                let _active = super::ActiveVmGuard::install(active_vm, module);
+                let _active = super::active::ActiveVmGuard::install(active_vm, module);
                 self.host
                     .call_foreign(id, &lowered)
                     .map_err(VmError::ForeignCall)
@@ -350,7 +390,7 @@ impl Vm<'_> {
         // the value must outlive every schedule this side could guess. Only a
         // call that actually ran retains — a refused call showed C nothing.
         let succeeded = outcome.is_ok();
-        for (index, value) in self.stack.split_off(first).into_iter().enumerate() {
+        for (index, value) in self.stack.drain(first..first + count).enumerate() {
             if succeeded && import.signature().is_retained(index) {
                 self.heap.retain_for_foreign(value);
             } else {

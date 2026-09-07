@@ -245,8 +245,8 @@ function decodePng(bytes: [U8]) -> Result<Image, ImageFailure> {
         return .Error(decoder.failure)
     }
     return .Ok(Image {
-        width: decoder.width
-        height: decoder.height
+        width: decoder.width,
+        height: decoder.height,
         pixels: move decoder.pixels
     })
 }

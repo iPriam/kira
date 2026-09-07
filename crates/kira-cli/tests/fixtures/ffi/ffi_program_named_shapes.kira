@@ -2,18 +2,18 @@
 
 enum Usage { Vertex Index Uniform }
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Pair {
     let first: I32 = 0
     let second: I32 = 0
 }
 
-@FFI.Extern { library: ffifixture; symbol: ffi_usage_stride; abi: c; }
-function ffiUsageStride(usage: Usage): I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_sum_floats; abi: c; }
-function ffiSumFloats(values: [F32], count: I32): F32;
-@FFI.Extern { library: ffifixture; symbol: ffi_pair_sum; abi: c; }
-function ffiPairSum(pair: Pair): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_usage_stride, abi: c }
+function ffiUsageStride(usage: Usage): I32
+@FFI.Extern { library: ffifixture, symbol: ffi_sum_floats, abi: c }
+function ffiSumFloats(values: [F32], count: I32): F32
+@FFI.Extern { library: ffifixture, symbol: ffi_pair_sum, abi: c }
+function ffiPairSum(pair: Pair): I32
 
 // The enum crosses as its case's number, so the named type stays on this side
 // of the call rather than being mapped to an integer at every site.

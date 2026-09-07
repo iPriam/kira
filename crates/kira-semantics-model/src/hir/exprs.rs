@@ -7,12 +7,58 @@
 
 use super::ops::{Callee, HirBinaryOp, HirUnaryOp};
 use super::{FuncId, HirPlace, HirWriteback, LocalId};
+pub use crate::ty::descriptor::TypeField;
 use crate::ty::{EnumId, StructId, Type};
-use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, NativeStateTypeId};
+use kira_runtime_abi::{
+    CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, MainThreadOp, NativeStateTypeId,
+};
 use la_arena::Idx;
 
 /// Handle to a HIR expression.
 pub type HirExprId = Idx<HirExpr>;
+
+/// The order a struct construction evaluates its field initializers in.
+///
+/// Storage is always declaration order; evaluation follows the source. A
+/// literal that writes its fields in declaration order — and every
+/// construction the compiler synthesizes — is `Declared`. A literal that
+/// writes them in another order is `Written`, and its side effects run in
+/// that order, as the language rules require.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldOrder {
+    /// Evaluate `fields[0]`, `fields[1]`, … in that sequence.
+    Declared,
+    /// Evaluate the fields at these declaration indices, in this sequence.
+    ///
+    /// A permutation of `0..fields.len()`.
+    Written(Vec<u32>),
+}
+
+impl FieldOrder {
+    /// The written sequence `written` (declaration indices in source order),
+    /// collapsed to `Declared` when it already is the declaration order.
+    #[must_use]
+    pub fn from_written(written: Vec<u32>) -> Self {
+        if written
+            .iter()
+            .enumerate()
+            .all(|(at, &slot)| at as u32 == slot)
+        {
+            Self::Declared
+        } else {
+            Self::Written(written)
+        }
+    }
+
+    /// The declaration indices in evaluation order, for `count` fields.
+    #[must_use]
+    pub fn sequence(&self, count: usize) -> Vec<u32> {
+        match self {
+            Self::Declared => (0..count as u32).collect(),
+            Self::Written(order) => order.clone(),
+        }
+    }
+}
 
 /// An expression, carrying its resolved type.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +87,19 @@ pub enum HirExpr {
     /// struct zero-fills a pointer member to `NULL`, and a zero-fill that could
     /// not name its own zero would have to refuse the field instead.
     RawPtrNull,
+    /// A read of a module-scope constant's global slot.
+    ///
+    /// The slot indexes [`HirProgram::constants`]: it was filled once at
+    /// program start, so a read copies the stored value the way a field read
+    /// copies a field — the constant keeps what it holds.
+    ///
+    /// [`HirProgram::constants`]: super::HirProgram::constants
+    ConstantGet {
+        /// The constant's index in the program's evaluation-ordered table.
+        constant: u32,
+        /// The constant's type.
+        ty: Type,
+    },
     /// A read of a local slot.
     Local {
         /// The referenced local.
@@ -56,6 +115,126 @@ pub enum HirExpr {
         operand: HirExprId,
         /// The result type.
         ty: Type,
+    },
+    /// An explicit `copy value`: a second, independent holder of a Copyable
+    /// value. Its own node, not a read or a move, so the intent survives
+    /// analysis: a read may be the last use, a move consumes, a copy neither.
+    Copy {
+        /// The value being copied.
+        value: HirExprId,
+        /// The value's type, already proven Copyable.
+        ty: Type,
+    },
+    /// `value is Type`: whether an erased value holds `target`, by nominal
+    /// runtime identity. The value is evaluated once and released.
+    TypeTest {
+        /// The `Any` being asked.
+        value: HirExprId,
+        /// The type tested for; one that erases into `Any`.
+        target: Type,
+    },
+    /// `value.type`: the runtime type descriptor of what `value` holds.
+    ///
+    /// `of` is the operand's static type, and it decides what the read costs.
+    /// For an `Any` it is a real question and the box answers it; for anything
+    /// else the answer is settled here and the value is evaluated only for its
+    /// effects. Carrying `of` rather than a resolved id keeps the descriptor
+    /// table out of the frontend, which mints no ids.
+    TypeOf {
+        /// The value being asked, evaluated once and released.
+        value: HirExprId,
+        /// The operand's static type.
+        of: Type,
+    },
+    /// `try value as Type`: the cast as a value a handler can answer.
+    ///
+    /// Yields the `Result`-shaped row the `attempt` machinery consumes —
+    /// `Ok(target)` or `Error(TypeCastError.Mismatch(Type))` — so a failed cast
+    /// is an ordinary fallible step rather than a trap. A cast written without
+    /// `try` stays [`HirExpr::TypeCast`] and still traps.
+    TypeCastResult {
+        /// The `Any` being unboxed, consumed either way.
+        value: HirExprId,
+        /// The type cast to.
+        target: Type,
+        /// The failure enum the error variant carries.
+        failure: EnumId,
+        /// The result row: `Ok(target)`, `Error(failure)`.
+        ty: Type,
+    },
+    /// `Channel<T>()`: a new channel, as its sender end.
+    ChannelCreate {
+        /// The sender row this yields.
+        ty: Type,
+    },
+    /// `sender.receiver`: the matching receiver end.
+    ///
+    /// A derivation, not a second creation: the two ends share an index and a
+    /// generation and differ only in one bit, so reading this twice names one
+    /// channel twice.
+    ChannelReceiver {
+        /// The sender the receiver is derived from.
+        sender: HirExprId,
+        /// The receiver row this yields.
+        ty: Type,
+    },
+    /// `sender.send(value)`: one value onto the back of the queue.
+    ChannelSend {
+        /// The sender end.
+        sender: HirExprId,
+        /// The value crossing, already checked against the payload type.
+        value: HirExprId,
+        /// How the value becomes the word the queue holds.
+        wire: crate::channel::Crossing,
+    },
+    /// `receiver.receive()`: the next value, or the channel's end.
+    ///
+    /// A suspension point: while the queue is empty and the sender is live,
+    /// this hands the next runnable task a turn rather than spinning.
+    ChannelReceive {
+        /// The receiver end.
+        receiver: HirExprId,
+        /// The payload type the success variant carries.
+        payload: Type,
+        /// How the queued word becomes the value again. See
+        /// [`HirExpr::ChannelSend::wire`].
+        wire: crate::channel::Crossing,
+        /// The failure enum the error variant carries.
+        failure: EnumId,
+        /// The result row: `Ok(payload)`, `Error(ChannelError)`.
+        ty: Type,
+    },
+    /// `end.close()`: this end is done.
+    ChannelClose {
+        /// The end being closed.
+        end: HirExprId,
+        /// Whether it is the sender end.
+        sender: bool,
+        /// How this channel's payload crosses.
+        ///
+        /// A receiver closing discards whatever is still queued, and a boxed
+        /// payload's queue slot owns the storage its token names — so what the
+        /// close has to do about the queue depends on this.
+        wire: crate::channel::Crossing,
+    },
+    /// A property of a runtime type descriptor: `t.name`, `t.package`,
+    /// `t.kind`, or `t.arguments`.
+    TypeField {
+        /// The descriptor being read.
+        descriptor: HirExprId,
+        /// Which property.
+        field: TypeField,
+        /// The property's type: `String`, or `[Type]` for the arguments, whose
+        /// array row only the program's table can name.
+        ty: Type,
+    },
+    /// `value as Type`: the `target` an erased value holds. A value of any
+    /// other type traps; the result is owned by the caller.
+    TypeCast {
+        /// The `Any` being unboxed.
+        value: HirExprId,
+        /// The type cast to; one that erases into `Any`.
+        target: Type,
     },
     /// A binary operation.
     Binary {
@@ -110,12 +289,15 @@ pub enum HirExpr {
     ///
     /// Every field is present and in declaration order: the analyzer fills an
     /// omitted field with its declared default, so nothing downstream has to
-    /// know defaults exist.
+    /// know defaults exist. `order` says in which sequence the initializers
+    /// run, which is the order the literal wrote them.
     StructNew {
         /// The struct being built.
         struct_id: StructId,
         /// One initializer per field, in declaration order.
         fields: Vec<HirExprId>,
+        /// The sequence the initializers are evaluated in.
+        order: FieldOrder,
     },
     /// Boxing a value into a fresh capture cell (`HirStmt::Let` of a boxed
     /// `var`).
@@ -498,8 +680,14 @@ pub enum HirExpr {
         /// The Kira value type exposed by the mutable view.
         ty: Type,
     },
-    /// Releases a callback-state handle or userdata token exactly once.
-    NativeStateFree {
+    /// Adds one owner to the callback state a handle or userdata token names.
+    NativeStateRetain {
+        /// The state handle or raw token.
+        token: HirExprId,
+    },
+    /// Removes one owner from the callback state a handle or userdata token
+    /// names. The last owner's release destroys the state.
+    NativeStateRelease {
         /// The state handle or raw token.
         token: HirExprId,
     },
@@ -521,6 +709,25 @@ pub enum HirExpr {
         /// The target type, carrying its width spelling.
         ty: Type,
     },
+    /// A `distinct` crossing: the same value, at the other type.
+    ///
+    /// Both directions are this one node, because both are the same non-event
+    /// at run time. `TabId(word)` carries the distinct type in `ty` and
+    /// `id.raw` carries the representation, and neither changes a bit of the
+    /// value — a distinct type *is* its representation once the type checker
+    /// has had its say. `kira-ir` lowers this to the operand alone, so the IR,
+    /// the bytecode, and every backend see the crossing as the nothing it is.
+    ///
+    /// It exists so the type checker has somewhere to put the type. Returning
+    /// the operand unchanged would leave the expression reporting the type it
+    /// crossed *from*, which is the one fact the crossing changes.
+    Distinct {
+        /// The value crossing.
+        value: HirExprId,
+        /// The type it crosses to: the distinct type on the way in, its
+        /// representation on the way out.
+        ty: Type,
+    },
     /// A value crossing into the top type: `value`, with its type erased.
     ///
     /// Analysis inserts this wherever a concrete value lands in an `Any`
@@ -537,27 +744,6 @@ pub enum HirExpr {
         value: HirExprId,
         /// The type it had before erasure.
         from: Type,
-    },
-    /// One generic instantiation carried into another whose type arguments are
-    /// `Any`: `Result<Int, E>` where `Result<Any, E>` is written.
-    ///
-    /// A sibling of [`HirExpr::IntoAny`] rather than a case of it. That node
-    /// wraps a value whose type stops being known; this one hands back a value
-    /// whose type is still known exactly — a different enum row, with the same
-    /// tag and a payload that crossed into `Any`. On the VM the two rows have
-    /// one runtime form and this costs nothing; on a statically typed backend
-    /// the payload's machine form differs, so this is a rebuild. Both types are
-    /// carried because both name a row the rebuild reads its variants from.
-    ///
-    /// See [`crate::TypeTable::widens_to`] for which pairs are
-    /// admitted, and why a payload behind an array is not among them.
-    Widen {
-        /// The value being widened.
-        value: HirExprId,
-        /// The instantiation it had.
-        from: Type,
-        /// The instantiation the position declared.
-        to: Type,
     },
     /// `Task { work(a, b) }` — spawn a deferred task and yield its handle.
     ///
@@ -590,6 +776,31 @@ pub enum HirExpr {
     TaskCancel {
         /// The handle being cancelled.
         handle: HirExprId,
+    },
+    /// A call routed through the host's main-thread event loop.
+    ///
+    /// The target is a named `@MainThread` function. Arguments are evaluated
+    /// on the requesting context and copied into an owned state tree before
+    /// the host sees them, so no VM heap or native local is shared between
+    /// threads.
+    MainThreadCall {
+        /// The scheduling operation requested by the source.
+        operation: MainThreadOp,
+        /// The target function.
+        function: FuncId,
+        /// The evaluated call arguments, including a method receiver when the
+        /// source used a method call.
+        args: Vec<HirExprId>,
+        /// The expression's result type. For `spawn`, this is the distinct
+        /// main-thread task handle type.
+        ty: Type,
+    },
+    /// Join a handle returned by `MainThread.spawn`.
+    MainThreadJoin {
+        /// The main-thread task handle.
+        handle: HirExprId,
+        /// The value returned by the target function.
+        ty: Type,
     },
     /// A placeholder for an expression that failed to analyze.
     Error,
@@ -663,6 +874,14 @@ impl HirExpr {
             HirExpr::Int(_) => Type::INT,
             HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
+            HirExpr::TypeTest { .. } => Type::Bool,
+            HirExpr::TypeOf { .. } => Type::RuntimeType,
+            HirExpr::TypeField { ty, .. } | HirExpr::TypeCastResult { ty, .. } => *ty,
+            HirExpr::ChannelCreate { ty }
+            | HirExpr::ChannelReceiver { ty, .. }
+            | HirExpr::ChannelReceive { ty, .. } => *ty,
+            HirExpr::ChannelSend { .. } | HirExpr::ChannelClose { .. } => Type::Void,
+            HirExpr::TypeCast { target, .. } => *target,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
             // Every one of them takes a `Float` and answers one.
@@ -672,9 +891,11 @@ impl HirExpr {
             | HirExpr::CStringNull
             | HirExpr::CLayoutAddress { .. }
             | HirExpr::ArrayElements { .. } => Type::CBlock,
-            HirExpr::Local { ty, .. }
+            HirExpr::ConstantGet { ty, .. }
+            | HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
+            | HirExpr::Copy { ty, .. }
             | HirExpr::Select { ty, .. }
             | HirExpr::Call { ty, .. }
             | HirExpr::Field { ty, .. }
@@ -686,11 +907,14 @@ impl HirExpr {
             | HirExpr::NativeState { ty, .. }
             | HirExpr::NativeRecover { ty, .. }
             | HirExpr::Convert { ty, .. }
+            | HirExpr::Distinct { ty, .. }
             | HirExpr::FileSystem { ty, .. }
             | HirExpr::Compiler { ty, .. }
             | HirExpr::Env { ty, .. }
             | HirExpr::TaskSpawn { ty, .. }
             | HirExpr::TaskJoin { ty, .. }
+            | HirExpr::MainThreadCall { ty, .. }
+            | HirExpr::MainThreadJoin { ty, .. }
             | HirExpr::CellNew { ty, .. }
             | HirExpr::CellNull { ty }
             | HirExpr::CellGet { ty, .. }
@@ -702,15 +926,16 @@ impl HirExpr {
             // None has a type that can vary, so none carries one.
             HirExpr::ArrayLen { .. }
             | HirExpr::StringLen { .. }
-            | HirExpr::StringCharAt { .. }
             | HirExpr::StringIndexOf { .. }
             | HirExpr::EnumTag { .. } => Type::INT,
+            // A byte read out of a string is a byte.
+            HirExpr::StringCharAt { .. } => Type::Int(crate::IntSpelling::U8),
             HirExpr::StringSubstring { .. } | HirExpr::StringOf { .. } => Type::String,
             HirExpr::NativeUserData { .. } => Type::RawPtr,
             HirExpr::IntoAny { .. } => Type::Any,
-            HirExpr::Widen { to, .. } => *to,
             HirExpr::ArrayAppend { .. }
-            | HirExpr::NativeStateFree { .. }
+            | HirExpr::NativeStateRetain { .. }
+            | HirExpr::NativeStateRelease { .. }
             | HirExpr::TaskDetach { .. }
             | HirExpr::TaskCancel { .. } => Type::Void,
             HirExpr::Error => Type::Error,

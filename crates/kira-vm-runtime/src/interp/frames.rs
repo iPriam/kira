@@ -13,7 +13,7 @@
 //! together is what makes that reviewable.
 
 use kira_bytecode::module::{FrameRelease, Module};
-use kira_runtime_abi::{HostCapabilities, NativeArg, TaskExecutor};
+use kira_runtime_abi::{ChannelExecutor, HostCapabilities, NativeArg, TaskExecutor};
 
 use crate::debug::VmDebugObserver;
 use crate::error::VmError;
@@ -110,11 +110,15 @@ impl<'h> Vm<'h> {
             pending_capture: scratch.pending_capture,
             captured: scratch.captured,
             tasks: TaskExecutor::new(),
+            channels: ChannelExecutor::new(),
             frame_cache: scratch.frame_cache,
             native_writebacks: scratch.native_writebacks,
             native_scratch: scratch.native_scratch,
+            constants: scratch.constants,
+            initializing_constants: false,
             running_drops: Vec::new(),
             trap_probe: None,
+            slice_budget: None,
         }
     }
 
@@ -161,6 +165,27 @@ impl<'h> Vm<'h> {
         Ok(frame)
     }
 
+    /// Takes over the task and channel tables of an execution already running.
+    ///
+    /// Handing them in rather than starting fresh is what makes a suspended
+    /// execution one execution: see [`super::VmExecutors`].
+    pub(crate) fn adopt_executors(&mut self, executors: super::VmExecutors) {
+        self.tasks = executors.tasks;
+        self.channels = executors.channels;
+    }
+
+    /// Hands those tables back, leaving this VM empty ones.
+    ///
+    /// Called on every path out of a slice, including a trap: an execution that
+    /// failed still owns rows its caller has to be able to account for, exactly
+    /// as it still owns its heap.
+    pub(crate) fn take_executors(&mut self) -> super::VmExecutors {
+        super::VmExecutors {
+            tasks: std::mem::take(&mut self.tasks),
+            channels: std::mem::take(&mut self.channels),
+        }
+    }
+
     /// Returns the persistent heap and reusable non-task storage after a call.
     pub(crate) fn into_heap_and_scratch(self) -> (Heap, VmScratch) {
         let Vm {
@@ -175,6 +200,7 @@ impl<'h> Vm<'h> {
             frame_cache,
             native_writebacks,
             native_scratch,
+            constants,
             ..
         } = self;
         (
@@ -190,6 +216,7 @@ impl<'h> Vm<'h> {
                 frame_cache,
                 native_writebacks,
                 native_scratch,
+                constants,
             },
         )
     }
@@ -251,12 +278,41 @@ impl<'h> Vm<'h> {
     /// Takes ownership of `args`: every one of them is either moved into a
     /// parameter slot — and dropped with the frame — or freed here, on every
     /// path out, including the ones that never start the function.
+    /// Sets how many instructions the next slice may run before suspending.
+    pub(crate) fn set_slice_budget(&mut self, budget: Option<u64>) {
+        self.slice_budget = budget;
+    }
+
+    /// Enters `function_id` with no arguments under the current slice budget.
+    ///
+    /// The lifecycle entry: a `@MainThreadLifecycle` function takes no
+    /// parameters, so there is nothing to marshal, and the run may suspend
+    /// before it returns.
+    pub(crate) fn enter_sliced(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+    ) -> Result<super::Dispatched, VmError> {
+        self.ensure_constants(module)?;
+        let frame = self.take_frame(module, u64::from(function_id))?;
+        self.dispatch_frames(module, Some(frame), None)
+    }
+
+    /// Continues the frames a previous slice suspended on.
+    pub(crate) fn resume_sliced(&mut self, module: &Module) -> Result<super::Dispatched, VmError> {
+        self.dispatch_frames(module, None, None)
+    }
+
     pub(crate) fn enter_values(
         &mut self,
         module: &Module,
         function_id: u32,
         args: Vec<Value>,
     ) -> Result<Value, VmError> {
+        if let Err(error) = self.ensure_constants(module) {
+            self.discard(args);
+            return Err(error);
+        }
         let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
@@ -299,6 +355,10 @@ impl<'h> Vm<'h> {
         args: Vec<Value>,
         observer: &mut dyn VmDebugObserver,
     ) -> Result<Value, VmError> {
+        if let Err(error) = self.ensure_constants(module) {
+            self.discard(args);
+            return Err(error);
+        }
         let mut frame = match self.take_frame(module, u64::from(function_id)) {
             Ok(frame) => frame,
             Err(error) => {
@@ -323,6 +383,54 @@ impl<'h> Vm<'h> {
         }
         frame.capture = std::mem::take(&mut self.pending_capture);
         self.run_with_debug(module, frame, observer)
+    }
+
+    /// Fills every module-constant slot this VM has not filled yet.
+    ///
+    /// Each slot is computed by one call of its init function, front to back
+    /// in the module's table order — the compiler's dependency order, so a
+    /// later init's `LoadConstant` of an earlier slot always finds it. Runs
+    /// before an embedder entry's first frame; the init calls re-enter
+    /// [`Vm::enter_values`], and the guard flag is what keeps that re-entry
+    /// from starting the fill again.
+    fn ensure_constants(&mut self, module: &Module) -> Result<(), VmError> {
+        if self.initializing_constants || self.constants.len() >= module.constants.len() {
+            return Ok(());
+        }
+        // Constants are program-start work, not part of any slice: their
+        // initializers run through `enter_values`, which cannot suspend, so a
+        // budget installed for a sliced entry must not count them — a heavy
+        // initializer exhausting it would trap the run instead of yielding.
+        let budget = self.slice_budget.take();
+        self.initializing_constants = true;
+        let result = self.fill_constants(module);
+        self.initializing_constants = false;
+        self.slice_budget = budget;
+        result
+    }
+
+    /// Runs each unfilled module-constant initializer, in slot order.
+    fn fill_constants(&mut self, module: &Module) -> Result<(), VmError> {
+        while self.constants.len() < module.constants.len() {
+            let init = module.constants[self.constants.len()];
+            let Ok(init) = u32::try_from(init) else {
+                return Err(VmError::UnknownFunction(init));
+            };
+            let value = self.enter_values(module, init, Vec::new())?;
+            self.constants.push(value);
+        }
+        Ok(())
+    }
+
+    /// Frees every filled module-constant slot.
+    ///
+    /// A one-shot run calls this before reading heap accounting, so a clean
+    /// program still reports `current == 0`; a per-call VM on a shared heap
+    /// calls it before handing the heap back, so constants do not accumulate
+    /// across crossings.
+    pub(crate) fn release_constants(&mut self) {
+        let values = std::mem::take(&mut self.constants);
+        self.discard(values);
     }
 
     /// Frees a batch of values this VM owns.
@@ -400,11 +508,11 @@ impl<'h> Vm<'h> {
             self.heap.drop_value(result);
             return Err(VmError::UnknownFunction(finished.func));
         };
-        // Most generated functions use the conservative `EveryLocal` release
-        // plan and have no written-through parameters. Their return has no
+        // An `EveryLocal` frame with no written-through parameters — a module
+        // built by hand, or written before release plans existed — has no
         // writeback or capture work to do, so keep this branch ahead of the
         // general plan walker. It also avoids taking the empty capture vector
-        // and matching the release-plan variants on every ordinary call.
+        // and matching the release-plan variants on that path.
         if finished.writebacks.is_empty()
             && finished.capture.is_empty()
             && matches!(&function.releases, FrameRelease::EveryLocal)
@@ -605,5 +713,7 @@ fn is_heap_value(value: &Value) -> bool {
             | Value::Cell(_)
             | Value::NativeSnapshot(_)
             | Value::CBlock(_)
+            | Value::MainThreadTask(_)
+            | Value::NativeState(_)
     )
 }

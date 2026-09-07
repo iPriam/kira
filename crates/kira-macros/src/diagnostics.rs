@@ -123,6 +123,10 @@ pub(crate) const DEPTH_LIMIT: &str = "KMAC010";
 pub(crate) const NOT_A_DERIVE: &str = "KMAC011";
 /// KMAC012 — a `comptime macro`'s `expand` does not match its `kind`.
 pub(crate) const EXPAND_SIGNATURE: &str = "KMAC012";
+/// KMAC013 — `Identifier(text)` was handed text no identifier can spell.
+pub(crate) const BAD_IDENTIFIER: &str = "KMAC013";
+/// KMAC014 — a `quote { … }` or `#{ … }` in an `expand` body never closes.
+pub(crate) const UNCLOSED_QUOTE: &str = "KMAC014";
 /// KMAC016 — a statement-position expansion that does not parse as statements.
 pub(crate) const NOT_STATEMENTS: &str = "KMAC016";
 /// KMAC017 — an expression-position expansion that is not a single expression.
@@ -153,6 +157,8 @@ pub(crate) const TWO_REPLACERS: &str = "KMAC028";
 pub(crate) const TRIGGER_WITHOUT_REPLACE: &str = "KMAC029";
 /// KMAC030 — two expansions claimed the same bytes (a bug in this crate).
 pub(crate) const CONFLICTING_REWRITE: &str = "KMAC030";
+/// KMAC031 — a macro name declared twice inside one scope.
+pub(crate) const DUPLICATE_MACRO: &str = "KMAC031";
 
 #[cfg(test)]
 mod tests {

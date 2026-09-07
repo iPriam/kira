@@ -1,0 +1,97 @@
+import Foundation
+
+// EvxEvaluationOrderTests.kira — the order side effects happen in: written
+// order for struct-literal fields, arguments, and array elements, whatever the
+// declaration order of the fields is.
+// PREFIX: evx / Evx  (all top-level names use this prefix).
+
+struct EvxPair {
+    let first: Int
+    let second: Int
+}
+
+struct EvxTriple {
+    let a: Int
+    let b: Int
+    let c: Int = 0
+}
+
+// Appends `value` to `log` and hands it back, so the log records the order
+// the calls ran in.
+function evxTick(log: borrow mut [Int], value: Int) -> Int {
+    log.append(value)
+    return value
+}
+
+// The log folded into one number, first entry most significant.
+function evxFold(log: borrow [Int]) -> Int {
+    var acc = 0
+    for i in 0..log.count {
+        acc = acc * 10 + log[i]
+    }
+    return acc
+}
+
+// Fields written out of declaration order evaluate as written…
+construct EvxStructFieldsEvaluateAsWritten() extends Test {
+    test {
+        var log: [Int] = []
+        let p = EvxPair { second: evxTick(log, 2), first: evxTick(log, 1) }
+        return evxFold(log) * 100 + p.first * 10 + p.second
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2112) return e }
+}
+
+// …and still land in their declared slots.
+construct EvxStructFieldsLandInDeclaredSlots() extends Test {
+    test {
+        var log: [Int] = []
+        let t = EvxTriple { b: evxTick(log, 7), a: evxTick(log, 3) }
+        return evxFold(log) * 1000 + t.a * 100 + t.b * 10 + t.c
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(73370) return e }
+}
+
+// A field written in declaration order keeps the plain construction path.
+construct EvxStructFieldsInDeclaredOrder() extends Test {
+    test {
+        var log: [Int] = []
+        let p = EvxPair { first: evxTick(log, 1), second: evxTick(log, 2) }
+        return evxFold(log) * 100 + p.first * 10 + p.second
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1212) return e }
+}
+
+// Call arguments evaluate left to right.
+construct EvxArgumentsEvaluateLeftToRight() extends Test {
+    test {
+        var log: [Int] = []
+        let sum = evxSum3(evxTick(log, 1), evxTick(log, 2), evxTick(log, 3))
+        return evxFold(log) * 10 + sum
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1236) return e }
+}
+
+function evxSum3(a: Int, b: Int, c: Int) -> Int {
+    return a + b + c
+}
+
+// Array elements evaluate in written order.
+construct EvxArrayElementsEvaluateInOrder() extends Test {
+    test {
+        var log: [Int] = []
+        let xs = [evxTick(log, 4), evxTick(log, 5), evxTick(log, 6)]
+        return evxFold(log) * 10 + xs.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4563) return e }
+}
+
+// Binary operands evaluate left to right.
+construct EvxBinaryOperandsEvaluateLeftToRight() extends Test {
+    test {
+        var log: [Int] = []
+        let v = evxTick(log, 1) * 100 + evxTick(log, 2) * 10 + evxTick(log, 3)
+        return evxFold(log) * 1000 + v
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(123123) return e }
+}

@@ -6,8 +6,8 @@ package lists its native libraries under `NativeLibs/`, declares bodyless
 other function. The same package runs on the VM, on LLVM/native, and on hybrid,
 and links for wasm.
 
-See `../../docs/ffi.md` for the full reference. This directory is the worked
-example.
+See `../../sites/docs/content/docs/appendix/ffi-workflows/` for the full
+reference. This directory is the worked example.
 
 ## Build the C archive, then run
 
@@ -48,7 +48,7 @@ kira build --device wasm32 main.kira
 
 ## Deferred to later milestones
 
-`../../docs/ffi.md` keeps the list, and keeps it once: this example predates
+The FFI workflow pages keep the list, and keep it once: this example predates
 half of what has landed since, and a second copy of the list is how a reader
 learns that structs, arrays, callbacks, and generated bindings are unavailable
 when they are not. Everything still deferred is refused with a typed diagnostic

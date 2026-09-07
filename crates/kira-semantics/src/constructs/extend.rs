@@ -12,7 +12,9 @@
 //! ordinary direct call and runs byte-identically on every backend. No new IR,
 //! opcode, or serialized shape is introduced.
 
-use kira_semantics_model::hir::{FuncId, HirFunction};
+use kira_semantics_model::hir::{
+    CallableSignature, FuncId, HirFunction, ParamSignature, ReceiverSignature, ThreadAffinity,
+};
 use kira_semantics_model::{EnumId, OwnershipMode, Type};
 use kira_source::SourceId;
 use kira_syntax_model::ast::{ExtendDecl, Function, Item};
@@ -30,7 +32,8 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn collect_extend_blocks(&mut self) {
         for (source, declaration) in self.extend_declarations() {
             self.source = source;
-            let family_name = self.interner.resolve(declaration.name).to_owned();
+            let written = self.interner.resolve(declaration.name).to_owned();
+            let family_name = self.visible_family_key(&written).unwrap_or(written);
             if !self.construct_families.contains_key(&family_name) {
                 // A class is the other thing `extend` may name, and it is
                 // handled where a class's methods are collected rather than
@@ -106,11 +109,11 @@ impl<'a> Analyzer<'a> {
     /// silent lie about what was compiled, so each is named where it was
     /// written.
     fn refuse_annotations_a_modifier_cannot_carry(&mut self, method: &Function) {
-        if method.is_main {
+        if method.is_main || method.is_main_thread_lifecycle {
             self.emit(
                 method.name_span,
                 "KSEM258",
-                "`@Main` cannot annotate an `extend` modifier: a modifier is \
+                "an entrypoint annotation cannot decorate an `extend` modifier: a modifier is \
                  called on a family value, so there is nothing for the operating \
                  system to start"
                     .to_owned(),
@@ -234,7 +237,7 @@ impl<'a> Analyzer<'a> {
         // Snapshot the modifier's resolved shape and syntax before analyzing its
         // body: the immutable read of `construct_families` cannot overlap the
         // `&mut self` the body analysis needs.
-        let Some((function, source, params, ownership, result)) = self
+        let Some((function, source, params, ownership, result, mutates_self)) = self
             .construct_families
             .get(family)
             .and_then(|info| info.methods.get(method))
@@ -245,6 +248,10 @@ impl<'a> Analyzer<'a> {
                     entry.params.clone(),
                     entry.ownership.clone(),
                     entry.result,
+                    entry
+                        .function
+                        .receiver
+                        .is_some_and(|receiver| receiver.mutable),
                 )
             })
         else {
@@ -254,14 +261,18 @@ impl<'a> Analyzer<'a> {
         self.source = source;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(result);
-        // Local 0 is the receiver `self`, the family value. It is read as a
-        // whole value (wrapped into a layer's child slot), never mutated, so it
-        // is an immutable borrow — the family enum has no fields to write.
+        // Local 0 is the receiver `self`, the family value. A read-only
+        // modifier lends it; a `borrow mut self` modifier receives the family
+        // storage so its updated enum reaches the caller.
         ctx.declare_param(
             "self",
             Type::Enum(enum_id),
-            false,
-            OwnershipMode::BorrowRead,
+            mutates_self,
+            if mutates_self {
+                OwnershipMode::BorrowMut
+            } else {
+                OwnershipMode::BorrowRead
+            },
         );
         for (index, param) in function.params.iter().enumerate() {
             let ty = params.get(index).copied().unwrap_or(Type::Error);
@@ -282,6 +293,28 @@ impl<'a> Analyzer<'a> {
                 format!("modifier `Any {family}.{method}` may finish without returning a value"),
             );
         }
+        let signature = CallableSignature {
+            receiver: Some(ReceiverSignature {
+                ty: Type::Enum(enum_id),
+                mutable: mutates_self,
+            }),
+            params: function
+                .params
+                .iter()
+                .zip(params.iter())
+                .zip(ownership.iter())
+                .map(|((param, &ty), &mode)| ParamSignature {
+                    label: self.interner.resolve(param.name).to_owned(),
+                    ty,
+                    ownership: mode,
+                    has_default: param.default.is_some(),
+                })
+                .collect(),
+            result,
+            is_async: function.is_async,
+            affinity: ThreadAffinity::Any,
+            execution: function.execution,
+        };
         HirFunction {
             name: format!("Any {family}.{method}"),
             param_count: 1 + function.params.len() as u32,
@@ -289,6 +322,7 @@ impl<'a> Analyzer<'a> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             // The engine the modifier was written to run on. A modifier's body
             // is synthesized, but it is the body the author wrote, so `@Native`
@@ -296,8 +330,9 @@ impl<'a> Analyzer<'a> {
             // function in the native half. Hardcoding `Inherited` here is what
             // made the annotation vanish between the source and the split.
             execution: function.execution,
-            mutates_self: false,
+            mutates_self,
             name_span: function.name_span,
+            signature,
         }
     }
 
@@ -309,10 +344,12 @@ impl<'a> Analyzer<'a> {
             locals: Vec::new(),
             body: Vec::new(),
             is_main: false,
+            is_main_thread: false,
             is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: kira_source::Span::new(0, 0),
+            signature: CallableSignature::synthesized(&[], Type::Void),
         }
     }
 

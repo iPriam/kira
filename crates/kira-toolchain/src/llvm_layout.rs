@@ -15,7 +15,9 @@ pub const MANAGED_LLVM_DIR: &str = "llvm";
 pub fn host_llvm_bundle_key(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("windows", "x86_64") => Some("x86_64-windows-msvc"),
+        ("windows", "aarch64") => Some("aarch64-windows-msvc"),
         ("linux", "x86_64") => Some("x86_64-linux-gnu"),
+        ("linux", "aarch64") => Some("aarch64-linux-gnu"),
         ("macos", "aarch64") => Some("aarch64-macos"),
         _ => None,
     }
@@ -70,14 +72,22 @@ mod tests {
             host_llvm_bundle_key("windows", "x86_64")
         );
         assert_eq!(
+            Some("aarch64-windows-msvc"),
+            host_llvm_bundle_key("windows", "aarch64")
+        );
+        assert_eq!(
             Some("x86_64-linux-gnu"),
             host_llvm_bundle_key("linux", "x86_64")
+        );
+        assert_eq!(
+            Some("aarch64-linux-gnu"),
+            host_llvm_bundle_key("linux", "aarch64")
         );
         assert_eq!(
             Some("aarch64-macos"),
             host_llvm_bundle_key("macos", "aarch64")
         );
-        assert_eq!(None, host_llvm_bundle_key("linux", "aarch64"));
+        assert_eq!(None, host_llvm_bundle_key("linux", "x86"));
     }
 
     #[test]

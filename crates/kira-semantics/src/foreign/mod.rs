@@ -73,6 +73,12 @@ struct ForeignSeam {
     /// `@FFI.Pointer`. The wire position stays a pointer word; this is what lets
     /// a call pass the struct and have its address taken.
     pointee: Option<kira_semantics_model::hir::ForeignPointee>,
+    /// The `distinct` type this position was written as, when it was one.
+    ///
+    /// The wire position is the representation, because that is what the type
+    /// *is*; this is what keeps the Kira side of the call nominal, so a `TabId`
+    /// parameter takes a `TabId` and refuses the `U32` underneath it.
+    distinct: Option<Type>,
 }
 
 impl ForeignSeam {
@@ -82,6 +88,7 @@ impl ForeignSeam {
             spec: ForeignTypeSpec::Scalar(ty),
             wrapper: None,
             pointee: None,
+            distinct: None,
         }
     }
 }
@@ -101,6 +108,11 @@ struct MappedForeign {
     result_pointee: Option<StructId>,
     /// The result's wrapper, if it is a single-scalar-field handle.
     result_wrapper: Option<StructId>,
+    /// One `distinct` type per parameter, `Some` when the parameter was written
+    /// as one.
+    param_distincts: Box<[Option<Type>]>,
+    /// The result's `distinct` type, when it was written as one.
+    result_distinct: Option<Type>,
 }
 
 /// The [`ForeignType`] a resolved type crosses as when it is already a seam

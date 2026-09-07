@@ -40,7 +40,7 @@ fn vm_batch_debugger_stops_disassembles_and_resumes() {
 #[test]
 fn vm_lldb_debugger_stops_at_a_bytecode_function_and_pc() {
     if !lldb_available() {
-        eprintln!("skipping VM LLDB test: LLDB is not installed");
+        eprintln!("skipping VM LLDB test: LLDB is unavailable here");
         return;
     }
     let path = write_isolated_source(
@@ -98,7 +98,7 @@ fn vm_lldb_debugger_stops_at_a_bytecode_function_and_pc() {
 #[test]
 fn vm_lldb_dap_reads_decoded_state_from_a_real_stop() {
     if !lldb_dap_available() {
-        eprintln!("skipping VM LLDB DAP test: lldb-dap is not installed");
+        eprintln!("skipping VM LLDB DAP test: lldb-dap is unavailable here");
         return;
     }
     let path = write_isolated_source(
@@ -143,7 +143,7 @@ fn vm_lldb_dap_reads_decoded_state_from_a_real_stop() {
 #[test]
 fn llvm_lldb_dap_stops_at_a_native_function() {
     if !lldb_dap_available() {
-        eprintln!("skipping LLVM LLDB DAP test: lldb-dap is not installed");
+        eprintln!("skipping LLVM LLDB DAP test: lldb-dap is unavailable here");
         return;
     }
     let path =
@@ -177,7 +177,7 @@ fn llvm_lldb_dap_stops_at_a_native_function() {
 #[test]
 fn hybrid_lldb_dap_stops_in_the_vm_half() {
     if !lldb_dap_available() {
-        eprintln!("skipping Hybrid LLDB DAP test: lldb-dap is not installed");
+        eprintln!("skipping Hybrid LLDB DAP test: lldb-dap is unavailable here");
         return;
     }
     let path = write_isolated_source(
@@ -220,7 +220,7 @@ fn hybrid_lldb_dap_stops_in_the_vm_half() {
 #[test]
 fn hybrid_lldb_dap_stops_at_a_native_function() {
     if !lldb_dap_available() {
-        eprintln!("skipping Hybrid LLDB DAP native test: lldb-dap is not installed");
+        eprintln!("skipping Hybrid LLDB DAP native test: lldb-dap is unavailable here");
         return;
     }
     let path = write_isolated_source(
@@ -291,7 +291,7 @@ fn hybrid_batch_debugger_stops_in_the_vm_half_and_runs_native_code() {
 #[test]
 fn hybrid_lldb_debugger_combines_vm_stops_with_native_runtime_inspection() {
     if !lldb_available() {
-        eprintln!("skipping Hybrid LLDB test: LLDB is not installed");
+        eprintln!("skipping Hybrid LLDB test: LLDB is unavailable here");
         return;
     }
     let path = write_isolated_source(
@@ -502,6 +502,13 @@ fn lldb_dap_available() -> bool {
 /// on `PATH` counts as present. Probing it bare would fail in the loader and
 /// silently skip every LLDB test on a host that has a working LLDB.
 fn engine_available(engine: Engine, argument: &str) -> bool {
+    // A host that refuses debugger attachment leaves every LLDB launch
+    // blocked on an authorization prompt no test run can answer; an installed
+    // frontend that can never attach is not available.
+    if kira_debug::debugging_unauthorized() {
+        eprintln!("skipping: {}", kira_debug::ENABLE_DEBUGGING_HINT);
+        return false;
+    }
     let executable = engine.executable();
     let mut command = Command::new(&executable);
     kira_debug::configure_engine(&mut command, &executable);

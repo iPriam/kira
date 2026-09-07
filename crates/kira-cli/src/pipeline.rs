@@ -275,6 +275,26 @@ fn apply_manifest_defaults(
     Ok(())
 }
 
+/// Refuses a sanitizer request on a code generator it cannot instrument.
+fn refuse_unsupported_sanitizer(verb: &str, options: &CompileOptions) -> Result<(), i32> {
+    if options.sanitize == kira_llvm_backend::Sanitize::None {
+        return Ok(());
+    }
+    if matches!(options.device, Device::Web(_)) {
+        err!(
+            "kira {verb}: `--sanitize address` instruments native code, but the Web target emits WebAssembly; use a native host or cross target"
+        );
+        return Err(EXIT_USAGE);
+    }
+    if options.backend == BackendMode::VmBytecode {
+        err!(
+            "kira {verb}: the VM engine interprets and carries its own exit accounting; `--sanitize address` instruments native code; use `--backend llvm` or `--backend hybrid`"
+        );
+        return Err(EXIT_USAGE);
+    }
+    Ok(())
+}
+
 /// Maps a manifest execution mode to the backend API.
 fn manifest_backend(mode: &str) -> Option<BackendMode> {
     match mode {
@@ -411,6 +431,19 @@ pub(crate) fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i
 fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Result<Compiled, i32> {
     let mut frontend = kira_build::FrontendSession::new();
     compile_with_frontend(path, target, &mut frontend)
+}
+
+/// Compiles `path` for `device` and hands its program back for a caller that
+/// wants the diagnostics as values rather than rendered to a terminal.
+///
+/// The toolchain capability reaches this: a Kira program driving `kcCheck`,
+/// `kcBuild`, or `kcRun` reads the diagnostics back as `KiraDiagnostic`s, and
+/// the verbs on the command line render the same program's diagnostics to
+/// stderr. Both start here, so a package checks the same way whether a person
+/// or a program asked.
+pub(crate) fn compiled_for(path: &str, device: Option<&Device>) -> Result<Compiled, i32> {
+    let target = compile_target(path, device);
+    compile(path, &target)
 }
 
 fn compile_with_frontend(

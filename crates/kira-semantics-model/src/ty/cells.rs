@@ -72,6 +72,19 @@ impl CellTable {
             .map(|(index, inner)| (CellId(index as u32), *inner))
     }
 
+    /// Rewrites every row's held type through `visit`, then rebuilds the intern
+    /// index. See [`super::arrays::ArrayTable::visit_elements_mut`] for why a
+    /// duplicate row is kept rather than merged.
+    pub fn visit_inner_types_mut(&mut self, visit: &dyn Fn(&mut Type)) {
+        for inner in &mut self.inners {
+            visit(inner);
+        }
+        self.index.clear();
+        for (index, inner) in self.inners.iter().enumerate() {
+            self.index.entry(*inner).or_insert(CellId(index as u32));
+        }
+    }
+
     /// How many distinct cell types the program mentions.
     pub fn len(&self) -> usize {
         self.inners.len()

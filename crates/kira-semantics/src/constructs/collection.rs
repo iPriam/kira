@@ -22,7 +22,8 @@ impl<'a> Analyzer<'a> {
         for (source, declaration) in self.family_declarations() {
             self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
-            if self.construct_families.contains_key(&name) {
+            let key = self.template_key(source, &name);
+            if self.construct_families.contains_key(&key) {
                 self.emit(
                     declaration.name_span,
                     "KSEM004",
@@ -46,6 +47,8 @@ impl<'a> Analyzer<'a> {
                 );
                 continue;
             };
+            let module = self.imports.module_of(source).to_owned();
+            self.program.types.enums_mut().set_module(enum_id, &module);
             self.enum_defaults.push(Vec::new());
 
             let required: Vec<String> = declaration
@@ -154,11 +157,12 @@ impl<'a> Analyzer<'a> {
                     default: field.default,
                     source,
                     slot: field.slot,
+                    mutable: field.mutable,
                 })
                 .collect();
-            self.construct_family_names.insert(enum_id, name.clone());
+            self.construct_family_names.insert(enum_id, key.clone());
             self.construct_families.insert(
-                name,
+                key,
                 ConstructFamilyInfo {
                     enum_id,
                     required,
@@ -192,6 +196,8 @@ impl<'a> Analyzer<'a> {
                 },
             ) {
                 Some(id) => {
+                    let module = self.imports.module_of(source).to_owned();
+                    self.program.types.structs_mut().set_module(id, &module);
                     // A construct-backed declaration is a struct like any
                     // other, so where it was written gates who may name it.
                     self.struct_sources.insert(id, source);
@@ -236,11 +242,8 @@ impl<'a> Analyzer<'a> {
                     .variants
                     .iter()
                     .map(|variant| VariantDef {
-                        name: self
-                            .program
-                            .types
-                            .type_name(Type::Struct(variant.struct_id)),
-                        payload: Some(Type::Struct(variant.struct_id)),
+                        name: self.program.types.type_name(variant.ty),
+                        payload: Some(variant.ty),
                     })
                     .collect();
                 (info.enum_id, variants)
@@ -429,6 +432,7 @@ impl<'a> Analyzer<'a> {
                 initializes: Some(id),
                 function: init,
                 source,
+                type_bindings: Vec::new(),
             });
         }
         let mut own = HashSet::new();
@@ -440,16 +444,20 @@ impl<'a> Analyzer<'a> {
             }
             own.insert(self.interner.resolve(method.function.name));
             callables.push(Callable {
-                receiver: Some(id),
+                receiver: Some(Type::Struct(id)),
                 origin: None,
                 specialize: Vec::new(),
                 initializes: None,
                 function: &method.function,
                 source,
+                type_bindings: Vec::new(),
             });
         }
         let family_name = self.interner.resolve(*family);
-        if let Some(info) = self.construct_families.get(family_name) {
+        if let Some(info) = self
+            .visible_family_key(family_name)
+            .and_then(|key| self.construct_families.get(&key))
+        {
             for (method_name, method) in &info.methods {
                 if own.contains(method_name.as_str()) {
                     continue;
@@ -463,12 +471,13 @@ impl<'a> Analyzer<'a> {
                     continue;
                 }
                 callables.push(Callable {
-                    receiver: Some(id),
+                    receiver: Some(Type::Struct(id)),
                     origin: None,
                     specialize: Vec::new(),
                     initializes: None,
                     function: method.function,
                     source: method.source,
+                    type_bindings: Vec::new(),
                 });
             }
         }

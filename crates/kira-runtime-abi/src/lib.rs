@@ -19,6 +19,7 @@
 pub mod aggregate;
 pub mod bridge;
 pub mod c_storage;
+pub mod channels;
 pub mod compiler;
 pub mod enum_payload;
 pub mod env;
@@ -26,12 +27,15 @@ pub mod erased;
 pub mod execution;
 pub mod file_system;
 pub mod foreign;
+pub mod int_width;
+pub mod main_thread;
 pub mod math_op;
 pub mod native_state;
 pub mod ownership;
 pub mod string_op;
 pub mod syscall;
 pub mod tasks;
+pub mod toolchain;
 
 pub use aggregate::{
     ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates,
@@ -43,6 +47,12 @@ pub use compiler::{
     CheckDiagnostic, CheckFile, CheckPackage, CheckRequest, CheckSeverity, CheckWireError,
     CompilerError, CompilerOp, DIAGNOSTIC_FIELDS, PackageChecker,
 };
+pub use int_width::IntWidth;
+pub use toolchain::{
+    TOOL_DIAGNOSTIC_FIELDS, ToolAnswer, ToolBackend, ToolDiagnostic, ToolRequest, ToolVariable,
+    ToolVerb, ToolWireError, Toolchain, ToolchainError,
+};
+
 pub use enum_payload::EnumPayloadKind;
 pub use env::EnvOp;
 pub use erased::ErasedKind;
@@ -71,6 +81,8 @@ pub fn foreign_adapter_name(index: usize) -> String {
 pub fn foreign_callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
 }
+pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
+pub use main_thread::*;
 pub use math_op::MathOp;
 pub use native_state::{
     CBlockOffset, NativeCBlock, NativeCBlockChild, NativeCBlockError, NativeCell, NativeStateError,
@@ -101,7 +113,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 10;
+pub const RUNTIME_ABI_VERSION: u32 = 15;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -133,7 +145,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_10";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_15";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -168,6 +180,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_live_mark_reload",
     "kira_live_take_reload",
     "kira_rt_heap_report",
+    "kira_rt_task_reset",
     "kira_rt_native_value_int",
     "kira_rt_native_value_any",
     "kira_rt_native_value_read_any_type",
@@ -199,12 +212,25 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_native_state_recover",
     "kira_rt_native_state_replace",
     "kira_rt_native_state_free",
+    "kira_rt_native_state_retain",
+    "kira_rt_native_state_release",
     "kira_rt_native_value_set_cblock_child",
     "kira_rt_native_value_cblock_child_offset",
     "kira_rt_native_value_cblock_child_width",
     "kira_rt_native_value_cblock_from_handle",
     "kira_rt_native_value_cblock_to_handle",
     "kira_rt_cblock_release_retained",
+    "kira_rt_main_thread_call",
+    "kira_rt_main_thread_join",
+    "kira_rt_main_thread_run",
+    "kira_rt_main_thread_install_dispatcher",
+    "kira_main_thread_dispatch",
+    "kira_rt_main_thread_install_lifecycle_resolver",
+    "kira_main_thread_lifecycle_resolve",
+    "kira_rt_main_thread_lifecycle_start_local",
+    "kira_rt_main_thread_lifecycle_pump_local",
+    "kira_rt_main_thread_lifecycle_reset_local",
+    "kira_rt_channel_reset",
 ];
 
 /// An argument the VM hands to a native function.
@@ -391,6 +417,29 @@ pub trait HostCapabilities {
         Err(NativeCallError::NoNativeHalf)
     }
 
+    /// Services one request on the host's main-thread event loop.
+    ///
+    /// The default refuses because a portable VM host may not have a process
+    /// main thread at all. An application runner installs the capability and
+    /// owns the loop; the VM only supplies the copied request.
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        let _ = request;
+        Err(MainThreadError::NoHost)
+    }
+
+    /// Joins a task previously returned by [`Self::main_thread`] with
+    /// [`MainThreadOp::Spawn`].
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        let _ = handle;
+        Err(MainThreadError::NoHost)
+    }
+
     /// Runs the generated adapter for `foreign_id`.
     ///
     /// The default refuses so the portable VM never acquires a dynamic-loading
@@ -538,8 +587,14 @@ pub trait HostCapabilities {
         self.native_state_replace(token, ty, root)
     }
 
-    /// Releases callback state exactly once.
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+    /// Adds one owner to live callback state.
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        let _ = token;
+        Err(NativeStateError::NoStateHost)
+    }
+
+    /// Removes one owner from live callback state, destroying it with the last.
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         let _ = token;
         Err(NativeStateError::NoStateHost)
     }
@@ -576,6 +631,25 @@ pub trait HostCapabilities {
     /// request that could not be read.
     fn compiler(&mut self, request: &CheckRequest) -> Result<Vec<CheckDiagnostic>, CompilerError> {
         compiler::perform(request)
+    }
+
+    /// Checks, builds, or runs a package that is already on a disk.
+    ///
+    /// A separate slot from [`Self::compiler`] rather than another operation of
+    /// it, because a host can honestly have one and not the other: a browser
+    /// tab embeds the frontend and can answer a question about source it was
+    /// handed, and has no directory to build and no process to start. Each
+    /// refuses on its own.
+    ///
+    /// A package that does not compile is not an error here either — its
+    /// problems are the answer, and so is the exit code of a program that ran
+    /// and failed. The error is for a host with no toolchain at all.
+    fn toolchain(
+        &mut self,
+        verb: ToolVerb,
+        request: &ToolRequest,
+    ) -> Result<ToolAnswer, ToolchainError> {
+        toolchain::perform(verb, request)
     }
 }
 

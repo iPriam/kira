@@ -9,11 +9,11 @@
     "control-flow",
     "functions",
     "structures-and-types",
-    "properties",
     "methods",
     "traits",
     "annotations",
     "constructs",
+    "concurrency",
     "interop-and-ffi",
     "execution-model",
     "memory-and-safety"

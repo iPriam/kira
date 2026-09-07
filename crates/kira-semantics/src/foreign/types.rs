@@ -13,6 +13,7 @@ impl<'a> Analyzer<'a> {
         let mut params = Vec::with_capacity(function.params.len());
         let mut param_wrappers = Vec::with_capacity(function.params.len());
         let mut param_pointees = Vec::with_capacity(function.params.len());
+        let mut param_distincts = Vec::with_capacity(function.params.len());
         let mut ok = true;
         for param in &function.params {
             match self.map_foreign_param(param) {
@@ -20,6 +21,7 @@ impl<'a> Analyzer<'a> {
                     params.push(seam.spec);
                     param_wrappers.push(seam.wrapper);
                     param_pointees.push(seam.pointee);
+                    param_distincts.push(seam.distinct);
                 }
                 None => ok = false,
             }
@@ -32,6 +34,8 @@ impl<'a> Analyzer<'a> {
                 param_pointees: param_pointees.into(),
                 result_pointee: result.pointee.map(|pointee| pointee.struct_id),
                 result_wrapper: result.wrapper,
+                param_distincts: param_distincts.into(),
+                result_distinct: result.distinct,
             }),
             _ => None,
         }
@@ -135,12 +139,25 @@ impl<'a> Analyzer<'a> {
         span: Span,
         position: Position,
     ) -> Option<ForeignSeam> {
+        // A distinct type crosses as the representation it is, with no wrapper
+        // and no unwrapping step: `kira-ir` has already decided the value the
+        // backend hands to C is that scalar word, so the signature this
+        // computes has to name the same one. Nominality is a Kira-side fact —
+        // a `TabId` still reaches no `U32` parameter *in Kira* — and a C
+        // prototype has nowhere to put it.
+        if let Type::Distinct(_) = ty {
+            let representation = self.program.types.representation(ty);
+            let mut seam = self.foreign_seam_of(representation, span, position)?;
+            seam.distinct = Some(ty);
+            return Some(seam);
+        }
         if let Type::Struct(id) = ty
             && !self.ffi_struct_kind(id).is_some_and(is_deferred_ffi)
         {
             if let Some(field_ty) = self.single_scalar_field_seam(id) {
                 return Some(ForeignSeam {
                     pointee: None,
+                    distinct: None,
                     spec: ForeignTypeSpec::Scalar(field_ty),
                     wrapper: Some(id),
                 });
@@ -154,6 +171,7 @@ impl<'a> Analyzer<'a> {
                     .aggregate_seam_of(id, span)
                     .map(|aggregate| ForeignSeam {
                         pointee: None,
+                        distinct: None,
                         spec: ForeignTypeSpec::Aggregate(aggregate),
                         wrapper: Some(id),
                     });

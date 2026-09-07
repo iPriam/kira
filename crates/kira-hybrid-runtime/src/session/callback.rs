@@ -77,7 +77,16 @@ pub(super) unsafe extern "C" fn ffi_callback_entry(
             } else {
                 // SAFETY: a CString callback parameter is NUL-terminated by its
                 // C caller and remains live through this synchronous callback.
-                unsafe { String::from_utf8_lossy(CStr::from_ptr(address).to_bytes()) }.into_owned()
+                let bytes = unsafe { CStr::from_ptr(address).to_bytes() };
+                match std::str::from_utf8(bytes) {
+                    Ok(text) => text.to_owned(),
+                    // A `String` holds UTF-8 and nothing else; a callback
+                    // handed other bytes has broken its declaration.
+                    Err(_) => fatal(&format!(
+                        "runtime trap: foreign call failed — the `CString` argument {index} of a \
+                         callback was not valid UTF-8"
+                    )),
+                }
             };
             strings[index] = Some(text);
         }

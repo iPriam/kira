@@ -8,10 +8,21 @@
 //! Whether a borrow is represented by a pointer is engine-specific: native code
 //! lends the caller's storage, while the VM copies the value into the callee's
 //! slot and moves it back. The plan therefore receives [`Lending`] from
-//! lowering rather than deriving it in either backend. The bytecode compiler
-//! serializes the same plan that LLVM consumes while emitting a `return`.
+//! lowering rather than deriving it in either backend. So is what a slot's
+//! death has to free: the native frame lays a scalar-only struct out inline
+//! while the VM boxes every struct, so planning receives [`HeapModel`] too.
+//! Each backend builds its plan with its own lending and model; a plan built
+//! under one engine's pair is not the other's.
+//!
+//! Ownership has a second half: *when*. [`scope_releases`] walks each body and
+//! places a [`IrStmt::ReleaseLocals`] wherever a block-scoped binding dies —
+//! the end of its declaring block, and before every `break`/`continue` that
+//! jumps past it. Placement asks only which bindings a block declares, which
+//! no engine disagrees about; whether a named slot is this engine's to release
+//! stays with the plan, which each backend consults when it lowers the
+//! statement.
 
-use kira_semantics_model::TypeTable;
+use kira_semantics_model::{Type, TypeTable};
 
 use crate::ir::{IrFunction, IrProgram};
 
@@ -84,6 +95,34 @@ impl ReleasePlan {
     }
 }
 
+/// Which memory layout an engine gives the values a frame holds, which is
+/// what decides whether a slot's death has anything to release.
+///
+/// The two engines answer differently for structs and for nothing else. A
+/// native frame lays a scalar-only struct out inline, so its death frees
+/// nothing; the VM allocates a heap object for *every* struct, so its death
+/// frees one however scalar its fields are. A plan built for one model and
+/// consumed under the other either leaks (inline plan, boxed heap) or
+/// releases storage that was never allocated (boxed plan, inline heap) — so
+/// the model is an input to planning, exactly as [`Lending`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeapModel {
+    /// Aggregates without heap-owning fields live inline in the frame.
+    Inline,
+    /// Every struct is a heap object, whatever its fields hold.
+    Boxed,
+}
+
+impl HeapModel {
+    /// Whether a slot of `ty` owns storage this engine must release.
+    pub fn owns(self, types: &TypeTable, ty: Type) -> bool {
+        match self {
+            HeapModel::Inline => types.owns_heap(ty),
+            HeapModel::Boxed => types.owns_heap(ty) || matches!(ty, Type::Struct(_)),
+        }
+    }
+}
+
 /// Whether a borrowed parameter reaches a callee as a pointer into the
 /// caller's storage, or as a value of its own.
 ///
@@ -143,6 +182,7 @@ pub fn plan_function(
     function: &IrFunction,
     types: &TypeTable,
     lending: Lending,
+    model: HeapModel,
     drop_glue: bool,
 ) -> Result<ReleasePlan, MidError> {
     let local_count = function.locals.len();
@@ -180,7 +220,7 @@ pub fn plan_function(
                 slot,
             });
         }
-        if lent || state_local || !types.owns_heap(ty) {
+        if lent || state_local || !model.owns(types, ty) {
             continue;
         }
         if drop_glue && slot == 0 {
@@ -192,7 +232,11 @@ pub fn plan_function(
 }
 
 /// Builds a release plan for every function in `program`, in function order.
-pub fn plan(program: &IrProgram, lending: Lending) -> Result<Vec<ReleasePlan>, MidError> {
+pub fn plan(
+    program: &IrProgram,
+    lending: Lending,
+    model: HeapModel,
+) -> Result<Vec<ReleasePlan>, MidError> {
     let glue: std::collections::BTreeSet<u32> = program
         .types
         .structs()
@@ -209,142 +253,15 @@ pub fn plan(program: &IrProgram, lending: Lending) -> Result<Vec<ReleasePlan>, M
                 function,
                 &program.types,
                 lending,
+                model,
                 glue.contains(&(index as u32)),
             )
         })
         .collect()
 }
 
+mod scope;
+pub use scope::scope_releases;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use kira_runtime_abi::Execution;
-    use kira_semantics_model::Type;
-
-    fn function(locals: Vec<Type>) -> IrFunction {
-        IrFunction {
-            name: "probe".to_owned(),
-            param_count: 0,
-            locals,
-            native_state_locals: Vec::new(),
-            return_type: Type::Void,
-            body: Vec::new(),
-            execution: Execution::Runtime,
-            by_reference_params: Vec::new(),
-            by_pointer_params: Vec::new(),
-        }
-    }
-
-    /// The lending most tests here do not depend on.
-    const BY_VALUE: Lending = Lending::BY_VALUE;
-
-    /// The native backend's: both kinds of borrow are the caller's storage.
-    const BY_POINTER: Lending = Lending {
-        read_only: BorrowLending::ByPointer,
-        write_through: BorrowLending::ByPointer,
-        user_drop: BorrowLending::ByPointer,
-    };
-
-    /// An empty type table: every type these tests use answers `owns_heap`
-    /// from its own shape, with no struct or enum declaration to look up.
-    fn types() -> TypeTable {
-        TypeTable::default()
-    }
-
-    #[test]
-    fn only_the_slots_that_own_storage_are_released() {
-        let function = function(vec![Type::INT, Type::String, Type::Bool, Type::String]);
-        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
-        assert_eq!(plan.slots(), &[1, 3]);
-        assert!(plan.releases(1));
-        assert!(!plan.releases(0), "an integer has nothing to release");
-    }
-
-    /// A by-reference parameter lent by pointer is the caller's storage, and
-    /// releasing it here would free a value the caller still holds and will
-    /// free itself.
-    #[test]
-    fn a_by_reference_parameter_lent_by_pointer_is_left_to_its_caller() {
-        let mut function = function(vec![Type::String, Type::String]);
-        function.param_count = 1;
-        function.by_reference_params = vec![0];
-        let plan = plan_function(&function, &types(), BY_POINTER, false).expect("a plan");
-        assert_eq!(plan.slots(), &[1]);
-    }
-
-    /// The same parameter on an engine that cannot lend a pointer. The callee
-    /// holds a copy of its own — the caller kept the original and gets the
-    /// copy back by writeback — so leaving the slot out would leak it.
-    #[test]
-    fn a_by_reference_parameter_passed_by_value_is_the_callee_s_to_release() {
-        let mut function = function(vec![Type::String, Type::String]);
-        function.param_count = 1;
-        function.by_reference_params = vec![0];
-        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
-        assert_eq!(plan.slots(), &[0, 1]);
-    }
-
-    /// A read-only borrow is lent independently of a written-through one: the
-    /// native backend lends both, a library lends neither, and no engine has
-    /// ever needed the mixed case — but the two are separate inputs, so the
-    /// plan answers each on its own rather than from whichever was asked last.
-    #[test]
-    fn each_kind_of_borrow_is_lent_on_its_own_terms() {
-        let mut function = function(vec![Type::String, Type::String, Type::String]);
-        function.param_count = 2;
-        function.by_reference_params = vec![0];
-        function.by_pointer_params = vec![1];
-        let mixed = Lending {
-            read_only: BorrowLending::ByPointer,
-            write_through: BorrowLending::ByValue,
-            user_drop: BorrowLending::ByPointer,
-        };
-        let plan = plan_function(&function, &types(), mixed, false).expect("a plan");
-        assert_eq!(plan.slots(), &[0, 2]);
-    }
-
-    /// A callback-state local names a value in a store that outlives the call.
-    #[test]
-    fn a_callback_state_local_is_left_to_its_store() {
-        let mut function = function(vec![Type::String, Type::String]);
-        function.native_state_locals =
-            vec![None, Some(kira_runtime_abi::NativeStateTypeId::new(0))];
-        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
-        assert_eq!(plan.slots(), &[0]);
-    }
-
-    /// Two facts that cannot both hold of one slot are a compiler bug, and are
-    /// reported rather than resolved by preferring one of them.
-    #[test]
-    fn a_slot_cannot_be_both_borrowed_and_state_backed() {
-        let mut function = function(vec![Type::String]);
-        function.by_reference_params = vec![0];
-        function.native_state_locals = vec![Some(kira_runtime_abi::NativeStateTypeId::new(0))];
-        assert!(matches!(
-            plan_function(&function, &types(), BY_VALUE, false),
-            Err(MidError::ConflictingSlotRole { slot: 0, .. })
-        ));
-    }
-
-    /// A parameter index that names no local means this stage and lowering
-    /// disagree about the function's shape, which must not be guessed past.
-    #[test]
-    fn a_parameter_naming_no_local_is_refused() {
-        let mut function = function(vec![Type::String]);
-        function.by_reference_params = vec![7];
-        assert!(matches!(
-            plan_function(&function, &types(), BY_VALUE, false),
-            Err(MidError::UnknownParameter { slot: 7, .. })
-        ));
-    }
-
-    /// The plan is ascending, which is what makes `releases` a binary search
-    /// and what keeps two engines from releasing in two different orders.
-    #[test]
-    fn the_plan_is_in_slot_order() {
-        let function = function(vec![Type::String; 5]);
-        let plan = plan_function(&function, &types(), BY_VALUE, false).expect("a plan");
-        assert_eq!(plan.slots(), &[0, 1, 2, 3, 4]);
-        assert!(plan.slots().windows(2).all(|pair| pair[0] < pair[1]));
-    }
-}
+mod tests;

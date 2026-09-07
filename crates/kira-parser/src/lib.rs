@@ -278,6 +278,49 @@ impl<'a> Parser<'a> {
         false
     }
 
+    /// Skips tokens the lexer could not classify.
+    ///
+    /// Each one was already reported (`KLEX001`, or `KLEX005` for a `;`), so
+    /// the parser passes over it without a second diagnostic and resumes at
+    /// the next token that can start something. Called at the boundaries
+    /// where a list or block looks for its next element.
+    pub(crate) fn skip_unknown(&mut self) {
+        while self.at(TokenKind::Unknown) {
+            self.bump();
+        }
+    }
+
+    /// Consumes a list separator: a `,`, or a run of refused tokens (a `;`
+    /// the lexer already reported as `KLEX005`) standing where one would be.
+    ///
+    /// Returns whether anything was consumed, so a caller reports a missing
+    /// comma only when nothing at all separates two elements.
+    pub(crate) fn eat_separator(&mut self) -> bool {
+        if self.eat(TokenKind::Comma) {
+            return true;
+        }
+        if self.at(TokenKind::Unknown) {
+            self.skip_unknown();
+            return true;
+        }
+        false
+    }
+
+    /// Reports two `what` written with nothing between them, at the token
+    /// that began the second one.
+    ///
+    /// Newlines are whitespace, so a list separated by line breaks alone is
+    /// this mistake; the message says which comma is missing rather than what
+    /// the parser expected instead, because the fix is always the same.
+    pub(crate) fn missing_comma(&mut self, what: &str) {
+        let span = self.current().span;
+        self.error(
+            span,
+            "KPAR002",
+            format!("expected `,` between {what}; newlines do not separate them"),
+        );
+    }
+
     fn text_of(&self, span: Span) -> &str {
         span.slice(self.text)
     }

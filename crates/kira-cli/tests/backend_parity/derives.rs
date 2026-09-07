@@ -1,8 +1,8 @@
-//! Parity for the builtin derives: Foundation's four macros, and the compiler's
+//! Parity for the builtin derives: Foundation's six macros, and the compiler's
 //! own `@Derive(Copy)` assertion.
 //!
 //! These sit apart from `macros.rs` because what they prove is different. The
-//! macro tests prove the *mechanism*; these prove the four functions Foundation
+//! macro tests prove the *mechanism*; these prove the generated functions Foundation
 //! generates behave identically on every backend, down to the exact wire string
 //! the serde pair writes and the trap malformed input produces.
 
@@ -46,7 +46,66 @@ function main() {
     assert_eq!(output, "true\nfalse\ntrue\nedge\n");
 }
 
-/// Foundation's `@Derive(Serializable)` / `@Derive(Deserializable)`: the exact
+/// Foundation's `@Derive(Hashable)` folds scalar and nested fields in the same
+/// declaration order on every backend.
+#[test]
+fn the_foundation_hashable_derive_agrees() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Hashable)
+struct DhxInner { var value: Int }
+
+@Derive(Hashable)
+struct DhxRecord {
+    var id: Int
+    var label: String
+    var enabled: Bool
+    var inner: DhxInner
+}
+
+@Main
+function main() {
+    let base = DhxRecord { id: 7, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    let same = DhxRecord { id: 7, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    let changed = DhxRecord { id: 8, label: "same", enabled: true, inner: DhxInner { value: 11 } }
+    print(hash_DhxRecord(base) == hash_DhxRecord(same))
+    print(hash_DhxRecord(base) != hash_DhxRecord(changed))
+    print(hash_DhxInner(DhxInner { value: 12 }) != hash_DhxInner(DhxInner { value: 13 }))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\n");
+}
+
+/// `@Derive(Tagged)` maps payload-less enum variants to declaration-order codes
+/// and uses the first variant as the total decoder fallback.
+#[test]
+fn the_foundation_tagged_derive_agrees() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Tagged)
+enum DhxMaterial { Flat Frosted Metallic }
+
+@Main
+function main() {
+    print(code_DhxMaterial(DhxMaterial.Flat))
+    print(code_DhxMaterial(DhxMaterial.Frosted))
+    print(code_DhxMaterial(DhxMaterial.Metallic))
+    print(code_DhxMaterial(DhxMaterial_fromCode(2)))
+    print(code_DhxMaterial(DhxMaterial_fromCode(99)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "0\n1\n2\n2\n0\n");
+}
+
+/// Foundation's `@Derive(Serializable)`: the exact
 /// wire string, and the round-trip law asserted with `eq_`.
 #[test]
 fn the_foundation_serde_derives_agree() {
@@ -54,13 +113,13 @@ fn the_foundation_serde_derives_agree() {
         r#"
 import Foundation
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxPoint {
     var x: Int
     var y: Int
 }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxSegment {
     var from: DsxPoint
     var to: DsxPoint
@@ -74,7 +133,7 @@ function main() {
     let wire = serialize_DsxPoint(point)
     print(wire)
     print(eq_DsxPoint(point, deserialize_DsxPoint(wire)))
-    print(eq_DsxPoint(point, deserialize_DsxPoint("DsxPoint{x=1;y=-2}")))
+    print(eq_DsxPoint(point, deserialize_DsxPoint("DsxPoint{x:Int(1),y:Int(-2)}")))
 
     let segment = DsxSegment {
         from: point,
@@ -95,12 +154,12 @@ function main() {
     );
     assert_eq!(
         output,
-        "DsxPoint{x=1;y=-2}\n\
+        "DsxPoint{x:Int(1),y:Int(-2)}\n\
          true\n\
          true\n\
-         DsxSegment{from=DsxPoint{x=1;y=-2};to=DsxPoint{x=3;y=4};label=\"edge\";live=true}\n\
+         DsxSegment{from:DsxPoint{x:Int(1),y:Int(-2)},to:DsxPoint{x:Int(3),y:Int(4)},label:\"edge\",live:true}\n\
          true\n\
-         DsxSegment{from=DsxPoint{x=1;y=-2};to=DsxPoint{x=1;y=-2};label=\"\";live=false}\n\
+         DsxSegment{from:DsxPoint{x:Int(1),y:Int(-2)},to:DsxPoint{x:Int(1),y:Int(-2)},label:\"\",live:false}\n\
          true\n"
     );
 }
@@ -117,13 +176,13 @@ fn the_foundation_serde_derives_agree_over_enums() {
         r#"
 import Foundation
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 enum DsxTool { Select Move Rotate }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 enum DsxNote { Blank Rank(Int) Tag(String) }
 
-@Derive(Equatable, Serializable, Deserializable)
+@Derive(Equatable, Serializable)
 struct DsxSlot {
     var tool: DsxTool
     var note: DsxNote
@@ -153,12 +212,12 @@ function main() {
         output,
         "DsxTool.Rotate\n\
          DsxNote.Blank\n\
-         DsxNote.Rank(-7)\n\
+         DsxNote.Rank(Int(-7))\n\
          DsxNote.Tag(\"edge\")\n\
          true\n\
          true\n\
          true\n\
-         DsxSlot{tool=DsxTool.Select;note=DsxNote.Tag(\"hi\");count=3}\n\
+         DsxSlot{tool:DsxTool.Select,note:DsxNote.Tag(\"hi\"),count:Int(3)}\n\
          true\n"
     );
 }
@@ -168,15 +227,18 @@ function main() {
 fn malformed_serialized_text_traps_on_every_backend() {
     for wire in [
         "garbage",
-        "DsxPoint{x=1",
-        "Other{x=1;y=2}",
-        "DsxPoint{x=n;y=2}",
+        "DsxPoint{x:Int(1)",
+        "Other{x:Int(1),y:Int(2)}",
+        "DsxPoint{x:n,y:Int(2)}",
+        "DsxPoint{x:Int(1),y:Int(2)}trailing",
+        "DsxPoint{y:Int(2),x:Int(1)}",
+        "DsxPoint{x:Int(1),x:Int(1)}",
     ] {
         let source = format!(
             r#"
 import Foundation
 
-@Derive(Deserializable)
+@Derive(Serializable)
 struct DsxPoint {{
     var x: Int
     var y: Int

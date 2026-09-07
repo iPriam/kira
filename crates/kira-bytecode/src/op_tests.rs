@@ -12,6 +12,7 @@ fn round_trips_a_mixed_instruction_stream() {
         Instruction::ConstStr(7),
         Instruction::LoadLocal(3),
         Instruction::StoreLocal(9),
+        Instruction::LoadConstant(4),
         Instruction::AddInt,
         Instruction::ConcatStr,
         Instruction::JumpIfFalse(12),
@@ -315,13 +316,16 @@ fn native_state_opcodes_are_appended_and_round_trip() {
     assert_eq!(opcode::NATIVE_STATE, 0x49);
     assert_eq!(opcode::NATIVE_USER_DATA, 0x4a);
     assert_eq!(opcode::NATIVE_RECOVER, 0x4b);
-    assert_eq!(opcode::NATIVE_STATE_FREE, 0x4c);
+    assert_eq!(opcode::NATIVE_STATE_RELEASE, 0x4c);
+    assert_eq!(opcode::NATIVE_STATE_RETAIN, 0x89);
 
     let code = vec![
         Instruction::NativeState(u64::MAX),
-        Instruction::NativeUserData,
+        Instruction::NativeUserData { shared: true },
+        Instruction::NativeUserData { shared: false },
         Instruction::NativeRecover(0x0102_0304_0506_0708),
-        Instruction::NativeStateFree,
+        Instruction::NativeStateRetain,
+        Instruction::NativeStateRelease,
     ];
     let bytes = encode(&code);
     assert_eq!(decode(&bytes).unwrap(), code);
@@ -619,6 +623,51 @@ fn legacy_codec_decodes_old_widths_and_round_trips_in_the_current_format() {
     assert_eq!(decode(&encode(&decoded)).unwrap(), decoded);
 }
 
+/// A reordered construction carries its permutation and, when the type has
+/// one, its `Drop` glue; both halves survive the trip.
+#[test]
+fn round_trips_an_ordered_struct_construction() {
+    let stream = vec![
+        Instruction::NewStructOrdered {
+            order: vec![2, 0, 1],
+            glue: None,
+        },
+        Instruction::NewStructOrdered {
+            order: vec![1, 0],
+            glue: Some(0x1234_5678),
+        },
+    ];
+    let bytes = encode(&stream);
+    assert_eq!(bytes[0], opcode::NEW_STRUCT_ORDERED);
+    assert_eq!(decode(&bytes).unwrap(), stream);
+}
+
+/// The checked arithmetic and width-check opcodes round-trip, operands
+/// included.
+#[test]
+fn round_trips_the_checked_arithmetic_and_width_opcodes() {
+    let stream = vec![
+        Instruction::AddIntChecked,
+        Instruction::SubIntChecked,
+        Instruction::MulIntChecked,
+        Instruction::NegIntChecked,
+        Instruction::DivIntChecked,
+        Instruction::AddUIntChecked,
+        Instruction::SubUIntChecked,
+        Instruction::MulUIntChecked,
+        Instruction::CheckInt(4),
+        Instruction::WrapInt(1),
+        Instruction::CheckShift(32),
+        Instruction::ConvertInt { from: 7, to: 0 },
+        Instruction::ConvertUIntToFloat,
+        Instruction::PrintUnsigned,
+        Instruction::StringOfUnsigned,
+        Instruction::TypeTest(0x1234_5678_9abc),
+        Instruction::Downcast(0x0002_0000_0007),
+    ];
+    assert_eq!(decode(&encode(&stream)).unwrap(), stream);
+}
+
 #[test]
 fn a_wide_path_count_is_rejected_when_its_steps_are_missing() {
     let mut bytes = vec![opcode::STORE_FIELD];
@@ -639,4 +688,39 @@ fn noncanonical_boolean_operands_are_rejected() {
             Err(DecodeError::InvalidBoolean { value: 2, .. })
         ));
     }
+}
+
+#[test]
+fn round_trips_every_channel_primitive() {
+    let stream: Vec<Instruction> = ChannelPrim::ALL
+        .into_iter()
+        .map(Instruction::ChannelOp)
+        .collect();
+    assert_eq!(decode(&encode(&stream)).unwrap(), stream);
+}
+
+#[test]
+fn the_channel_opcode_is_appended_after_the_tried_cast() {
+    assert_eq!(opcode::CHANNEL_OP, opcode::TYPE_CAST_RESULT + 1);
+}
+
+#[test]
+fn an_unknown_channel_primitive_byte_is_rejected() {
+    // Only generated code writes this byte, so an unknown one means the module
+    // and this decoder disagree. Folding it into a neighbouring primitive would
+    // run a different program than the one that was compiled.
+    let bytes = vec![opcode::CHANNEL_OP, ChannelPrim::ALL.len() as u8];
+    assert!(matches!(
+        decode(&bytes),
+        Err(DecodeError::UnknownOpcode { .. })
+    ));
+}
+
+#[test]
+fn a_channel_opcode_without_its_primitive_is_rejected() {
+    let bytes = vec![opcode::CHANNEL_OP];
+    assert!(matches!(
+        decode(&bytes),
+        Err(DecodeError::UnexpectedEnd { .. })
+    ));
 }

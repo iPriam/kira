@@ -97,6 +97,20 @@ pub fn call<H: HostCapabilities + ?Sized>(
             actual: args.len(),
         });
     }
+    for (index, (argument, &expected)) in args.iter().zip(signature.parameters().iter()).enumerate()
+    {
+        let actual = argument.spec();
+        if actual != expected {
+            return Err(ForeignCallError::ArgumentType {
+                index,
+                expected,
+                actual,
+            });
+        }
+    }
+    if !result_is_register_word(signature.result()) {
+        return Err(SyscallError::NotARegisterWord.into());
+    }
     // A `CString` argument crosses as a pointer to a NUL-terminated copy, and
     // the copy has to outlive the call rather than the loop that made it. This
     // is the transient half of the rule `c_storage` states: the kernel reads
@@ -113,6 +127,31 @@ pub fn call<H: HostCapabilities + ?Sized>(
     // would hand it a pointer into freed storage.
     drop(owned);
     result_of(signature.result(), answer)
+}
+
+/// Whether a syscall result can be read from the one kernel result register.
+///
+/// The frontend applies the same rule, but this host entrypoint is public and
+/// embedders can construct a signature without going through the analyzer. The
+/// check belongs before the kernel call: accepting a floating or aggregate
+/// result and reporting it only afterward would perform a syscall whose answer
+/// the caller has already declared unreadable.
+fn result_is_register_word(spec: ForeignTypeSpec) -> bool {
+    matches!(
+        spec,
+        ForeignTypeSpec::Scalar(
+            ForeignType::Void
+                | ForeignType::I8
+                | ForeignType::I16
+                | ForeignType::I32
+                | ForeignType::I64
+                | ForeignType::U8
+                | ForeignType::U16
+                | ForeignType::U32
+                | ForeignType::U64
+                | ForeignType::RawPtr
+        )
+    )
 }
 
 /// Lowers one declared argument to the word its register receives.
@@ -353,6 +392,54 @@ mod tests {
                 expected: 2,
                 actual: 1,
             })
+        );
+    }
+
+    #[test]
+    fn a_call_site_with_the_wrong_width_is_refused_before_lowering() {
+        let mut host = CapturingHost::new();
+        let signature = ForeignSignature::scalars(vec![ForeignType::I32], ForeignType::I32);
+        assert_eq!(
+            call(
+                &mut host,
+                LinuxSyscall::Write,
+                &signature,
+                &[ForeignArg::I64(1)]
+            ),
+            Err(ForeignCallError::ArgumentType {
+                index: 0,
+                expected: ForeignTypeSpec::Scalar(ForeignType::I32),
+                actual: ForeignTypeSpec::Scalar(ForeignType::I64),
+            })
+        );
+    }
+
+    #[test]
+    fn an_unreadable_result_is_refused_before_the_kernel_is_called() {
+        struct RecordingHost {
+            calls: usize,
+        }
+
+        impl HostCapabilities for RecordingHost {
+            fn write_line(&mut self, _text: &str) {}
+
+            fn syscall(&mut self, _call: LinuxSyscall, _args: &[i64]) -> Result<i64, SyscallError> {
+                self.calls += 1;
+                Ok(0)
+            }
+        }
+
+        let mut host = RecordingHost { calls: 0 };
+        let signature = ForeignSignature::scalars(vec![], ForeignType::F64);
+        let error = call(&mut host, LinuxSyscall::Ppoll, &signature, &[])
+            .expect_err("a float cannot be a kernel result");
+        assert_eq!(
+            error,
+            ForeignCallError::Syscall(SyscallError::NotARegisterWord)
+        );
+        assert_eq!(
+            host.calls, 0,
+            "the invalid signature never reached the host"
         );
     }
 

@@ -1,30 +1,33 @@
 import Foundation
 
 // Kira Test coverage for the deferred async task spine: `async function`
-// execution, `Task { call }` deferred spawn, `handle.await` join, cooperative
+// entry points (started only as tasks), `Task { call }` deferred spawn, `handle.await` join, cooperative
 // `requestCancel()` (cancel-before-drive prevents the call; awaiting a
 // cancelled task traps), `detach()` (drives and discards; a later await is a
 // double-join trap).
 
-construct AsxAsyncFunctionRunsLikeSync() extends Test {
+construct AsxAsyncFunctionRunsAsATask() extends Test {
     test {
-        return asyncSum(19, 23)
+        let handle = Task { asyncSum(19, 23) }
+        return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
-construct AsxAsyncCallsAsync() extends Test {
+construct AsxAsyncCallsOrdinaryFunctions() extends Test {
     test {
-        return asyncDouble(21)
+        let handle = Task { asyncDouble(21) }
+        return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
-construct AsxAsyncRecursion() extends Test {
+construct AsxAsyncWrapsRecursion() extends Test {
     test {
-        return asyncFactorial(5)
+        let handle = Task { asyncFactorial(5) }
+        return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct AsxTaskSpawnAwait() extends Test {
@@ -32,7 +35,7 @@ construct AsxTaskSpawnAwait() extends Test {
         let handle = Task { asyncFactorial(5) }
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct AsxAwaitYieldsDeferredResult() extends Test {
@@ -40,7 +43,7 @@ construct AsxAwaitYieldsDeferredResult() extends Test {
         let handle = Task { asyncSum(40, 2) }
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct AsxAwaitCancelledTaskTraps() extends Test {
@@ -49,7 +52,7 @@ construct AsxAwaitCancelledTaskTraps() extends Test {
         handle.requestCancel()
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct AsxDoubleAwaitTraps() extends Test {
@@ -58,7 +61,7 @@ construct AsxDoubleAwaitTraps() extends Test {
         let first = handle.await
         return first + handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct AsxAwaitAfterDetachTraps() extends Test {
@@ -67,14 +70,14 @@ construct AsxAwaitAfterDetachTraps() extends Test {
         handle.detach()
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct AsxCancelledSiblingLeavesJoinIntact() extends Test {
     test {
         return asyncCancelDetachSiblings()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(142); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(142) return e }
 }
 
 construct AsxReadySpawnAwait() extends Test {
@@ -82,7 +85,7 @@ construct AsxReadySpawnAwait() extends Test {
         let handle = Task { 41 }
         return handle.await + 1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct AsxVoidTaskJoinsAsZero() extends Test {
@@ -90,7 +93,7 @@ construct AsxVoidTaskJoinsAsZero() extends Test {
         let handle = Task { asyncNoop(5) }
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct AsxVoidTaskDetach() extends Test {
@@ -99,7 +102,7 @@ construct AsxVoidTaskDetach() extends Test {
         handle.detach()
         return 1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct AsxYieldWithEmptyQueueIsNoop() extends Test {
@@ -107,7 +110,7 @@ construct AsxYieldWithEmptyQueueIsNoop() extends Test {
         taskYield()
         return 1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct AsxYieldInsideTaskBody() extends Test {
@@ -117,7 +120,7 @@ construct AsxYieldInsideTaskBody() extends Test {
         let joined = phased.await
         return joined + sibling.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(243); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(243) return e }
 }
 
 construct AsxSuspendableFrameSurvivesYields() extends Test {
@@ -125,7 +128,7 @@ construct AsxSuspendableFrameSurvivesYields() extends Test {
         let handle = Task { asyncStepper(100, 1) }
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(102); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(102) return e }
 }
 
 construct AsxSuspendableTasksInterleave() extends Test {
@@ -135,7 +138,7 @@ construct AsxSuspendableTasksInterleave() extends Test {
         let c = Task { asyncStepper(300, 3) }
         return a.await + b.await + c.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(612); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(612) return e }
 }
 
 construct AsxCancelledSuspendableNeverRuns() extends Test {
@@ -144,7 +147,7 @@ construct AsxCancelledSuspendableNeverRuns() extends Test {
         handle.requestCancel()
         return handle.await
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct AsxJoinSuspensionParksUntilComplete() extends Test {
@@ -153,7 +156,7 @@ construct AsxJoinSuspensionParksUntilComplete() extends Test {
         let bystander = Task { asyncSum(1, 2) }
         return c.await + bystander.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(114); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(114) return e }
 }
 
 construct AsxSleepParksAndResumes() extends Test {
@@ -162,12 +165,12 @@ construct AsxSleepParksAndResumes() extends Test {
         let b = Task { asyncNapper(1, 2) }
         return a.await * 10 + b.await
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(424); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(424) return e }
 }
 
 construct AsxSpineSectionChecksum() extends Test {
     test {
         return asyncSpineSection()
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(304); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(304) return e }
 }

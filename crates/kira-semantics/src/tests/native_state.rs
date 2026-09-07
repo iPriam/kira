@@ -7,7 +7,7 @@ struct CounterState { var count: Int }
     var token = nativeUserData(state)
     var view = nativeRecover<CounterState>(token)
     view.count = view.count + 1
-    nativeStateFree(state)
+    nativeUserDataRelease(token)
 }
 "#;
 
@@ -19,17 +19,41 @@ fn callback_state_intrinsics_type_check_as_first_class_expressions() {
 #[test]
 fn callback_state_intrinsics_check_arity_and_type_arguments() {
     assert_eq!(
-        codes("@Main function main() { nativeState(); return }"),
+        codes("@Main function main() { nativeState() return }"),
         vec!["KSEM220"]
     );
     assert_eq!(
-        codes("@Main function main() { var x = nativeRecover(0); return }"),
+        codes("@Main function main() { var x = nativeRecover(0) return }"),
         vec!["KSEM216", "KSEM217"]
     );
     assert_eq!(
-        codes("@Main function main() { nativeStateFree(1); return }"),
+        codes("@Main function main() { nativeStateFree(1) return }"),
         vec!["KSEM219"]
     );
+    assert_eq!(
+        codes("@Main function main() { nativeUserDataRetain() return }"),
+        vec!["KSEM220"]
+    );
+    assert_eq!(
+        codes("@Main function main() { nativeUserDataRelease<Int>(RawPtr(0)) return }"),
+        vec!["KSEM221"]
+    );
+}
+
+/// The owner-count intrinsics take the exported token, never the handle: a
+/// handle releases its own reference by going out of scope.
+#[test]
+fn owner_count_intrinsics_take_a_raw_pointer_token() {
+    let text = r#"
+struct CounterState { var count: Int }
+@Main function main() {
+    let state = nativeState(CounterState { count: 0 })
+    nativeUserDataRetain(state)
+    nativeUserDataRelease(state)
+    return
+}
+"#;
+    assert_eq!(codes(text), vec!["KSEM361", "KSEM361"]);
 }
 
 /// State may hold a closure that captured a `var`.
@@ -49,7 +73,6 @@ struct AppState { var label: String  var bump: () -> Void }
     var state = nativeRecover<AppState>(nativeUserData(boxed))
     state.bump()
     print(total)
-    nativeStateFree(boxed)
     return
 }
 "#;
@@ -73,13 +96,9 @@ struct State { var payload: Payload }
     let pointer = nativeUserData(source)
     var direct = nativeState(State { payload: .Direct(pointer) })
     var nested = nativeState(State { payload: .Nested(.Pointer(pointer)) })
-    nativeStateFree(direct)
-    nativeStateFree(nested)
     var total = 0
     let bump: () -> Void = { in total = total + 1 }
     var handler = nativeState(State { payload: .Handler(bump) })
-    nativeStateFree(handler)
-    nativeStateFree(source)
     return
 }
 "#;
@@ -97,7 +116,6 @@ struct Holder { var value: Any  var read: () -> Void }
     var erased: Any = 1
     let read: () -> Void = { in print(erased) }
     let boxed = nativeState(Holder { value: erased, read: read })
-    nativeStateFree(boxed)
     return
 }
 "#;
@@ -115,7 +133,6 @@ enum Payload { Erased(Any) }
 struct State { var payload: Payload }
 @Main function main() {
     var state = nativeState(State { payload: .Erased(1) })
-    nativeStateFree(state)
     return
 }
 "#;
@@ -127,9 +144,9 @@ fn callback_state_rejects_non_owned_and_statically_wrong_types() {
     assert_eq!(
         codes(
             r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct CState { var count: Int }
-@Main function main() { var state = nativeState(CState { count: 0 }); return }
+@Main function main() { var state = nativeState(CState { count: 0 }) return }
 "#,
         ),
         vec!["KSEM214"]
@@ -150,16 +167,17 @@ struct Right { var value: Int }
     );
 }
 
-// --- KSEM116: a state box the body allocates and then loses -----------------
+// --- Reference counting: handles, tokens, and the deprecated free -----------
 //
-// `nativeState` is the one allocation with no automatic release, so a handle
-// that is neither freed nor handed on is a box nothing can name again. These
-// pin both halves: that the mistake is reported, and — the half that decides
-// whether the check is usable at all — that the idioms which *do* account for
-// a handle stay silent.
+// A handle owns one reference and gives it up when it goes out of scope, so
+// nothing about a handle's lifetime is reported at compile time any more. What
+// the checker still says: `nativeStateFree` is deprecated and consumes the
+// handle, and the owner-count intrinsics take tokens.
 
+/// A handle that is never mentioned again releases its reference with its
+/// scope, which is the ordinary shape and reports nothing.
 #[test]
-fn a_state_box_that_is_never_freed_is_reported() {
+fn a_handle_releases_its_reference_when_its_scope_ends() {
     let text = r#"
 struct CounterState { var count: Int }
 @Main function main() {
@@ -167,11 +185,12 @@ struct CounterState { var count: Int }
     return
 }
 "#;
-    assert_eq!(codes(text), vec!["KSEM116"]);
+    assert_eq!(codes(text), Vec::<String>::new());
 }
 
+/// `nativeStateFree` still compiles, as one release, and is warned about.
 #[test]
-fn freeing_the_handle_accounts_for_it() {
+fn native_state_free_is_a_deprecated_release() {
     let text = r#"
 struct CounterState { var count: Int }
 @Main function main() {
@@ -180,17 +199,16 @@ struct CounterState { var count: Int }
     return
 }
 "#;
-    assert_eq!(codes(text), Vec::<String>::new());
+    assert_eq!(codes(text), vec!["KSEM360"]);
+    let diagnostics = diagnostics(text);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].severity, kira_diagnostics::Severity::Warning);
 }
 
-/// Handing the token out is the other way to account for a handle: some other
-/// owner has it now, and this body is not the one that must free it.
-///
-/// This is the shape a factory has — `makeRenderEncoder` in Kira Graphics binds
-/// a handle, puts its token in the struct it returns, and correctly never frees
-/// it — and a check that reported it would be wrong on working code.
+/// A token may leave the body that made it: it owns a reference of its own,
+/// and whoever holds it releases that one.
 #[test]
-fn handing_the_token_out_accounts_for_it() {
+fn a_token_may_leave_the_body_that_exported_it() {
     let text = r#"
 struct CounterState { var count: Int }
 struct Holder { let storage: RawPtr }
@@ -200,23 +218,23 @@ function make() -> Holder {
 }
 @Main function main() {
     let held = make()
+    nativeUserDataRelease(held.storage)
     return
 }
 "#;
     assert_eq!(codes(text), Vec::<String>::new());
 }
 
-/// The documented idiom hands a token out and then frees the handle anyway, so
-/// handing out must not consume the binding.
+/// Exporting a token leaves the handle usable: the export is a read, not a move.
 #[test]
-fn a_handle_may_be_handed_out_and_still_freed_here() {
+fn a_handle_may_be_exported_and_still_used() {
     assert!(diagnostics(STATE).is_empty());
 }
 
-/// Freeing consumes the handle, so reading it afterwards is a use-after-free —
-/// and it is the ordinary use-after-move check that says so.
+/// Releasing through the handle consumes it, so reading it afterwards is the
+/// ordinary use after move.
 #[test]
-fn reading_a_handle_after_freeing_it_is_use_after_move() {
+fn reading_a_handle_after_releasing_it_is_use_after_move() {
     let text = r#"
 struct CounterState { var count: Int }
 @Main function main() {
@@ -226,32 +244,11 @@ struct CounterState { var count: Int }
     return
 }
 "#;
-    assert_eq!(codes(text), vec!["KSEM107"]);
-}
-
-/// Freeing twice is the same mistake seen once more.
-#[test]
-fn freeing_a_handle_twice_is_reported() {
-    let text = r#"
-struct CounterState { var count: Int }
-@Main function main() {
-    let state = nativeState(CounterState { count: 0 })
-    nativeStateFree(state)
-    nativeStateFree(state)
-    return
-}
-"#;
-    assert_eq!(codes(text), vec!["KSEM107"]);
+    assert_eq!(codes(text), vec!["KSEM360", "KSEM107"]);
 }
 
 /// A handle cannot be *declared* as a parameter type — `NativeState<T>` is a
-/// type the checker infers and prints, not one the grammar parses — so a
-/// borrowed handle is unreachable from source today and the `Owned`-only filter
-/// in [`FnCtx::unfreed_native_state_handles`] has nothing to exclude yet. It is
-/// written that way regardless, because the day the type becomes spellable a
-/// `borrow` parameter naming somebody else's box must not be this body's to
-/// free, and finding that out then would mean finding it out through a false
-/// positive on working code.
+/// type the checker infers and prints, not one the grammar parses.
 #[test]
 fn a_handle_type_is_inferred_rather_than_written() {
     let text = r#"
@@ -266,82 +263,35 @@ function peek(state: NativeState<CounterState>) {
     assert_eq!(codes(text), vec!["KSEM050"]);
 }
 
-/// Overwriting a live handle throws away the only token that named the box.
+/// Overwriting a live handle releases the reference it held, as assigning over
+/// any owned value does, so nothing is reported.
 #[test]
-fn overwriting_a_live_handle_is_reported() {
+fn overwriting_a_live_handle_releases_the_old_one() {
     let text = r#"
 struct CounterState { var count: Int }
 @Main function main() {
     var slot = nativeState(CounterState { count: 1 })
     slot = nativeState(CounterState { count: 2 })
-    nativeStateFree(slot)
-    return
-}
-"#;
-    assert_eq!(codes(text), vec!["KSEM117"]);
-}
-
-/// Free first, then replace. This is the shape a render pass uses to swap its
-/// encoder every pass, and reporting it would be reporting correct code.
-#[test]
-fn freeing_before_replacing_a_handle_is_quiet() {
-    let text = r#"
-struct CounterState { var count: Int }
-@Main function main() {
-    var slot = nativeState(CounterState { count: 1 })
-    nativeStateFree(slot)
-    slot = nativeState(CounterState { count: 2 })
-    nativeStateFree(slot)
     return
 }
 "#;
     assert_eq!(codes(text), Vec::<String>::new());
 }
 
-/// Handed out, then replaced: the first box has another owner, so replacing the
-/// binding loses nothing.
+/// Moving a handle transfers its owner, and the moved-from binding is done.
 #[test]
-fn replacing_a_handle_that_was_handed_out_is_quiet() {
+fn moving_a_handle_transfers_its_owner() {
     let text = r#"
 struct CounterState { var count: Int }
-function build() -> RawPtr {
-    var slot = nativeState(CounterState { count: 1 })
-    let first = nativeUserData(slot)
-    slot = nativeState(CounterState { count: 2 })
-    nativeStateFree(slot)
-    return first
-}
-@Main function main() {
-    let p = build()
-    return
-}
-"#;
-    assert_eq!(codes(text), Vec::<String>::new());
-}
-
-/// A handle freed on only one arm is NOT reported.
-///
-/// The branch join takes a value moved on either path as moved, which is the
-/// sound direction for use-after-move and the unsound one for must-free. The
-/// choice is deliberate: this check is worth having only while it never fires
-/// on correct code, and a must-free join would need its own state rather than a
-/// reinterpretation of that column. Pinned here so the gap is a decision on the
-/// record rather than something to rediscover.
-#[test]
-fn a_handle_freed_on_one_arm_only_is_not_reported_yet() {
-    let text = r#"
-struct CounterState { var count: Int }
-function conditional(flag: Bool) {
-    let maybe = nativeState(CounterState { count: 3 })
-    if flag {
-        nativeStateFree(maybe)
-    }
+function keep(state: NativeState<CounterState>) {
     return
 }
 @Main function main() {
-    conditional(true)
+    let state = nativeState(CounterState { count: 1 })
+    let other = move state
+    let token = nativeUserData(state)
     return
 }
 "#;
-    assert_eq!(codes(text), Vec::<String>::new());
+    assert_eq!(codes(text), vec!["KSEM050", "KSEM107"]);
 }

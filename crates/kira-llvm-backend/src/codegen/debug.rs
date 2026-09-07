@@ -275,9 +275,14 @@ impl DebugBuilder {
             Type::Int(_) => ("Int", 64, 0x05),
             Type::Float(_) => ("Float", 64, 0x04),
             Type::Bool => ("Bool", 1, 0x02),
-            Type::RawPtr | Type::ForeignPtr(_) | Type::NativeState(_) | Type::Task(_) => {
-                ("Pointer", 64, 0x01)
-            }
+            Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::NativeState(_)
+            | Type::Task(_)
+            | Type::MainThreadTask(_) => ("Pointer", 64, 0x01),
+            // A `distinct` type never reaches a slot here: `kira-ir` rewrote it
+            // to the scalar it is, so the debugger sees that scalar's encoding
+            // — which is also what the storage holds.
             Type::String
             | Type::Array(_)
             | Type::Enum(_)
@@ -286,6 +291,8 @@ impl DebugBuilder {
             | Type::Struct(_)
             | Type::Void
             | Type::Error
+            | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::CString
             | Type::CBlock => return self.unspecified_type("KiraValue"),
         };

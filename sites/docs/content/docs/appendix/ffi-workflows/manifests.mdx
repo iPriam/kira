@@ -1,111 +1,88 @@
 ---
 title: Native Library Manifests
-description: The per-library TOML format that owns header paths, autobinding inputs, build sources, and per-target artifacts.
+description: The two spellings a package declares a native library in, how a target row is selected, what a row contributes beyond an archive, and runtime files.
 ---
 
-Each native library is described by its own TOML file under a nearby `native_libs/` directory.
+A package declares a native library in `package.kira`, or in a `NativeLibs/<name>.toml` beside it. Both spellings mean the same thing, and a package may use either or both. The only difference is where relative paths are anchored: the package root for an inline entry, the file's own directory for a TOML.
 
-Example from the Sokol proof target:
+## In `package.kira`
+
+```kira
+let nativeLibraries = [
+    NativeLibrary {
+        name: "sokol",
+        linkMode: .Static,
+        headers: Headers { entrypoint: "NativeLibs/Sokol/sokol.h", defines: ["SOKOL_NO_ENTRY"] },
+        sources: ["NativeLibs/Sokol/sokol_impl.c"],
+        nativeTargets: [
+            NativeTarget { triple: "aarch64-macos-none", staticLib: "generated/libsokol.a",
+                           frameworks: ["AppKit", "QuartzCore"] },
+            NativeTarget { triple: "x86_64-linux-gnu", staticLib: "generated/libsokol.a",
+                           systemLibs: ["X11", "GL"] }
+        ],
+    }
+]
+```
+
+## In `NativeLibs/<name>.toml`
+
+```toml
+name = "ffimath"
+
+[[target]]
+triple = "aarch64-macos-none"
+staticLib = "lib/libffimath.a"
+
+[[target]]
+triple = "wasm32-emscripten-unknown"
+staticLib = "lib/libffimath-wasm.a"
+```
+
+A sectioned spelling is accepted too, selected by the presence of a `[library]` table:
 
 ```toml
 [library]
-name = "sokol"
+name = "ffimath"
 link_mode = "static"
-abi = "c"
-
-[headers]
-entrypoint = "../../../third_party/sokol/sokol_bindings.h"
-include_dirs = ["../../../third_party/sokol"]
-defines = ["SOKOL_NO_ENTRY", "SOKOL_GLCORE"]
-
-[autobinding]
-module = "sokol"
-output = "../sokol.kira"
-headers = [
-  "../../../third_party/sokol/sokol_app.h",
-  "../../../third_party/sokol/sokol_gfx.h",
-  "../../../third_party/sokol/sokol_glue.h"
-]
-
-[bindings]
-mode = "all_public"
-
-[build]
-sources = ["../../../third_party/sokol/sokol_impl.m"]
-include_dirs = ["../../../third_party/sokol"]
 
 [target.aarch64-macos-none]
-static_lib = "../generated/native/aarch64-macos/libsokol.a"
-frameworks = ["AppKit", "QuartzCore", "OpenGL"]
+static_lib = "lib/libffimath.a"
 
-[target.x86_64-linux-gnu]
-static_lib = "../generated/native/x86_64-linux-gnu/libsokol.a"
-system_libs = ["X11", "Xi", "Xcursor", "GL", "dl", "pthread", "m"]
-
-[target.x86_64-windows-msvc]
-static_lib = "../generated/native/x86_64-windows-msvc/sokol.lib"
+[target.wasm32-emscripten-unknown]
+static_lib = "lib/libffimath-wasm.a"
+compiler_flags = ["--use-port=emdawnwebgpu"]
 ```
 
-## Section Meanings
+Both decode into one model, so where a library was written never changes what it means.
 
-### `[library]`
+## Target Selection
 
-Defines the public identity and the supported ABI:
+Selection is exact and structural: a host build picks the row whose triple matches this machine, and `--device wasm32` picks the `wasm32-emscripten-unknown` row. A library declared only for the host and asked for wasm is refused before `emcc` runs, with a diagnostic naming the library and the target.
 
-- `name`
-- `link_mode`
-- `abi`
+The triple is the same `arch-os-abi` spelling `kira build --target` takes, so a cross build selects the row it names.
 
-For the current documented path, `link_mode = "static"` and `abi = "c"` are the supported choices.
+## What a Row Contributes
 
-### `[headers]`
+A selected row contributes more than an archive. Its `frameworks`, `systemLibs`, and `linkerFlags` go on the same link line, so a library whose symbols come from Apple frameworks needs no archive at all: write the row with neither `staticLib` nor `dynamicLib`.
 
-Defines the C header view used for binding generation:
+Under `.Dynamic`, a row that names nothing whatsoever links the library by its own name, so `dynamicLib: ""` on a library called `vulkan` is `-lvulkan`. The same row under `.Static` is refused, because it says nothing about what to link.
 
-- `entrypoint`
-- `include_dirs`
-- `defines`
-- optional framework/system library hints
+## Runtime Files
 
-### `[autobinding]`
+A row may name `runtimeFiles`: what the finished program has to find beside itself when it *starts*, as opposed to what the linker reads.
 
-Defines how Kira emits the binding module:
+```kira
+NativeTarget {
+    triple: "x86_64-windows-msvc",
+    dynamicLib: "NativeLibs/Dawn/x86_64-windows-msvc/lib/webgpu_dawn.lib",
+    runtimeFiles: ["NativeLibs/Dawn/x86_64-windows-msvc/bin"]
+}
+```
 
-- `module`: import path used by Kira source
-- `output`: generated `.kira` file path
-- `headers`: the public headers to inspect
+A dynamic library is two files, and naming only the first leaves a program that links clean and cannot start. Each entry is copied beside every link output, a file as itself and a directory as its files one level deep, because the loader searches the program's own directory before anything else.
 
-### `[bindings]`
+A directory rather than three named DLLs is what a vendor's release payload actually is, and Dawn opens one of them (`dxcompiler.dll`) by name at run time with no link-time mention of it at all. An entry missing on the target being built is refused by name, since the alternative is a loader status code naming no file.
 
-Defines how public declarations are filtered into the generated module.
+## Building the Archive
 
-The Sokol proof target currently uses:
-
-- `mode = "all_public"`
-
-### `[build]`
-
-Defines how Kira should produce the static archive if sources are present:
-
-- `sources`
-- `include_dirs`
-- `defines`
-
-### `[target.<triple>]`
-
-Defines the per-host artifact and extra link settings.
-
-That is where platform-specific archive paths, frameworks, and system libraries live.
-
-## Important Rules
-
-- one TOML file describes one native library
-- the TOML owns header paths, autobinding inputs, and binary locations
-- Kira source should import the generated module, not hardcode binary paths
-- `.bind.toml` sidecar files are no longer part of the documented workflow in this repository
-
-## Dynamic Linking Note
-
-The manifest model includes `dynamic_lib` fields, but the documented workflow in this repository is based on static linking.
-
-The examples, tests, and proof targets all use static linking.
+`headers` and `sources` describe how the library is built. When `sources` are present, Kira builds the static archive itself with the managed clang. `headers` also feeds [generated bindings](/docs/appendix/ffi-workflows/autobindings).

@@ -1,16 +1,16 @@
-@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
+@FFI.Callback { abi: c, params: [I32, I32], result: I32 }
 struct Adder {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct Hooks { var add: Adder
 var scale: I32 }
 
-@FFI.Extern { library: ffifixture; symbol: ffi_default_adder; abi: c; }
-function defaultAdder() -> Adder;
-@FFI.Extern { library: ffifixture; symbol: ffi_hooks_apply; abi: c; }
-function hooksApply(h: Hooks, a: I32, b: I32) -> I32;
-@FFI.Extern { library: ffifixture; symbol: ffi_call_adder; abi: c; }
-function callAdder(add: Adder, a: I32, b: I32) -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_default_adder, abi: c }
+function defaultAdder() -> Adder
+@FFI.Extern { library: ffifixture, symbol: ffi_hooks_apply, abi: c }
+function hooksApply(h: Hooks, a: I32, b: I32) -> I32
+@FFI.Extern { library: ffifixture, symbol: ffi_call_adder, abi: c }
+function callAdder(add: Adder, a: I32, b: I32) -> I32
 
 @Main function main() {
     // A zero-filled callback member is NULL, and C sees it as null.

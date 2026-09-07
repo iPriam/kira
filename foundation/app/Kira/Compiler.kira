@@ -66,7 +66,7 @@ enum KiraSeverity {
 //
 // `codeText` is the code exactly as the compiler wrote it, for the case
 // `KiraError` has no name for.
-struct KiraCheckDiagnostic {
+struct KiraPackageDiagnostic {
     var code: KiraError = .Unrecognized
     var codeText: String = ""
     var severity: KiraSeverity = .Error
@@ -86,8 +86,8 @@ struct KiraCheckDiagnostic {
 }
 
 // What one check answered.
-struct KiraCheckResult {
-    var diagnostics: [KiraCheckDiagnostic] = []
+struct KiraPackageCheckResult {
+    var diagnostics: [KiraPackageDiagnostic] = []
 
     // How many problems were reported, of every severity.
     function count() -> Int {
@@ -98,12 +98,12 @@ struct KiraCheckResult {
     //
     // Out of range is an answer rather than a trap, because a caller reading a
     // result it did not produce should be able to ask.
-    function at(index: Int) -> KiraCheckDiagnostic {
+    function at(index: Int) -> KiraPackageDiagnostic {
         if index < 0 {
-            return KiraCheckDiagnostic()
+            return KiraPackageDiagnostic()
         }
         if index >= self.diagnostics.count {
-            return KiraCheckDiagnostic()
+            return KiraPackageDiagnostic()
         }
         return self.diagnostics[index]
     }
@@ -166,7 +166,7 @@ struct KiraCheckResult {
 // request that cannot be read answers with the package diagnostic saying so.
 // A caller asking whether something compiles is entitled to an answer either
 // way, so nothing here fails.
-function checkPackages(request: borrow KiraCheckRequest) -> KiraCheckResult {
+function checkPackages(request: borrow KiraCheckRequest) -> KiraPackageCheckResult {
     return decodeCheckResult(kcCheckPackages(encodeCheckRequest(request)))
 }
 
@@ -174,7 +174,7 @@ function checkPackages(request: borrow KiraCheckRequest) -> KiraCheckResult {
 //
 // The common shape, spelled once: most callers have one package and a manifest
 // that names it.
-function checkPackage(root: borrow String, package: borrow KiraPackage) -> KiraCheckResult {
+function checkPackage(root: borrow String, package: borrow KiraPackage) -> KiraPackageCheckResult {
     var request = KiraCheckRequest()
     request.root = root
     request.packages.append(package)
@@ -212,11 +212,11 @@ function encodeCheckRequest(request: borrow KiraCheckRequest) -> [String] {
 // Five fields per diagnostic, in order, so this walks rather than parses. A
 // trailing partial record is dropped: the compiler writes whole records, and
 // half a diagnostic is not one.
-function decodeCheckResult(fields: borrow [String]) -> KiraCheckResult {
-    var result = KiraCheckResult()
+function decodeCheckResult(fields: borrow [String]) -> KiraPackageCheckResult {
+    var result = KiraPackageCheckResult()
     var index = 0
     while index + 4 < fields.count {
-        var diagnostic = KiraCheckDiagnostic()
+        var diagnostic = KiraPackageDiagnostic()
         diagnostic.codeText = fields[index]
         diagnostic.code = kiraErrorFromCode(fields[index])
         diagnostic.severity = kiraSeverityFromText(fields[index + 1])

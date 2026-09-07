@@ -91,7 +91,7 @@ Stored, required, and computed members
 ================================================================================
 
 construct Panel(scale: Int) extends Widget {
-    let parts: [some Widget]
+    var parts: [some Widget]
     @Required let title: String
     @Content let extra: Any
     let node: Any { return parts[0] }

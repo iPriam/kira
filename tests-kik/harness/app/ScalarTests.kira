@@ -78,32 +78,32 @@ function sctClassify(n: Int) -> Int {
 
 construct ScalarAddCommutes() extends Test {
     test { return 17 + 25 }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct ScalarSubtractNegativeResult() extends Test {
     test { return 10 - 31 }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 21) return e }
 }
 
 construct ScalarMultiply() extends Test {
     test { return 6 * 7 }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct ScalarPrecedenceMulBeforeAdd() extends Test {
     test { return 2 + 3 * 4 }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct ScalarPrecedenceParens() extends Test {
     test { return (2 + 3) * 4 }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct ScalarNestedGrouping() extends Test {
     test { return 0 - (3 * (4 + 5)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 27); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 27) return e }
 }
 
 construct ScalarUnaryMinusFold() extends Test {
@@ -112,24 +112,24 @@ construct ScalarUnaryMinusFold() extends Test {
         let b = 0 - a
         return a + b + (0 - 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ScalarLeftAssocSubtraction() extends Test {
     test { return 100 - 30 - 20 - 5 }
-    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(45) return e }
 }
 
 // --- integer division / modulo --------------------------------------------
 
 construct ScalarDivTruncatesTowardZero() extends Test {
     test { return 7 / 2 }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct ScalarModuloPositive() extends Test {
     test { return 17 % 5 }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct ScalarDivModIdentity() extends Test {
@@ -138,7 +138,7 @@ construct ScalarDivModIdentity() extends Test {
         let b = 71
         return (a / b) * b + (a % b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12345); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12345) return e }
 }
 
 construct ScalarModuloCycleSum() extends Test {
@@ -152,46 +152,46 @@ construct ScalarModuloCycleSum() extends Test {
         return acc
     }
     // sum of (i%7) for i in 0..29: 4 full cycles of (0..6)=21 -> 84, +28%7=0 +29%7=1
-    expect { let e: Result<Int, TestFailure> = .Ok(85); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(85) return e }
 }
 
 // --- comparisons -----------------------------------------------------------
 
 construct ScalarLessThanTrue() extends Test {
     test { return 3 < 7 }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarGreaterEqualBoundary() extends Test {
     test { return 7 >= 7 }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarNotEqual() extends Test {
     test { return 5 != 6 }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarEqualityFalse() extends Test {
     test { return 5 == 6 }
-    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
 }
 
 // --- boolean logic ---------------------------------------------------------
 
 construct ScalarAndShortCircuit() extends Test {
     test { return (4 > 2) && (10 % 2 == 0) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarOrFalseLeft() extends Test {
     test { return (1 > 2) || (3 > 2) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarNotComposition() extends Test {
     test { return !(1 > 2) && !(2 > 3) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct ScalarBooleanTruthTableFold() extends Test {
@@ -213,7 +213,7 @@ construct ScalarBooleanTruthTableFold() extends Test {
         // (av&&bv)||(av||bv) is true unless both false -> 3 of 4 combos
         return trues
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // --- conditional (ternary) expressions -------------------------------------
@@ -223,7 +223,7 @@ construct ScalarTernaryPicksThen() extends Test {
         let x = 9
         return x > 5 ? 100 : 200
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct ScalarTernaryFoldOverRange() extends Test {
@@ -237,41 +237,41 @@ construct ScalarTernaryFoldOverRange() extends Test {
         // +0 -1 +2 -3 +4 -5 +6 -7 +8 -9 = -5
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // --- recursion -------------------------------------------------------------
 
 construct ScalarFactorialTen() extends Test {
     test { return sctFactorial(10) }
-    expect { let e: Result<Int, TestFailure> = .Ok(3628800); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3628800) return e }
 }
 
 construct ScalarFibTwenty() extends Test {
     test { return sctFib(20) }
-    expect { let e: Result<Int, TestFailure> = .Ok(6765); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6765) return e }
 }
 
 construct ScalarGcdCoprime() extends Test {
     test { return sctGcd(1071, 462) }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 construct ScalarGcdOne() extends Test {
     test { return sctGcd(17, 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct ScalarPowOfTwo() extends Test {
     test { return sctPow(2, 16) }
-    expect { let e: Result<Int, TestFailure> = .Ok(65536); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(65536) return e }
 }
 
 // --- loop accumulation -----------------------------------------------------
 
 construct ScalarGaussSum() extends Test {
     test { return sctSumTo(100) }
-    expect { let e: Result<Int, TestFailure> = .Ok(5050); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5050) return e }
 }
 
 construct ScalarMixedOperatorLoop() extends Test {
@@ -285,7 +285,7 @@ construct ScalarMixedOperatorLoop() extends Test {
         return acc
     }
     // sum(i*3)=3825, -sum(i/2)=625, +sum(i%7)=148 -> 3825-625+148
-    expect { let e: Result<Int, TestFailure> = .Ok(3348); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3348) return e }
 }
 
 construct ScalarClassifySwitchFold() extends Test {
@@ -299,7 +299,7 @@ construct ScalarClassifySwitchFold() extends Test {
         // 12 values cycling 100,200,300 -> 4*(100+200+300) = 2400
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2400); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2400) return e }
 }
 
 // --- float folded into an integer checksum ---------------------------------
@@ -318,5 +318,5 @@ construct ScalarFloatAccumulatesToInt() extends Test {
         }
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7500) return e }
 }

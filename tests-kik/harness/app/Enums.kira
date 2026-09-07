@@ -119,10 +119,8 @@ function enumsStructPayloadChurnSection() -> Int {
     while m < 40 {
         let card = EmxCard()
         acc = acc + emxPaintScore(card.paint)
-        var e = 0
-        while e < card.effects.count {
+        for e in 0..card.effects.count {
             acc = acc + emxPaintScore(card.effects[e])
-            e = e + 1
         }
         m = m + 1
     }

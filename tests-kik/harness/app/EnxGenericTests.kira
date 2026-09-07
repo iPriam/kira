@@ -227,7 +227,7 @@ construct EnxGDivOkBasic() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // enxGSafeDiv(100, 7) -> Ok(14) (truncated)
@@ -241,7 +241,7 @@ construct EnxGDivOkTruncated() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 // enxGSafeDiv(50, 0) -> Error(DivByZero) -> -1
@@ -255,7 +255,7 @@ construct EnxGDivErrDivByZero() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 1) return e }
 }
 
 // enxGSafeDiv(-10, 2) -> Error(BadInput) -> -5
@@ -269,7 +269,7 @@ construct EnxGDivErrBadInput() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // enxGSafeDiv(0, 5) -> Ok(0)
@@ -283,19 +283,19 @@ construct EnxGDivZeroNumerator() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // enxGSafeDiv(42, 1) -> Ok(42)
 construct EnxGDivUnitDivisor() extends Test {
     test { return enxGResultIntVal(enxGSafeDiv(42, 1)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 // enxGSafeDiv(999, 9) -> Ok(111)
 construct EnxGDivLargeOk() extends Test {
     test { return enxGResultIntVal(enxGSafeDiv(999, 9)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(111); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
 }
 
 // sum enxGSafeDiv(120, i+1) for i=0..11 (all Ok):
@@ -311,7 +311,7 @@ construct EnxGDivLoopFold12() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(371); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(371) return e }
 }
 
 // Count Error results in enxGSafeDiv(i-3, 2) for i=0..5:
@@ -332,7 +332,7 @@ construct EnxGDivErrorCount() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // Sum of all 5 error codes: -1-2-3-4-5 = -15
@@ -345,7 +345,7 @@ construct EnxGAllErrCodeSum() extends Test {
         let f = enxGErrCode(.BadInput)
         return a + b + c + d + f
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 15) return e }
 }
 
 // Inline match with both paths covered: Ok path
@@ -359,7 +359,7 @@ construct EnxGInlineMatchOk() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // Inline match with both paths covered: Error path
@@ -373,7 +373,7 @@ construct EnxGInlineMatchErr() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,37 +383,37 @@ construct EnxGInlineMatchErr() extends Test {
 // makeRect(5,3) -> Ok -> area=15
 construct EnxGRectOkArea() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(5, 3)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 // makeRect(10,10) -> Ok -> area=100
 construct EnxGRectOkAreaSquare() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(10, 10)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 // makeRect(-1, 5) -> Error(BadInput) -> -5
 construct EnxGRectErrNegW() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(0 - 1, 5)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // makeRect(5, -1) -> Error(BadInput) -> -5
 construct EnxGRectErrNegH() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(5, 0 - 1)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // makeRect(0, 5) -> Error(BadInput) -> -5
 construct EnxGRectErrZeroW() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(0, 5)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // makeRect(200, 200) -> area=40000 > 10000 -> Error(Overflow) -> -2
 construct EnxGRectErrOverflow() extends Test {
     test { return enxGRectResultArea(enxGMakeRect(200, 200)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }
 
 // Fold makeRect(i+1, i+2) for i=0..5: areas 1*2+2*3+3*4+4*5+5*6+6*7=2+6+12+20+30+42=112
@@ -427,7 +427,7 @@ construct EnxGRectFoldLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(112) return e }
 }
 
 // Fold makeRect(i, 10-i) for i=0..10:
@@ -444,7 +444,7 @@ construct EnxGRectFoldMixed() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(155); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(155) return e }
 }
 
 // Rect field access from Ok: makeRect(4,6) -> Ok -> read w+h=10
@@ -458,7 +458,7 @@ construct EnxGRectFieldAccessOk() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -468,31 +468,31 @@ construct EnxGRectFieldAccessOk() extends Test {
 // colorResult(0) -> Ok(Warm) -> 100
 construct EnxGToneWarm() extends Test {
     test { return enxGToneResultVal(enxGColorResult(0)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 // colorResult(1) -> Ok(Cool) -> 200
 construct EnxGToneCool() extends Test {
     test { return enxGToneResultVal(enxGColorResult(1)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 // colorResult(2) -> Ok(Neutral) -> 300
 construct EnxGToneNeutral() extends Test {
     test { return enxGToneResultVal(enxGColorResult(2)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(300) return e }
 }
 
 // colorResult(3) -> Ok(Vivid) -> 400
 construct EnxGToneVivid() extends Test {
     test { return enxGToneResultVal(enxGColorResult(3)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(400) return e }
 }
 
 // colorResult(4) -> Error(BadInput) -> -5
 construct EnxGToneBadInput() extends Test {
     test { return enxGToneResultVal(enxGColorResult(4)) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 5) return e }
 }
 
 // Fold colorResult(i%5) for i=0..15 (16 values):
@@ -508,7 +508,7 @@ construct EnxGToneFold16() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3085); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3085) return e }
 }
 
 // Count non-error tones in i=0..19: i%5 in {0,1,2,3} -> 4 per 5-cycle -> 16
@@ -528,7 +528,7 @@ construct EnxGToneNonErrorCount() extends Test {
         }
         return count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 // Fold colorResult(i%5) for i=0..11:
@@ -544,7 +544,7 @@ construct EnxGToneFold12() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(2290); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2290) return e }
 }
 
 // Inline double-match: Ok(Vivid) inner tone value
@@ -558,6 +558,6 @@ construct EnxGToneInlineDouble() extends Test {
         }
         return out
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(400) return e }
 }
 

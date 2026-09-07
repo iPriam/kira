@@ -2,43 +2,43 @@
 // cooperative Task scheduler. The native functions only schedule Tokio work;
 // they never block the Kira task while a socket is doing I/O.
 
-@FFI.Extern { library: kira_network; symbol: kira_network_http1_server; abi: c; }
-function http1Server() -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_http1_client; abi: c; }
-function http1Client(port: U16) -> Int;
+@FFI.Extern { library: kira_network, symbol: kira_network_http1_server, abi: c }
+function http1Server() -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_http1_client, abi: c }
+function http1Client(port: U16) -> Int
 
-@FFI.Extern { library: kira_network; symbol: kira_network_http2_server; abi: c; }
-function http2Server() -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_http2_client; abi: c; }
-function http2Client(port: U16) -> Int;
+@FFI.Extern { library: kira_network, symbol: kira_network_http2_server, abi: c }
+function http2Server() -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_http2_client, abi: c }
+function http2Client(port: U16) -> Int
 
-@FFI.Extern { library: kira_network; symbol: kira_network_http3_server; abi: c; }
-function http3Server() -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_http3_client; abi: c; }
-function http3Client(port: U16) -> Int;
+@FFI.Extern { library: kira_network, symbol: kira_network_http3_server, abi: c }
+function http3Server() -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_http3_client, abi: c }
+function http3Client(port: U16) -> Int
 
-@FFI.Extern { library: kira_network; symbol: kira_network_websocket_server; abi: c; }
-function websocketServer() -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_websocket_client; abi: c; }
-function websocketClient(port: U16) -> Int;
+@FFI.Extern { library: kira_network, symbol: kira_network_websocket_server, abi: c }
+function websocketServer() -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_websocket_client, abi: c }
+function websocketClient(port: U16) -> Int
 
-@FFI.Extern { library: kira_network; symbol: kira_network_io_roundtrip; abi: c; }
-function ioRoundtrip() -> Int;
+@FFI.Extern { library: kira_network, symbol: kira_network_io_roundtrip, abi: c }
+function ioRoundtrip() -> Int
 
-@FFI.Extern { library: kira_network; symbol: kira_network_server_port; abi: c; }
-function serverPort(handle: Int) -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_poll; abi: c; }
-function networkPoll(handle: Int) -> I32;
-@FFI.Extern { library: kira_network; symbol: kira_network_result; abi: c; }
-function networkResult(handle: Int) -> Int;
-@FFI.Extern { library: kira_network; symbol: kira_network_close; abi: c; }
-function networkClose(handle: Int);
-@FFI.Extern { library: kira_network; symbol: kira_network_cancel; abi: c; }
-function networkCancel(handle: Int);
+@FFI.Extern { library: kira_network, symbol: kira_network_server_port, abi: c }
+function serverPort(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_poll, abi: c }
+function networkPoll(handle: Int) -> I32
+@FFI.Extern { library: kira_network, symbol: kira_network_result, abi: c }
+function networkResult(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_close, abi: c }
+function networkClose(handle: Int)
+@FFI.Extern { library: kira_network, symbol: kira_network_cancel, abi: c }
+function networkCancel(handle: Int)
 
 // Polling is a Kira yield point, so the Kira scheduler keeps driving sibling
 // protocol tasks while Tokio completes the actual socket future.
-async function waitOperation(handle: Int) -> Int {
+function waitOperation(handle: Int) -> Int {
     if handle <= 0 {
         return handle
     }

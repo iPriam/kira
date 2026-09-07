@@ -74,6 +74,16 @@ impl FnCompiler<'_> {
                 let target = self.innermost_loop()?.continue_target;
                 self.code.push(Instruction::Jump(target));
             }
+            IrStmt::ReleaseLocals { locals } => {
+                // `TakeLocal` leaves the slot empty before `Pop` releases the
+                // value. The frame plan still names the slot for early-return
+                // paths; seeing `Void` there makes that later release a no-op.
+                for &local in locals {
+                    let slot = self.local_slot(local)?;
+                    self.code.push(Instruction::TakeLocal(slot));
+                    self.code.push(Instruction::Pop);
+                }
+            }
         }
         Ok(())
     }
@@ -243,7 +253,7 @@ impl FnCompiler<'_> {
         self.function
             .locals
             .get(slot as usize)
-            .is_some_and(|&ty| self.program.types.runs_user_drop(ty))
+            .is_some_and(|&ty| self.program.types.takes_on_read(ty))
             && !self.function.by_pointer_params.contains(&slot)
             && !self.function.by_reference_params.contains(&slot)
     }

@@ -64,6 +64,11 @@ impl Codegen<'_> {
     /// Emits the whole export surface: the marker, one trampoline per export,
     /// and one destructor per exported class.
     pub(super) fn lower_export_surface(&mut self) -> Result<(), LlvmError> {
+        // A consumer-entered library has no entry of its own to start the
+        // module from, so its constants fill at load, as a global constructor.
+        if let Some(init) = self.lower_constants_init()? {
+            self.register_constants_ctor(init);
+        }
         if let Some(marker) = self.exports.abi_marker.clone() {
             self.lower_abi_marker(&marker);
         }

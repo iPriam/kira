@@ -17,9 +17,9 @@ enum Note { Tag(String) Rank(Int) Blank }
 // return.
 function rank(s: borrow Shade) -> Int {
     match s {
-        Light -> return 1;
-        Mid -> return 2;
-        Dark -> return 3;
+        Light -> return 1
+        Mid -> return 2
+        Dark -> return 3
     }
 }
 
@@ -41,9 +41,9 @@ function describe(n: borrow Note) -> String {
 // the enum still owns its own.
 function label(n: borrow Note) -> String {
     match n {
-        Tag(text) -> return text;
+        Tag(text) -> return text
         Rank(value) -> { if value > 10 { return "high" } return "low" }
-        Blank -> return "none";
+        Blank -> return "none"
     }
 }
 

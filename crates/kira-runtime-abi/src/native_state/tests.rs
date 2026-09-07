@@ -115,9 +115,31 @@ fn store_recovers_mutates_and_frees_once() {
         store.recover(token, LEFT),
         Ok(NativeStateValue::struct_of(vec![NativeStateValue::Int(7)]))
     );
-    assert_eq!(store.free(token), Ok(()));
+    assert_eq!(store.release(token), Ok(true));
     assert_eq!(
-        store.free(token),
+        store.release(token),
+        Err(NativeStateError::UnknownToken(token.as_word()))
+    );
+}
+
+#[test]
+fn a_state_is_destroyed_by_the_release_that_drops_its_last_owner() {
+    let mut store = NativeStateStore::new();
+    let token = store
+        .create(LEFT, NativeStateValue::Int(1))
+        .expect("state allocates");
+    assert_eq!(store.owners(token), Ok(1));
+    store.retain(token).expect("a live state retains");
+    store.retain(token).expect("a live state retains");
+    assert_eq!(store.owners(token), Ok(3));
+    assert_eq!(store.release(token), Ok(false));
+    assert_eq!(store.release(token), Ok(false));
+    assert_eq!(store.live(), 1);
+    assert_eq!(store.recover(token, LEFT), Ok(NativeStateValue::Int(1)));
+    assert_eq!(store.release(token), Ok(true));
+    assert_eq!(store.live(), 0);
+    assert_eq!(
+        store.retain(token),
         Err(NativeStateError::UnknownToken(token.as_word()))
     );
 }
@@ -142,7 +164,7 @@ fn callback_state_teardown_releases_a_nested_enum_cell_share() {
         0,
         "the stored state still owns its cell share"
     );
-    store.free(token).expect("callback state frees");
+    store.release(token).expect("callback state releases");
     assert_eq!(
         releases.load(std::sync::atomic::Ordering::Relaxed),
         1,
@@ -168,7 +190,7 @@ fn store_rejects_wrong_null_and_unknown_tokens() {
         Err(NativeStateError::NullToken)
     );
     assert_eq!(
-        store.free(NativeStateToken::from_word(999)),
+        store.release(NativeStateToken::from_word(999)),
         Err(NativeStateError::UnknownToken(999))
     );
 }

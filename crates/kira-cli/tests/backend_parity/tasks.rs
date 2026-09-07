@@ -12,18 +12,23 @@
 //! a different order would still add up the same — which is why the yielding
 //! cases also *print* from inside the bodies, where order shows.
 
-use crate::{assert_parity, assert_trap_parity};
+use crate::{
+    assert_parity, assert_parity_with_heap_balance, assert_trap_message_parity, assert_trap_parity,
+};
 
 /// The async bodies every case below spawns.
 const BODIES: &str = r#"
 async function tskSum(a: Int, b: Int) -> Int {
     return a + b
 }
-async function tskFactorial(n: Int) -> Int {
+function tskFactorialOf(n: Int) -> Int {
     if n <= 1 {
         return 1
     }
-    return n * tskFactorial(n - 1)
+    return n * tskFactorialOf(n - 1)
+}
+async function tskFactorial(n: Int) -> Int {
+    return tskFactorialOf(n)
 }
 async function tskNoop(n: Int) {
     let unused = n + 1
@@ -37,9 +42,9 @@ fn program(body: &str) -> String {
 }
 
 #[test]
-fn an_async_function_called_directly_runs_like_a_synchronous_one() {
+fn an_async_function_runs_as_a_task_and_joins_for_its_result() {
     let output = assert_parity(&program(
-        "    print(tskSum(19, 23))\n    print(tskFactorial(5))",
+        "    let sum = Task { tskSum(19, 23) }\n    let product = Task { tskFactorial(5) }\n    print(sum.await)\n    print(product.await)",
     ));
     assert_eq!(output, "42\n120\n");
 }
@@ -230,4 +235,190 @@ fn joining_after_a_detach_traps_on_every_engine() {
         ),
         "",
     );
+}
+
+/// A channel orders two contexts against each other identically on every
+/// backend, with the heap balanced.
+///
+/// The receive is the point: it comes back after the task that fills it has
+/// run, because an empty live channel hands the next runnable task a turn
+/// rather than spinning. That policy is one synthesized IR function both
+/// engines run, so this is the two of them agreeing by construction.
+#[test]
+fn a_channel_orders_two_contexts_on_every_backend() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<Int>) -> Int {
+    tx.send(41)
+    tx.send(1)
+    tx.close()
+    return 7
+}
+
+@Main
+function main() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        print(first + second)
+        let past = try rx.receive()
+        print(past)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    print(pending.await)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n-1\n7\n");
+}
+
+/// A receive nothing can ever answer traps identically on every backend,
+/// rather than hanging, and says the same sentence about it.
+///
+/// The queue is empty, the sender is live, and no other work is runnable, so no
+/// future turn can change the answer. Waiting forever is a hang, and answering
+/// `Closed` would tell the program the sender went away when it did not.
+#[test]
+fn a_receive_nothing_can_answer_traps_on_every_backend() {
+    assert_trap_message_parity(
+        r#"
+import Foundation
+
+@Main
+function main() {
+    print(1)
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    attempt {
+        let value = try rx.receive()
+        print(value)
+    } handle {
+        Closed { print(77) }
+    }
+    return
+}
+"#,
+        "1\n",
+        "kira: runtime trap: a receive is waiting for a value nothing can send",
+    );
+}
+
+/// A payload that owns storage crosses whole, and both engines rebuild the
+/// same value from the same token.
+///
+/// A queue slot is one machine word and a `String` has no word of its own, so
+/// it travels as a token naming it in the store and the receiver takes the
+/// value out. The heap balance is the half that matters here: the token owns
+/// the storage while it is queued, and a delivered payload frees it on the way
+/// out.
+#[test]
+fn an_owned_payload_crosses_a_channel_whole() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<String>) -> Int {
+    tx.send("carried whole")
+    tx.send("and again")
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<String>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        print(first)
+        print(second)
+        print(pending.await)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "carried whole\nand again\n1\n");
+}
+
+/// A struct payload arrives as itself, fields and all.
+#[test]
+fn a_struct_payload_crosses_a_channel_whole() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+struct Note {
+    var title: String
+    var rank: Int
+}
+
+async function fill(tx: Sender<Note>) -> Int {
+    tx.send(Note(title: "boxed", rank: 41))
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<Note>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    attempt {
+        let got = try rx.receive()
+        print(got.title)
+        print(got.rank + pending.await)
+    } handle {
+        Closed { print(0 - 1) }
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "boxed\n42\n");
+}
+
+/// Closing a receiver releases what it never delivered.
+///
+/// This is the case a leak hides in. Three payloads are queued and none is
+/// received, so the close is the only thing that can free them — and without
+/// the drain the program still prints exactly this and still exits zero, while
+/// three strings stay in the store forever. The heap balance is what tells the
+/// difference, which is why this case is asserted with it rather than on its
+/// output alone.
+#[test]
+fn closing_a_receiver_releases_what_it_never_delivered() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<String>) -> Int {
+    tx.send("one")
+    tx.send("two")
+    tx.send("three")
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<String>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    print(pending.await)
+    rx.close()
+    print(2)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n");
 }

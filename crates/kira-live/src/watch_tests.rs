@@ -1,6 +1,7 @@
 use super::*;
 use std::fs;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 /// A scratch directory that removes itself.
 struct TempDir(PathBuf);
@@ -40,6 +41,35 @@ fn changes(watcher: &mut SourceWatcher) -> Vec<Change> {
     watcher
         .wait_for(Duration::from_secs(2))
         .expect("watcher wait")
+}
+
+/// Every path the watcher reports up to and including `wanted`.
+///
+/// For the tests that assert some path is *never* reported. Which batch a
+/// change arrives in is the platform's business: it differs between inotify
+/// and FSEvents, and — as an x86_64 runner passing while an arm64 one failed
+/// showed — between two machines running the same backend at different speeds.
+/// So nothing here is asserted about batches. Events are read until the one
+/// that must arrive has, and the union of everything seen is what the caller
+/// makes its claim about, which is true however the events were grouped.
+fn changes_until(watcher: &mut SourceWatcher, wanted: &Path) -> Vec<PathBuf> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seen: Vec<PathBuf> = Vec::new();
+    while Instant::now() < deadline {
+        for change in watcher
+            .wait_for(Duration::from_millis(500))
+            .expect("watcher wait")
+        {
+            seen.push(change.path);
+        }
+        if seen.iter().any(|path| path == wanted) {
+            return seen;
+        }
+    }
+    panic!(
+        "the watcher never reported {}: saw {seen:?}",
+        wanted.display()
+    );
 }
 
 fn write_same_size_same_mtime(path: &Path, contents: &str) {
@@ -204,13 +234,14 @@ fn build_output_never_triggers_a_rebuild() {
     ] {
         dir.write(output, "build output");
     }
+    // A real edit last, and the claim is about every path reported up to it —
+    // not about the batch it lands in, which is the platform's business. See
+    // `changes_until`.
+    let source = dir.write("app.kira", "after!");
 
-    assert!(
-        watcher
-            .wait_for(Duration::from_millis(250))
-            .expect("output watcher")
-            .is_empty()
-    );
+    let seen = changes_until(&mut watcher, &source);
+    let ignored: Vec<&PathBuf> = seen.iter().filter(|path| **path != source).collect();
+    assert!(ignored.is_empty(), "build output reported: {ignored:?}");
 }
 
 #[test]
@@ -228,13 +259,12 @@ fn editor_noise_never_triggers_a_rebuild() {
     ] {
         dir.write(noise, "noise");
     }
+    // See `build_output_never_triggers_a_rebuild`.
+    let source = dir.write("app.kira", "after!");
 
-    assert!(
-        watcher
-            .wait_for(Duration::from_millis(250))
-            .expect("noise watcher")
-            .is_empty()
-    );
+    let seen = changes_until(&mut watcher, &source);
+    let ignored: Vec<&PathBuf> = seen.iter().filter(|path| **path != source).collect();
+    assert!(ignored.is_empty(), "editor noise reported: {ignored:?}");
 }
 
 #[test]
@@ -276,6 +306,20 @@ fn shaders_and_assets_are_watched() {
     assert_eq!(changed, expected);
 }
 
+/// A root that names one file reports that file and not the directory it sits
+/// in.
+///
+/// Ordered rather than timed. The sibling is written first and the root second,
+/// and the wait is for the root's own change — a signal that must arrive —
+/// rather than for a window in which the sibling's must not. A watcher that
+/// followed the whole directory would put the sibling in this batch, because
+/// the platform reports in the order the writes happened; one that watches the
+/// file alone reports only the file.
+///
+/// The earlier spelling asserted nothing arrived within 150ms, which is a claim
+/// about how promptly a file-system notification service delivers rather than
+/// about what this watcher watches. It failed on macOS, where FSEvents watches
+/// the directory and the filtering this test is about happens afterwards.
 #[test]
 fn a_single_file_root_does_not_watch_its_siblings() {
     let dir = TempDir::new("single");
@@ -284,14 +328,10 @@ fn a_single_file_root_does_not_watch_its_siblings() {
     let mut watcher = SourceWatcher::new(WatchSet::new().root(&source)).expect("watcher");
 
     fs::write(&sibling, "changed").expect("sibling edit");
-    assert!(
-        watcher
-            .wait_for(Duration::from_millis(150))
-            .expect("sibling watcher")
-            .is_empty()
-    );
     fs::write(&source, "after!").expect("source edit");
-    assert_eq!(changes(&mut watcher).len(), 1);
+
+    let seen = changes_until(&mut watcher, &source);
+    assert!(!seen.contains(&sibling), "sibling reported: {seen:?}");
 }
 
 #[test]

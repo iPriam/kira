@@ -79,7 +79,7 @@ function main() {
 fn c_layout_blocks_made_in_a_loop_balance() {
     assert_balances(
         r#"
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct FrameDesc {
     let label: CString
 }
@@ -178,8 +178,8 @@ function main() {
     while i < 3 {
         let outcome = Outcome.Failed("bad")
         match outcome {
-            Ok -> print("ok");
-            Failed(reason) -> print(reason);
+            Ok -> print("ok")
+            Failed(reason) -> print(reason)
         }
         i = i + 1
     }
@@ -244,8 +244,8 @@ function classify(code: Int) -> Outcome {
 @Native
 function describe(outcome: borrow Outcome) -> String {
     match outcome {
-        Ok -> return "ok";
-        Failed(reason) -> return reason;
+        Ok -> return "ok"
+        Failed(reason) -> return reason
     }
     return "?"
 }

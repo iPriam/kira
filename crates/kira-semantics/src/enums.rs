@@ -74,6 +74,8 @@ impl<'a> Analyzer<'a> {
                 },
             ) {
                 Some(id) => {
+                    let module = self.imports.module_of(source).to_owned();
+                    self.program.types.enums_mut().set_module(id, &module);
                     // Reserved in id order now and filled by the second pass, so
                     // `enum_defaults` stays indexed by the ids the table minted.
                     self.enum_defaults.push(Vec::new());
@@ -321,6 +323,11 @@ impl<'a> Analyzer<'a> {
             // releases it with the rest of its payload, while the captured
             // binding and any other closure keep their own shares.
             | Type::Cell(_)
+            // A distinct type travels as the scalar it is: `kira-ir` rewrites
+            // the payload's declared type before any backend lays the box out,
+            // so `Option<TabId>` is the `Option<U32>` box with the type checker
+            // still holding the two apart above it.
+            | Type::Distinct(_)
             | Type::Error => ty,
             _ => {
                 self.emit(

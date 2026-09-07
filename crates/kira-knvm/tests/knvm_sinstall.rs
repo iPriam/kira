@@ -122,7 +122,12 @@ fn repository_root() -> PathBuf {
 }
 
 /// The three tools land under the names this host runs them by, and run.
+///
+/// Ignored in the default gate: a sinstall builds the shipped binaries from
+/// this checkout, which is minutes proving the install route rather than the
+/// change under test. The `toolchain` suite runs it.
 #[test]
+#[ignore = "builds and installs the shipped tools; run via the toolchain suite"]
 fn sinstall_lands_both_tools_and_configures_the_path() {
     // This installs for real, so on Windows it edits the user `Path` exactly as
     // the test that asserts about it does.

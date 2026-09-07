@@ -1,0 +1,14 @@
+{
+  "title": "Macros",
+  "pages": [
+    "index",
+    "declarative-macros",
+    "comptime-functions",
+    "procedural-macros",
+    "reflection",
+    "derives",
+    "property-wrappers",
+    "shaders",
+    "diagnostics"
+  ]
+}

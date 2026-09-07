@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Buf, Bytes};
+use h3::error::StreamError;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use quinn::{ClientConfig, Endpoint, EndpointConfig, ServerConfig};
 use tokio::task::JoinHandle;
@@ -326,10 +327,31 @@ impl Http3Client {
             .send_request(message)
             .await
             .map_err(|_| NetworkError::Protocol)?;
+        // A server may answer without reading the request body — it needs
+        // nothing from it, or it is refusing what is being offered. Doing so
+        // terminates the receiving side of the request stream, and every write
+        // left to make and the finish itself then fail. That is the peer saying
+        // it has what it needs rather than a failed request: the answer is
+        // still on its way, so stop sending and go and read it. Any other
+        // failure is a transport failure and is reported as one.
+        //
+        // Left as a failure this is a race, because whether the answer beats
+        // the last write decides it: a request the server never reads the body
+        // of succeeds or fails depending on scheduling.
+        let mut stopped = false;
         if !body.is_empty() {
-            stream.send_data(body).await.map_err(|_| NetworkError::Io)?;
+            match stream.send_data(body).await {
+                Ok(()) => {}
+                Err(StreamError::RemoteTerminate { .. }) => stopped = true,
+                Err(_) => return Err(NetworkError::Io),
+            }
         }
-        stream.finish().await.map_err(|_| NetworkError::Io)?;
+        if !stopped {
+            match stream.finish().await {
+                Ok(()) | Err(StreamError::RemoteTerminate { .. }) => {}
+                Err(_) => return Err(NetworkError::Io),
+            }
+        }
         let response = stream
             .recv_response()
             .await
@@ -736,6 +758,48 @@ mod tests {
         assert_eq!(
             two.expect("two").bytes().await.expect("two body"),
             Bytes::from_static(b"request-reply")
+        );
+        token.cancel();
+        server_task
+            .await
+            .expect("server task")
+            .expect("server result");
+    }
+
+    /// A server that answers without reading the request body still answers.
+    ///
+    /// Dropping the request body reader terminates the receiving side of the
+    /// request stream, so the client's remaining writes and its finish fail.
+    /// That is the peer saying it has what it needs, not a failed request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_server_that_answers_without_reading_the_body_still_answers() {
+        let server_config = Http3ServerConfig::self_signed_localhost().expect("certificate");
+        let client_config = Http3ClientConfig::new("localhost")
+            .with_root_certificate(server_config.certificate_der.clone());
+        let mut router = Http3Router::default();
+        // The body is never read: the handler answers from the request line
+        // alone, which is what a refusal or a redirect does.
+        router.route(Method::POST, "/ignored", |_request| async move {
+            Ok(Http3ServerResponse::ok(Bytes::from_static(b"answered")))
+        });
+        let server = Http3Server::bind(loopback(0), server_config, router)
+            .await
+            .expect("server");
+        let address = server.local_addr().expect("address");
+        let token = CancellationToken::new();
+        let server_task = tokio::spawn(server.run(token.clone()));
+        let client = Http3Client::connect(address, client_config)
+            .await
+            .expect("client");
+        // Large enough that the answer arrives while the body is still going.
+        let body = Bytes::from(vec![b'x'; 8 * 1024 * 1024]);
+        let request = HttpRequest::new(Method::POST, &format!("https://{address}/ignored"))
+            .expect("request")
+            .with_body(body);
+        let response = client.request(request).await.expect("response");
+        assert_eq!(
+            response.bytes().await.expect("body"),
+            Bytes::from_static(b"answered")
         );
         token.cancel();
         server_task

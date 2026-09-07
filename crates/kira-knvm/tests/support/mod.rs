@@ -225,6 +225,24 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
         )
         .expect("write fixture compiler runtime archive");
     }
+    #[cfg(target_os = "macos")]
+    for target in [
+        format!("{}-apple-darwin", std::env::consts::ARCH),
+        "aarch64-apple-ios".to_owned(),
+        "aarch64-apple-ios-sim".to_owned(),
+        "aarch64-apple-tvos".to_owned(),
+        "aarch64-apple-tvos-sim".to_owned(),
+        "aarch64-apple-visionos".to_owned(),
+        "aarch64-apple-visionos-sim".to_owned(),
+    ] {
+        let archive_dir = bin.join(target);
+        std::fs::create_dir_all(&archive_dir).expect("create Apple runner directory");
+        std::fs::write(
+            archive_dir.join("libkira_app_runner.a"),
+            "fixture Apple runner archive",
+        )
+        .expect("write fixture Apple runner archive");
+    }
 
     if shape.with_foundation {
         let foundation = payload.join("foundation");

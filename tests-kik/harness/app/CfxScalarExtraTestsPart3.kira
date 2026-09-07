@@ -13,13 +13,13 @@ import Foundation
 construct CfxSLargeSafe1() extends Test {
     test { return 100000 * 100000 }
     // 10^10 = 10000000000
-    expect { let e: Result<Int, TestFailure> = .Ok(10000000000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10000000000) return e }
 }
 
 construct CfxSLargeSafe2() extends Test {
     test { return 999999 * 999999 }
     // 999998000001
-    expect { let e: Result<Int, TestFailure> = .Ok(999998000001); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(999998000001) return e }
 }
 
 construct CfxSLargeSafe3() extends Test {
@@ -29,7 +29,7 @@ construct CfxSLargeSafe3() extends Test {
         return a * b
     }
     // 1111111101
-    expect { let e: Result<Int, TestFailure> = .Ok(1111111101); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1111111101) return e }
 }
 
 construct CfxSLargeDiv2() extends Test {
@@ -38,7 +38,7 @@ construct CfxSLargeDiv2() extends Test {
         let b = 1000000
         return a / b
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1000000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1000000) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -47,12 +47,12 @@ construct CfxSLargeDiv2() extends Test {
 
 construct CfxSGcdIdentity() extends Test {
     test { return cfxsGcd(42, 42) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct CfxSGcdWithOne() extends Test {
     test { return cfxsGcd(1, 999) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSGcdSymmetric() extends Test {
@@ -61,7 +61,7 @@ construct CfxSGcdSymmetric() extends Test {
         let g2 = cfxsGcd(18, 48)
         return g1 == g2 ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSGcdChain() extends Test {
@@ -72,7 +72,7 @@ construct CfxSGcdChain() extends Test {
         return g
     }
     // gcd(360,240)=120, gcd(120,180)=60, gcd(60,120)=60
-    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(60) return e }
 }
 
 construct CfxSGcdLcmProduct() extends Test {
@@ -84,7 +84,7 @@ construct CfxSGcdLcmProduct() extends Test {
         return lcm
     }
     // gcd(12,18)=6, lcm=36
-    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(36) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,32 +93,32 @@ construct CfxSGcdLcmProduct() extends Test {
 
 construct CfxSMinBasic() extends Test {
     test { return cfxsMin(7, 13) }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct CfxSMaxBasic() extends Test {
     test { return cfxsMax(7, 13) }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 construct CfxSMinEq() extends Test {
     test { return cfxsMin(5, 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct CfxSAbsPos() extends Test {
     test { return cfxsAbs(42) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct CfxSAbsNeg() extends Test {
     test { return cfxsAbs(0 - 42) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct CfxSAbsZero() extends Test {
     test { return cfxsAbs(0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxSMinOverArray() extends Test {
@@ -130,7 +130,7 @@ construct CfxSMinOverArray() extends Test {
         }
         return mn
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSMaxOverArray() extends Test {
@@ -142,7 +142,7 @@ construct CfxSMaxOverArray() extends Test {
         }
         return mx
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(99); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(99) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ construct CfxSMixedLoop1() extends Test {
         // total = 420-63+40 = 397
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(397); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(397) return e }
 }
 
 construct CfxSMixedLoop2() extends Test {
@@ -178,7 +178,7 @@ construct CfxSMixedLoop2() extends Test {
         // total = 4060-225 = 3835
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(3835); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3835) return e }
 }
 
 construct CfxSMixedLoop3() extends Test {
@@ -194,7 +194,7 @@ construct CfxSMixedLoop3() extends Test {
         // total = 2046-385 = 1661
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1661); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1661) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ construct CfxSStringCountHello() extends Test {
         let s = "hello"
         return s.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct CfxSStringCountEmpty() extends Test {
@@ -214,7 +214,7 @@ construct CfxSStringCountEmpty() extends Test {
         let s = ""
         return s.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxSStringCountLong() extends Test {
@@ -222,7 +222,7 @@ construct CfxSStringCountLong() extends Test {
         let s = "abcdefghij"
         return s.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ construct CfxSTrapDivZero() extends Test {
         let b = 0
         return a / b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapModZero() extends Test {
@@ -244,7 +244,7 @@ construct CfxSTrapModZero() extends Test {
         let b = 0
         return a % b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapArrayOOB() extends Test {
@@ -253,7 +253,7 @@ construct CfxSTrapArrayOOB() extends Test {
         let _ = xs[100]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapDivZeroNeg() extends Test {
@@ -262,7 +262,7 @@ construct CfxSTrapDivZeroNeg() extends Test {
         let b = 0
         return a / b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapDivZeroLarge() extends Test {
@@ -271,7 +271,7 @@ construct CfxSTrapDivZeroLarge() extends Test {
         let b = 0
         return a / b
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapOOBSingleElem() extends Test {
@@ -280,7 +280,7 @@ construct CfxSTrapOOBSingleElem() extends Test {
         let _ = xs[1]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct CfxSTrapModZeroLoop() extends Test {
@@ -295,7 +295,7 @@ construct CfxSTrapModZeroLoop() extends Test {
         }
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -308,22 +308,22 @@ construct CfxSTrapModZeroLoop() extends Test {
 
 construct CfxSModNegDividendPosDivisor() extends Test {
     test { return (0 - 17) % 5 }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }
 
 construct CfxSModPosDividendNegDivisor() extends Test {
     test { return 17 % (0 - 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct CfxSModNegDividendNegDivisor() extends Test {
     test { return (0 - 17) % (0 - 5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 2) return e }
 }
 
 construct CfxSModNegExact() extends Test {
     test { return (0 - 20) % 5 }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct CfxSDivModIdentityNegDividend() extends Test {
@@ -332,7 +332,7 @@ construct CfxSDivModIdentityNegDividend() extends Test {
         let b = 5
         return (a / b) * b + (a % b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 17); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 17) return e }
 }
 
 construct CfxSDivModIdentityNegDivisor() extends Test {
@@ -341,7 +341,7 @@ construct CfxSDivModIdentityNegDivisor() extends Test {
         let b = 0 - 5
         return (a / b) * b + (a % b)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(17) return e }
 }
 
 construct CfxSDivModIdentityGridMixedSigns() extends Test {
@@ -364,7 +364,7 @@ construct CfxSDivModIdentityGridMixedSigns() extends Test {
         // a in [-12,12] = 25 values; b in [-4,4] \ {0} = 8 -> 200 holds.
         return ok
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 construct CfxSFloatModNegTruncates() extends Test {
@@ -373,7 +373,7 @@ construct CfxSFloatModNegTruncates() extends Test {
         // truncated remainder: sign follows dividend -> -1.0 (floored would be 3.0)
         return r == (0.0 - 1.0) ? 1 : 0
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,12 +389,12 @@ function cfxsDeepRec(d: Int) -> Int {
 
 construct CfxSShallowRecursionOk() extends Test {
     test { return cfxsDeepRec(200) }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 construct CfxSDeepRecursionCompletes() extends Test {
     test { return cfxsDeepRec(1000) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1000) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,17 +409,17 @@ construct CfxSDeepRecursionCompletes() extends Test {
 
 construct CfxSFloatDivideByZeroIsInfinity() extends Test {
     test { return 1.0 / 0.0 == 2.0 / 0.0 ? 1 : 0 }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatNegativeInfinityOrdersBelowEverything() extends Test {
     test { return (0.0 - 1.0) / 0.0 < -1000000.0 ? 1 : 0 }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatPositiveInfinityOrdersAboveEverything() extends Test {
     test { return 1000000.0 < 1.0 / 0.0 ? 1 : 0 }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatZeroOverZeroIsNaN() extends Test {
@@ -428,7 +428,7 @@ construct CfxSFloatZeroOverZeroIsNaN() extends Test {
         // which no other float value can say.
         return (0.0 / 0.0) == (0.0 / 0.0) ? 0 : 1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatNaNComparesUnequalToNumbers() extends Test {
@@ -439,10 +439,10 @@ construct CfxSFloatNaNComparesUnequalToNumbers() extends Test {
         if nan > 1.0 { return 0 }
         return 1
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct CfxSFloatInfinitySubtractsItselfToNaN() extends Test {
     test { return ((1.0 / 0.0) - (1.0 / 0.0)) == (1.0 / 0.0) ? 0 : 1 }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }

@@ -1,44 +1,45 @@
 ---
 title: Methods
-description: Functions declared inside `struct` or `class`.
+description: "A method is a function with a receiver: how self is written, what mutating means, bare member names, and what extend adds to a type declared elsewhere."
 ---
 
-Methods are functions declared inside a `struct` or `class` body.
+**A method is a function with a receiver.** A struct's, class's, or construct-backed declaration's methods are collected into the same flat function table free functions live in, so nothing below analysis learns one was written inside a declaration.
 
-## Declaring a Method
+```kira
+struct Counter {
+    var n: Int = 0
 
-```ts
-struct StoryLane {
-    let width: Float
-    let height: Float
-
-    function area() -> Float {
-        return width * height
-    }
+    function value(borrow self) -> Int { return n }
+    function bump(borrow mut self, by: Int) { n = n + by }
 }
 ```
 
-The checked-in geometry examples show the same style repeatedly:
+## Receivers
 
-- methods live inside the `struct` or `class` body
-- they use normal function syntax
-- they can refer to stored members directly by name
+A method's receiver is written as a leading `self` parameter, or left out.
 
-## Returning Values
+```kira
+function hash(borrow self) -> Int          // reads the receiver
+function bump(borrow mut self, by: Int)    // writes through it
+function label() -> String                 // the same as `borrow self`
+```
 
-Methods participate in the same return-type rules as top-level functions:
+A bare `self` is `KPAR075`: it reads like a consuming receiver, which this language does not have. A receiver on a declaration that is not a method is `KSEM299`.
 
-- explicit return types are allowed
-- inference is possible when unambiguous
-- mismatched inferred returns require an explicit type
+## Reading Members
 
-## Current Limits
+A body may name a member bare, so `self.step` and `step` are the same read. A closure lifted out of a method has no `self`, so a bare field name inside one is an undefined name rather than a silent capture.
 
-This repository does not yet document a wider method model with topics such as:
+## Mutating
 
-- method overloading rules
-- mutating/nonmutating markers
-- `self`-specific syntax
-- deinitializers
+A non-mutating method borrows the receiver for reads. A method that writes `self` is marked mutating by its `borrow mut self` receiver, and the call site writes the callee's final receiver value back to the original mutable place. The call therefore needs a `var` binding to write through, the same rule a `borrow mut` parameter carries.
 
-What it does prove today is simpler and still useful: methods are part of the implemented frontend surface for both Kira `struct` and `class` declarations.
+## Retroactive Members
+
+`extend T: Trait { … }` implements a trait for a type declared elsewhere. See [Traits](/docs/language-guide/traits).
+
+`extend Family { … }` without a colon adds fluent modifier methods to a construct family, the chainable surface a UI library builds its `.padding(…)` out of. See [Constructs](/docs/language-guide/constructs).
+
+## Overloading
+
+Methods overload by parameter list exactly as free functions do, and a subclass may override one overload while inheriting the rest. See [Functions](/docs/language-guide/functions#overloading).

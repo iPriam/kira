@@ -1,0 +1,77 @@
+---
+title: Geometry and Values
+description: The geometry value structs, their named algebra methods, the math primitives the compiler answers, Result, and Printable.
+---
+
+## The Geometry Vocabulary
+
+`Point`, `Size`, `Rect`, `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quaternion` are
+value structs. `Mat4` defaults to the identity, and the free function
+`mat4Identity()` returns it.
+
+```kira
+let frame = Rect(x: 0.0, y: 0.0, width: 640.0, height: 480.0)
+let origin = Point { x = frame.x, y = frame.y }
+let extent = Size(frame.width, frame.height)
+let identity = Mat4()
+```
+
+Each is constructed by its implicit memberwise constructor: `Point(1.0, 2.0)` fills the fields in declaration order and `Point(x: 1.0, y: 2.0)` binds each by name, the two spellings the `Point { x = …, y = … }` literal already had. A field the call does not reach takes its declared default, so `Mat4()` is the all-defaulted value.
+
+## Math
+
+Vectors expose named methods (`add`, `subtract`, `multiply`, `divide`, `dot`,
+`length`, and `normalize`, with `cross` on `Vec3`) and the arithmetic operators
+desugar to those methods. Matrices use `multiply`, `translate`, `scale`, and
+`rotate`; the free constructors include `mat4Perspective` and `mat4LookAt`.
+Quaternions use `multiply`, `normalize`, and `toMat4`. See
+[Functions](/docs/language-guide/functions#floating-point-primitives) for the
+complete list of compiler-provided floating-point primitives.
+
+## `Result`
+
+`Result.kira` ships `enum Result<Value, Failure>`.
+
+```kira
+let outcome: Result<Int, Trouble> = .Ok(1)
+let same: Result<Int, Trouble> = Result.Ok(1)
+```
+
+Both spellings construct it, because a qualified constructor carries no type arguments and takes its instantiation from the position it fills. A qualified spelling with nothing to anchor it is `KSEM254` rather than a guess.
+
+`Result` is `Result`-shaped, so [`attempt` / `try` / `handle`](/docs/language-guide/control-flow#attempt-try-and-handle) unwraps it with nothing added. So does any enum a program writes with the same `Ok`/`Error` pair: the rule is structural, not nominal.
+
+## `Option`
+
+`Option.kira` ships `enum Option<Value>`.
+
+```kira
+let found: Option<TabId> = .Some(TabId(U32(3)))
+let missing: Option<TabId> = .None
+
+match found {
+    Some(id) -> return id.raw
+    None -> return U32(0)
+}
+```
+
+An ordinary generic enum, with nothing around it: no `?T` spelling, no implicit wrapping at a call site, and no unwrap operator. It goes wherever a generic enum goes and is matched the way `Result` is.
+
+Absence as a *variant* is the whole of what it buys over a sentinel value. A sentinel is a value of the type it stands in for, so nothing can tell "no tab" from "tab 0" and every reader has to remember which number means nothing; `None` is a case a `match` has to answer.
+
+## `Printable`
+
+`Printable.kira` ships the `Printable` construct family, whose one requirement is `onPrint() -> String`.
+
+That is the whole surface. `print(value)` does not consult it, and there is no `@Printable` annotation, so `onPrint()` is called by name like any other member.
+
+## Derives
+
+`Derive.kira`, `DeriveHashable.kira`, `DeriveSerde.kira`, and
+`DeriveTagged.kira` ship `Equatable`, `Clone`, `Hashable`, `Serializable`,
+and `Tagged`, written in pure Kira on top of `comptime macro`.
+See [Derives](/docs/macros/derives).
+
+## `Byte`
+
+`Byte` is not a builtin. Foundation spells it as an alias, `type Byte = U8`, which is why it behaves exactly as `U8` does, unsigned division included.

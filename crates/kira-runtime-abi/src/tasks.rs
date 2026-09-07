@@ -148,6 +148,9 @@ pub enum TaskTrap {
     /// An argument slot outside the fixed per-task set was addressed.
     #[error("task argument slot is out of range")]
     SlotOutOfRange,
+    /// The executor cannot represent another stable task identity.
+    #[error("task handle space is exhausted")]
+    HandleExhausted,
 }
 
 /// How many argument slots one task carries.
@@ -186,13 +189,23 @@ struct Task {
     result: i64,
 }
 
+/// One reusable task-table position.
+#[derive(Debug, Clone, Copy, Default)]
+struct TaskSlot {
+    /// Incremented whenever the task in this position is reclaimed.
+    generation: u32,
+    task: Option<Task>,
+}
+
 /// The task table one running program owns.
 ///
-/// Handles are 1-based indices into it, so `0` is free to mean "no task" — the
-/// answer [`TaskPrim::PickReady`] gives when nothing is runnable.
+/// A handle packs a generation in its high 32 bits and a 1-based slot index in
+/// its low 32 bits. Reusing storage therefore never makes an old handle name a
+/// new task, while `0` remains free to mean "no task".
 #[derive(Debug, Default)]
 pub struct TaskExecutor {
-    tasks: Vec<Task>,
+    tasks: Vec<TaskSlot>,
+    free: Vec<usize>,
     clock_ms: i64,
 }
 
@@ -212,7 +225,7 @@ impl TaskExecutor {
 
     /// How many tasks have been spawned, joined or not.
     pub fn spawned(&self) -> usize {
-        self.tasks.len()
+        self.tasks.iter().filter(|slot| slot.task.is_some()).count()
     }
 
     /// Carries out one primitive.
@@ -221,7 +234,7 @@ impl TaskExecutor {
     /// own reading of what a primitive means.
     pub fn perform(&mut self, prim: TaskPrim, a: i64, b: i64, c: i64) -> Result<i64, TaskTrap> {
         match prim {
-            TaskPrim::Spawn => Ok(self.spawn(a)),
+            TaskPrim::Spawn => self.spawn(a),
             TaskPrim::SetArg => {
                 let slot = Self::slot_index(b)?;
                 self.task_mut(a)?.slots[slot] = c;
@@ -244,12 +257,13 @@ impl TaskExecutor {
             TaskPrim::TakeResult => self.take_result(a),
             TaskPrim::MarkDetached => {
                 self.task_mut(a)?.state = TaskState::Detached;
+                self.reclaim(a)?;
                 Ok(0)
             }
             TaskPrim::Cancel => {
-                let task = self.task_mut(a)?;
-                if task.state == TaskState::Pending {
-                    task.state = TaskState::Cancelled;
+                if self.task(a)?.state == TaskState::Pending {
+                    self.task_mut(a)?.state = TaskState::Cancelled;
+                    self.reclaim(a)?;
                 }
                 Ok(0)
             }
@@ -261,15 +275,25 @@ impl TaskExecutor {
     }
 
     /// Adds a pending task and returns its handle.
-    fn spawn(&mut self, target: i64) -> i64 {
-        self.tasks.push(Task {
+    fn spawn(&mut self, target: i64) -> Result<i64, TaskTrap> {
+        let task = Task {
             state: TaskState::Pending,
             target,
             slots: [0; TASK_SLOTS],
             result: 0,
-        });
-        // 1-based: handle `0` is reserved for "no task".
-        self.tasks.len() as i64
+        };
+        let index = match self.free.pop() {
+            Some(index) => index,
+            None => {
+                let index = self.tasks.len();
+                u32::try_from(index + 1).map_err(|_| TaskTrap::HandleExhausted)?;
+                self.tasks.push(TaskSlot::default());
+                index
+            }
+        };
+        let slot = self.tasks.get_mut(index).ok_or(TaskTrap::HandleExhausted)?;
+        slot.task = Some(task);
+        Self::handle(index, slot.generation)
     }
 
     /// Claims `handle` for a join, answering whether its body still has to run.
@@ -313,10 +337,13 @@ impl TaskExecutor {
     /// earlier, and a task already on the stack is `Running`, so a driver can
     /// never pick the body it is standing in.
     fn pick_ready(&mut self) -> i64 {
-        for (index, task) in self.tasks.iter_mut().enumerate() {
+        for (index, slot) in self.tasks.iter_mut().enumerate() {
+            let Some(task) = slot.task.as_mut() else {
+                continue;
+            };
             if task.state == TaskState::Pending {
                 task.state = TaskState::Running;
-                return index as i64 + 1;
+                return Self::handle(index, slot.generation).unwrap_or(0);
             }
         }
         0
@@ -324,11 +351,12 @@ impl TaskExecutor {
 
     /// Takes a finished task's result, marking it joined.
     fn take_result(&mut self, handle: i64) -> Result<i64, TaskTrap> {
-        let task = self.task_mut(handle)?;
-        match task.state {
+        match self.task(handle)?.state {
             TaskState::Finished => {
-                task.state = TaskState::Joined;
-                Ok(task.result)
+                let result = self.task(handle)?.result;
+                self.task_mut(handle)?.state = TaskState::Joined;
+                self.reclaim(handle)?;
+                Ok(result)
             }
             TaskState::Joined => Err(TaskTrap::AlreadyJoined),
             TaskState::Detached => Err(TaskTrap::Detached),
@@ -347,20 +375,57 @@ impl TaskExecutor {
 
     /// Resolves a handle to a live task.
     fn task(&self, handle: i64) -> Result<&Task, TaskTrap> {
-        let index = usize::try_from(handle)
-            .ok()
-            .and_then(|handle| handle.checked_sub(1))
-            .ok_or(TaskTrap::UnknownHandle)?;
-        self.tasks.get(index).ok_or(TaskTrap::UnknownHandle)
+        let (index, generation) = Self::parts(handle)?;
+        let slot = self.tasks.get(index).ok_or(TaskTrap::UnknownHandle)?;
+        if slot.generation != generation {
+            return Err(TaskTrap::UnknownHandle);
+        }
+        slot.task.as_ref().ok_or(TaskTrap::UnknownHandle)
     }
 
     /// Resolves a handle to a live task for writing.
     fn task_mut(&mut self, handle: i64) -> Result<&mut Task, TaskTrap> {
-        let index = usize::try_from(handle)
-            .ok()
-            .and_then(|handle| handle.checked_sub(1))
-            .ok_or(TaskTrap::UnknownHandle)?;
-        self.tasks.get_mut(index).ok_or(TaskTrap::UnknownHandle)
+        let (index, generation) = Self::parts(handle)?;
+        let slot = self.tasks.get_mut(index).ok_or(TaskTrap::UnknownHandle)?;
+        if slot.generation != generation {
+            return Err(TaskTrap::UnknownHandle);
+        }
+        slot.task.as_mut().ok_or(TaskTrap::UnknownHandle)
+    }
+
+    /// Reclaims one terminal task and advances the slot generation.
+    fn reclaim(&mut self, handle: i64) -> Result<(), TaskTrap> {
+        let (index, generation) = Self::parts(handle)?;
+        let slot = self.tasks.get_mut(index).ok_or(TaskTrap::UnknownHandle)?;
+        if slot.generation != generation || slot.task.take().is_none() {
+            return Err(TaskTrap::UnknownHandle);
+        }
+        if let Some(next) = slot
+            .generation
+            .checked_add(1)
+            .filter(|next| *next <= i32::MAX as u32)
+        {
+            slot.generation = next;
+            self.free.push(index);
+        }
+        Ok(())
+    }
+
+    /// Packs one stable handle.
+    fn handle(index: usize, generation: u32) -> Result<i64, TaskTrap> {
+        let slot = u32::try_from(index + 1).map_err(|_| TaskTrap::HandleExhausted)?;
+        let word = (u64::from(generation) << 32) | u64::from(slot);
+        i64::try_from(word).map_err(|_| TaskTrap::HandleExhausted)
+    }
+
+    /// Unpacks and validates a nonzero handle.
+    fn parts(handle: i64) -> Result<(usize, u32), TaskTrap> {
+        let word = u64::try_from(handle).map_err(|_| TaskTrap::UnknownHandle)?;
+        let slot =
+            u32::try_from(word & u64::from(u32::MAX)).map_err(|_| TaskTrap::UnknownHandle)?;
+        let index = usize::try_from(slot.checked_sub(1).ok_or(TaskTrap::UnknownHandle)?)
+            .map_err(|_| TaskTrap::UnknownHandle)?;
+        Ok((index, (word >> 32) as u32))
     }
 }
 
@@ -428,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn joining_twice_traps() {
+    fn a_join_reclaims_the_task_and_stales_its_handle() {
         let mut executor = TaskExecutor::new();
         let handle = spawn_one(&mut executor, 1, 7);
         executor.perform(TaskPrim::BeginJoin, handle, 0, 0).unwrap();
@@ -438,18 +503,19 @@ mod tests {
             .unwrap();
         assert_eq!(
             executor.perform(TaskPrim::BeginJoin, handle, 0, 0),
-            Err(TaskTrap::AlreadyJoined)
+            Err(TaskTrap::UnknownHandle)
         );
+        assert_eq!(executor.spawned(), 0);
     }
 
     #[test]
-    fn joining_a_cancelled_task_traps_and_its_body_never_runs() {
+    fn cancellation_reclaims_the_task_and_stales_its_handle() {
         let mut executor = TaskExecutor::new();
         let handle = spawn_one(&mut executor, 1, 7);
         assert_eq!(executor.perform(TaskPrim::Cancel, handle, 0, 0), Ok(0));
         assert_eq!(
             executor.perform(TaskPrim::BeginJoin, handle, 0, 0),
-            Err(TaskTrap::Cancelled)
+            Err(TaskTrap::UnknownHandle)
         );
         // Nothing claimed it, so no driver would ever pick it up either.
         assert_eq!(executor.perform(TaskPrim::PickReady, 0, 0, 0), Ok(0));
@@ -466,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn joining_a_detached_task_traps() {
+    fn detach_reclaims_the_task_and_stales_its_handle() {
         let mut executor = TaskExecutor::new();
         let handle = spawn_one(&mut executor, 1, 7);
         assert_eq!(executor.perform(TaskPrim::BeginDetach, handle, 0, 0), Ok(1));
@@ -476,8 +542,23 @@ mod tests {
             .unwrap();
         assert_eq!(
             executor.perform(TaskPrim::BeginJoin, handle, 0, 0),
-            Err(TaskTrap::Detached)
+            Err(TaskTrap::UnknownHandle)
         );
+        assert_eq!(executor.spawned(), 0);
+    }
+
+    #[test]
+    fn a_reused_slot_has_a_new_generation() {
+        let mut executor = TaskExecutor::new();
+        let stale = spawn_one(&mut executor, 1, 7);
+        executor.perform(TaskPrim::Cancel, stale, 0, 0).unwrap();
+        let current = spawn_one(&mut executor, 2, 9);
+        assert_ne!(current, stale);
+        assert_eq!(
+            executor.perform(TaskPrim::TargetOf, stale, 0, 0),
+            Err(TaskTrap::UnknownHandle)
+        );
+        assert_eq!(executor.perform(TaskPrim::TargetOf, current, 0, 0), Ok(2));
     }
 
     #[test]

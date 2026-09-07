@@ -20,17 +20,24 @@
 //! [`ExtendDecl`](super::ExtendDecl) rather than four clause types that would
 //! each have to restate the rule.
 
-use super::Function;
+use super::{Function, TypeParamDecl, TypeRefId};
 use kira_core::Symbol;
 use kira_source::Span;
 
 /// One trait named in a `: Trait, Trait` conformance list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A generic trait is named with its type arguments (`Producer<Int>`), so the
+/// reference carries them when they were written. Empty for an ordinary trait
+/// name; whether the arguments fit the trait's parameters is semantics'
+/// question, which is why every name and list written is recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitRef {
     /// The trait's name, as written.
     pub name: Symbol,
     /// Span of the name token, for diagnostics and definition links.
     pub span: Span,
+    /// The written type arguments, in order; empty when none were written.
+    pub args: Vec<TypeRefId>,
 }
 
 /// A `trait Name { … }` declaration.
@@ -44,6 +51,12 @@ pub struct TraitDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The declared type parameters, in order; empty for an ordinary trait.
+    ///
+    /// A generic trait names no contract by itself: each written instantiation
+    /// (`Producer<Int>` in a conformance clause or a bound) is what states the
+    /// concrete one, with the arguments substituted into the members.
+    pub type_params: Vec<TypeParamDecl>,
     /// Trait names written after the declaration's own name.
     ///
     /// A supertrait is a *requirement*: conforming to this trait obliges a type

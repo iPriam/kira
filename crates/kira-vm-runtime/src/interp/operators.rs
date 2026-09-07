@@ -126,6 +126,7 @@ impl Vm<'_> {
             I::EqBool | I::NeBool => self.bool_compare(instruction),
             I::EqStr | I::NeStr => self.str_compare(instruction),
             I::EqAny | I::NeAny => self.any_compare(instruction),
+            I::EqType | I::NeType => self.type_compare(instruction),
             I::BitAnd | I::BitOr | I::BitXor | I::Shl | I::ShrInt | I::ShrUInt => {
                 self.bitwise(instruction)
             }
@@ -292,6 +293,26 @@ impl Vm<'_> {
         let value = match instruction {
             Instruction::EqBool => lhs == rhs,
             Instruction::NeBool => lhs != rhs,
+            _ => return Err(VmError::BadDispatch),
+        };
+        self.stack.push(Value::Bool(value));
+        Ok(())
+    }
+
+    /// Identity equality of two runtime type descriptors.
+    ///
+    /// One word against another, and nothing is dropped: a descriptor is an id,
+    /// owning no storage, exactly as a `RawPtr` does not.
+    fn type_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
+        let operands = self.pop_operands(2)?;
+        let (Value::Type(rhs), Value::Type(lhs)) = (operands[0], operands[1]) else {
+            return Err(VmError::TypeMismatch {
+                expected: "two runtime type descriptors",
+            });
+        };
+        let value = match instruction {
+            Instruction::EqType => lhs == rhs,
+            Instruction::NeType => lhs != rhs,
             _ => return Err(VmError::BadDispatch),
         };
         self.stack.push(Value::Bool(value));

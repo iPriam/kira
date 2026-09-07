@@ -134,6 +134,7 @@ impl FunctionLowering<'_, '_> {
         op: IrBinOp,
         lhs: IrExprId,
         rhs: IrExprId,
+        ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         // Short-circuit operators are control flow, not instructions: the VM
         // never evaluates the right operand unless the left demands it.
@@ -147,14 +148,28 @@ impl FunctionLowering<'_, '_> {
         let right = self.lower_expr(rhs)?;
         let builder = self.codegen.builder;
 
+        // Integer arithmetic and shifts carry the width rules — overflow
+        // traps, range checks, shift-count checks — and are lowered apart.
+        if let Type::Int(spelling) = ty
+            && let Some(value) = self.lower_int_arithmetic(op, left, right, spelling)?
+        {
+            return Ok(value);
+        }
+
         // SAFETY: both operands carry the types the typed operator fixes, and the
-        // builder is on a live block. None of the integer builders set
-        // `nsw`/`nuw`, so they wrap as the VM does.
+        // builder is on a live block. The wrapping integer builders set no
+        // `nsw`/`nuw`; the checked forms were lowered above.
         let value = unsafe {
             match op {
-                IrBinOp::AddInt => LLVMBuildAdd(builder, left, right, c"add".as_ptr()),
-                IrBinOp::SubInt => LLVMBuildSub(builder, left, right, c"sub".as_ptr()),
-                IrBinOp::MulInt => LLVMBuildMul(builder, left, right, c"mul".as_ptr()),
+                IrBinOp::AddInt | IrBinOp::WrappingAddInt => {
+                    LLVMBuildAdd(builder, left, right, c"add".as_ptr())
+                }
+                IrBinOp::SubInt | IrBinOp::WrappingSubInt => {
+                    LLVMBuildSub(builder, left, right, c"sub".as_ptr())
+                }
+                IrBinOp::MulInt | IrBinOp::WrappingMulInt => {
+                    LLVMBuildMul(builder, left, right, c"mul".as_ptr())
+                }
                 IrBinOp::DivInt | IrBinOp::RemInt => {
                     return self.lower_int_division(op, left, right);
                 }
@@ -199,6 +214,22 @@ impl FunctionLowering<'_, '_> {
                         c"any.cmp".as_ptr(),
                     ));
                 }
+                // Two descriptor ids, compared as the words they are. Neither
+                // owns anything, so nothing is dropped.
+                IrBinOp::EqType => LLVMBuildICmp(
+                    builder,
+                    LLVMIntPredicate::LLVMIntEQ,
+                    left,
+                    right,
+                    c"type.eq".as_ptr(),
+                ),
+                IrBinOp::NeType => LLVMBuildICmp(
+                    builder,
+                    LLVMIntPredicate::LLVMIntNE,
+                    left,
+                    right,
+                    c"type.ne".as_ptr(),
+                ),
                 IrBinOp::BitAnd => LLVMBuildAnd(builder, left, right, c"and".as_ptr()),
                 IrBinOp::BitOr => LLVMBuildOr(builder, left, right, c"or".as_ptr()),
                 IrBinOp::BitXor => LLVMBuildXor(builder, left, right, c"xor".as_ptr()),
@@ -242,7 +273,7 @@ impl FunctionLowering<'_, '_> {
     /// Kira (not UB), and `MIN / -1` overflows — poison for `sdiv`, but a
     /// defined wrapping result for the VM's `wrapping_div`. Both are branched
     /// on explicitly, so the fast path stays a plain `sdiv`/`srem`.
-    fn lower_int_division(
+    pub(super) fn lower_int_division(
         &mut self,
         op: IrBinOp,
         left: LLVMValueRef,
@@ -276,9 +307,9 @@ impl FunctionLowering<'_, '_> {
                 .call_runtime(self.codegen.runtime.trap_div_zero, &mut [], c"");
             LLVMBuildUnreachable(builder);
 
-            // Divisor is -1: `MIN / -1` would be poison, so take the wrapping
-            // answer directly. `x / -1` is `-x` and `x % -1` is 0 for every x,
-            // so this branch needs no division at all.
+            // Divisor is -1: `MIN / -1` would be poison. `x % -1` is 0 for
+            // every x, and `x / -1` is `-x` — which overflows exactly when `x`
+            // is `MIN`, the one division the language traps on.
             LLVMPositionBuilderAtEnd(builder, overflow_block);
             let minus_one = LLVMConstInt(types.i64, u64::MAX, 1);
             let by_minus_one = LLVMBuildICmp(
@@ -293,7 +324,28 @@ impl FunctionLowering<'_, '_> {
 
             LLVMPositionBuilderAtEnd(builder, wrap_block);
             let wrapped = match op {
-                IrBinOp::DivInt => LLVMBuildNeg(builder, left, c"div.wrapped".as_ptr()),
+                IrBinOp::DivInt => {
+                    let min = LLVMConstInt(types.i64, i64::MIN as u64, 1);
+                    let is_min = LLVMBuildICmp(
+                        builder,
+                        LLVMIntPredicate::LLVMIntEQ,
+                        left,
+                        min,
+                        c"div.min".as_ptr(),
+                    );
+                    let width = LLVMConstInt(
+                        types.i32,
+                        u64::from(kira_runtime_abi::IntWidth::Plain.code()),
+                        0,
+                    );
+                    self.trap_if(
+                        is_min,
+                        self.codegen.runtime.trap_overflow,
+                        &mut [width],
+                        c"div.overflow",
+                    )?;
+                    LLVMBuildNeg(self.codegen.builder, left, c"div.negated".as_ptr())
+                }
                 _ => zero,
             };
             LLVMBuildBr(builder, done_block);

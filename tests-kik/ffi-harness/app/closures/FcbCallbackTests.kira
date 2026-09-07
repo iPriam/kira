@@ -33,7 +33,7 @@ construct FcbNamedFunction() extends Test {
     test {
         return fcbInvoke(fcbTopLevelAddFive, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct FcbIdentity() extends Test {
@@ -41,7 +41,7 @@ construct FcbIdentity() extends Test {
         let cb: (Int) -> Int = { x in return x }
         return fcbInvoke(move cb, 42)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct FcbConstant() extends Test {
@@ -49,7 +49,7 @@ construct FcbConstant() extends Test {
         let cb: (Int) -> Int = { x in return 77 }
         return fcbInvoke(move cb, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(77) return e }
 }
 
 construct FcbDouble() extends Test {
@@ -57,7 +57,7 @@ construct FcbDouble() extends Test {
         let cb: (Int) -> Int = { x in return x * 2 }
         return fcbInvoke(move cb, 6)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct FcbAddFive() extends Test {
@@ -65,7 +65,7 @@ construct FcbAddFive() extends Test {
         let cb: (Int) -> Int = { x in return x + 5 }
         return fcbInvoke(move cb, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }
 
 construct FcbNegate() extends Test {
@@ -73,7 +73,7 @@ construct FcbNegate() extends Test {
         let cb: (Int) -> Int = { x in return 0 - x }
         return fcbInvoke(move cb, 9)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0 - 9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0 - 9) return e }
 }
 
 construct FcbSquare() extends Test {
@@ -81,7 +81,7 @@ construct FcbSquare() extends Test {
         let cb: (Int) -> Int = { x in return x * x }
         return fcbInvoke(move cb, 7)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(49); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(49) return e }
 }
 
 construct FcbLinear() extends Test {
@@ -89,7 +89,7 @@ construct FcbLinear() extends Test {
         let cb: (Int) -> Int = { x in return x * 3 + 6 }
         return fcbInvoke(move cb, 4)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 construct FcbSubFromConstant() extends Test {
@@ -97,7 +97,7 @@ construct FcbSubFromConstant() extends Test {
         let cb: (Int) -> Int = { x in return 10 - x }
         return fcbInvoke(move cb, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // ── Group B: fcbInvoke — closure capturing scalar lets ────────────────────────
@@ -108,7 +108,7 @@ construct FcbCaptureAdd() extends Test {
         let cb: (Int) -> Int = { x in return x + bonus }
         return fcbInvoke(move cb, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 // ── Group C: fcbInvoke — callback calls @Native inside ───────────────────────
@@ -118,7 +118,7 @@ construct FcbSandwichAddScaled() extends Test {
         let cb: (Int) -> Int = { x in return fsbAddScaled(x, 1, 3) }
         return fcbInvoke(move cb, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(18) return e }
 }
 
 construct FcbSandwichStructWidth() extends Test {
@@ -129,7 +129,7 @@ construct FcbSandwichStructWidth() extends Test {
         }
         return fcbInvoke(move cb, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(320); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(320) return e }
 }
 
 construct FcbSandwichStructHeight() extends Test {
@@ -140,7 +140,7 @@ construct FcbSandwichStructHeight() extends Test {
         }
         return fcbInvoke(move cb, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(240); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(240) return e }
 }
 
 construct FcbSandwichStructSum() extends Test {
@@ -151,7 +151,7 @@ construct FcbSandwichStructSum() extends Test {
         }
         return fcbInvoke(move cb, 40)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(600); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(600) return e }
 }
 
 construct FcbSandwichNested() extends Test {
@@ -161,7 +161,7 @@ construct FcbSandwichNested() extends Test {
         }
         return fcbInvoke(move cb, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // ── Group D: repeated callback crossings ─────────────────────────────────────
@@ -177,7 +177,7 @@ construct FcbLoopAddOne100() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct FcbLoopAddOne500() extends Test {
@@ -191,7 +191,7 @@ construct FcbLoopAddOne500() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(500); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(500) return e }
 }
 
 construct FcbLoopDouble5() extends Test {
@@ -205,7 +205,7 @@ construct FcbLoopDouble5() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(32) return e }
 }
 
 construct FcbLoopDouble8() extends Test {
@@ -219,7 +219,7 @@ construct FcbLoopDouble8() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(256); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(256) return e }
 }
 
 construct FcbLoopSandwichDouble5() extends Test {
@@ -233,7 +233,7 @@ construct FcbLoopSandwichDouble5() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(96); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(96) return e }
 }
 
 construct FcbLoopSandwichStruct3() extends Test {
@@ -250,7 +250,7 @@ construct FcbLoopSandwichStruct3() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(720); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(720) return e }
 }
 
 // ── Group E: fcbInvokeTwo — two distinct owned closures, each called once ─────
@@ -261,7 +261,7 @@ construct FcbTwoArithmetic() extends Test {
         let f2: (Int) -> Int = { x in return x * 2 }
         return fcbInvokeTwo(move f1, move f2, 9, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FcbTwoSandwiches() extends Test {
@@ -270,7 +270,7 @@ construct FcbTwoSandwiches() extends Test {
         let f2: (Int) -> Int = { x in return fsbAddScaled(x, 0, 3) }
         return fcbInvokeTwo(move f1, move f2, 3, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct FcbTwoMixed() extends Test {
@@ -282,7 +282,7 @@ construct FcbTwoMixed() extends Test {
         }
         return fcbInvokeTwo(move f1, move f2, 9, 0)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(330); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(330) return e }
 }
 
 construct FcbTwoNegAndPos() extends Test {
@@ -291,7 +291,7 @@ construct FcbTwoNegAndPos() extends Test {
         let f2: (Int) -> Int = { x in return 0 - x * 2 }
         return fcbInvokeTwo(move f1, move f2, 5, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // ── Group F: fcbInvokeThree — three distinct owned closures, each called once ─
@@ -303,7 +303,7 @@ construct FcbThreeIdentities() extends Test {
         let f3: (Int) -> Int = { x in return x }
         return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(6) return e }
 }
 
 construct FcbThreeDoubles() extends Test {
@@ -313,7 +313,7 @@ construct FcbThreeDoubles() extends Test {
         let f3: (Int) -> Int = { x in return x * 2 }
         return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct FcbThreeMixedArith() extends Test {
@@ -323,7 +323,7 @@ construct FcbThreeMixedArith() extends Test {
         let f3: (Int) -> Int = { x in return x * x }
         return fcbInvokeThree(move f1, move f2, move f3, 4, 3, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 construct FcbThreeSandwiches() extends Test {
@@ -333,7 +333,7 @@ construct FcbThreeSandwiches() extends Test {
         let f3: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
         return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // ── Group G: sequential multi-call in test body ───────────────────────────────
@@ -346,7 +346,7 @@ construct FcbSequentialTwoRaw() extends Test {
         let r2 = fcbInvoke(move cb2, 5)
         return r1 + r2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 construct FcbSequentialSandwich() extends Test {
@@ -360,7 +360,7 @@ construct FcbSequentialSandwich() extends Test {
         let r2 = fcbInvoke(move cb2, 0)
         return r1 + r2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(326); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(326) return e }
 }
 
 construct FcbSequentialThree() extends Test {
@@ -373,7 +373,7 @@ construct FcbSequentialThree() extends Test {
         let r3 = fcbInvoke(move cb3, 3)
         return r1 + r2 + r3
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(66); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(66) return e }
 }
 
 // ── Group H: additional no-capture patterns ───────────────────────────────────
@@ -384,7 +384,7 @@ construct FcbPolynomial() extends Test {
         let cb: (Int) -> Int = { x in return x * x + x + 1 }
         return fcbInvoke(move cb, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 construct FcbHighFreqLoop() extends Test {
@@ -399,7 +399,7 @@ construct FcbHighFreqLoop() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1000) return e }
 }
 
 construct FcbLoopGeometric() extends Test {
@@ -414,7 +414,7 @@ construct FcbLoopGeometric() extends Test {
         }
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1023); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1023) return e }
 }
 
 construct FcbSandwichDoubleWidth() extends Test {
@@ -426,7 +426,7 @@ construct FcbSandwichDoubleWidth() extends Test {
         }
         return fcbInvoke(move cb, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(645); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(645) return e }
 }
 
 construct FcbSandwichProductArgs() extends Test {
@@ -435,7 +435,7 @@ construct FcbSandwichProductArgs() extends Test {
         let cb: (Int) -> Int = { x in return fsbAddScaled(x, x, 1) }
         return fcbInvoke(move cb, 7)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct FcbTwoSquareAndTriple() extends Test {
@@ -445,7 +445,7 @@ construct FcbTwoSquareAndTriple() extends Test {
         let f2: (Int) -> Int = { x in return x * 3 }
         return fcbInvokeTwo(move f1, move f2, 4, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(31); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(31) return e }
 }
 
 construct FcbThreeDistinctArith() extends Test {
@@ -456,7 +456,7 @@ construct FcbThreeDistinctArith() extends Test {
         let f3: (Int) -> Int = { x in return x * x }
         return fcbInvokeThree(move f1, move f2, move f3, 1, 4, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(48); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(48) return e }
 }
 
 construct FcbSeqFourSteps() extends Test {
@@ -472,7 +472,7 @@ construct FcbSeqFourSteps() extends Test {
         let r4 = fcbInvoke(move cb4, 5)
         return r1 + r2 + r3 + r4
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(41); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(41) return e }
 }
 
 construct FcbSandwichComposed() extends Test {
@@ -481,7 +481,7 @@ construct FcbSandwichComposed() extends Test {
         let cb: (Int) -> Int = { x in return fsbAddScaled(x * 2, 0, 3) }
         return fcbInvoke(move cb, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 // ── Group K: captured scalar lets ─────────────────────────────────────────────
@@ -492,7 +492,7 @@ construct FcbCaptureMul() extends Test {
         let cb: (Int) -> Int = { x in return x * m }
         return fcbInvoke(move cb, 4)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 construct FcbCaptureTwoScalars() extends Test {
@@ -502,7 +502,7 @@ construct FcbCaptureTwoScalars() extends Test {
         let cb: (Int) -> Int = { x in return x + p + q }
         return fcbInvoke(move cb, 1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(16); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
 }
 
 construct FcbCaptureNeg() extends Test {
@@ -511,7 +511,7 @@ construct FcbCaptureNeg() extends Test {
         let cb: (Int) -> Int = { x in return (0 - x) + n }
         return fcbInvoke(move cb, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct FcbCaptureOffset() extends Test {
@@ -520,7 +520,7 @@ construct FcbCaptureOffset() extends Test {
         let cb: (Int) -> Int = { x in return x + off }
         return fcbInvoke(move cb, 1)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(101); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(101) return e }
 }
 
 construct FcbCaptureComposite() extends Test {
@@ -530,7 +530,7 @@ construct FcbCaptureComposite() extends Test {
         let cb: (Int) -> Int = { x in return x * a + b }
         return fcbInvoke(move cb, 5)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 construct FcbCaptureSandwich() extends Test {
@@ -540,7 +540,7 @@ construct FcbCaptureSandwich() extends Test {
         return fcbInvoke(move cb, 5)
     }
     // fsbAddScaled(5, 0, 2) = (5 + 0) * 2 = 10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct FcbCaptureStructSandwich() extends Test {
@@ -553,7 +553,7 @@ construct FcbCaptureStructSandwich() extends Test {
         return fcbInvoke(move cb, 0)
     }
     // 320 + 0 + 5
-    expect { let e: Result<Int, TestFailure> = .Ok(325); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(325) return e }
 }
 
 construct FcbLoopCapture50() extends Test {
@@ -569,7 +569,7 @@ construct FcbLoopCapture50() extends Test {
         // sum of (i + 1) for i in 0..49 = sum(1..50) = 1275
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1275); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1275) return e }
 }
 
 construct FcbLoopCaptureSandwich5() extends Test {
@@ -585,7 +585,7 @@ construct FcbLoopCaptureSandwich5() extends Test {
         // fsbAddScaled(i, 0, 2) = 2i; sum(2i, i in 0..4) = 20
         return acc
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FcbTwoDistinctCaptures() extends Test {
@@ -597,7 +597,7 @@ construct FcbTwoDistinctCaptures() extends Test {
         // Each callback keeps its own capture: (1 + 10) + (2 + 100) = 113.
         return fcbInvokeTwo(move cbA, move cbB, 1, 2)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(113); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(113) return e }
 }
 
 construct FcbThreeCaptures() extends Test {
@@ -611,7 +611,7 @@ construct FcbThreeCaptures() extends Test {
         // (1+10) + (2+100) + (3+1000) = 1116
         return fcbInvokeThree(move cbA, move cbB, move cbC, 1, 2, 3)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1116); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1116) return e }
 }
 
 construct FcbSequentialCaptures() extends Test {
@@ -625,5 +625,5 @@ construct FcbSequentialCaptures() extends Test {
         // Each sequential callback keeps its own capture: 11 + 101 = 112.
         return r1 + r2
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(112) return e }
 }

@@ -132,6 +132,8 @@ impl Heap {
             Value::CBlock(id) => NativeStateValue::CBlock(self.take_cblock_tree(id)?),
             Value::Void => return Err("a void value"),
             Value::NativeState(_) => return Err("callback state inside callback state"),
+            Value::MainThreadTask(_) => return Err("a main-thread task handle"),
+            Value::Type(_) => return Err("a runtime type descriptor"),
             Value::NativeView { .. } => {
                 return Err("a recovered callback-state view inside callback state");
             }
@@ -190,9 +192,9 @@ impl Heap {
                 self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
             }
             NativeStateValue::Cell(cell) => Value::RawPtr(cell.handle()),
-            // The bytes come back as a block this heap owns; the node keeps
-            // its own copy, exactly as a string's text does above.
             NativeStateValue::CBlock(block) => Value::CBlock(self.copy_native_cblock(block)),
+            // A main-thread task handle never becomes a state node, so there
+            // is no reverse conversion for one.
         }
     }
 

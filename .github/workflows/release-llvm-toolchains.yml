@@ -130,9 +130,17 @@ jobs:
       # Whichever toolset the image carries: the bundle's compatibility floor
       # is enforced on the built artifact, not by asking for a toolset version
       # GitHub is free to stop shipping.
+      #
+      # `arch` is named because this action defaults to `x64` whatever it is
+      # running on. Unset, an arm64 runner gets an x64 developer environment
+      # and builds a bundle full of x86_64 objects under an `aarch64` name —
+      # which links nowhere on the host it claims to serve, and reports its
+      # members' symbols as merely unresolved rather than as the wrong machine.
       - name: Set up MSVC
         if: ${{ matrix.platform == 'windows' }}
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ startsWith(matrix.target_key, 'aarch64') && 'arm64' || 'x64' }}
 
       - name: Build LLVM install tree (Unix)
         if: ${{ matrix.platform != 'windows' }}
@@ -168,6 +176,20 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
         run: ./scripts/llvm/check-msvc-portability.ps1 -InstallDir "$env:RUNNER_TEMP\llvm-install"
+
+      # A bundle whose machine type is not the one its name promises is worse
+      # than a missing bundle: it installs, it is the right size, its archives
+      # hold the symbols a reader looks for, and the only thing that ever
+      # objects is a linker on the target host reporting every one of them
+      # unresolved. Checked here, where the name and the artifact are both in
+      # hand, rather than left to a consumer months later.
+      - name: Check the Windows bundle is the architecture it is named for
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: >-
+          ./scripts/llvm/check-bundle-architecture.ps1
+          -InstallDir "$env:RUNNER_TEMP\llvm-install"
+          -TargetKey "${{ matrix.target_key }}"
 
       - name: Package LLVM install tree (Unix)
         if: ${{ matrix.platform != 'windows' }}

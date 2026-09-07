@@ -10,11 +10,11 @@
 // run would box it, the callback would find nothing, and the failure would be a
 // trap inside a library's event loop rather than at the line that boxed it.
 
-@FFI.Callback { abi: c; params: [U64, I32]; result: I32; }
+@FFI.Callback { abi: c, params: [U64, I32], result: I32 }
 struct UserdataTaker {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_call_userdata_twice; abi: c; }
-function callUserdataTwice(take: UserdataTaker, userdata: U64, n: I32) -> I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_call_userdata_twice, abi: c }
+function callUserdataTwice(take: UserdataTaker, userdata: U64, n: I32) -> I32
 
 struct FrameCounter {
     var hits: Int = 0
@@ -51,6 +51,6 @@ function onFrame(userdata: U64, n: I32) -> I32 {
     print(after.marks.count)
     print(after.marks[0])
     print(after.marks[1])
-    nativeStateFree(boxed)
+    nativeUserDataRelease(handle)
     return
 }

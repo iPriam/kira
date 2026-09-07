@@ -180,8 +180,14 @@ fn build_hybrid_bundle(
     backend: LiveBackend,
     foreign_link: &NativeLinkInputs,
 ) -> Result<Bundle, LiveError> {
-    let bundle = hybrid::build(program, source, false, foreign_link)
-        .map_err(|error| LiveError::build(backend, &error))?;
+    let bundle = hybrid::build(
+        program,
+        source,
+        false,
+        kira_llvm_backend::Sanitize::None,
+        foreign_link,
+    )
+    .map_err(|error| LiveError::build(backend, &error))?;
     let artifacts = Artifacts::for_source(source).map_err(|error| LiveError::Io {
         path: source.to_owned(),
         source: error,

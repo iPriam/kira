@@ -17,6 +17,8 @@ fn module(code: Vec<I>, locals: u64) -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![FuncProto {
             name: "main".to_owned(),
             param_count: 0,
@@ -52,6 +54,8 @@ fn hybrid_module(code: Vec<I>, locals: u64) -> Module {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![main, native],
         main: Some(0),
         strings: Vec::new(),
@@ -110,13 +114,13 @@ fn a_recovered_view_is_snapshotted_for_a_native_call() {
             I::NativeState(STATE_TYPE.as_word()),
             I::StoreLocal(0),
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::CallNative(1),
             I::Print,
             I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateFree,
+            I::TakeLocal(0),
+            I::NativeStateRelease,
             I::Pop,
             I::ReturnVoid,
         ],
@@ -140,13 +144,13 @@ fn a_recovered_array_crosses_the_array_elements_seam() {
             I::NativeState(STATE_TYPE.as_word()),
             I::StoreLocal(0),
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::GetField(0),
             I::ArrayElements(kira_runtime_abi::ForeignType::F32),
             I::StoreLocal(1),
-            I::LoadLocal(0),
-            I::NativeStateFree,
+            I::TakeLocal(0),
+            I::NativeStateRelease,
             I::Pop,
             I::LoadLocal(1),
             I::Return,
@@ -179,7 +183,7 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
             I::NewArray(2),
             I::NewStruct(1),
             I::NativeState(STATE_TYPE.as_word()),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::Return,
         ],
         releases: kira_bytecode::FrameRelease::EveryLocal,
@@ -208,7 +212,12 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
         param_count: 1,
         local_count: 1,
         execution: Execution::Runtime,
-        code: vec![I::LoadLocal(0), I::NativeStateFree, I::Pop, I::ReturnVoid],
+        code: vec![
+            I::TakeLocal(0),
+            I::NativeStateRelease,
+            I::Pop,
+            I::ReturnVoid,
+        ],
         releases: kira_bytecode::FrameRelease::EveryLocal,
     };
     let module = Module {
@@ -216,6 +225,8 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![make_state, read_state, free_state],
         main: None,
         strings: Vec::new(),
@@ -256,7 +267,7 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
             I::NewStruct(1),
             I::NewStruct(1),
             I::NativeState(STATE_TYPE.as_word()),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::Return,
         ],
         releases: kira_bytecode::FrameRelease::EveryLocal,
@@ -303,6 +314,8 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![make_state, read_state, read_state_stack],
         main: None,
         strings: Vec::new(),
@@ -385,7 +398,7 @@ fn a_mutable_native_call_writes_a_recovered_view_back_to_state() {
             I::NativeState(STATE_TYPE.as_word()),
             I::StoreLocal(0),
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::StoreLocal(1),
             I::LoadLocal(1),
@@ -402,8 +415,8 @@ fn a_mutable_native_call_writes_a_recovered_view_back_to_state() {
             I::GetField(0),
             I::Print,
             I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateFree,
+            I::TakeLocal(0),
+            I::NativeStateRelease,
             I::Pop,
             I::ReturnVoid,
         ],
@@ -430,7 +443,7 @@ fn boxes_recovers_mutates_observes_and_frees_state() {
             I::NativeState(STATE_TYPE.as_word()),
             I::StoreLocal(0),
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::StoreLocal(1),
             I::LoadLocal(1),
             I::NativeRecover(STATE_TYPE.as_word()),
@@ -447,8 +460,8 @@ fn boxes_recovers_mutates_observes_and_frees_state() {
             I::GetField(0),
             I::Print,
             I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateFree,
+            I::TakeLocal(0),
+            I::NativeStateRelease,
             I::Pop,
             I::ReturnVoid,
         ],
@@ -467,7 +480,7 @@ fn wrong_recovery_type_and_double_free_are_typed_traps() {
             I::ConstInt(0),
             I::NewStruct(1),
             I::NativeState(STATE_TYPE.as_word()),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word() + 1),
             I::ReturnVoid,
         ],
@@ -484,12 +497,13 @@ fn wrong_recovery_type_and_double_free_are_typed_traps() {
             I::ConstInt(0),
             I::NewStruct(1),
             I::NativeState(STATE_TYPE.as_word()),
+            I::NativeUserData { shared: false },
             I::StoreLocal(0),
             I::LoadLocal(0),
-            I::NativeStateFree,
+            I::NativeStateRelease,
             I::Pop,
             I::LoadLocal(0),
-            I::NativeStateFree,
+            I::NativeStateRelease,
             I::ReturnVoid,
         ],
         1,
@@ -499,6 +513,80 @@ fn wrong_recovery_type_and_double_free_are_typed_traps() {
         execute(&double_free, &mut host),
         Err(VmError::NativeState(NativeStateError::UnknownToken(_)))
     ));
+}
+
+/// Every owner of a state is counted: the handle, each exported token, and
+/// each explicit retain. The release that removes the last owner destroys the
+/// state, and a token that names a destroyed state traps.
+#[test]
+fn owners_are_counted_and_the_last_release_destroys_the_state() {
+    let module = module(
+        vec![
+            I::ConstInt(5),
+            I::NewStruct(1),
+            I::NativeState(STATE_TYPE.as_word()),
+            // The temporary handle's reference becomes the token's.
+            I::NativeUserData { shared: false },
+            I::StoreLocal(0),
+            I::LoadLocal(0),
+            I::NativeStateRetain,
+            I::Pop,
+            I::LoadLocal(0),
+            I::NativeStateRelease,
+            I::Pop,
+            // One owner left: the state is still here.
+            I::LoadLocal(0),
+            I::NativeRecover(STATE_TYPE.as_word()),
+            I::GetField(0),
+            I::Print,
+            I::Pop,
+            I::LoadLocal(0),
+            I::NativeStateRelease,
+            I::Pop,
+            I::LoadLocal(0),
+            I::NativeRecover(STATE_TYPE.as_word()),
+            I::ReturnVoid,
+        ],
+        1,
+    );
+    let mut host = NativeStateHost::new(CapturingHost::new());
+    assert!(matches!(
+        execute(&module, &mut host),
+        Err(VmError::NativeState(NativeStateError::UnknownToken(_)))
+    ));
+    assert_eq!(host.inner().lines(), ["5"]);
+    assert_eq!(host.store().live(), 0);
+}
+
+/// A handle a frame still holds when it returns gives up its reference with
+/// the frame, and a token exported from it keeps the state alive on its own.
+#[test]
+fn a_handle_dropped_with_its_frame_releases_one_owner() {
+    let module = module(
+        vec![
+            I::ConstInt(3),
+            I::NewStruct(1),
+            I::NativeState(STATE_TYPE.as_word()),
+            I::StoreLocal(0),
+            // A shared export: the handle stays owned by local 0 and the token
+            // takes an owner of its own.
+            I::LoadLocal(0),
+            I::NativeUserData { shared: true },
+            I::Return,
+        ],
+        1,
+    );
+    let mut host = NativeStateHost::new(CapturingHost::new());
+    let outcome = execute(&module, &mut host).expect("the token is returned");
+    let crate::Value::RawPtr(word) = outcome.result else {
+        panic!("the token must return as a raw pointer");
+    };
+    let token = kira_runtime_abi::NativeStateToken::from_word(word);
+    assert_eq!(host.store().owners(token), Ok(1));
+    assert_eq!(host.store().live(), 1);
+    host.native_state_release(token)
+        .expect("the token's owner releases");
+    assert_eq!(host.store().live(), 0);
 }
 
 /// A local that already holds a recovered view may be REBOUND to another view.
@@ -523,12 +611,12 @@ fn rebinding_a_recovered_local_to_another_view_is_not_a_write_back() {
             I::StoreLocal(1),
             // Recover the first into local 2 ...
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::StoreLocal(2),
             // ... then rebind that same local to a view of the second.
             I::LoadLocal(1),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::StoreLocal(2),
             // The local now names the second state, and the first is untouched.
@@ -537,16 +625,16 @@ fn rebinding_a_recovered_local_to_another_view_is_not_a_write_back() {
             I::Print,
             I::Pop,
             I::LoadLocal(0),
-            I::NativeUserData,
+            I::NativeUserData { shared: false },
             I::NativeRecover(STATE_TYPE.as_word()),
             I::GetField(0),
             I::Print,
             I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateFree,
+            I::TakeLocal(0),
+            I::NativeStateRelease,
             I::Pop,
-            I::LoadLocal(1),
-            I::NativeStateFree,
+            I::TakeLocal(1),
+            I::NativeStateRelease,
             I::Pop,
             I::ReturnVoid,
         ],
@@ -585,8 +673,8 @@ fn a_capture_cell_in_state_is_shared_and_its_share_comes_back() {
             I::CellGet(0),
             I::Print,
             I::Pop,
-            I::LoadLocal(1),
-            I::NativeStateFree,
+            I::TakeLocal(1),
+            I::NativeStateRelease,
             I::Pop,
             // …and still readable after the state that shared it is gone.
             I::CellGet(0),
@@ -681,6 +769,8 @@ fn a_reentered_vm_returns_an_array_writeback_to_the_suspended_frame() {
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
         foreign_callbacks: Vec::new(),
+        constants: Vec::new(),
+        types: Vec::new(),
         functions: vec![entry, callback, native],
         main: None,
         strings: Vec::new(),

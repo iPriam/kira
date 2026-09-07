@@ -1,0 +1,49 @@
+---
+title: Property Wrappers
+description: "`kind { wrapper }`: one macro defines the protocol, every wrapper type is an ordinary annotated struct, and monomorphization happens per wrapped field."
+---
+
+`kind { wrapper }` is the full property-wrapper protocol: one macro defines it, and every wrapper type is an ordinary annotated struct.
+
+```kira
+comptime macro PropertyWrapper {
+    kind { wrapper }
+    appliesTo { form }
+
+    expand(target: Declaration, wrapper: Declaration) -> Syntax { … }
+}
+
+@PropertyWrapper
+struct State {
+    var wrappedValue: Wrapped     // `Wrapped` is the macro's placeholder for the field's type
+    var key: String = ""
+
+    function get() -> Wrapped { …storage read… }
+    function set(value: Wrapped) { …storage write… }
+}
+
+construct Counter() extends MyPanel {
+    @State var count: Int = 0     // works because State IS a @PropertyWrapper
+    let body: Int = 1
+}
+```
+
+## Registration
+
+Annotating a struct with the macro's name registers it as a wrapper **template** and runs the macro's validation invocation, `expand(template, template)`. `target.name == wrapper.name` discriminates the path. The macro validates the protocol and may emit conformance declarations; the template itself is then removed from the program, because it may carry placeholder types and is never compiled as-is.
+
+Templates are registered in a pre-scan, so declaration order between files and packages never matters.
+
+## Summoning
+
+A field annotated with a registered template's name summons the macro over the enclosing declaration, `expand(target = the form, wrapper = the template)`, and the output replaces the form.
+
+Inside that path the macro monomorphizes the template per wrapped field with `Syntax.replaceIdentifier`, renaming the wrapper type and substituting the field's declared type for `Wrapped`, so any field type works without generics. It then emits per-property accessors and rewrites the form with `dropField` and `rewriteProperty`.
+
+Storage policy lives entirely in the wrapper struct's own `get` and `set`; the compiler knows nothing about it.
+
+The generated names are derived by splice gluing rather than by hygienic gensym, because the rewritten uses must be able to name them.
+
+## Cross-File Reads
+
+A `kind { wrapper }` macro is the one macro form that reads other files' declarations. When a program declares one, the files carrying its templates join the expansion key; when it declares none, nothing scans another file's declarations at all.

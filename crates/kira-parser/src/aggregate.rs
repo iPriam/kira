@@ -37,7 +37,11 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
-        self.refuse_type_params("struct");
+        let type_params = if self.at_type_params() {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
         let traits = self.parse_trait_list();
         let mut fields = Vec::new();
         let mut methods = Vec::new();
@@ -46,6 +50,7 @@ impl Parser<'_> {
             return Some(StructDecl {
                 name,
                 name_span,
+                type_params,
                 traits,
                 fields,
                 methods,
@@ -56,7 +61,7 @@ impl Parser<'_> {
         }
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -72,7 +77,9 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Function => {
-                    if let Some(method) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut method) = self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut method);
                         methods.push(method);
                     }
                 }
@@ -90,7 +97,7 @@ impl Parser<'_> {
                     self.bump();
                 }
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -100,6 +107,7 @@ impl Parser<'_> {
         Some(StructDecl {
             name,
             name_span,
+            type_params,
             traits,
             fields,
             methods,
@@ -165,18 +173,21 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
-        // An enum is the one declaration form that takes type parameters.
+        // Enum parameters are recorded like the other declaration forms; the
+        // semantic pass decides when their concrete rows are needed.
         let type_params = if self.at_type_params() {
             self.parse_type_params()
         } else {
             Vec::new()
         };
+        let traits = self.parse_trait_list();
         let mut variants = Vec::new();
         if !self.expect(TokenKind::LBrace) {
             let span = Span::from_bounds(start.start, self.previous_end());
             return Some(EnumDecl {
                 name,
                 name_span,
+                traits,
                 type_params,
                 variants,
                 derives_copy: None,
@@ -185,7 +196,7 @@ impl Parser<'_> {
         }
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -205,7 +216,7 @@ impl Parser<'_> {
                 );
                 self.bump();
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -215,6 +226,7 @@ impl Parser<'_> {
         Some(EnumDecl {
             name,
             name_span,
+            traits,
             type_params,
             variants,
             derives_copy: None,
@@ -266,7 +278,11 @@ impl Parser<'_> {
         let start = self.current().span;
         self.expect(TokenKind::Class);
         let (name, name_span) = self.parse_declaration_name("KPAR033", "expected a class name");
-        self.refuse_type_params("class");
+        let type_params = if self.at_type_params() {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
         // `: traits` first, `extends parents` second: the colon is always
         // conformance and `extends` is always a parent, so the two clauses
         // never have to be told apart by what they name.
@@ -280,6 +296,7 @@ impl Parser<'_> {
             return Some(ClassDecl {
                 name,
                 name_span,
+                type_params,
                 traits,
                 parents,
                 fields,
@@ -291,7 +308,7 @@ impl Parser<'_> {
         }
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -307,7 +324,10 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Function => {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut function) =
+                        self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut function);
                         methods.push(ClassMethod {
                             is_override: false,
                             function,
@@ -321,7 +341,8 @@ impl Parser<'_> {
                 TokenKind::At => {
                     let annotations = self.parse_annotations();
                     if self.at(TokenKind::Function) {
-                        if let Some(function) = self.parse_function_annotated(&annotations) {
+                        if let Some(mut function) = self.parse_function_annotated(&annotations) {
+                            self.refuse_generic_member(&mut function);
                             methods.push(ClassMethod {
                                 is_override: false,
                                 function,
@@ -351,7 +372,7 @@ impl Parser<'_> {
                     self.bump();
                 }
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -361,6 +382,7 @@ impl Parser<'_> {
         Some(ClassDecl {
             name,
             name_span,
+            type_params,
             traits,
             parents,
             fields,
@@ -392,11 +414,18 @@ impl Parser<'_> {
                 break;
             }
             let span = self.current().span;
-            parents.push(ParentRef {
-                name: self.intern_span(span),
-                span,
-            });
+            let name = self.intern_span(span);
             self.bump();
+            let type_args = if self.at(TokenKind::Lt) {
+                self.parse_call_type_args()
+            } else {
+                Vec::new()
+            };
+            parents.push(ParentRef {
+                name,
+                span,
+                type_args,
+            });
             if !self.eat(TokenKind::Comma) {
                 break;
             }
@@ -417,7 +446,8 @@ impl Parser<'_> {
         self.bump(); // `override`
         match self.current_kind() {
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                if let Some(mut function) = self.parse_function(false, Execution::Inherited, None) {
+                    self.refuse_generic_member(&mut function);
                     methods.push(ClassMethod {
                         is_override: true,
                         function,

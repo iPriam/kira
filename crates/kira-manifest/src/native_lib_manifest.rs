@@ -119,8 +119,6 @@ pub struct RawAutobindingSection {
 pub struct RawBindingsSection {
     /// `"all_public"` or `"selected"`.
     pub mode: Option<String>,
-    /// The generator ruleset name.
-    pub profile: Option<String>,
 }
 
 /// The `[build]` section.

@@ -1,0 +1,183 @@
+---
+title: Derives
+description: The seven derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
+---
+
+Foundation ships six derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`, plus the builtin `@Derive(Copy)` assertion. Together they are the seven derives. All seven are available as `@Derive` targets in any file with its own `import Foundation`.
+
+| Derive | Generated free function | Contract |
+| --- | --- | --- |
+| `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
+| `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
+| `Hashable` | `function hash_<Type>(v: borrow <Type>) -> Int` | deterministic FNV-1a fold of every supported field |
+| `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` and `function deserialize_<Type>(s: borrow String) -> <Type>` | value to compact wire string and back, trapping on malformed input |
+| `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
+| `Ordered` | `function compare_<Type>(a: borrow <Type>, b: borrow <Type>) -> Ordering` and `lt_<Type>` | declaration-order total order, with no position exposed |
+
+The generated name is glued to the derived type's exact name (`eq_Point`,
+`clone_Point`, `hash_Point`, `serialize_Point`, `deserialize_Point`,
+`code_Note`, `Note_fromCode`), and that is a fixed contract other tooling reads.
+
+## Field Classification
+
+`Equatable`, `Clone`, and `Serializable` share one classification. A builtin scalar field (`Int`, the sized numeric widths, `Float`, `F32`, `Bool`, `String`, and the C types) is handled directly. A field whose type is another bare named type is a nested derived type and recurses through that type's own generated function. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic.
+
+An array field holds scalars, nested arrays, or named derived types to any depth. A generic, optional, qualified, or function field type is refused with a `Diagnostics.error` naming the field. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text.
+
+## `Hashable`
+
+`Hashable` folds fields in declaration order with 64-bit FNV-1a and generates
+`hash_<Type>`. Integer widths, `Bool`, `String` bytes, and nested structs are
+supported; a nested struct must derive `Hashable` too. This is a change
+detector, not a cryptographic hash, so collisions are possible and only mean
+redundant work for a cache or diff.
+
+Array, generic, and optional field types are refused instead of guessing
+whether identity, order, or length is part of the hash. `Float` and `F32` are
+also refused: equal floating-point values can have distinct bit patterns, so a
+bitwise fold would disagree with `Equatable`.
+
+```kira
+@Derive(Hashable)
+struct Point { var x: Int var y: Int }
+
+let key = hash_Point(Point { x = 3, y = 4 })
+```
+
+## `Tagged`
+
+`Tagged` applies to enums and generates `code_<Type>` plus
+`<Type>_fromCode`. `code_<Type>` returns the zero-based declaration position;
+payloads do not affect the code. `fromCode` returns the matching payload-less
+variant and falls back to the first variant for an unknown number, so use it on
+an enum whose variants carry no payload.
+
+```kira
+@Derive(Tagged)
+enum Material { Flat Frosted }
+
+let code = code_Material(Material.Frosted)       // 1
+let value = Material_fromCode(code)              // Material.Frosted
+```
+
+## `Ordered`
+
+`Ordered` applies to enums and generates `compare_<Type>`, returning the
+Foundation enum `Ordering` (`Less`, `Equal`, `Greater`), plus `lt_<Type>`.
+Earlier variants sort before later ones.
+
+It answers a different question from `Tagged` and deliberately answers only
+that one. A program that needs a sort but not a wire code should not have to
+take a number to get an order: once the position is a value, it reaches call
+sites, gets stored, and ends up written down, making declaration order a wire
+fact nobody declared it to be. The ordinal `Ordered` is built from stays inside
+the expansion under the reserved `__kira_ord_` prefix, so nothing above it can
+read a position or compare one against a literal.
+
+```kira
+@Derive(Ordered)
+enum Severity { Note Warning Error }
+
+let order = compare_Severity(Severity.Note, Severity.Error)   // Ordering.Less
+let sorts = lt_Severity(Severity.Note, Severity.Warning)      // true
+```
+
+**A payload-carrying variant is refused.** Ordering by position alone would
+call two `Custom` values equal when their payloads differ, silently breaking the
+total order a sort depends on; ordering by payload needs that payload type
+ordered too. Guessing which was meant ships a wrong answer instead of a
+diagnostic, so the derive refuses, the same way `Hashable` refuses an array
+field.
+
+Like `Tagged`, the order is stable exactly as long as the enum is only appended
+to: inserting a variant in the middle reorders values already written down.
+
+## The Wire Format
+
+`Serializable` builds on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
+
+```text
+TypeName{field1:VALUE,field2:VALUE,...}
+```
+
+An integer writes its spelling around its digits (`U8(7)`, `I32(-5)`), so the value carries its width. A `Float` is `Float(0x` and the sixteen hex digits of its exact bits, an `F32` is `F32(0x` and eight. A `String` is its escaped text wrapped in `"`. An array is its elements in brackets (`[Int(1),Int(2)]`), nested to any depth. A nested derived struct recurses inline, so `from:Point{id:TabId(U32(7))}` sits inside its parent braces. A distinct writes its name around its representation: `TabId(U32(7))`.
+
+Deserialization is the exact inverse. It validates the leading `TypeName{`, then for each field in declaration order locates `label:`, carves the value with a depth-aware scanner, and converts by field type. The integer tag must name the field width exactly, and the digits are range-checked by the narrowing conversion, so `U8(300)` traps and `Int(5)` in a `U8` field is refused. A `U64` field parses unsigned, because the top half of its range is past what a signed accumulation holds.
+
+**Malformed input traps.** A wrong type name, a missing `:` or `,` or `}`, truncated text, trailing text after the closing `}`, a field out of order, a duplicate or unknown label, or a non-digit where an integer is expected drives an out-of-range `charAt` or an inverted `substring`. Both turn into a hard trap on every backend. There is no partial parse: a value either round-trips or the program stops.
+
+**Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise.
+
+```kira
+@Derive(Equatable, Serializable)
+struct Point { var x: Int var y: Int }
+
+let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x:Int(1),y:Int(-2)}"
+let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
+```
+
+## Enums
+
+An enum derives too, and writes the variant it holds by name, with a payload in parentheses after it.
+
+```kira
+@Derive(Equatable, Serializable)
+enum Note { Blank Rank(Int) Tag(String) }
+
+serialize_Note(Note.Rank(42))                       // "Note.Rank(Int(42))"
+serialize_Note(Note.Blank)                          // "Note.Blank"
+deserialize_Note("Note.Tag(\"edge\")")              // Note.Tag("edge")
+```
+
+The variant is named, never numbered. An enum used as a struct field is that same text in the field value slot, and an unknown variant name traps like any other structural violation.
+
+## Two Limits
+
+A `String` value is escaped on the way out and unescaped on the way back: `\"`, `\\`, `\n`, `\r`, `\t`, and `\0`. Everything else is written as itself, and the scanner that carves a field out reads a quoted region as content, so a value holding `;` or `}` round-trips. An escape the format does not define is malformed input and traps, rather than being passed through as text nothing wrote.
+
+A `Float` is written as its bits, not as a rendering of them, so it reads back as itself — including a signed zero, an infinity, and a NaN payload, none of which a decimal form can carry. A decimal wire value would round twice: once writing, once reading.
+
+## Distinct Types
+
+A [`distinct` type](/docs/language-reference/types#distinct-types) derives too, and every derive delegates to the representation it was declared over rather than wrapping it.
+
+```kira
+@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
+distinct Port = U32
+
+serialize_Port(Port(U32(8080)))       // "Port(U32(8080))"
+deserialize_Port("Port(U32(8080))")   // Port(U32(8080))
+lt_Port(Port(U32(41)), Port(U32(42))) // true
+```
+
+A distinct type has exactly one readable member, `raw`, and the derives see it as a field of that name. A distinct is built by calling it, so `clone_Port` returns `Port(v.raw)` rather than a brace literal.
+
+Two representations are refused where they have no answer, each by name: `Float` and `F32` for `Hashable` and `Ordered`, and `RawPtr` for `Hashable`, `Ordered`, and `Serializable`.
+
+`Tagged` does not apply: it answers which number a *variant* is, and a distinct type has no variants. `@Derive(Copy)` is refused at the parser (`KPAR086`) — one scalar word is copyable already, so the assertion can neither add nor withhold anything.
+
+## `@Derive(Copy)`
+
+`Copy` is a compiler builtin rather than a Foundation macro: it generates no code and produces no free function. It is an *opt-in assertion* that a type is structurally copyable, checked at compile time, which is why macro expansion leaves it in place instead of consuming it.
+
+Kira already classifies copyability automatically and structurally: a type is copyable when every field or variant payload is, and it *moves* the moment it gains a heap-owning field (a `String`, an array), an opaque payload (a callback, native state), or anything that transitively contains one. That classification is silent, so adding one such field flips a type from copy to move at every call site with no signal at the declaration. `@Derive(Copy)` makes the contract explicit and enforced.
+
+On an eligible type the derive is a **no-op**: it compiles and the type behaves exactly as before, granting no new powers. On an ineligible one it is `KIR005`, naming the first offending field or variant payload and its type, and the check is transitive.
+
+```kira
+@Derive(Copy)                 // ok: every field is a scalar
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@Derive(Copy)                 // error[KIR005]: `Label` derives `Copy`, but its
+struct Label {                //   member `text` has type `String`, which is not
+    let id: Int               //   copyable, so `Label` moves rather than copies.
+    let text: String
+}
+```
+
+`Copy` composes with the Foundation derives: `@Derive(Copy, Equatable)` runs the builtin assertion *and* generates `eq_<Type>`. It is recognized before the user-macro lookup, so it never trips `KMAC011`.
+
+`Copyable` is the trait spelling of the same assertion. See [Traits](/docs/language-guide/traits#compiler-known-traits).

@@ -1,10 +1,12 @@
+import Foundation
+
 // ControlFlow.kira
 // Control flow + recursion + numeric coverage for the kik harness.
 // Every top-level name is prefixed `cf`. Entry point: cfSection() -> Int.
 // All arithmetic is chosen to be backend-identical:
 //   * modulo operands are kept non-negative (negative `%` diverges across backends),
 //   * integer division truncates toward zero (consistent, negatives allowed),
-//   * integer overflow wraps as two's-complement i64 (identical across backends),
+//   * ordinary integer arithmetic traps on overflow; `wrappingAdd`/`wrappingMul` wrap,
 //   * floats use exact binary fractions only and fold to Int via comparisons.
 
 // ---------------------------------------------------------------------------
@@ -357,7 +359,7 @@ function cfSection() -> Int {
                 break
             }
             if (a + b) % 2 == 0 {
-                b = b + 1;
+                b = b + 1
                 continue
             }
             loopAcc = loopAcc + (a * 10 + b)
@@ -368,7 +370,7 @@ function cfSection() -> Int {
         }
         a = a + 1
     }
-    checksum = checksum * 131 + loopAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), loopAcc)
 
     // --- Part 2: nested for-in loops with a skip guard ---
     // (`continue` is exercised in while loops; for-in skips via a guard.)
@@ -382,7 +384,7 @@ function cfSection() -> Int {
             }
         }
     }
-    checksum = checksum * 131 + forAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), forAcc)
 
     // --- Part 3: a long comparison chain with a fallback, over varied inputs ---
     var gradeAcc = 0
@@ -391,7 +393,7 @@ function cfSection() -> Int {
         gradeAcc = gradeAcc + cfGrade(s)
         s = s + 7
     }
-    checksum = checksum * 131 + gradeAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), gradeAcc)
 
     // --- Part 4: match (statement position) over enum selection ---
     var matchAcc = 0
@@ -406,7 +408,7 @@ function cfSection() -> Int {
         matchAcc = matchAcc + cfStepValue(step)
         pi = pi + 1
     }
-    checksum = checksum * 131 + matchAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), matchAcc)
 
     // --- Part 5: nested ternary expressions (non-negative inputs only) ---
     var ternAcc = 0
@@ -415,7 +417,7 @@ function cfSection() -> Int {
         ternAcc = ternAcc + cfTernary(t)
         t = t + 13
     }
-    checksum = checksum * 131 + ternAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), ternAcc)
 
     // --- Part 6: early returns from loops ---
     var earlyAcc = 0
@@ -425,7 +427,7 @@ function cfSection() -> Int {
     let probe: [Int] = [2, 4, 8, 16, 32, 64]
     earlyAcc = earlyAcc + cfFindOver(probe, 20)
     earlyAcc = earlyAcc + cfFindOver(probe, 1000)
-    checksum = checksum * 131 + earlyAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), earlyAcc)
 
     // --- Part 7: recursion (factorial / fib / gcd / triangular / mutual) ---
     var recAcc = 0
@@ -451,21 +453,21 @@ function cfSection() -> Int {
         ei = ei + 1
     }
     recAcc = recAcc + even
-    checksum = checksum * 131 + recAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), recAcc)
 
-    // --- Part 8: integer overflow / wraparound (deterministic two's complement) ---
+    // --- Part 8: wrapping arithmetic is spelled out (ordinary `+` and `*` trap) ---
     var ovAcc = 0
     let nearMax = 9223372036854775807
-    ovAcc = ovAcc + (nearMax + 1)          // wraps to i64 min
-    ovAcc = ovAcc + (nearMax * 2)          // wraps to -2
+    ovAcc = wrappingAdd(ovAcc, wrappingAdd(nearMax, 1))   // wraps to i64 min
+    ovAcc = wrappingAdd(ovAcc, wrappingMul(nearMax, 2))   // wraps to -2
     var wrap = 1
     var w = 0
     while w < 64 {
-        wrap = wrap * 2                    // eventually wraps past i64 range
+        wrap = wrappingMul(wrap, 2)        // eventually wraps past i64 range
         w = w + 1
     }
     ovAcc = ovAcc + wrap                   // 2^64 wrapped == 0
-    checksum = checksum * 131 + ovAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), ovAcc)
 
     // --- Part 9: division + modulo over varied + negative values ---
     // (modulo operands stay non-negative; division covers negative operands).
@@ -485,10 +487,10 @@ function cfSection() -> Int {
     numAcc = numAcc + cfDigitSum(123456789)
     numAcc = numAcc + cfDigitSum(999999)
     numAcc = numAcc + cfPow2(10)           // 1024
-    checksum = checksum * 131 + numAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), numAcc)
 
     // --- Part 10: closures (owned, moved; let-by-value + var shared-mutable) ---
-    checksum = checksum * 131 + cfClosureFold()
+    checksum = wrappingAdd(wrappingMul(checksum, 131), cfClosureFold())
 
     // --- Part 11: struct method + borrow mut writeback on a LOCAL var ---
     var structAcc = 0
@@ -499,10 +501,10 @@ function cfSection() -> Int {
         ci = ci + 1
     }
     structAcc = counter.value + counter.steps
-    checksum = checksum * 131 + structAcc
+    checksum = wrappingAdd(wrappingMul(checksum, 131), structAcc)
 
     // --- Part 12: float arithmetic folded into an Int ---
-    checksum = checksum * 131 + cfFloatFold()
+    checksum = wrappingAdd(wrappingMul(checksum, 131), cfFloatFold())
 
     return checksum
 }

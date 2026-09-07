@@ -27,21 +27,37 @@ mod foundation;
 mod inspect;
 mod installed_toolchain;
 mod lint_verb;
+mod macros;
 mod migration;
 mod modules;
 mod natives;
 mod packages;
 mod programs;
+mod sanitizers;
 mod scaffold;
 mod tests_verb;
 mod web;
 
 /// Writes `source` to a uniquely-named temp `.kira` file and returns its path.
+///
+/// In a directory of its own, because a build puts its `.kira-build` beside the
+/// source it was given. A source written straight into the system temp
+/// directory makes that `/tmp/.kira-build`, shared by every test doing the same
+/// — and a `kira build` clears its output directory on the way in, so one
+/// test's build removes the directory another test's LLVM worker is moving an
+/// object into. It fails as `No such file or directory`, naming a path that
+/// looks like the test's own.
+///
+/// The file keeps its unique stem so a caller deriving an artifact name from
+/// it reads the same as before; only the parent is new.
 fn write_source(source: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let path = std::env::temp_dir().join(format!("kira_e2e_{pid}_{unique}.kira"));
+    let name = format!("kira_e2e_{pid}_{unique}");
+    let directory = std::env::temp_dir().join(&name);
+    std::fs::create_dir_all(&directory).expect("temp source directory");
+    let path = directory.join(format!("{name}.kira"));
     std::fs::write(&path, source).expect("write temp source");
     path
 }

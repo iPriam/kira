@@ -440,8 +440,8 @@ fn match_syntax_analyzes_the_way_the_compiler_does() {
     let clean = analyze(
         "t.kira",
         "enum Shade { Light Mid Dark }\n\
-         function rank(s: borrow Shade) -> Int { match s { Light -> return 1; \
-         Mid -> return 2; Dark -> return 3; } }\n\
+         function rank(s: borrow Shade) -> Int { match s { Light -> return 1 \
+         Mid -> return 2 Dark -> return 3 } }\n\
          @Main function main() { let d: Shade = .Dark print(rank(d)) return }",
     );
     assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);

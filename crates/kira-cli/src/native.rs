@@ -36,6 +36,7 @@ pub fn build(
     optimize: bool,
     foreign_link: &NativeLinkInputs,
     target: &NativeBuildTarget,
+    sanitize: kira_llvm_backend::Sanitize,
 ) -> Result<NativeArtifacts, NativeError> {
     // Asked before anything else a cross build needs is looked for. The runtime
     // archive and the sysroot are things a machine can be given; a code
@@ -60,6 +61,7 @@ pub fn build(
         unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
         target: target.clone(),
+        sanitize,
     };
     Ok(kira_llvm_backend::build_native(program, &options)?)
 }
@@ -89,6 +91,9 @@ pub fn build_live(
         foreign_link: foreign_link.clone(),
         // A live library is loaded into this process, so it is this machine's.
         target: NativeBuildTarget::host(),
+        // Live reload trades everything for turnaround; a sanitized live
+        // session is a flag away when the loop grows one.
+        sanitize: kira_llvm_backend::Sanitize::None,
     };
     Ok(kira_llvm_backend::build_native_live(program, &options)?)
 }
@@ -119,6 +124,9 @@ pub fn build_debug(
         // A debugger session attaches to a process on this machine, so a debug
         // build is this machine's whatever else the invocation asked for.
         target: NativeBuildTarget::host(),
+        // The debugger reads the un-instrumented program; ASan's shadow
+        // bookkeeping between every load would be noise under a breakpoint.
+        sanitize: kira_llvm_backend::Sanitize::None,
     };
     Ok(kira_llvm_backend::build_native_debug(
         program, &options, debug,

@@ -34,11 +34,20 @@ impl<'a> Analyzer<'a> {
             resolving_param_defaults: BTreeSet::new(),
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
+            generic_aggregates: crate::generics::GenericAggregateTable::new(),
+            generic_instance_templates: HashMap::new(),
+            generic_instance_arguments: HashMap::new(),
+            generic_functions: crate::generics::GenericFunctionTable::new(),
+            generic_function_instances: HashMap::new(),
+            generic_callables: Vec::new(),
+            generic_method_callables: Vec::new(),
+            generic_signatures_open: false,
             type_bindings: crate::generics::TypeBindings::new(),
             pending_bounds: Vec::new(),
             instantiation_depth: 0,
             payload_blame: None,
             aliases: AliasTable::new(),
+            distincts: crate::distincts::DistinctTable::new(),
             pointer_targets: HashMap::new(),
             classes: HashMap::new(),
             constructs: HashMap::new(),
@@ -48,13 +57,21 @@ impl<'a> Analyzer<'a> {
             existential_traits: HashMap::new(),
             traits: crate::traits::TraitTable::new(),
             conformances: Vec::new(),
+            cast_error: None,
+            cast_results: HashMap::new(),
+            channel_error: None,
+            channel_senders: HashMap::new(),
+            channel_receivers: HashMap::new(),
+            channel_results: HashMap::new(),
+            channel_ends: HashMap::new(),
+            checked_conformances: 0,
             drop_extractions: Vec::new(),
             enum_payload_sites: Vec::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
             init_content: HashMap::new(),
-            synth_base: 0,
+            synth_base: SYNTH_ID_BASE,
             synth: Vec::new(),
             closure_sites: Vec::new(),
             current_execution: kira_semantics_model::Execution::Inherited,
@@ -64,11 +81,22 @@ impl<'a> Analyzer<'a> {
             ffi_array_counts: HashMap::new(),
             ffi_callback_signatures: HashMap::new(),
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),
+            constants: Vec::new(),
+            constant_index: HashMap::new(),
+            constant_decls: Vec::new(),
+            constant_progress: Vec::new(),
+            constant_stack: Vec::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
             definitions: Vec::new(),
             decl_spans: crate::definitions::DeclSpans::collect(tree, interner),
         };
+        // The packages the program was assembled from, so every identity the
+        // table answers carries the resolved package rather than its name.
+        let packages: Vec<_> = analyzer.imports.packages().cloned().collect();
+        for package in packages {
+            analyzer.program.types.declare_package(package);
+        }
         analyzer.report_unresolved_imports(&entries);
         analyzer.link_resolved_imports(&entries);
         analyzer
@@ -79,10 +107,19 @@ impl<'a> Analyzer<'a> {
         // below may name one; they resolve lazily on first use, so registering
         // them here does not require the struct or enum table to exist yet.
         self.collect_type_aliases();
+        // `distinct` declarations are registered beside the aliases and for the
+        // same reason: any collection below may name one, and both resolve
+        // lazily on first use. Registered *after* the aliases so a distinct
+        // type's name can be refused for colliding with one.
+        self.collect_distinct_types();
         // Traits are registered from syntax alone, before any type table, because
         // one type namespace means a struct, class, enum, or family declared
         // below has to be able to lose its name to a trait.
         self.collect_traits();
+        // Generic declaration headers are templates, not concrete rows. Keep
+        // them available before the ordinary type passes so a field may mint a
+        // concrete `Box<Int>` while those passes are resolving.
+        self.collect_generic_declarations();
         // Enum *names* are declared before structs, so a struct field may name
         // one; a struct is declared before signatures, so a parameter may name
         // either. Enum *payloads* wait until every struct exists, because a
@@ -119,6 +156,12 @@ impl<'a> Analyzer<'a> {
         // Every type a payload could name now has an id, so the variants the
         // header pass left empty are filled here.
         self.resolve_enum_payloads(&enum_headers);
+        // Every `distinct` declaration resolves here whether or not anything
+        // names it, so a representation the type cannot be built over is
+        // reported at the declaration. Run after the nominal tables so
+        // `distinct Anchor = Point` is refused for being a struct rather than
+        // for naming a type that does not exist yet.
+        self.resolve_declared_distinct_types();
         // Conformance names a type, so it is resolved once every struct-shaped
         // one has an id — and before callables are enumerated, because a
         // default a conforming type did not write becomes one of its methods.
@@ -131,12 +174,22 @@ impl<'a> Analyzer<'a> {
         // is answered once every struct, class, enum, and construct-backed type
         // exists and every payload is resolved.
         self.check_copy_derives();
-        let callables = self.callables();
-        // Every synthesized function sits after every declared one, so the
-        // declared count is the offset a reserved id is measured from. Fixed
-        // here, before any signature can reserve one.
-        self.synth_base = callables.len() as u32;
+        let mut callables = self.callables();
+        // Resolving a callable's signature can itself encounter a generic
+        // aggregate type. Its concrete methods are not known when
+        // `callables()` takes its snapshot, so drain and sign those methods in
+        // rounds until signature resolution stops discovering more rows.
+        self.generic_method_callables.clear();
         self.collect_signatures(&callables);
+        loop {
+            let discovered = std::mem::take(&mut self.generic_method_callables);
+            if discovered.is_empty() {
+                break;
+            }
+            self.collect_signatures(&discovered);
+            callables.extend(discovered);
+        }
+        self.generic_signatures_open = true;
         // Which init parameters take content is a question about the written
         // `some X`, and the ids the answer is filed under exist only now.
         self.record_init_content(&callables);
@@ -195,6 +248,13 @@ impl<'a> Analyzer<'a> {
         // construct header was collected. Re-run the value-cycle break after
         // those edges become concrete, before any instance default is lowered.
         self.break_remaining_value_cycles();
+        // Module constants are collected before any default or body resolves:
+        // a read anywhere below finds the finished table. Each initializer is
+        // analyzed on first demand, so a constant an initializer reads is
+        // analyzed before the read resolves — and a struct default an
+        // initializer constructs through resolves lazily on first use, so the
+        // pass below only re-walks what this one already forced.
+        self.collect_constants();
         // A field default belongs to its declaration. Resolve every one now, with
         // signatures and foreign callables available but before a construction
         // site can supply some unrelated file scope, and reuse that HIR at every
@@ -212,6 +272,17 @@ impl<'a> Analyzer<'a> {
         for (index, callable) in callables.iter().enumerate() {
             let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
+        }
+        // A generic free function is instantiated lazily by the first call
+        // whose argument types make its parameters concrete. Those signatures
+        // are appended after the declarations, and their bodies are analyzed
+        // to the same function vector before synthesized ids are allocated.
+        let mut generic_index = 0;
+        while generic_index < self.generic_callables.len() {
+            let (id, callable) = self.generic_callables[generic_index].clone();
+            let hir_function = self.analyze_function(id, &callable);
+            self.program.functions.push(hir_function);
+            generic_index += 1;
         }
         // Dynamic construct dispatchers, family value-member dispatchers, and
         // `extend` modifier bodies share one synthesized-function id space, and
@@ -247,6 +318,16 @@ impl<'a> Analyzer<'a> {
         // final once every literal of its type has been found, and a callback
         // state's identity is a fingerprint of the shape it boxes.
         self.finalize_native_state_type_ids();
+        // Constant slots exist in declaration order until here. With every
+        // body analyzed and every synthesized function at its final id, the
+        // real call graph decides what order the slots are filled in at
+        // program start — and whether any initializer genuinely depends on
+        // its own value.
+        self.order_constant_evaluation();
+        // What a runtime descriptor answers for `conformances`, recorded after
+        // every conformance is registered and coherence has run: a program may
+        // ask a type what it keeps, and nothing later can add to the answer.
+        self.record_conformances();
         Analysis {
             program: self.program,
             diagnostics: self.diagnostics,

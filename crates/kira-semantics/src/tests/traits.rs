@@ -520,3 +520,38 @@ fn a_conformance_declared_by_the_traits_own_package_is_accepted() {
     );
     assert!(codes.is_empty(), "{codes:?}");
 }
+
+/// A requirement is a complete contract, not a list of types: an
+/// implementation that borrows where the requirement moves, or labels a
+/// parameter differently, does not satisfy it.
+#[test]
+fn a_conformance_must_match_the_requirements_whole_contract() {
+    let borrows = "trait Sink {\n    function take(borrow self, item: move String)\n}\n\
+                   struct Bin: Sink {\n    var kept: Int = 0\n\
+                   function take(borrow self, item: borrow String) { return }\n}\n\
+                   @Main function main() { return }";
+    let items = diagnostics(borrows);
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM293"))
+        .unwrap_or_else(|| panic!("expected a KSEM293, got {items:?}"));
+    assert!(refusal.message.contains("`borrow`"), "{refusal:?}");
+    assert!(refusal.message.contains("`move`"), "{refusal:?}");
+
+    let relabelled = "trait Sink {\n    function take(borrow self, item: move String)\n}\n\
+                      struct Bin: Sink {\n    var kept: Int = 0\n\
+                      function take(borrow self, value: move String) { return }\n}\n\
+                      @Main function main() { return }";
+    let items = diagnostics(relabelled);
+    let refusal = items
+        .iter()
+        .find(|item| item.has_code("KSEM293"))
+        .unwrap_or_else(|| panic!("expected a KSEM293, got {items:?}"));
+    assert!(refusal.message.contains("labelled `value`"), "{refusal:?}");
+
+    let exact = "trait Sink {\n    function take(borrow self, item: move String)\n}\n\
+                 struct Bin: Sink {\n    var kept: Int = 0\n\
+                 function take(borrow self, item: move String) { return }\n}\n\
+                 @Main function main() { return }";
+    assert!(diagnostics(exact).is_empty(), "{:?}", codes(exact));
+}

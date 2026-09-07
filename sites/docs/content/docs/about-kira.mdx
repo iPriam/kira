@@ -1,44 +1,32 @@
 ---
 title: About Kira
-description: Kira as a Zig-hosted compiler and bootstrap toolchain, with a broader frontend surface and a smaller runnable subset.
+description: Kira as a Rust-hosted compiler, VM, native backend, and hybrid runtime, and the compiler/library split that keeps framework behavior in Kira source.
 ---
 
-Kira is a Zig-hosted compiler and bootstrap toolchain.
+Kira is a compiler and runtime toolchain implemented as a Rust workspace. One program runs on a bytecode VM, on LLVM-emitted machine code, on a hybrid of the two, and on `wasm32-emscripten`, and every backend is held to the same answers.
 
-In this repository, it already includes:
+## What Ships in This Repository
 
-- `kira_source`, `kira_lexer`, `kira_parser`, `kira_semantics`, and `kira_ir`
-- a VM backend based on `kira_bytecode` and `kira_vm_runtime`
-- an LLVM/native backend based on `kira_llvm_backend` and `kira_native_bridge`
-- a hybrid runtime that can mix `@Runtime` bytecode with `@Native` code in one program
-- a managed toolchain flow for `kirac`, templates, and pinned LLVM bundles
-- a manifest-driven C ABI FFI workflow with generated Kira bindings
+| Piece | Crates |
+| --- | --- |
+| Frontend | `kira-source`, `kira-lexer`, `kira-macros`, `kira-parser`, `kira-semantics`, `kira-ir` |
+| VM | `kira-bytecode`, `kira-vm-runtime` |
+| Native | `kira-llvm-backend`, `kira-native-bridge` |
+| Hybrid | `kira-hybrid-runtime`, `kira-hybrid-definition`, `kira-hybrid-launcher` |
+| Shaders | `kira-ksl-parser`, `kira-ksl-semantics`, and the GLSL, WGSL, HLSL, MSL, and SPIR-V backends |
+| Interop | `kira-libffi`, `kira-dynamic-ffi`, `kira-clang`, `kira-native-lib-definition` |
+| Toolchain | `kira-toolchain`, `kira-knvm`, `kira-launcher`, `kira-build`, `kira-cli` |
 
-## The Language Boundary
+The full layer graph is in [Compiler Architecture](/docs/appendix/compiler-architecture).
 
-Kira's current language story has two layers:
+## Backend Parity
 
-- a **frontend surface** that parses and models a broad language shape
-- an **executable subset** that is lowered into the shared IR and today's backends
+A feature is finished when it works on the VM and on LLVM/native, on hybrid where it touches the seam, and on WASM where it is Web-portable. Anything else is refused by a typed diagnostic rather than half-supported on one engine.
 
-That is why the repo can check richer construct-driven programs such as `examples/complex_language_showcase` while also proving a smaller, runnable core through `examples/hello`, the callback examples, and the hybrid/native corpus.
+That rule is why `crates/kira-cli/tests/backend_parity/` runs the same program on every engine and requires identical output, traps included.
 
-## The Compiler-Library Split
+## The Compiler and Library Split
 
-The implementation draws an intentional line between compiler mechanisms and library behavior.
+The compiler owns parsing, macro expansion, semantic validation, lowering, and toolchain orchestration. Everything a program's author would call a library lives in Kira source.
 
-The compiler owns:
-
-- parsing
-- semantic validation
-- executable lowering
-- runtime/native orchestration
-- toolchain and FFI machinery
-
-Kira source and generated Kira bindings own:
-
-- app code
-- construct-defined library shapes
-- higher-level framework patterns built on top of the language surface
-
-That is why constructs, builder blocks, lifecycle hooks, and annotations appear in the language book even when the current runnable subset is smaller.
+Foundation is a real Kira package, not a compiler branch: its derive macros, its `Result`, its filesystem surface, and its image decoders are `.kira` files under `foundation/app/`. Construct families are the mechanism that lets a UI framework be written the same way, which is why `Widget` and `View` appear in Kira source and never in the compiler.

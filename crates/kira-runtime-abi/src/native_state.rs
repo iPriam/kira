@@ -457,6 +457,10 @@ pub fn native_state_walk_mut<'a>(
 struct Entry {
     ty: NativeStateTypeId,
     value: NativeStateValue,
+    /// Owners of this state: the Kira handle, every exported token, and every
+    /// explicit retain. The value is destroyed by the release that takes this
+    /// to zero, exactly once.
+    refs: u64,
 }
 
 /// A process-lifetime store of opaque, typed callback-state values.
@@ -498,8 +502,43 @@ impl NativeStateStore {
             .checked_add(Self::STRIDE)
             .ok_or(NativeStateError::TokenExhausted)?;
         let token = NativeStateToken(word);
-        self.entries.insert(token, Entry { ty, value });
+        self.entries.insert(token, Entry { ty, value, refs: 1 });
         Ok(token)
+    }
+
+    /// Adds one owner to a live state.
+    pub fn retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        let entry = self.entry_mut(token)?;
+        entry.refs = entry
+            .refs
+            .checked_add(1)
+            .ok_or(NativeStateError::TokenExhausted)?;
+        Ok(())
+    }
+
+    /// Removes one owner from a live state, destroying it when none remain.
+    ///
+    /// Returns whether this release destroyed the state. Tokens are never
+    /// reused, so a release after destruction is reported as an unknown token
+    /// rather than reaching a state that took the same word later.
+    pub fn release(&mut self, token: NativeStateToken) -> Result<bool, NativeStateError> {
+        let entry = self.entry_mut(token)?;
+        if entry.refs > 1 {
+            entry.refs -= 1;
+            return Ok(false);
+        }
+        self.entries.remove(&token);
+        Ok(true)
+    }
+
+    /// How many states are live, whatever their owner counts.
+    pub fn live(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// How many owners a live state has.
+    pub fn owners(&self, token: NativeStateToken) -> Result<u64, NativeStateError> {
+        Ok(self.entry(token)?.refs)
     }
 
     /// Returns an owned copy of the live value after validating its type.
@@ -560,15 +599,6 @@ impl NativeStateStore {
         let entry = self.entry_mut(token)?;
         Self::check_type(entry.ty, requested)?;
         native_state_walk_mut(&mut entry.value, path)
-    }
-
-    /// Releases one state exactly once.
-    pub fn free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        Self::check_non_null(token)?;
-        self.entries
-            .remove(&token)
-            .map(|_| ())
-            .ok_or(NativeStateError::UnknownToken(token.as_word()))
     }
 
     fn entry(&self, token: NativeStateToken) -> Result<&Entry, NativeStateError> {

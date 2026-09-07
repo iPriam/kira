@@ -30,6 +30,30 @@ function banner() -> String {
     );
 }
 
+/// A member read owns and releases a temporary returned by a call just as it
+/// does a local. This shape used to leave the native lowering incomplete.
+#[test]
+fn a_string_member_can_be_read_from_a_call_temporary() {
+    let output = assert_parity(
+        r#"
+function choose(which: Int) -> String {
+    if which == 0 {
+        return "temporary"
+    }
+    return "x"
+}
+
+@Main
+function main() {
+    print(choose(0).count)
+    print(choose(1).count)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "9\n1\n");
+}
+
 /// A `let` inside a loop stores into the same slot every iteration; both
 /// backends must reclaim the previous value rather than leak or double-free it.
 #[test]
@@ -111,7 +135,7 @@ function spxParseValue(entry: String) -> Int {
     var acc = 0
     var i = 0
     while i < digits.count {
-        let d = digits.charAt(i) - 48
+        let d = Int(digits.charAt(i)) - 48
         acc = acc * 10 + d
         i = i + 1
     }

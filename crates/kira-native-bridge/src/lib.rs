@@ -18,6 +18,7 @@ pub mod array;
 pub mod boxes;
 pub mod cblock;
 pub mod cells;
+pub mod channels;
 pub mod dynamic_call;
 pub mod dynamic_library;
 pub mod enums;
@@ -26,14 +27,15 @@ pub mod file_system;
 pub mod foreign;
 pub mod hybrid;
 pub mod live;
+pub mod main_thread;
 pub mod native_state;
 mod pool;
 pub mod raw_memory;
-pub mod redb;
 pub mod runtime;
 pub mod state_box;
 pub mod string_ops;
 pub mod tasks;
+pub mod traps;
 pub mod values;
 
 pub use array::{KArray, KiraArray};
@@ -45,6 +47,7 @@ pub use cells::{
 pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
 pub use foreign::{kira_foreign_adapter_abi_version_3, kira_rt_cstring_free, kira_rt_cstring_new};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
+pub use main_thread::{MainThreadDispatcher, MainThreadEntry};
 pub use runtime::{KStr, KiraString};
 
 /// Keeps this crate in a host binary's link graph.

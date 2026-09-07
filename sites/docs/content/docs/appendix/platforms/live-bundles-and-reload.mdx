@@ -1,0 +1,94 @@
+---
+title: Live Bundles and Reload
+description: The .klbundle as the runner boundary, the KLB1 manifest, the live.* event vocabulary and who owns each milestone, and how a reload decision is made.
+---
+
+## The Bundle Is the Boundary
+
+A runner reads a `.klbundle` and nothing else: never a compiler data structure, never a path into a build tree. That is what lets the compiler's internals change without breaking every runner, and it is why `kira-desktop-runner` has no dependency on `kira-ir`, on any backend, or on LLVM.
+
+```text
+app.klbundle/
+  manifest.klb          the KLB1 manifest
+  payloads/
+    app.khm             one file per payload, named by the manifest
+    app.kbc
+    libapp_ffi.dylib
+    libapp.dylib
+    libapp_live.dylib    whole-program LLVM live entry
+    libffifixture.a      native link asset, when selected
+    runtime.dll          native runtime asset, when selected
+```
+
+The manifest records the runner and profile the bundle was built for, one row per payload (name, kind, SHA-256, size), and which payload is the entrypoint.
+
+Payloads are staged **flat** because a `KHM1` hybrid manifest names its bytecode and library as file names beside itself, and a whole-native library resolves its bundled runtime files from the same directory. Staging them as siblings is what makes both forms resolve inside a runner's cache exactly as they did in the build directory.
+
+Bundles arrive over a socket, so the format is a validated wire format rather than a struct that happens to serialize: every truncation, unknown tag, and out-of-range index is a typed error, and payload names are checked to be plain file names once, at the decoder, because they become paths on disk. Payloads are verified against the manifest on arrival, so a runner holds the bytes the build produced, or it holds an error.
+
+Payload hashes are SHA-256 identity fingerprints. A collision could make a changed payload look unchanged, so reload never treats a changed bytecode payload as compatible without separate live-value evidence.
+
+## Events
+
+A session reports the `live.*` vocabulary, and each event is emitted where its milestone actually happened. `live.reload.completed` goes out after the new code *ran*, not after it was sent in the hope that it would.
+
+```text
+live.server.started      live.source.changed
+live.bundle.built        live.bundle.rebuilt
+live.client.connected    live.reload.notified        mode=hotpatch|relaunch [reason=…]
+live.bundle.requested    live.reload.staged
+live.bundle.sent         live.reload.applied
+live.bundle.received     live.reload.completed       mode=hotpatch
+live.bundle.loaded       live.reload.rejected        reason=…
+live.bundle.linked       live.reload.restart_required reason=…
+live.entrypoint.started  live.runner.relaunched
+live.session.ready       live.app.exited             [reason=…]
+live.watch.started       live.shutdown.started / live.shutdown.finished
+```
+
+The four reload events are deliberately distinct: `notified` is the supervisor asking, `staged` is loaded-but-not-live, `applied` is committed, and `completed` means the swapped-in code has run once without incident. A swap that commits and then traps on its first call is not a reload that worked.
+
+`live.app.exited` is the app's entrypoint returning, which is not the runner ending. The runner outlives it, holding the cache and the loaded library that make the next reload cheap. An unwatched session ends there because it has nothing else to do; a watched one reports it and keeps watching, and the next save starts the app again.
+
+### Each Milestone Belongs to the End That Can Know It
+
+The server observes that a runner connected and that bytes went out; only the runner can report that they loaded. A runner that reports one of the server's own milestones is refused, because otherwise it could assert its way to a ready session with no bundle ever served. A session is ready only once every required milestone has arrived, in order.
+
+Be precise about what that buys. The server enforces *ordering and ownership*, not honesty: a runner that downloads a bundle, discards it, and reports each milestone in order will be believed, because the server cannot see inside it. That is not a hole, it is where the trust boundary sits. The runner is the thing being trusted to run the app, so the evidence a session is real comes from the app's own behavior, which is why the end-to-end tests assert on its stdout rather than on milestones.
+
+## Reload
+
+Reload decisions use the `KLB1` manifest. Each payload row carries a name, kind, SHA-256 hash, and size. An exact manifest match is `Unchanged`.
+
+### Hot Patch
+
+A hot patch requires an in-process replacement operation and compatibility evidence for live values. The current `KLB1` manifest has payload identity only. It has no struct or enum layout and no closure signature fingerprint, so the reload decision **relaunches every changed bytecode payload**, including a hybrid bundle whose native library and hybrid manifest are unchanged. The runner can also refuse a proposed swap when its app thread or live values cannot accept it.
+
+Matching hash and size prove payload identity. They do not prove that a different bytecode artifact is safe beside live values.
+
+### Relaunch
+
+The runner is replaced, and the reason is reported. The rule is manifest evidence, not a source diff. A source edit that produces an identical manifest does nothing.
+
+| Relaunch reason | When |
+| --- | --- |
+| the native library changed | its bytes moved; the mapped code is stale |
+| the hybrid manifest changed | the VM/native boundary moved |
+| the bytecode changed | `KLB1` has no layout or closure compatibility evidence |
+| a payload changed | something not swappable in place, such as an asset |
+| the bundle's payloads changed | one appeared, vanished, was renamed, or changed kind |
+| the entrypoint moved or is not swappable | a different program shape |
+| the bundle is for a different runner or profile | not the same app |
+| hot patching is disabled | `KIRA_LIVE_NO_HOTPATCH=1` |
+| the app's entrypoint is still running | a run loop has a call stack in the code the swap would replace |
+| the runner refused | only it knows what its live values depend on |
+
+Unsafe or rejected swaps report their reason. Direct relaunch decisions and runner refusals are both visible to the session.
+
+`KIRA_LIVE_NO_HOTPATCH=1` turns hot patching off entirely: the runner refuses every swap and every reload relaunches.
+
+A running app's entrypoint stays on its run loop, so the runner refuses a swap until it has a safe frame boundary.
+
+### What Survives
+
+A compatible hot patch keeps the current process, loaded native libraries, and values owned by them. A relaunch loses process state.

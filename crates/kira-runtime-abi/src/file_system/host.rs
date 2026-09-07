@@ -10,9 +10,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use super::{FileRequest, FileResponse, FileSystemError};
 use crate::{
-    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, LinuxSyscall, NativeArg,
-    NativeCallError, NativeReturn, NativeStateError, NativeStateToken, NativeStateTypeId,
-    NativeStateValue, SyscallError,
+    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, LinuxSyscall, MainThreadError,
+    MainThreadHandle, MainThreadRequest, MainThreadResponse, NativeArg, NativeCallError,
+    NativeReturn, NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    SyscallError,
 };
 
 /// Runs one request against the process's real filesystem.
@@ -94,11 +95,11 @@ fn read_text(path: &str) -> String {
     let Ok(bytes) = fs::read(path) else {
         return String::new();
     };
-    let end = bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
+    // The whole file, NUL bytes included: a NUL is ordinary string content.
+    // Text is UTF-8 or it is not text: a file that is not valid UTF-8 reads
+    // as nothing, the same answer an unreadable file gives, never as a lossy
+    // rendering that only looks like the file.
+    String::from_utf8(bytes).unwrap_or_default()
 }
 
 /// The names directly inside a directory, in the platform's own order.
@@ -186,6 +187,20 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         self.inner.call_native(function_id, args)
     }
 
+    fn main_thread(
+        &mut self,
+        request: MainThreadRequest,
+    ) -> Result<MainThreadResponse, MainThreadError> {
+        self.inner.main_thread(request)
+    }
+
+    fn main_thread_join(
+        &mut self,
+        handle: MainThreadHandle,
+    ) -> Result<NativeStateValue, MainThreadError> {
+        self.inner.main_thread_join(handle)
+    }
+
     fn call_foreign(
         &mut self,
         foreign_id: u32,
@@ -227,8 +242,12 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         self.inner.native_state_replace(token, ty, value)
     }
 
-    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.inner.native_state_free(token)
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_release(token)
     }
 
     fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
@@ -309,8 +328,25 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Bytes that are not UTF-8 are not text: the read answers nothing rather
+    /// than a lossy rendering.
     #[test]
-    fn text_stops_at_a_nul_while_size_counts_the_whole_file() {
+    fn text_that_is_not_utf8_reads_as_nothing() {
+        let dir = scratch("not-utf8");
+        let path = format!("{dir}/bad.bin");
+        assert!(flag(perform(FileRequest::WriteBytes {
+            path: &path,
+            bytes: &[104, 0xff, 105],
+        })));
+        assert_eq!(
+            perform(FileRequest::ReadText { path: &path }),
+            FileResponse::Text(String::new())
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_keeps_a_nul_and_size_counts_the_whole_file() {
         let dir = scratch("nul");
         let path = format!("{dir}/nul.bin");
         assert!(flag(perform(FileRequest::WriteBytes {
@@ -319,7 +355,7 @@ mod tests {
         })));
         assert_eq!(
             perform(FileRequest::ReadText { path: &path }),
-            FileResponse::Text("h".to_owned())
+            FileResponse::Text("h\0i".to_owned())
         );
         assert_eq!(
             perform(FileRequest::FileSize { path: &path }),

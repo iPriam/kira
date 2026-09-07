@@ -60,7 +60,7 @@ construct SgxArrayOverwriteNoLeak() extends Test {
         }
         return names[0] + "|" + names[2]
     }
-    expect { let e: Result<String, TestFailure> = .Ok("item-alpha|item-gamma"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("item-alpha|item-gamma") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -69,22 +69,22 @@ construct SgxArrayOverwriteNoLeak() extends Test {
 
 construct SgxConcatSimple() extends Test {
     test { return "a" + "b" }
-    expect { let e: Result<String, TestFailure> = .Ok("ab"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("ab") return e }
 }
 
 construct SgxConcatEmptyLeft() extends Test {
     test { return "" + "x" }
-    expect { let e: Result<String, TestFailure> = .Ok("x"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("x") return e }
 }
 
 construct SgxConcatEmptyRight() extends Test {
     test { return "y" + "" }
-    expect { let e: Result<String, TestFailure> = .Ok("y"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("y") return e }
 }
 
 construct SgxConcatGreet() extends Test {
     test { return sgxGreet("kira") }
-    expect { let e: Result<String, TestFailure> = .Ok("hello, kira"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("hello, kira") return e }
 }
 
 construct SgxConcatLoopAccum() extends Test {
@@ -97,7 +97,7 @@ construct SgxConcatLoopAccum() extends Test {
         }
         return s
     }
-    expect { let e: Result<String, TestFailure> = .Ok("abababab"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("abababab") return e }
 }
 
 construct SgxConcatLoopEquality() extends Test {
@@ -110,12 +110,12 @@ construct SgxConcatLoopEquality() extends Test {
         }
         return s == "abababab"
     }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxConcatNested() extends Test {
     test { return ("p" + "q") + ("r" + "s") }
-    expect { let e: Result<String, TestFailure> = .Ok("pqrs"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("pqrs") return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ construct SgxCountTitle() extends Test {
         let title = "KIRA"
         return title.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct SgxCountSubtitle() extends Test {
@@ -135,7 +135,7 @@ construct SgxCountSubtitle() extends Test {
         let subtitle = "UI FOUNDATION"
         return subtitle.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,37 +144,37 @@ construct SgxCountSubtitle() extends Test {
 
 construct SgxEqAlphaAlpha() extends Test {
     test { return "alpha" == "alpha" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxEqAlphaBeta() extends Test {
     test { return "alpha" == "beta" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
 }
 
 construct SgxNeqAlphaBeta() extends Test {
     test { return "alpha" != "beta" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxEqEmptyEmpty() extends Test {
     test { return "" == "" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxEqPrefixMismatch() extends Test {
     test { return "a" == "ab" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
 }
 
 construct SgxEqPickComputed() extends Test {
     test { return sgxPick(0) == "alpha" }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxEqPickPick() extends Test {
     test { return sgxPick(1) == sgxPick(1) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,12 +183,12 @@ construct SgxEqPickPick() extends Test {
 
 construct SgxCallTempCountHello() extends Test {
     test { return sgxPickWord(0).count }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct SgxCallTempCountWorldwide() extends Test {
     test { return sgxPickWord(1).count }
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,20 +197,20 @@ construct SgxCallTempCountWorldwide() extends Test {
 
 construct SgxCallEchoText() extends Test {
     test { return sgxEchoText("hello parity") }
-    expect { let e: Result<String, TestFailure> = .Ok("hello parity"); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("hello parity") return e }
 }
 
 construct SgxCallAddPair() extends Test {
     test { return sgxAddPair(20, 22) }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct SgxCallEchoFlagTrue() extends Test {
     test { return sgxEchoFlag(true) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
 
 construct SgxCallEchoFlagFalse() extends Test {
     test { return sgxEchoFlag(false) }
-    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(false) return e }
 }

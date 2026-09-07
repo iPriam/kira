@@ -1,0 +1,98 @@
+@Native
+function lifecycleLeaf(value: Int) -> Int {
+    return value + 1
+}
+
+@Runtime
+function lifecycleMiddle(value: Int) -> Int {
+    return lifecycleLeaf(value) + 1
+}
+
+@MainThread
+function oneOffMainThreadWork() {
+    print("manual-main-thread")
+    return
+}
+
+// Owns the process main thread. Its call tree stays there across the
+// runtime/native split, so the loop keeps running independently of the
+// application thread below.
+@MainThreadLifecycle
+@Native
+function uiLifecycle() {
+    print("main-thread-lifecycle")
+    print(lifecycleMiddle(40))
+    return
+}
+
+// The entrypoint keeps the application thread and produces no output, so the
+// two threads cannot interleave what this harness asserts.
+@Main
+function main() {
+    uiLifecycle()
+    counterLifecycle()
+    return
+}
+
+// The storage a native-state token names. Boxed before the loop and recovered
+// after it, so the store the token resolves in has to be the same store on both
+// sides of every suspension in between.
+struct LifecycleBox {
+    var carried: Int
+}
+
+// The work a lifecycle orders itself against. Spawned before the loop and
+// joined after it, so the task table has to be the same table on both sides of
+// every suspension in between.
+async function lifecycleFill(tx: Sender<Int>) -> Int {
+    tx.send(7)
+    return 1
+}
+
+// Runs far past one scheduling slice, so the loop is suspended and resumed
+// many times. The printed total is the proof its locals survived every
+// suspension: a lifecycle restarted from scratch each turn could never reach
+// this count.
+//
+// The channel and the task are the same proof for the rows a lifecycle owns.
+// A slice boundary is not a boundary the program wrote, so a handle taken
+// before one still names its row after it; a table rebuilt per slice would
+// refuse the receive and the join alike.
+//
+// The posted work is queued from inside the loop rather than from the
+// application thread, which is what makes the printed order a scheduler
+// property instead of a race: posted work joins the main thread's one sequence
+// order, so it runs at the next round — before the slices this fiber still
+// owes — and "manual-main-thread" always precedes the total. Posting from the
+// application thread would only order the two when that thread happened to win.
+@MainThreadLifecycle
+function counterLifecycle() {
+    let tx = Channel<Int>()
+    let rx = tx.receiver
+    var pending = Task { lifecycleFill(tx) }
+    // A token minted before the first suspension. The value behind it lives in
+    // the host's store rather than on the VM, which is what this reads back to
+    // prove: a store rebuilt per slice would answer nothing here, exactly as a
+    // task table rebuilt per slice refused the join below.
+    let boxed = nativeState(LifecycleBox { carried: 13 })
+    let token = nativeUserData(boxed)
+    var total = 0
+    var index = 0
+    while index < 20000 {
+        if index == 10000 {
+            MainThread.post { oneOffMainThreadWork() }
+        }
+        total = total + 1
+        index = index + 1
+    }
+    total = total + nativeRecover<LifecycleBox>(token).carried
+    nativeUserDataRelease(token)
+    attempt {
+        let sent = try rx.receive()
+        total = total + sent + pending.await
+    } handle {
+        Closed { total = 0 - 1 }
+    }
+    print(total)
+    return
+}

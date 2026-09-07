@@ -194,14 +194,13 @@ pub fn kira_function_index(symbol: &str) -> Option<u32> {
 /// library they call. Time in any of them is time the program caused but did
 /// not write, which is the distinction a report exists to draw.
 fn is_runtime(symbol: &str) -> bool {
-    const PREFIXES: [&str; 8] = [
+    const PREFIXES: [&str; 7] = [
         "kira_rt_",
         "kira_lib_",
         "kira_vm_",
         "kira_ffi_",
         "kira_foreign_adapter_",
         "kira.elem.",
-        "kira.widen.",
         "kira.native.state.",
     ];
     const CONTAINS: [&str; 6] = [

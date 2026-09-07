@@ -1,3 +1,5 @@
+import Foundation
+
 // Scalar arithmetic, comparisons, boolean logic, control flow, and recursion.
 
 function scalarFactorial(n: Int) -> Int {

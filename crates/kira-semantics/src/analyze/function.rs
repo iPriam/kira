@@ -8,10 +8,10 @@ use super::*;
 impl<'a> Analyzer<'a> {
     /// Checks the entrypoint rule for the kind of thing being built.
     ///
-    /// An application needs exactly one `@Main`; a library must have none. Both
-    /// halves are decided here rather than in a backend because the answer is
-    /// the same for every backend: an entrypoint is a property of the program,
-    /// not of the engine that runs it.
+    /// An application needs exactly one `@Main`; a library must have none.
+    /// Decided here rather than in a backend because the answer is the same
+    /// for every backend: an entrypoint is a property of the program, not of
+    /// the engine that runs it.
     pub(super) fn check_main(&mut self) {
         // Snapshot the entrypoint's identity before emitting, so the
         // immutable borrow of `self.sigs` does not overlap `self.emit`.
@@ -19,6 +19,13 @@ impl<'a> Analyzer<'a> {
             let sig = &self.sigs[index];
             (FuncId(index as u32), sig.params.is_empty(), sig.name_span)
         });
+        self.program.main_thread_lifecycles = self
+            .sigs
+            .iter()
+            .enumerate()
+            .filter(|(_, sig)| sig.is_main_thread_lifecycle)
+            .map(|(index, _)| FuncId(index as u32))
+            .collect();
         match (self.build_kind, main) {
             (BuildKind::Application, None) => {
                 self.emit(
@@ -29,7 +36,11 @@ impl<'a> Analyzer<'a> {
             }
             (BuildKind::Application, Some((id, no_params, name_span))) => {
                 if !no_params {
-                    self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
+                    self.emit(
+                        name_span,
+                        "KSEM012",
+                        "an entrypoint must take no parameters",
+                    );
                 }
                 self.program.main = Some(id);
             }
@@ -39,7 +50,11 @@ impl<'a> Analyzer<'a> {
             (BuildKind::Library | BuildKind::Test, None) => {}
             (BuildKind::Test, Some((id, no_params, name_span))) => {
                 if !no_params {
-                    self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
+                    self.emit(
+                        name_span,
+                        "KSEM012",
+                        "an entrypoint must take no parameters",
+                    );
                 }
                 self.program.main = Some(id);
             }
@@ -47,7 +62,7 @@ impl<'a> Analyzer<'a> {
                 self.emit(
                     name_span,
                     "KSEM255",
-                    "a library package cannot declare `@Main`: a library is \
+                    "a library package cannot declare an entrypoint: a library is \
                      entered by its consumer, not run",
                 );
             }
@@ -60,9 +75,12 @@ impl<'a> Analyzer<'a> {
         // was written in — not the entry file's, and not the union of all of
         // them. That is what "file-scoped" means.
         self.source = callable.source;
+        let outer_bindings =
+            std::mem::replace(&mut self.type_bindings, callable.type_bindings.clone());
         let sig_return = self.sigs[id.0 as usize].return_type;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(sig_return);
+        ctx.set_main_thread(function.is_main_thread || function.is_main_thread_lifecycle);
         // Which names this body's closures mention, decided from the syntax
         // before anything is analyzed: a `var` among them is boxed where it is
         // declared, which is earlier than the capture that needs the box is
@@ -86,8 +104,11 @@ impl<'a> Analyzer<'a> {
             } else {
                 (false, OwnershipMode::BorrowRead)
             };
-            ctx.declare_param("self", Type::Struct(owner), mutable, mode);
-            ctx.receiver = Some(owner);
+            ctx.declare_param("self", owner, mutable, mode);
+            ctx.receiver = match owner {
+                Type::Struct(id) => Some(id),
+                _ => None,
+            };
         }
         // Parameters become the next locals, each carrying the mode its
         // declaration asked for. Reading the mode off the signature rather
@@ -119,7 +140,6 @@ impl<'a> Analyzer<'a> {
         }
         let param_count = function.params.len() as u32 + u32::from(callable.receiver.is_some());
         let body = self.analyze_block(&mut ctx, &function.body);
-        self.check_native_state_handles(&ctx);
         // Every expression this body could build now exists, so a member read
         // still unclaimed is one no borrowed position took.
         self.report_drop_extractions();
@@ -137,7 +157,7 @@ impl<'a> Analyzer<'a> {
                 format!("`{name}` may finish without returning a value"),
             );
         }
-        HirFunction {
+        let result = HirFunction {
             // The symbol, not the written name: two overloads share a name and
             // a backend has one function per symbol.
             name: self.function_symbol(id),
@@ -145,11 +165,15 @@ impl<'a> Analyzer<'a> {
             return_type: sig_return,
             locals: ctx.locals,
             body,
-            is_main: function.is_main,
+            is_main: self.sigs[id.0 as usize].is_main,
+            is_main_thread: function.is_main_thread,
             is_async: function.is_async,
             execution: function.execution,
             mutates_self: self.mutates_self(id),
             name_span: function.name_span,
-        }
+            signature: self.sigs[id.0 as usize].signature.clone(),
+        };
+        self.type_bindings = outer_bindings;
+        result
     }
 }

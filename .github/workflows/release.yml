@@ -38,12 +38,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             host_key: x86_64-linux-gnu
+          - os: ubuntu-24.04-arm
+            host_key: aarch64-linux-gnu
           - os: macos-latest
             host_key: aarch64-macos
           - os: windows-latest
             host_key: x86_64-windows-msvc
+          - os: windows-11-arm
+            host_key: aarch64-windows-msvc
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -123,6 +127,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # libffi is linked into the compiler statically, so the archive for the
+      # machine being built for has to exist before the release binaries
+      # compile. knvm is the installer that fetches them and does not depend on
+      # the crate that links them, so it builds here without the archive it is
+      # about to install: the release is provisioned through the pin and its
+      # checksum verification, the same path a user takes, rather than through a
+      # second copy of the download open-coded in YAML.
+      - name: Provision the pinned libffi
+        run: cargo run -p kira-knvm --bin knvm -- install libffi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Build the release binaries
         run: |
           rustup target add wasm32-unknown-emscripten
@@ -133,11 +149,23 @@ jobs:
           # Apple export links a per-slice runner-support archive; release
           # toolchains carry them beside the compiler in the per-triple
           # layout `locate_support_archive` searches, so exported projects
-          # build without a source checkout. visionOS has no stable Rust
-          # std target yet; its slices report themselves unavailable.
-          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
-            cargo build --release -p kira-app-runner --target "$triple"
-          done
+          # build without a source checkout. Only macOS toolchains carry these
+          # archives because Apple export requires Xcode SDKs.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            apple_targets=(
+              aarch64-apple-darwin
+              aarch64-apple-ios
+              aarch64-apple-ios-sim
+              aarch64-apple-tvos
+              aarch64-apple-tvos-sim
+              aarch64-apple-visionos
+              aarch64-apple-visionos-sim
+            )
+            rustup target add "${apple_targets[@]}"
+            for triple in "${apple_targets[@]}"; do
+              cargo build --release -p kira-app-runner --target "$triple"
+            done
+          fi
 
       - name: Package the toolchain and tools archives
         run: |
@@ -175,10 +203,21 @@ jobs:
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
           # The app-runner support archives ride in their per-triple
           # directories, which is where Apple export's archive lookup looks.
-          for triple in aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-tvos; do
-            mkdir -p "$stage/bin/$triple"
-            cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
-          done
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            apple_targets=(
+              aarch64-apple-darwin
+              aarch64-apple-ios
+              aarch64-apple-ios-sim
+              aarch64-apple-tvos
+              aarch64-apple-tvos-sim
+              aarch64-apple-visionos
+              aarch64-apple-visionos-sim
+            )
+            for triple in "${apple_targets[@]}"; do
+              mkdir -p "$stage/bin/$triple"
+              cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
+            done
+          fi
           cp -R foundation "$stage/foundation"
           mkdir -p dist
           tar -czf "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "kira-$KIRA_VERSION"

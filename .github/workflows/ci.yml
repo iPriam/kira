@@ -7,24 +7,54 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Makes `kira-llvm-backend`'s build script say which LLVM archives it asked
+  # to link. A build script can see what it emitted and not what cargo did with
+  # it, so when a link fails for want of symbols those archives define, this is
+  # what says whether they were requested at all.
+  KIRA_LLVM_LINK_TRACE: 1
 
 jobs:
   check:
     name: fmt + clippy + build + test (${{ matrix.os }})
     strategy:
       fail-fast: false
+      # `emscripten` says whether the Emscripten SDK exists for the host, not
+      # whether we want the Web pipeline: upstream publishes no Windows arm64
+      # build, so `emsdk install` there resolves to an x86_64 package that is
+      # not there. The day it ships one, this flag flips and nothing else here
+      # changes.
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             host_key: x86_64-linux-gnu
+            emscripten: true
+          - os: ubuntu-24.04-arm
+            host_key: aarch64-linux-gnu
+            emscripten: true
           - os: macos-latest
             host_key: aarch64-macos
-          # The third host the LLVM pin already names. `llvm-metadata.toml` has
-          # carried `[target.x86_64-windows-msvc]` since the pin was written and
-          # the bundle workflow builds it, so the platform was supported
-          # everywhere except the gate that would have proved it.
+            emscripten: true
           - os: windows-latest
             host_key: x86_64-windows-msvc
+            emscripten: true
+          # windows-11-arm is deliberately absent, not forgotten.
+          #
+          # The published `aarch64-windows-msvc` LLVM bundle is built for the
+          # wrong architecture: every member of its `LLVMCore.lib` is an AMD64
+          # object under an aarch64 name. It installs, it is the right size, and
+          # its archives hold every symbol a reader looks for — the only thing
+          # that ever objects is `link.exe` on that host, which skips the
+          # wrong-machine members and reports each symbol as merely unresolved.
+          #
+          # The cause is fixed: `release-llvm-toolchains.yml` now names the MSVC
+          # `arch` from the target key, where `ilammy/msvc-dev-cmd` defaulted to
+          # `x64` on every runner, and `check-bundle-architecture.ps1` fails a
+          # bundle whose machine type is not the one its name promises. What is
+          # missing is a rebuilt bundle: restoring this entry needs the LLVM
+          # toolchains workflow re-run with publish enabled for that target.
+          #
+          # Until then this runner cannot compile the workspace at all, so
+          # keeping it would report a broken artifact as a broken repository.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,77 +65,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The LLVM backend is a hard dependency, and the backend's build script
-      # discovers the bundle at the managed path itself — unpacking it there
-      # is the whole setup; no environment variable is exported. The pin lives
-      # in llvm-metadata.toml; the bundles are published by the llvm-bundles
-      # workflow, once per pin.
-      - name: Provision the managed LLVM
-        shell: bash
-        run: |
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
-          release="$(sed -n 's/^release_tag = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
-          # The asset name is read out of the metadata rather than spelled here.
-          # That file says nothing invents asset names, and it means it: it
-          # carries one archive format per host, and a name assembled from a
-          # hardcoded `.tar.xz` is a second source of truth that the Windows
-          # bundle — a `.zip` — contradicts on its first run.
-          asset="$(awk -v section="[target.${{ matrix.host_key }}]" '
-            $0 == section { inside = 1; next }
-            /^\[/ { inside = 0 }
-            inside && $1 == "asset" { gsub(/^[^"]*"|"$/, ""); print; exit }
-          ' llvm-metadata.toml)"
-          if [ -z "$asset" ]; then
-            echo "llvm-metadata.toml names no asset for ${{ matrix.host_key }}" >&2
-            exit 1
-          fi
-          home="$HOME/.kira/toolchains/llvm/$version/${{ matrix.host_key }}"
-          mkdir -p "$home"
-          case "$asset" in
-            *.zip)
-              gh release download "$release" --repo "$GITHUB_REPOSITORY" \
-                --pattern "$asset" --output "$RUNNER_TEMP/llvm-bundle.zip"
-              unzip -q "$RUNNER_TEMP/llvm-bundle.zip" -d "$home"
-              ;;
-            *)
-              gh release download "$release" --repo "$GITHUB_REPOSITORY" \
-                --pattern "$asset" --output - | tar -xJ -C "$home"
-              ;;
-          esac
-          # The pin names the code generators every bundle must carry, and a
-          # release owns its assets for good: an asset published before the pin
-          # grew one is a real LLVM that cannot emit for the device that
-          # generator serves. A run against it proves the wrong toolchain, so
-          # it stops here, where one message names the bundle and the fix,
-          # rather than in whichever suite reached that device first.
-          case "${{ matrix.host_key }}" in
-            x86_64-*) host_generator=X86 ;;
-            aarch64-*) host_generator=AArch64 ;;
-            *)
-              echo "no LLVM code generator is known for ${{ matrix.host_key }}" >&2
-              exit 1
-              ;;
-          esac
-          targets="$(sed -n 's/^targets_to_build = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
-          config="$home/bin/llvm-config"
-          [ -x "$config" ] || config="$config.exe"
-          built="$("$config" --targets-built)"
-          missing=""
-          for generator in $(printf '%s' "$targets" | tr ';' ' '); do
-            [ "$generator" = host ] && generator="$host_generator"
-            case " $built " in
-              *" $generator "*) ;;
-              *) missing="$missing $generator" ;;
-            esac
-          done
-          if [ -n "$missing" ]; then
-            echo "the bundles published under $release carry no$missing code generator;" >&2
-            echo "llvm-metadata.toml pins \"$targets\" and this one was built with: $built." >&2
-            echo "Re-run the LLVM toolchains workflow with publish enabled to replace the assets." >&2
-            exit 1
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The managed LLVM bundle and the pinned libffi, both of which have to
+      # exist before anything that links the compiler compiles. The Networking
+      # workflow builds `kira-cli` too and needs exactly the same two, so the
+      # provisioning is one composite action rather than a copy per workflow.
+      - name: Provision the native toolchain
+        uses: ./.github/actions/provision-native-toolchain
+        with:
+          host-key: ${{ matrix.host_key }}
+          token: ${{ github.token }}
 
       # The shader validators. `crates/kira-cli/tests/shader_validation.rs`
       # puts every backend's output through the compiler that consumes it, and
@@ -149,8 +117,10 @@ jobs:
       # them in the end-to-end tests, and the bridge crate cross-builds the
       # runtime archive those links consume.
       - uses: mymindstorm/setup-emsdk@v14
+        if: matrix.emscripten
 
       - name: Build the Web runtime archive
+        if: matrix.emscripten
         run: |
           rustup target add wasm32-unknown-emscripten
           cargo build -p kira-native-bridge --target wasm32-unknown-emscripten
@@ -169,5 +139,18 @@ jobs:
       # doc-tests, and the stock runner pays for each of them anyway.
       - uses: taiki-e/install-action@nextest
 
+      # A host with no Emscripten cannot run the tests that link with `emcc`
+      # and execute under node, so they are excluded there by name. Excluding
+      # them is the honest report; letting them fail would say the Web pipeline
+      # is broken, and skipping the whole job would say this platform is
+      # untested. Everything that does not need the toolchain still runs,
+      # including the refusal that is decided before `emcc` is ever invoked.
       - name: cargo nextest
-        run: cargo nextest run --workspace
+        shell: bash
+        run: |
+          if [ "${{ matrix.emscripten }}" = "true" ]; then
+            cargo nextest run --workspace
+          else
+            cargo nextest run --workspace \
+              -E 'not (test(/^web::/) or test(/^ffi_wasm::a_wasm_build_/))'
+          fi

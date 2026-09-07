@@ -76,7 +76,8 @@ fn count_vm(
         // process environment from another thread while the VM executes.
         let outcome = unsafe {
             env::with_arguments(program_arguments, || {
-                kira_vm_runtime::execute_with_debug(&module, &mut host, counter).map(|_| ())
+                kira_vm_runtime::execute_with_main_thread_debug(&module, &mut host, counter)
+                    .map(|_| ())
             })
         };
         return Ok(outcome.map_err(|trap| trap.to_string()));
@@ -121,7 +122,14 @@ fn count_hybrid(
     emit_llvm_ir: bool,
     counter: &mut InstructionCounter,
 ) -> Counted {
-    let bundle = crate::hybrid::build(ir, source, emit_llvm_ir, foreign_link).map_err(|error| {
+    let bundle = crate::hybrid::build(
+        ir,
+        source,
+        emit_llvm_ir,
+        kira_llvm_backend::Sanitize::None,
+        foreign_link,
+    )
+    .map_err(|error| {
         err!("kira profile record: {error}");
         EXIT_FAILURE
     })?;

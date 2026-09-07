@@ -10,3 +10,6 @@
 .codex/settings.local.json
 Cargo.lock
 kira.lock
+
+# A stray compiler output in the root is never ours to keep.
+/a.out

@@ -14,6 +14,8 @@
 //! subtree salsa-free and wasm-portable.
 
 mod borrow_alias;
+mod channels;
+mod erase;
 pub mod ir;
 pub mod lower;
 pub mod mid;
@@ -22,6 +24,7 @@ mod tasks;
 pub use ir::{
     ConvertKind, IrAttempt, IrAttemptStep, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId,
     IrForeignImport, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp, IrWriteback,
+    unary_result_type,
 };
 pub use lower::lower;
 
@@ -29,6 +32,7 @@ pub use lower::lower;
 mod tests {
     use super::*;
     use kira_semantics_model::Type;
+    use kira_semantics_model::hir::CallableSignature;
     use kira_semantics_model::hir::{
         Builtin, Callee, FuncId, HirExpr, HirFunction, HirProgram, HirStmt,
     };
@@ -53,10 +57,12 @@ mod tests {
             locals: Vec::new(),
             body: vec![print_stmt, return_stmt],
             is_main: true,
+            is_main_thread: false,
             is_async: false,
             execution: kira_runtime_abi::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 4),
+            signature: CallableSignature::synthesized(&[], Type::Void),
         });
         program.main = Some(FuncId(0));
         program
@@ -115,6 +121,8 @@ mod tests {
             param_wrappers: Box::from([None, None]),
             result_pointee: None,
             result_wrapper: None,
+            param_distincts: Box::from([None, None]),
+            result_distinct: None,
             name_span: Span::new(0, 3),
         });
         let a = program.exprs.alloc(HirExpr::Int(20));

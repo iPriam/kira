@@ -184,8 +184,6 @@ impl Parser<'_> {
         }
         let start = self.current().span;
         let stmts = self.parse_stmt().into_iter().collect();
-        // The `;` in `Red -> return 1;` is a separator, not a statement.
-        self.eat(TokenKind::Semicolon);
         Block {
             stmts,
             span: Span::from_bounds(start.start, self.previous_end()),
@@ -198,10 +196,6 @@ impl Parser<'_> {
         while !self.at_eof() && !self.at(TokenKind::RBrace) {
             if self.at(TokenKind::LBrace) {
                 self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
-                return;
-            }
-            if self.at(TokenKind::Semicolon) {
-                self.bump();
                 return;
             }
             self.bump();
@@ -240,7 +234,7 @@ mod tests {
     #[test]
     fn a_match_parses_both_arm_shapes_and_a_payload_binding() {
         let (tree, stmts) =
-            body("function f() { match e { Red -> return 1; Label(text) -> { out = text } } }");
+            body("function f() { match e { Red -> return 1 Label(text) -> { out = text } } }");
         let Stmt::Match { arms, .. } = &stmts[0] else {
             panic!("expected a match, got {:?}", stmts[0]);
         };
@@ -272,7 +266,7 @@ mod tests {
     /// same rule a `while` condition follows.
     #[test]
     fn a_match_subject_does_not_swallow_the_body_brace() {
-        let (_, stmts) = body("function f() { match shape { Empty -> return 0; } }");
+        let (_, stmts) = body("function f() { match shape { Empty -> return 0 } }");
         let Stmt::Match { arms, .. } = &stmts[0] else {
             panic!("expected a match, got {:?}", stmts[0]);
         };
@@ -284,7 +278,7 @@ mod tests {
     fn a_match_arm_without_a_variant_name_is_reported_and_recovers() {
         let result = parse(
             SourceId::new(0),
-            "function f() { match e { Red -> return 1; 42 -> return 2; Blue -> return 3; } }",
+            "function f() { match e { Red -> return 1 42 -> return 2 Blue -> return 3 } }",
         );
         assert!(
             result
@@ -381,7 +375,7 @@ mod tests {
     fn a_payload_binding_without_a_name_is_reported() {
         let result = parse(
             SourceId::new(0),
-            "function f() { match e { Label() -> return 1; } }",
+            "function f() { match e { Label() -> return 1 } }",
         );
         assert!(
             result

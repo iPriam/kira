@@ -8,26 +8,33 @@
 
 pub mod arrays;
 pub mod cells;
+pub mod descriptor;
+pub mod distincts;
 pub mod enums;
 pub mod erased;
 pub mod foreign_ptr;
+pub mod identity;
 pub mod native_state;
 pub mod scalars;
 pub mod structs;
 pub mod table;
 pub mod tasks;
-pub mod widening;
 
 pub use arrays::{ArrayId, ArrayTable};
 pub use cells::{CellId, CellTable};
+pub use descriptor::{
+    DescriptorFamily, DescriptorKind, TypeDescriptor, TypeDescriptorTable, TypeField,
+};
+pub use distincts::{DistinctDef, DistinctId, DistinctTable};
 pub use enums::{EnumDef, EnumId, EnumTable, Instantiation, VariantDef};
 pub use erased::ErasedTypeId;
 pub use foreign_ptr::{ForeignPtrId, ForeignPtrTable};
+pub use identity::{NominalIdentity, NominalKind, PackageIdentity};
 pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructOrigin, StructTable};
 pub use table::TypeTable;
-pub use tasks::TaskResult;
+pub use tasks::{MainThreadTaskResult, TaskResult};
 
 /// A resolved Kira type in the v0 subset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,6 +71,16 @@ pub enum Type {
     /// Like a struct, an enum is a nominal type: two enums with the same
     /// variants are still distinct, so this compares by [`EnumId`].
     Enum(EnumId),
+    /// A `distinct Name = Representation` type, named by its row in the
+    /// program's [`DistinctTable`], which holds the representation.
+    ///
+    /// Nominal in the strongest sense the lattice has: it is assignable to
+    /// nothing but itself, so `TabId` reaches no `U32` parameter and no
+    /// `BookmarkId` one, and a representation reaches it only through the
+    /// written `TabId(value)`. That refusal is the whole type — at run time it
+    /// *is* the representation, and `kira-ir` erases it before any backend
+    /// sees a program, so it costs no word, no box, and no instruction.
+    Distinct(DistinctId),
     /// Shared mutable storage for a captured `var`, named by its row in the
     /// program's [`CellTable`], which holds the type inside it.
     ///
@@ -107,6 +124,12 @@ pub enum Type {
     /// operations (`.await`, `.requestCancel()`, `.detach()`); every other use
     /// is `KSEM158`, which is why this is its own type rather than an `Int`.
     Task(TaskResult),
+    /// An opaque handle to work queued on the host's main-thread event loop.
+    ///
+    /// This is distinct from [`Type::Task`]: an ordinary task belongs to the
+    /// compiler-generated virtual scheduler, while this handle belongs to the
+    /// host main-thread runtime.
+    MainThreadTask(MainThreadTaskResult),
     /// The top type (`Any`): a value of any other type, with its own type
     /// erased at the point it crossed in.
     ///
@@ -116,11 +139,10 @@ pub enum Type {
     /// [`Type::erases_into_any`] for what each backend does with it, and
     /// `kira-ir`'s `IrExpr::IntoAny` for where the compiler inserts it.
     ///
-    /// It is opaque in the other direction. The language has no `is`, `as`, or
-    /// downcast surface, so an `Any` may be stored, copied, passed, returned,
-    /// and dropped, and never read. That is a property of the language's
-    /// surface, not a shortcut here: a recovery form would be new syntax, and
-    /// this type does not invent it.
+    /// Reading one back is a checked question rather than an implicit rule:
+    /// `value is T` answers by nominal runtime identity and `value as T` hands
+    /// the held value back, trapping on anything else. Nothing narrows a
+    /// specialization built over `Any` back to the one it was rebuilt from.
     Any,
     /// A borrowed, NUL-terminated C string, legal **only** as a foreign
     /// (`@FFI.Extern`) parameter (`CString`).
@@ -133,6 +155,19 @@ pub enum Type {
     /// a runtime value: the VM builds a transient C string from the `String` at
     /// the boundary and frees it before the foreign call returns.
     CString,
+    /// A runtime type descriptor, spelled `Type` (`value.type`).
+    ///
+    /// One word: the id of a row in the program's descriptor table. Two of them
+    /// are equal exactly when they name one type by package-qualified nominal
+    /// identity, which is what makes two packages' same-named `Point`s answer
+    /// unequal. It is `Copy` and owns no heap, so it is passed and stored like
+    /// any other scalar.
+    ///
+    /// What it exposes is fixed: a name, a package, a kind, and the arguments
+    /// an instantiation was minted with. Fields, layout, methods, and source
+    /// spans are compile-time reflection's, and a runtime descriptor that
+    /// carried them would make every declaration's private shape public.
+    RuntimeType,
     /// A uniquely owned block of C storage: a NUL-terminated string member, a
     /// C-layout image, or an array flattened to C widths, built for the
     /// foreign seam.
@@ -190,6 +225,10 @@ impl Type {
             // "unknown type".
             "RawPtr" => Type::RawPtr,
             "CString" => Type::CString,
+            // The type of `value.type`. Spelled like any other builtin, so a
+            // program annotates one (`let t: Type = value.type`) rather than
+            // being told the type has no name.
+            "Type" => Type::RuntimeType,
             _ => return None,
         })
     }
@@ -230,7 +269,7 @@ impl Type {
             // A task handle does not widen either, for a different reason: it
             // is opaque by design, and `Any` is the one type that would let one
             // be stored, passed, and dropped without ever being joined.
-            (Type::Task(_), Type::Any) => false,
+            (Type::Task(_), Type::Any) | (Type::MainThreadTask(_), Type::Any) => false,
             // A cell does not widen into `Any`, and nothing widens into a cell.
             // Erasing one would put shared mutable storage in a box whose
             // holders may only read, and there is no surface that would ever
@@ -251,6 +290,14 @@ impl Type {
             // hands one address back as `void*` in one function and as `T*` in
             // the next — which C itself converts between without a cast.
             (Type::ForeignPtr(_), Type::RawPtr) | (Type::RawPtr, Type::ForeignPtr(_)) => true,
+            // A distinct type is assignable to itself and to nothing else, in
+            // either direction. Stated as its own arm rather than left to the
+            // equality below because it is the feature: the wildcard that lets
+            // a bare `Int` literal reach any width must not reach *through* a
+            // distinct type, and neither must the representation it was
+            // declared over. `TabId(value)` and `id.raw` are the two crossings.
+            (Type::Distinct(from), Type::Distinct(to)) => from == to,
+            (Type::Distinct(_), _) | (_, Type::Distinct(_)) => false,
             _ => self == target,
         }
     }
@@ -316,6 +363,11 @@ impl Type {
                 | Type::ForeignPtr(_)
                 | Type::NativeState(_)
                 | Type::Task(_)
+                | Type::MainThreadTask(_)
+                // A distinct type is one scalar word: its representation is
+                // restricted to the scalars precisely so this answer needs no
+                // table. See `ty::distincts`.
+                | Type::Distinct(_)
         )
     }
 
@@ -353,11 +405,18 @@ impl Type {
             // trivially copyable by the same logic.
             // A task handle is a word naming a table row, so copying one copies
             // bits: the executor owns the task, not the handle.
+            // A distinct type copies as the scalar it is: `f(tabId)` needs no
+            // `move`, exactly as `f(u32Value)` does not.
+            // A runtime type descriptor is one word naming a table row, so it
+            // copies the way a task handle does.
             Type::RawPtr
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::NativeState(_)
-            | Type::Task(_) => true,
+            | Type::Task(_)
+            | Type::MainThreadTask(_)
+            | Type::RuntimeType
+            | Type::Distinct(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -429,13 +488,23 @@ impl Type {
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)
+            | Type::MainThreadTask(_)
             // A cell *is* meant to alias — that is what makes a capture shared
             // — so binding one must not consume the binding it came from. Every
             // cell-typed read the analyzer emits is synthetic anyway; no source
             // expression ever names one.
             | Type::Cell(_)
+            // A distinct type is the scalar word it was declared over, and a
+            // scalar aliases nothing.
+            | Type::Distinct(_)
+            | Type::RuntimeType
             | Type::Struct(_) => false,
         }
+    }
+
+    /// Whether this is a `distinct` type.
+    pub fn is_distinct(self) -> bool {
+        matches!(self, Type::Distinct(_))
     }
 }
 

@@ -16,7 +16,7 @@ construct ColxIndexRead0() extends Test {
         xs.append(300)
         return xs[0]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(100) return e }
 }
 
 construct ColxIndexRead1() extends Test {
@@ -27,7 +27,7 @@ construct ColxIndexRead1() extends Test {
         xs.append(300)
         return xs[1]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(200) return e }
 }
 
 construct ColxIndexReadLast() extends Test {
@@ -38,7 +38,7 @@ construct ColxIndexReadLast() extends Test {
         xs.append(300)
         return xs[2]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(300) return e }
 }
 
 construct ColxIndexWrite() extends Test {
@@ -50,7 +50,7 @@ construct ColxIndexWrite() extends Test {
         xs[1] = 42
         return xs[1]
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
 }
 
 construct ColxIndexWriteSum() extends Test {
@@ -64,7 +64,7 @@ construct ColxIndexWriteSum() extends Test {
         return colxSum(xs)
     }
     // 5+20+50 = 75
-    expect { let e: Result<Int, TestFailure> = .Ok(75); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(75) return e }
 }
 
 construct ColxIndexSwap() extends Test {
@@ -79,7 +79,7 @@ construct ColxIndexSwap() extends Test {
         return xs[0] * 10 + xs[2]
     }
     // xs[0]=3, xs[2]=1 -> 31
-    expect { let e: Result<Int, TestFailure> = .Ok(31); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(31) return e }
 }
 
 construct ColxSquaresIndex3() extends Test {
@@ -88,7 +88,7 @@ construct ColxSquaresIndex3() extends Test {
         return xs[3]
     }
     // 3^2 = 9
-    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(9) return e }
 }
 
 construct ColxSquaresIndex7() extends Test {
@@ -97,7 +97,7 @@ construct ColxSquaresIndex7() extends Test {
         return xs[7]
     }
     // 7^2 = 49
-    expect { let e: Result<Int, TestFailure> = .Ok(49); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(49) return e }
 }
 
 construct ColxModifyInLoop() extends Test {
@@ -111,7 +111,7 @@ construct ColxModifyInLoop() extends Test {
         return colxSum(xs)
     }
     // [0,3,6,9,12] -> 30
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct ColxBuildRangeMultiIndex() extends Test {
@@ -120,7 +120,7 @@ construct ColxBuildRangeMultiIndex() extends Test {
         return xs[5] + xs[10] + xs[14]
     }
     // 5+10+14 = 29
-    expect { let e: Result<Int, TestFailure> = .Ok(29); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(29) return e }
 }
 
 construct ColxTrapIndexJustPast() extends Test {
@@ -132,7 +132,7 @@ construct ColxTrapIndexJustPast() extends Test {
         let _ = xs[3]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 construct ColxTrapIndexFarPast() extends Test {
@@ -144,7 +144,7 @@ construct ColxTrapIndexFarPast() extends Test {
         let _ = xs[100]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ construct ColxReverseFirst() extends Test {
         return rev[0]
     }
     // reversed [0,1,2,3,4] -> [4,3,2,1,0], first=4
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct ColxReverseLast() extends Test {
@@ -168,7 +168,7 @@ construct ColxReverseLast() extends Test {
         return rev[4]
     }
     // last=0
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct ColxReverseSum() extends Test {
@@ -178,7 +178,7 @@ construct ColxReverseSum() extends Test {
         return colxSum(rev)
     }
     // same elements, sum=10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct ColxReverseCount() extends Test {
@@ -187,7 +187,7 @@ construct ColxReverseCount() extends Test {
         let rev = colxReverse(xs)
         return rev.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct ColxReverseSumManual() extends Test {
@@ -202,7 +202,7 @@ construct ColxReverseSumManual() extends Test {
         return colxSum(rev)
     }
     // 3+1+4+1+5 = 14
-    expect { let e: Result<Int, TestFailure> = .Ok(14); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
 }
 
 construct ColxTrapReverseOOB() extends Test {
@@ -212,7 +212,7 @@ construct ColxTrapReverseOOB() extends Test {
         let _ = rev[3]
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ construct ColxCountGtRange() extends Test {
         return colxCountGt(xs, 5)
     }
     // elements 6,7,8,9 -> 4
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct ColxCountGtSquares() extends Test {
@@ -234,7 +234,7 @@ construct ColxCountGtSquares() extends Test {
         return colxCountGt(xs, 30)
     }
     // [0,1,4,9,16,25,36,49,64,81] -> >30: 36,49,64,81 -> 4
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct ColxCountGtZero() extends Test {
@@ -248,7 +248,7 @@ construct ColxCountGtZero() extends Test {
         return colxCountGt(xs, 0)
     }
     // 1,2,3 -> 3
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct ColxProductManual3() extends Test {
@@ -259,7 +259,7 @@ construct ColxProductManual3() extends Test {
         xs.append(4)
         return colxProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(24) return e }
 }
 
 construct ColxProductManual5() extends Test {
@@ -272,7 +272,7 @@ construct ColxProductManual5() extends Test {
         xs.append(5)
         return colxProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(120); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(120) return e }
 }
 
 construct ColxProductSingle() extends Test {
@@ -281,7 +281,7 @@ construct ColxProductSingle() extends Test {
         xs.append(7)
         return colxProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 construct ColxProductEmpty() extends Test {
@@ -289,7 +289,7 @@ construct ColxProductEmpty() extends Test {
         let xs: [Int] = []
         return colxProduct(xs)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct ColxProductFibLike() extends Test {
@@ -303,7 +303,7 @@ construct ColxProductFibLike() extends Test {
         return colxProduct(xs)
     }
     // 1*1*2*3*5 = 30
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +320,7 @@ construct ColxPtArrayCount() extends Test {
         }
         return pts.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
 construct ColxPtSumX() extends Test {
@@ -340,7 +340,7 @@ construct ColxPtSumX() extends Test {
         return s
     }
     // x=0+1+2+3+4 = 10
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct ColxPtSumY() extends Test {
@@ -360,7 +360,7 @@ construct ColxPtSumY() extends Test {
         return s
     }
     // y=0+2+4+6+8 = 20
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct ColxPtSumBoth() extends Test {
@@ -380,7 +380,7 @@ construct ColxPtSumBoth() extends Test {
         return s
     }
     // x: 0+1+2+3+4=10, y: 1+2+3+4+5=15, total=25
-    expect { let e: Result<Int, TestFailure> = .Ok(25); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
 }
 
 construct ColxPtMutateByIndex() extends Test {
@@ -395,7 +395,7 @@ construct ColxPtMutateByIndex() extends Test {
         pts[1] = local
         return pts[1].x + pts[1].y
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(300) return e }
 }
 
 construct ColxPtBuildLarge() extends Test {
@@ -415,7 +415,7 @@ construct ColxPtBuildLarge() extends Test {
         return s
     }
     // sum x=0+1+...+19=190, sum y=1+2+...+20=210, total=400
-    expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(400) return e }
 }
 
 construct ColxBoxSumSizes() extends Test {
@@ -433,7 +433,7 @@ construct ColxBoxSumSizes() extends Test {
         return s
     }
     // sizes: 10+10+6 = 26
-    expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(26) return e }
 }
 
 construct ColxBoxSumMids() extends Test {
@@ -451,7 +451,7 @@ construct ColxBoxSumMids() extends Test {
         return s
     }
     // mids: (0+10)/2=5, (4+12)/2=8, (6+20)/2=13 -> 26
-    expect { let e: Result<Int, TestFailure> = .Ok(26); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(26) return e }
 }
 
 construct ColxPtWritebackLoop() extends Test {
@@ -478,7 +478,7 @@ construct ColxPtWritebackLoop() extends Test {
         return s
     }
     // doubled x: 0+2+4+6+8=20, y unchanged: 0+1+2+3+4=10, total=30
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct ColxPtCount50() extends Test {
@@ -491,7 +491,7 @@ construct ColxPtCount50() extends Test {
         }
         return pts.count
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(50); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(50) return e }
 }
 
 construct ColxPtSumX20() extends Test {
@@ -511,7 +511,7 @@ construct ColxPtSumX20() extends Test {
         return s
     }
     // 0+1+...+19 = 190
-    expect { let e: Result<Int, TestFailure> = .Ok(190); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(190) return e }
 }
 
 construct ColxTrapPtArrayOOB() extends Test {
@@ -523,6 +523,6 @@ construct ColxTrapPtArrayOOB() extends Test {
         let _ = pts[5].x
         return 0
     }
-    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+    expect { let e: Result<Any, TestFailure> = .Error(.Runtime("")) return e }
 }
 

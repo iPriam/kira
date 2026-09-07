@@ -55,8 +55,8 @@ function sumOfCoordinates(point: borrow Point) -> Int {
 
 // `retains:` names the parameter the callee keeps a pointer to past the
 // call, so a caller passing a named value must `move` it in.
-@FFI.Extern { library: kira_example; symbol: kira_example_keep; abi: c; retains: text; }
-function keep(text: CString) -> Void;
+@FFI.Extern { library: kira_example, symbol: kira_example_keep, abi: c, retains: text }
+function keep(text: CString) -> Void
 
 @Main
 function main() {

@@ -14,6 +14,12 @@ pub struct PackageRoot {
     pub name: String,
     /// The directory containing the package's Kira source files.
     pub source_dir: PathBuf,
+    /// The version the package's manifest declares; empty for a root that was
+    /// not resolved from a manifest.
+    pub version: String,
+    /// The dependency instance: the canonical directory the package was
+    /// resolved from; empty for a root that was not resolved from disk.
+    pub instance: String,
 }
 
 impl PackageRoot {
@@ -23,7 +29,44 @@ impl PackageRoot {
         Self {
             name: name.into(),
             source_dir: source_dir.into(),
+            version: String::new(),
+            instance: String::new(),
         }
+    }
+
+    /// A root resolved from a manifest, carrying its version and instance.
+    #[must_use]
+    pub fn resolved(
+        name: impl Into<String>,
+        source_dir: impl Into<PathBuf>,
+        version: impl Into<String>,
+        instance: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            source_dir: source_dir.into(),
+            version: version.into(),
+            instance: instance.into(),
+        }
+    }
+
+    /// The package's identity as the analyzer records it.
+    #[must_use]
+    pub fn identity(&self) -> kira_semantics::PackageIdentity {
+        kira_semantics::PackageIdentity {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            instance: self.instance.clone(),
+        }
+    }
+
+    /// The module identity of `module` inside this package.
+    #[must_use]
+    pub fn module_identity(&self, module: &str) -> String {
+        if self.version.is_empty() && self.instance.is_empty() {
+            return kira_semantics::ImportTable::package_module_identity(&self.name, module);
+        }
+        kira_semantics::ImportTable::resolved_package_module_identity(&self.identity(), module)
     }
 
     /// Whether `module` falls inside this package's namespace.

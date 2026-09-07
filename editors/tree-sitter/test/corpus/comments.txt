@@ -95,3 +95,26 @@ function real() {}
     name: (identifier)
     parameters: (parameters)
     body: (block)))
+
+================================================================================
+Block comments nest
+================================================================================
+
+/* outer /* inner */ still outer */
+function f() {
+    let a = /* inline */ 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (block_comment
+    (block_comment))
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        (block_comment)
+        value: (integer_literal)))))

@@ -1,3 +1,5 @@
+import Foundation
+
 // Structs: nested fields, methods with `self`, `borrow mut` writeback, value
 // copy semantics, and deep nesting churned in a loop.
 

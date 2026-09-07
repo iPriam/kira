@@ -6,7 +6,7 @@
 //! with one is a declaration whose parameters are its construction inputs, and
 //! a construct without one is the template itself.
 //!
-//! Both share a member body — stored `let` members, computed block-bodied
+//! Both share a member body — stored `let`/`var` members, computed block-bodied
 //! members (`let node: Any { expr }`), `function` members, and the bodyless
 //! `@Required function f(…) -> T` requirement — so they share a parser. A family
 //! adds nothing to the header beyond its name; a backed declaration adds a
@@ -55,10 +55,43 @@ impl Parser<'_> {
     /// body's `{` or at the `:` of an impl block, and requiring one of those is
     /// what keeps a local named `extend` from being read as a declaration.
     pub(crate) fn at_extend_block(&self) -> bool {
-        self.at(TokenKind::Identifier)
-            && self.text_of(self.current().span) == "extend"
-            && self.peek(1).kind == TokenKind::Identifier
-            && matches!(self.peek(2).kind, TokenKind::LBrace | TokenKind::Colon)
+        if !(self.at(TokenKind::Identifier) && self.text_of(self.current().span) == "extend") {
+            return false;
+        }
+        if !matches!(
+            self.peek(1).kind,
+            TokenKind::Identifier | TokenKind::LBracket | TokenKind::LParen
+        ) {
+            return false;
+        }
+        // The target is a written type, so a generic argument or nested array
+        // can contain the same delimiters as the header. Scan to the first
+        // top-level `:` or `{`; doing this here keeps `extend` contextual and
+        // avoids treating an ordinary identifier named `extend` as a
+        // declaration. The real type parser performs the authoritative check.
+        let mut angle = 0_u32;
+        let mut bracket = 0_u32;
+        let mut paren = 0_u32;
+        let mut offset = 1;
+        loop {
+            match self.peek(offset).kind {
+                TokenKind::Lt => angle += 1,
+                TokenKind::Gt => angle = angle.saturating_sub(1),
+                TokenKind::GtGt => angle = angle.saturating_sub(2),
+                TokenKind::LBracket => bracket += 1,
+                TokenKind::RBracket => bracket = bracket.saturating_sub(1),
+                TokenKind::LParen => paren += 1,
+                TokenKind::RParen => paren = paren.saturating_sub(1),
+                TokenKind::LBrace | TokenKind::Colon
+                    if angle == 0 && bracket == 0 && paren == 0 =>
+                {
+                    return true;
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
+        }
     }
 
     /// Parses `extend Family { [@Native] function ... }`, with `extend` at the
@@ -73,23 +106,37 @@ impl Parser<'_> {
         let start = self.current().span;
         self.bump(); // `extend`
         let name_span = self.current().span;
-        let name = if self.at(TokenKind::Identifier) {
+        let (name, target) = if self.at(TokenKind::Identifier) {
             let symbol = self.intern_span(name_span);
             self.bump();
-            symbol
+            if self.at_type_params() {
+                // Generic targets are concrete types too (`extend Box<Int>:
+                // Trait`). Keep the parsed type reference so semantics can
+                // resolve the instantiated identity rather than the template.
+                let target = self.parse_generic_args(symbol, name_span, name_span);
+                (Symbol::ERROR, Some(target))
+            } else {
+                (symbol, None)
+            }
+        } else if matches!(self.current_kind(), TokenKind::LBracket | TokenKind::LParen) {
+            let target = self.parse_type_ref();
+            // The semantic target is the type reference; the symbol remains an
+            // error sentinel because an array or function type has no identifier
+            // to intern.
+            (Symbol::ERROR, Some(target))
         } else {
             self.error(
                 name_span,
                 "KPAR063",
                 "expected the name of the construct family to extend",
             );
-            Symbol::ERROR
+            (Symbol::ERROR, None)
         };
         // `extend T: Trait { … }` is the impl block, and it may name exactly one
         // trait: a block implements the members of one trait for one type, so a
         // second name would have no members of its own to carry.
         let conformance = self.parse_trait_list();
-        let conforms = conformance.first().copied();
+        let conforms = conformance.first().cloned();
         for extra in conformance.iter().skip(1) {
             self.error(
                 extra.span,
@@ -102,13 +149,16 @@ impl Parser<'_> {
         self.expect(TokenKind::LBrace);
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
             match self.current_kind() {
                 TokenKind::Function => {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut function) =
+                        self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut function);
                         methods.push(function);
                     }
                 }
@@ -122,7 +172,8 @@ impl Parser<'_> {
                 TokenKind::At => {
                     let annotations = self.parse_annotations();
                     if self.at(TokenKind::Function) {
-                        if let Some(function) = self.parse_function_annotated(&annotations) {
+                        if let Some(mut function) = self.parse_function_annotated(&annotations) {
+                            self.refuse_generic_member(&mut function);
                             methods.push(function);
                         }
                     } else {
@@ -148,7 +199,7 @@ impl Parser<'_> {
                     self.recover_to_next_construct_member();
                 }
             }
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -158,6 +209,7 @@ impl Parser<'_> {
         Some(ExtendDecl {
             name,
             name_span,
+            target,
             conforms,
             methods,
             span,
@@ -222,6 +274,7 @@ impl Parser<'_> {
             kind,
             name,
             name_span,
+            type_params: Vec::new(),
             traits,
             fields: body.fields,
             methods: body.methods,
@@ -261,6 +314,7 @@ impl Parser<'_> {
             kind,
             name,
             name_span,
+            type_params: Vec::new(),
             traits: Vec::new(),
             fields: body.fields,
             methods: body.methods,
@@ -377,12 +431,12 @@ impl Parser<'_> {
         }
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
             self.parse_construct_member(body, backing_family);
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.pos == before {
                 self.bump();
             }
@@ -399,18 +453,10 @@ impl Parser<'_> {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_construct_member(body),
             TokenKind::Let => self.parse_construct_let(body, false),
-            TokenKind::Var => {
-                let span = self.current().span;
-                self.error(
-                    span,
-                    "KPAR058",
-                    "a construct member is declared with `let`: a construct's fields \
-                     are its construction inputs, not reassignable state",
-                );
-                self.parse_construct_let(body, true);
-            }
+            TokenKind::Var => self.parse_construct_let(body, true),
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                if let Some(mut function) = self.parse_function(false, Execution::Inherited, None) {
+                    self.refuse_generic_member(&mut function);
                     body.methods.push(ConstructMethod {
                         computed: false,
                         lifecycle: false,

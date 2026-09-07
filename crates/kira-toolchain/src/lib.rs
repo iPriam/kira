@@ -25,7 +25,8 @@ pub use libffi_metadata::{
 };
 pub use llvm_code_generators::{CodeGeneratorError, WEB_CODE_GENERATOR};
 pub use llvm_discovery::{
-    DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover, is_llvm_home,
+    ApplePlatform, AsanTargetOs, DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover,
+    is_llvm_home,
 };
 pub use llvm_metadata::{
     LlvmMetadata, MalformedMetadata, TargetBundle, bundle_for, pinned, pinned_version,

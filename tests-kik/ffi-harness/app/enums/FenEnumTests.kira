@@ -283,57 +283,57 @@ function fenNativeStateChain(steps: Int) -> Int {
 
 construct FenDirNorthScore() extends Test {
     test { return fenNativeDirScore(0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct FenDirSouthScore() extends Test {
     test { return fenNativeDirScore(1) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct FenDirEastScore() extends Test {
     test { return fenNativeDirScore(2) }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 construct FenDirWestScore() extends Test {
     test { return fenNativeDirScore(3) }
-    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
 construct FenColorRedScore() extends Test {
     test { return fenNativeColorScore(0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(10) return e }
 }
 
 construct FenColorGreenScore() extends Test {
     test { return fenNativeColorScore(1) }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 construct FenColorBlueScore() extends Test {
     test { return fenNativeColorScore(2) }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 construct FenStateIdleScore() extends Test {
     test { return fenNativeStateScore(0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 construct FenStateRunningScore() extends Test {
     test { return fenNativeStateScore(1) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 construct FenStatePausedScore() extends Test {
     test { return fenNativeStateScore(2) }
-    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
 }
 
 construct FenStateDoneScore() extends Test {
     test { return fenNativeStateScore(3) }
-    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
 }
 
 // ── Tests — Group B: @Native struct with enum field ─────────────────────────
@@ -346,7 +346,7 @@ construct FenPacketNorth() extends Test {
         let p = fenMakePacket(0)
         return fenPacketScore(p)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
 }
 
 // fenMakePacket(1): dir=South, n=5 → 5+2 = 7
@@ -355,7 +355,7 @@ construct FenPacketSouth() extends Test {
         let p = fenMakePacket(1)
         return fenPacketScore(p)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // fenMakePacket(2): dir=East, n=10 → 10+3 = 13
@@ -364,7 +364,7 @@ construct FenPacketEast() extends Test {
         let p = fenMakePacket(2)
         return fenPacketScore(p)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
 }
 
 // fenMakePacket(3): dir=West, n=15 → 15+4 = 19
@@ -373,7 +373,7 @@ construct FenPacketWest() extends Test {
         let p = fenMakePacket(3)
         return fenPacketScore(p)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(19); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(19) return e }
 }
 
 // fenMakeCell(0): state=Idle, count=1 → 0
@@ -382,7 +382,7 @@ construct FenCellIdle() extends Test {
         let c = fenMakeCell(0)
         return fenCellScore(c)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // fenMakeCell(1): state=Running, count=2 → 2*10 = 20
@@ -391,7 +391,7 @@ construct FenCellRunning() extends Test {
         let c = fenMakeCell(1)
         return fenCellScore(c)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(20) return e }
 }
 
 // fenMakeCell(2): state=Paused, count=3 → 3*5 = 15
@@ -400,7 +400,7 @@ construct FenCellPaused() extends Test {
         let c = fenMakeCell(2)
         return fenCellScore(c)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
 }
 
 // fenMakeCell(3): state=Done, count=4 → 4+100 = 104
@@ -409,7 +409,7 @@ construct FenCellDone() extends Test {
         let c = fenMakeCell(3)
         return fenCellScore(c)
     }
-    expect { let e: Result<Int, TestFailure> = .Ok(104); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(104) return e }
 }
 
 // ── Tests — Group C: single-payload(Int) enum across the bridge ──────────────
@@ -419,25 +419,25 @@ construct FenCellDone() extends Test {
 // i=0 → Empty → 0
 construct FenValEmpty() extends Test {
     test { return fenNativeValScore(0) }
-    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
 // i=1 → Loaded(7) → 7
 construct FenValLoaded7() extends Test {
     test { return fenNativeValScore(1) }
-    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
 }
 
 // i=3 → Loaded(21) → 21
 construct FenValLoaded21() extends Test {
     test { return fenNativeValScore(3) }
-    expect { let e: Result<Int, TestFailure> = .Ok(21); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(21) return e }
 }
 
 // i=5 → Loaded(35) → 35
 construct FenValLoaded35() extends Test {
     test { return fenNativeValScore(5) }
-    expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(35) return e }
 }
 
 // ── Tests — Group D: loop churns ─────────────────────────────────────────────
@@ -446,60 +446,60 @@ construct FenValLoaded35() extends Test {
 // 12 iters, dir=i%4: 3 full cycles of (1+2+3+4) = 30
 construct FenDirLoopSum12() extends Test {
     test { return fenDirLoopSum(12) }
-    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
 }
 
 // 9 iters, color=i%3: 3 full cycles of (10+20+30) = 180
 construct FenColorLoopSum9() extends Test {
     test { return fenColorLoopSum(9) }
-    expect { let e: Result<Int, TestFailure> = .Ok(180); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(180) return e }
 }
 
 // 8 iters, state=i%4: 2 full cycles of (0+1+2+3) = 12
 construct FenStateLoopSum8() extends Test {
     test { return fenStateLoopSum(8) }
-    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
 // 10 iters, val=fenPickVal(i): even→0, odd→i*7
 // odd i in 0..9: 1(7)+3(21)+5(35)+7(49)+9(63) = 175
 construct FenValLoopSum10() extends Test {
     test { return fenValLoopSum(10) }
-    expect { let e: Result<Int, TestFailure> = .Ok(175); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(175) return e }
 }
 
 // 4 iters, packets 0..3: 1+7+13+19 = 40
 construct FenPacketLoopSum4() extends Test {
     test { return fenPacketLoopSum(4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(40) return e }
 }
 
 // 8 iters (2 cycles of the same 4 packets): 80
 construct FenPacketLoopSum8() extends Test {
     test { return fenPacketLoopSum(8) }
-    expect { let e: Result<Int, TestFailure> = .Ok(80); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(80) return e }
 }
 
 // 4 iters, cells 0..3: 0+20+15+104 = 139
 construct FenCellLoopSum4() extends Test {
     test { return fenCellLoopSum(4) }
-    expect { let e: Result<Int, TestFailure> = .Ok(139); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(139) return e }
 }
 
 // 8 iters (2 cycles): 278
 construct FenCellLoopSum8() extends Test {
     test { return fenCellLoopSum(8) }
-    expect { let e: Result<Int, TestFailure> = .Ok(278); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(278) return e }
 }
 
 // High-volume: 100 iters of dir, 25 full cycles of (1+2+3+4)=250
 construct FenDirHighVolume() extends Test {
     test { return fenDirLoopSum(100) }
-    expect { let e: Result<Int, TestFailure> = .Ok(250); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(250) return e }
 }
 
 // High-volume: 60 iters of color, 20 full cycles of (10+20+30)=1200
 construct FenColorHighVolume() extends Test {
     test { return fenColorLoopSum(60) }
-    expect { let e: Result<Int, TestFailure> = .Ok(1200); return e }
+    expect { let e: Result<Any, TestFailure> = .Ok(1200) return e }
 }

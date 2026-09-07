@@ -75,7 +75,7 @@ function main() {
     // A `var` reassigned to fresh variants, its type fixed by the annotation.
     var here: Color = .Red
     here = .Blue
-    print(rank(here))
+    print(rank(move here))
 
     // A payload variant: built, moved, and dropped. The default fills the
     // omitted payload of `.InvalidFormat`.

@@ -72,6 +72,10 @@ mkdir -p "$build_dir" "$install_dir"
 # lld links every format Kira emits from every host it runs on, which is the
 # only arrangement under which a target is a property of the compiler rather
 # than of the machine it happens to be installed on.
+# compiler-rt is here for its sanitizer runtimes: `kira build --sanitize
+# address` instruments Kira's own objects and links the runtime FROM THIS
+# BUNDLE, never from whatever Xcode or distro clang the host happens to carry.
+# Only sanitizer runtimes are built; profiling, fuzzing, and tracing stay out.
 cmake -S "$source_dir/llvm" -B "$build_dir" -G "$cmake_generator" \
     -DCMAKE_BUILD_TYPE="$build_type" \
     -DCMAKE_INSTALL_PREFIX="$install_dir" \
@@ -79,6 +83,18 @@ cmake -S "$source_dir/llvm" -B "$build_dir" -G "$cmake_generator" \
     -DBUILD_SHARED_LIBS=OFF \
     -DLLVM_LINK_LLVM_DYLIB=ON \
     -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
+    -DCOMPILER_RT_BUILD_SANITIZERS=ON \
+    -DCOMPILER_RT_ENABLE_IOS=ON \
+    -DCOMPILER_RT_ENABLE_TVOS=ON \
+    -DCOMPILER_RT_ENABLE_XROS=ON \
+    -DCOMPILER_RT_ENABLE_WATCHOS=OFF \
+    -DCOMPILER_RT_BUILD_XRAY=OFF \
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+    -DCOMPILER_RT_BUILD_PROFILE=OFF \
+    -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+    -DCOMPILER_RT_BUILD_ORC=OFF \
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
     -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
     -DCLANG_ENABLE_ARCMT=OFF \
     -DLLVM_ENABLE_BINDINGS=OFF \

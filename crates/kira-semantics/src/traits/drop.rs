@@ -75,12 +75,15 @@ impl Analyzer<'_> {
             .conformances
             .iter()
             .filter(|entry| entry.contract.trait_name() == Some(super::DROP))
-            .map(|entry| (entry.ty, entry.source, entry.span))
+            .filter_map(|entry| match entry.ty {
+                Type::Struct(id) => Some((id, entry.source, entry.span)),
+                _ => None,
+            })
             .collect();
         for (ty, source, span) in claims {
             self.source = source;
             let type_name = self.program.types.type_name(Type::Struct(ty));
-            let qualified = format!("{type_name}.{DROP_MEMBER}");
+            let qualified = format!("{}.{DROP_MEMBER}", self.member_owner_name(Type::Struct(ty)));
             let Some(candidates) = self.sig_index.get(&qualified).cloned() else {
                 self.emit(
                     span,
@@ -161,7 +164,7 @@ impl Analyzer<'_> {
         let Type::Struct(id) = receiver else {
             return false;
         };
-        if !self.conforms_to(id, super::DROP) {
+        if !self.conforms_to(Type::Struct(id), super::DROP) {
             return false;
         }
         let type_name = self.program.types.type_name(receiver);

@@ -25,6 +25,24 @@ use kira_syntax_model::ast::{CallArg, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 
+/// The syntax and receiver context for a construct-backed declaration call.
+struct ConstructDeclarationCall<'a> {
+    /// The function context receiving ownership effects.
+    ctx: &'a mut FnCtx,
+    /// The declaration being called.
+    id: StructId,
+    /// The source expression naming the declaration.
+    receiver_syntax: ExprId,
+    /// The member name.
+    method: &'a str,
+    /// The written member arguments.
+    args: &'a [CallArg],
+    /// The enclosing call span.
+    root_span: Span,
+    /// The member span.
+    method_span: Span,
+}
+
 impl Analyzer<'_> {
     /// Resolves `Root.name(args)` when `Root` is a name rather than a value.
     ///
@@ -62,14 +80,17 @@ impl Analyzer<'_> {
             // `Sprite.draw()` is about `Sprite`, and only a class hierarchy
             // makes a bare type name mean "run the inherited body".
             if let Some(id) = self.construct_backed_named(&root) {
-                return Some(self.analyze_construct_declaration_call(
-                    ctx,
-                    id,
-                    &name,
-                    args,
-                    span,
-                    method_span,
-                ));
+                return Some(
+                    self.analyze_construct_declaration_call(ConstructDeclarationCall {
+                        ctx,
+                        id,
+                        receiver_syntax: receiver,
+                        method: &name,
+                        args,
+                        root_span: span,
+                        method_span,
+                    }),
+                );
             }
             // Once the root is known to be a type name, this path owns the
             // call: falling through would analyze the type name as a value and
@@ -112,13 +133,17 @@ impl Analyzer<'_> {
     /// a type has no values of its own to run a member against.
     fn analyze_construct_declaration_call(
         &mut self,
-        ctx: &mut FnCtx,
-        id: StructId,
-        method: &str,
-        args: &[CallArg],
-        root_span: Span,
-        method_span: Span,
+        call: ConstructDeclarationCall<'_>,
     ) -> HirExprId {
+        let ConstructDeclarationCall {
+            ctx,
+            id,
+            receiver_syntax,
+            method,
+            args,
+            root_span,
+            method_span,
+        } = call;
         let own_member = ctx.receiver == Some(id);
         let receiver_hir = match own_member.then(|| ctx.resolve("self")).flatten() {
             Some(local) => self.program.exprs.alloc(HirExpr::Local {
@@ -127,7 +152,7 @@ impl Analyzer<'_> {
             }),
             None => self.analyze_construct_new(ctx, id, &[], &[], root_span),
         };
-        let owner = self.program.types.type_name(Type::Struct(id));
+        let owner = self.member_owner_name(Type::Struct(id));
         let qualified = format!("{owner}.{method}");
         if self.lookup_function(&qualified).is_none() {
             // A declaration also answers its family's uniform `extend`
@@ -135,7 +160,7 @@ impl Analyzer<'_> {
             // family and dispatch there.
             if let Some(family_id) = self.family_uniform_method(id, method) {
                 let upcast = self.coerce_construct_value(receiver_hir, Some(Type::Enum(family_id)));
-                return self.analyze_construct_family_call(
+                let call = self.analyze_construct_family_call(
                     ctx,
                     upcast,
                     family_id,
@@ -143,9 +168,11 @@ impl Analyzer<'_> {
                     crate::constructs::ConstructCallContent {
                         args,
                         children: &[],
+                        receiver_syntax: (!own_member).then_some(receiver_syntax),
                     },
                     method_span,
                 );
+                return call;
             }
             self.emit(
                 method_span,

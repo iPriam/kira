@@ -258,14 +258,12 @@ function f() {
             (integer_literal)))))))
 
 ================================================================================
-Semicolons are optional separators, and runs of them are legal
+Statements are delimited structurally, on one line or many
 ================================================================================
 
 function f() {
-    ;;;
-    let a = 1;;
-    ;
-    print(a);
+    let a = 1 print(a)
+    print(a)
 }
 
 --------------------------------------------------------------------------------
@@ -282,21 +280,21 @@ function f() {
         (call_expression
           function: (identifier)
           arguments: (arguments
+            (identifier))))
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
             (identifier)))))))
 
 ================================================================================
-A block of nothing but semicolons
+A semicolon is not a token of the language
+:error
 ================================================================================
 
-function f() { ; ; ; }
+function f() { let a = 1; }
 
 --------------------------------------------------------------------------------
-
-(source_file
-  (function_definition
-    name: (identifier)
-    parameters: (parameters)
-    body: (block)))
 
 ================================================================================
 A statement boundary continues the expression: let a = 5 NEWLINE -2 is one statement
@@ -326,11 +324,11 @@ function f() -> Int {
         value: (identifier)))))
 
 ================================================================================
-A semicolon is the only way to start a statement with a minus
+A minus on the next line continues the expression above it
 ================================================================================
 
 function f() -> Int {
-    let a = 5;
+    let a = 5
     -2
     return a
 }
@@ -346,10 +344,9 @@ function f() -> Int {
     body: (block
       (variable_declaration
         name: (identifier)
-        value: (integer_literal))
-      (expression_statement
-        (unary_expression
-          operand: (integer_literal)))
+        value: (binary_expression
+          left: (integer_literal)
+          right: (integer_literal)))
       (return_statement
         value: (identifier)))))
 
@@ -448,7 +445,7 @@ A `match` arm takes a block or a single statement
 
 function f(s: borrow Shade) -> Int {
     match s {
-        Light -> return 1;
+        Light -> return 1
         Tag(text) -> { print(text) }
         Dark -> { return 3 }
     }

@@ -10,10 +10,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use kira_core::Names;
 use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
-use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
+use kira_semantics_model::{DistinctId, EnumId, OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{ExprId, Function, Item};
+use kira_syntax_model::ast::{ConstantDecl, ExprId, Function, Item};
 
 mod scope;
 mod signatures;
@@ -24,6 +24,13 @@ pub(crate) use signatures::FuncSig;
 use crate::aliases::AliasTable;
 use crate::build_kind::BuildKind;
 use crate::build_machine::BuildMachine;
+
+/// Synthesized functions use a temporary id range while analysis is still
+/// discovering generic specializations. Generic signatures are appended while
+/// ordinary bodies are analyzed, so reserving synthesized ids in the final
+/// function-index range would make the two kinds overlap. The temporary range
+/// is rewritten to its final contiguous position once all signatures exist.
+pub(crate) const SYNTH_ID_BASE: u32 = 1 << 31;
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -39,8 +46,10 @@ pub struct Analysis {
 /// One declared function plus the struct it is a method of, if any.
 #[derive(Clone)]
 pub(crate) struct Callable<'a> {
-    /// The struct whose method this is; `None` for a free function.
-    pub(crate) receiver: Option<StructId>,
+    /// The type whose method this is; `None` for a free function. Most methods
+    /// are aggregate methods, but `extend` may attach a method to any concrete
+    /// type, including a scalar or an array.
+    pub(crate) receiver: Option<Type>,
     /// For a class method copied from an ancestor, the ancestor that wrote the
     /// body; `None` for a free function or a method written where it lives.
     ///
@@ -73,6 +82,10 @@ pub(crate) struct Callable<'a> {
     /// and so its body resolves qualified names against *that* file's imports —
     /// which is the whole of file scoping.
     pub(crate) source: SourceId,
+    /// Type-parameter substitutions active while this callable's signature and
+    /// body are resolved. Ordinary declarations carry an empty frame; a
+    /// monomorphized generic declaration carries its concrete arguments.
+    pub(crate) type_bindings: crate::generics::TypeBindings,
 }
 
 /// The parameter of one `init(…)` that its construction's trailing children
@@ -223,6 +236,31 @@ pub(crate) struct Analyzer<'a> {
     /// instantiation substitutes its arguments and declares the result in the
     /// ordinary enum table. See [`crate::generics`].
     pub(crate) generic_enums: crate::generics::GenericEnumTable<'a>,
+    /// Generic struct and class declarations waiting for an instantiation.
+    pub(crate) generic_aggregates: crate::generics::GenericAggregateTable<'a>,
+    /// Concrete aggregate rows back to their template name for constructor
+    /// inference from an expected result type.
+    pub(crate) generic_instance_templates: HashMap<StructId, String>,
+    /// The concrete arguments used for each generic aggregate row, so generic
+    /// function inference can unify a parameter such as `Box<Value>` with an
+    /// already analyzed `Box<Int>` argument.
+    pub(crate) generic_instance_arguments: HashMap<StructId, kira_semantics_model::Instantiation>,
+    /// Generic free functions waiting for argument inference at a call site.
+    pub(crate) generic_functions: crate::generics::GenericFunctionTable<'a>,
+    /// Memoized concrete signatures for generic free-function calls.
+    pub(crate) generic_function_instances: HashMap<String, FuncId>,
+    /// Monomorphized callable bodies discovered while resolving declarations or
+    /// calls. They are appended to the ordinary function list before any
+    /// synthesized function ids are allocated.
+    pub(crate) generic_callables: Vec<(FuncId, Callable<'a>)>,
+    /// Methods belonging to concrete generic struct/class instances. They are
+    /// included in the ordinary callable list once all rows have been minted.
+    pub(crate) generic_method_callables: Vec<Callable<'a>>,
+    /// Whether the initial ordinary callable list has already reserved its
+    /// signatures. Generic aggregate instances discovered while analyzing a
+    /// body must register their methods immediately rather than waiting for a
+    /// callable-list pass that has already happened.
+    pub(crate) generic_signatures_open: bool,
     /// The type-parameter substitution in force right now, empty outside a
     /// generic enum's body.
     pub(crate) type_bindings: crate::generics::TypeBindings,
@@ -247,6 +285,13 @@ pub(crate) struct Analyzer<'a> {
     /// Registered before anything is resolved and consulted from
     /// `resolve_named_type`, so an alias reaches every type position at once.
     pub(crate) aliases: AliasTable,
+    /// Every `distinct Name = Representation` declaration, keyed by name.
+    ///
+    /// Registered beside the aliases and consulted from the same
+    /// `resolve_named_type`, so a distinct type reaches every type position at
+    /// once. The row in the program's type table is minted on first
+    /// resolution, which is why this is memoized rather than recomputed.
+    pub(crate) distincts: crate::distincts::DistinctTable,
     /// What each `@FFI.Pointer` alias points at, by name — alias name to
     /// written target name.
     ///
@@ -281,6 +326,32 @@ pub(crate) struct Analyzer<'a> {
     /// Beside the type table rather than in it: conformance is resolved away
     /// before the HIR exists, so nothing downstream carries it.
     pub(crate) conformances: Vec<crate::traits::Conformance>,
+    /// The compiler's own cast-failure enum, minted on first use.
+    ///
+    /// Held rather than looked up by name: a program may declare a
+    /// `TypeCastError` of its own, and a name lookup would hand a cast that
+    /// enum instead of this one.
+    pub(crate) cast_error: Option<EnumId>,
+    /// The result row each cast target answers with, minted on first use, for
+    /// the same reason.
+    pub(crate) cast_results: HashMap<Type, EnumId>,
+    /// The compiler's own channel-failure enum, minted on first use, held for
+    /// the reason [`Analyzer::cast_error`] is.
+    pub(crate) channel_error: Option<EnumId>,
+    /// The sender row for each payload type, minted on first use.
+    pub(crate) channel_senders: HashMap<Type, DistinctId>,
+    /// The receiver row for each payload type, minted on first use.
+    pub(crate) channel_receivers: HashMap<Type, DistinctId>,
+    /// The result row a receive of each payload answers with.
+    pub(crate) channel_results: HashMap<Type, EnumId>,
+    /// What each minted end row is, so a member access on one is recognized
+    /// without searching the two maps above.
+    pub(crate) channel_ends: HashMap<DistinctId, crate::typeck::channels::ChannelEnd>,
+    /// Number of conformance rows already checked. Generic instances can be
+    /// discovered while a body is analyzed, after the initial conformance
+    /// pass; checking only the suffix keeps that late activation diagnostic-
+    /// stable instead of repeating every earlier claim.
+    pub(crate) checked_conformances: usize,
     /// Member and element reads of a value that runs a user `Drop`, waiting for
     /// the body being analyzed to finish.
     ///
@@ -330,8 +401,10 @@ pub(crate) struct Analyzer<'a> {
     /// child slot does. This is what makes `NavigationLink(value: v) { Text(…) }`
     /// reach an init instead of only the parenthesized header.
     pub(crate) init_content: HashMap<u32, InitContent>,
-    /// The id every synthesized function is offset from: the number of
-    /// functions the source declares.
+    /// The base of the temporary id range reserved for synthesized functions.
+    ///
+    /// These ids are rewritten to the final function-vector positions after
+    /// generic specializations have been discovered.
     pub(crate) synth_base: u32,
     /// Synthesized function bodies — lifted closures and dispatchers — indexed
     /// by their id less [`Analyzer::synth_base`].
@@ -368,6 +441,22 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) ffi_callback_signatures: HashMap<StructId, kira_runtime_abi::ForeignSignature>,
     /// Keeps each C-layout aggregate in the program table exactly once.
     pub(crate) foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder,
+    /// Every module-scope constant, in declaration order, in lockstep with
+    /// [`kira_semantics_model::hir::HirProgram::constants`].
+    ///
+    /// Rows are permuted into evaluation order by the end-of-analysis pass in
+    /// [`crate::constant_order`]; until then the slot is the declaration index.
+    pub(crate) constants: Vec<crate::constants::ConstantEntry>,
+    /// Each constant's slot by name. Names are unique — a clash was refused —
+    /// so one index answers a read.
+    pub(crate) constant_index: HashMap<String, u32>,
+    /// Each constant's declaration, for demand-driven initializer analysis.
+    pub(crate) constant_decls: Vec<(SourceId, &'a ConstantDecl)>,
+    /// How far each constant's initializer analysis has gone.
+    pub(crate) constant_progress: Vec<crate::constants::ConstantProgress>,
+    /// The constants whose initializers are being analyzed right now, outermost
+    /// first. A slot met again while on this stack is a resolution cycle.
+    pub(crate) constant_stack: Vec<u32>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Reference→definition links, recorded as names resolve.

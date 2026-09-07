@@ -1,71 +1,52 @@
 ---
-title: Platforms & Runners
-description: How Kira models platform targets and runners — the typed runner ids, build profiles, default runner mapping, and the honesty rule that host probes never count as Kira render success.
+title: Platforms and Runners
+description: The typed runner ids, the three build profiles, how a command tells a runner from a path, and the honesty rule that keeps a host probe from counting as Kira output.
 ---
 
-Kira models runners with **typed ids**, not ad-hoc strings. Every id is valid for command parsing; if the host or generated runner client cannot complete a flow, Kira reports a precise diagnostic (missing Xcode tools, missing Visual Studio tools, missing Android SDK/Gradle, or a modeled-but-incomplete runner) instead of pretending to succeed.
+Kira models runners with **typed ids**, not ad-hoc strings. Every id parses, because a command that fails to parse cannot explain itself. A runner this build cannot drive gets a precise diagnostic naming what is missing rather than failing as an unknown command.
 
-## Runner ids
+## Runner Ids
 
 ```text
 desktop  macos  ios  tvos  visionos  windows  android  web  linux
 ```
 
-Default runners are synthesized even when a project's TOML omits them:
+`ios-simulator` and `ios-device` are spellings of `ios` that select which physical kind an Apple run targets.
 
 | Platform | Default runner |
 | --- | --- |
 | Desktop | `kira` |
-| Apple (macOS/iOS/tvOS/visionOS) | `xcode` |
+| Apple (macOS, iOS, tvOS, visionOS) | `xcode` |
 | Windows | `visual-studio` |
 | Android | `android-studio` |
-| Web | `kira-wasm` (`default_surface = "dom"`) |
+| Web | `kira-wasm` |
 | Linux | `cmake` |
 
-## Build profiles
+## Build Profiles
 
-Profiles are synthesized even when TOML omits them. A minimal app needs only:
+| Profile | Backend | Optimization | For |
+| --- | --- | --- | --- |
+| `debug` | vm | none, with debug symbols | Iteration. |
+| `profiler` | llvm | light, with debug symbols and profiling | A recording that still names its frames. |
+| `release` | llvm | full, stripped, LTO | Shipping. |
 
-```toml
-[package]
-name = "example"
-kind = "app"
-```
+`profiles.profiler` is the supported profiling profile; `profiles.profile` is reserved so configs do not silently drift between the noun and the mode name. The profile index is a wire format: a `.klbundle` records its profile as that index.
 
-The default profile set:
+## Runner or Path
 
-```toml
-[profiles.debug]
-backend = "vm"
-optimization = "none"
-debug_symbols = true
+`kira live ios` means runner `ios` and the current project. `kira live ./ios` means the default runner with target path `./ios`.
 
-[profiles.profiler]
-backend = "llvm"
-optimization = "speed-lite"
-debug_symbols = true
-profiling = true
+The distinction is made on **shape, not on what happens to exist**: a path-looking argument stays a path even when nothing is there, so the error says the file is missing rather than that the runner is unknown. A runner id is recognized only in the first positional slot.
 
-[profiles.release]
-backend = "llvm"
-optimization = "speed"
-debug_symbols = false
-strip = true
-lto = true
-```
+## The Honesty Rule
 
-`profiles.profiler` is the supported profiling profile; `profiles.profile` is reserved so configs do not silently drift between the noun and the mode name.
+A runner is a host bridge, not the app. It may create windows, surfaces, canvases, devices, event loops, and logging bridges, but it must not draw content of its own and call it Kira output.
 
-## Command-aware target inference
+Host-only evidence is reported with `HOST_*` markers and never satisfies Kira runtime, UI, layout, graphics-frame, or visible-content success. Apple, Android, and iOS live reporting keep build, device detection, install, launch, and protocol states separate, and emulator-only or simulator-only success is never reported as physical-device success.
 
-`kira live ios` means runner `ios` and the current project target. `kira live ./ios` means the default desktop runner with target path `./ios`.
+## In This Section
 
-## The honesty rule
-
-A runner is a host bridge, not the app. It may create windows, surfaces, canvases, devices, event loops, and logging bridges — but it must not draw fake content and call it Kira output. Host-only evidence is reported with `HOST_*` markers and never satisfies Kira runtime, UI, layout, graphics-frame, or visible-content success. Apple, Android, and iOS live reporting keep build, device/emulator detection, install, launch, and protocol states separate; emulator-only or simulator-only success is never reported as physical-device success.
-
-## In this section
-
-- [Live & Hot Reload](/docs/appendix/platforms/live-and-hot-reload) — the `kira live` server/client session and hot restart.
-- [Exports](/docs/appendix/platforms/exports) — `kira export` scaffolds for Apple, Windows, Android, Web, and Linux.
-- [Web & WASM](/docs/appendix/platforms/web-and-wasm) — the Kira Wasm runner, web surfaces, and `Foundation.Web`.
+- [Live and Hot Reload](/docs/appendix/platforms/live-and-hot-reload): the session, its flags, the runners, and what is watched.
+- [Live Bundles and Reload](/docs/appendix/platforms/live-bundles-and-reload): the `.klbundle` format, the event vocabulary, and how a reload is decided.
+- [Exports](/docs/appendix/platforms/exports): the per-platform project scaffolds.
+- [Web and WASM](/docs/appendix/platforms/web-and-wasm): the Web runner and surfaces.

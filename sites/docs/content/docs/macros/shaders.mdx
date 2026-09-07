@@ -1,0 +1,55 @@
+---
+title: The Shader Macro
+description: "`ksl!` is not a compiler builtin: how `Ksl.compile` works, why the target is an enum case, what the returned record holds, and when shaders are compiled."
+---
+
+`ksl!` is not a compiler builtin. It is an ordinary `comptime macro` the engine declares, and the compiler's whole half of the contract is one compile-time call, `Ksl.compile(path, target)`, which answers with one backend's output for one shader.
+
+```kira
+comptime macro ksl {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let msl = Ksl.compile(input, ShaderBackend.Msl)
+        let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        return quote {
+            KslArtifact(
+                combinedMsl: #{msl.combinedSource},
+                vertexWgsl: #{wgsl.vertexSource},
+                fragmentWgsl: #{wgsl.fragmentSource},
+                vertexEntry: #{msl.vertexEntry},
+                resourceReflection: #{msl.resourceReflection},
+            )
+        }
+    }
+}
+```
+
+Note what the compiler does not know there: `KslArtifact`, its field names, and how many backends get inlined are all Kira source, so an engine can add a target, drop one, or rename a field without a compiler release.
+
+## The Target Is a Case
+
+The target is a **case**, not a string: `ShaderBackend.Msl`, `.Wgsl`, `.Glsl`, `.Hlsl`, `.Spirv`. `ShaderBackend` is an ordinary Kira enum the engine declares beside the macro, and naming a case it does not have is an error that lists the ones it does.
+
+That matters because the alternative failed late: a string target that no longer existed compiled into every artifact as an empty field and surfaced as "no output was compiled for it" at each call site instead of at the one line naming it.
+
+The case carries no version. `Glsl` is the backend; which GLSL version it emits is the compiler's business, and moving from 330 to 430 changed no program.
+
+## What Comes Back
+
+The value `Ksl.compile` returns is a record whose every member is a `String`: `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`, `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and `resourceReflection`.
+
+Every member is always present. A stage a shader does not have, and a source form a target does not use, read as the empty string rather than as an absent member, so a macro body asks whether one is empty instead of branching on a shape that varies per target. Being strings is also what makes inlining work at all: each one splices into a `quote` as a Kira string literal with its newlines and quotes already escaped.
+
+Metal compiles one module holding every stage, so its whole source arrives in `combinedSource`; the other four compile a stage at a time and fill `vertexSource`, `fragmentSource`, and `computeSource`. SPIR-V is binary and arrives as hexadecimal with eight characters to a word, ready to be read straight into the `uint32_t` array `vkCreateShaderModule` takes.
+
+A target that cannot express a shape leaves its sources empty and reports a note, because the other targets still carry the shader and the build should still succeed. The one such shape is a SPIR-V compute entry point declaring output variables: `GLCompute` has none, and a compute shader publishes through storage.
+
+## Paths and Timing
+
+`path` is relative to the package root, the way `assets` in a manifest is: `ksl!("Shaders/X.ksl")` written in `app/main.kira` names `Shaders/X.ksl` beside `package.kira`. It must be a literal known at compile time (`KMAC024`), and the call site's own syntax counts as one, so a `function` macro can hand `input` straight through without unquoting it by hand.
+
+Shaders are compiled *before* analysis rather than during it: expansion runs inside queries that may not read files, so the build layer scans the program for `name!("….ksl")` call sites, compiles each one, and hands the results in as an input. Matching on the shape rather than on the macro's name is deliberate, so an engine that calls its shader macro something else still gets its shaders compiled.
+
+A compiler handed no pipeline refuses with `KMAC022` naming what is missing rather than expanding to a fabricated artifact, because a shader that silently compiled to nothing would take a render path down at run time instead of at build time.
+
+See [KSL Shaders](/docs/appendix/shaders) for the language itself.

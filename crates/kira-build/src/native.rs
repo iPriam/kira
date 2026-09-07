@@ -182,6 +182,9 @@ pub fn build_native_library(
             optimize: false,
             unavailable_imports: Vec::new(),
             target: options.target.clone(),
+            // A consumer-library build carries no sanitize choice yet; the
+            // program paths thread the user's flag.
+            sanitize: kira_llvm_backend::Sanitize::None,
         },
     )?;
 

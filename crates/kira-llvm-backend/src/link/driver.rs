@@ -341,9 +341,9 @@ pub(super) fn stage_runtime_files(
     foreign_link: &NativeLinkInputs,
     output: &Path,
 ) -> Result<(), LinkError> {
-    let Some(directory) = output.parent() else {
+    if output.parent().is_none() {
         return Ok(());
-    };
+    }
     for declared in foreign_link.runtime_files() {
         let sources = if declared.is_dir() {
             let entries = std::fs::read_dir(declared).map_err(|source| {
@@ -369,28 +369,34 @@ pub(super) fn stage_runtime_files(
             vec![declared.clone()]
         };
         for file in sources {
-            let Some(name) = file.file_name() else {
-                continue;
-            };
-            let destination = directory.join(name);
-            // A program still running from this directory holds its own copy
-            // open, and replacing a file the loader has mapped is refused. The
-            // bytes are already the ones being copied in that case, so the link
-            // is not failed over it.
-            if destination.is_file() && same_file_contents(&file, &destination) {
-                continue;
-            }
-            std::fs::create_dir_all(directory)
-                .and_then(|()| std::fs::copy(&file, &destination))
-                .map(|_| ())
-                .map_err(|source| LinkError::RuntimeFileUnplaceable {
-                    source_path: file.clone(),
-                    output: output.to_path_buf(),
-                    source,
-                })?;
+            stage_runtime_file(&file, output)?;
         }
     }
     Ok(())
+}
+
+pub(super) fn stage_runtime_file(file: &Path, output: &Path) -> Result<(), LinkError> {
+    let Some(directory) = output.parent() else {
+        return Ok(());
+    };
+    let Some(name) = file.file_name() else {
+        return Ok(());
+    };
+    let destination = directory.join(name);
+    // A program still running from this directory holds its own copy open, and
+    // replacing a file the loader has mapped is refused. Identical bytes need
+    // no replacement.
+    if destination.is_file() && same_file_contents(file, &destination) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(directory)
+        .and_then(|()| std::fs::copy(file, &destination))
+        .map(|_| ())
+        .map_err(|source| LinkError::RuntimeFileUnplaceable {
+            source_path: file.to_path_buf(),
+            output: output.to_path_buf(),
+            source,
+        })
 }
 
 /// Whether two files hold the same bytes, for deciding a copy can be skipped.

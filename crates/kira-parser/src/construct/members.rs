@@ -71,7 +71,10 @@ impl Parser<'_> {
             }
             "Consuming" => {
                 if self.at(TokenKind::Function) {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, None) {
+                    if let Some(mut function) =
+                        self.parse_function(false, Execution::Inherited, None)
+                    {
+                        self.refuse_generic_member(&mut function);
                         body.methods.push(ConstructMethod {
                             computed: false,
                             lifecycle: false,
@@ -151,7 +154,10 @@ impl Parser<'_> {
         body.inits.push(Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
+            is_main_thread_lifecycle: false,
+            is_main_thread: false,
             is_async: false,
             export: None,
             foreign: None,
@@ -175,7 +181,7 @@ impl Parser<'_> {
         self.bump(); // `requires`
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -214,7 +220,7 @@ impl Parser<'_> {
         self.bump(); // `lifecycle`
         self.bump(); // `{`
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            while self.eat(TokenKind::Semicolon) {}
+            self.skip_unknown();
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
@@ -302,7 +308,6 @@ impl Parser<'_> {
             );
             self.parse_block();
         }
-        self.eat(TokenKind::Semicolon);
         let span = Span::from_bounds(start.start, self.previous_end());
         body.methods.push(ConstructMethod {
             computed: false,
@@ -312,7 +317,10 @@ impl Parser<'_> {
             function: Function {
                 name,
                 name_span,
+                type_params: Vec::new(),
                 is_main: false,
+                is_main_thread_lifecycle: false,
+                is_main_thread: false,
                 is_async: false,
                 export: None,
                 foreign: None,
@@ -351,6 +359,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: true,
+            mutable: false,
             slot,
             ty,
             default,
@@ -372,6 +381,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: false,
+            mutable: false,
             slot: true,
             ty,
             default,
@@ -381,7 +391,7 @@ impl Parser<'_> {
 
     /// Parses a plain or computed `let` construct member, with `let`/`var` at
     /// the cursor.
-    pub(super) fn parse_construct_let(&mut self, body: &mut ConstructBody, _is_var: bool) {
+    pub(super) fn parse_construct_let(&mut self, body: &mut ConstructBody, is_var: bool) {
         let start = self.current().span;
         self.bump(); // `let` / `var`
         let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
@@ -417,6 +427,7 @@ impl Parser<'_> {
             name,
             name_span,
             required: false,
+            mutable: is_var,
             slot,
             ty,
             default,
@@ -514,7 +525,10 @@ impl Parser<'_> {
         Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
+            is_main_thread_lifecycle: false,
+            is_main_thread: false,
             is_async: false,
             foreign: None,
             export: None,
@@ -537,7 +551,10 @@ impl Parser<'_> {
         Function {
             name,
             name_span,
+            type_params: Vec::new(),
             is_main: false,
+            is_main_thread_lifecycle: false,
+            is_main_thread: false,
             is_async: false,
             foreign: None,
             export: None,

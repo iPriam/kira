@@ -250,7 +250,7 @@ impl Analyzer<'_> {
             self.restore_drop_extractions(extractions);
             return None;
         };
-        let qualified = format!("{}.{SUBSCRIPT_MEMBER}", self.type_name(base_ty));
+        let qualified = format!("{}.{SUBSCRIPT_MEMBER}", self.member_owner_name(base_ty));
         if self.lookup_function(&qualified).is_none() {
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);

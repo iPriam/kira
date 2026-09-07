@@ -8,17 +8,17 @@
 // read at the wrong offset gives a wrong answer rather than a crash — which is
 // exactly the failure a backend can have silently.
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct ffi_touch {
     let identifier: U64 = 0
     let pos_x: F32 = 0.0
     let pos_y: F32 = 0.0
 }
 
-@FFI.Array { element: ffi_touch; count: 4; }
+@FFI.Array { element: ffi_touch, count: 4 }
 struct ffi_touch_array_4 {}
 
-@FFI.Struct { layout: c; }
+@FFI.Struct { layout: c }
 struct ffi_event {
     let kind: U8 = 0
     let code: I32 = 0
@@ -28,13 +28,13 @@ struct ffi_event {
     let next: ffi_event_ptr
 }
 
-@FFI.Pointer { target: ffi_event; ownership: borrowed; }
+@FFI.Pointer { target: ffi_event, ownership: borrowed }
 struct ffi_event_ptr {}
 
-@FFI.Extern { library: ffifixture; symbol: ffi_event_current; abi: c; }
-function ffiEventCurrent(): ffi_event_ptr;
-@FFI.Extern { library: ffifixture; symbol: ffi_event_none; abi: c; }
-function ffiEventNone(): ffi_event_ptr;
+@FFI.Extern { library: ffifixture, symbol: ffi_event_current, abi: c }
+function ffiEventCurrent(): ffi_event_ptr
+@FFI.Extern { library: ffifixture, symbol: ffi_event_none, abi: c }
+function ffiEventNone(): ffi_event_ptr
 
 @Native
 function readKind() -> Int {

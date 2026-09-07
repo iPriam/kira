@@ -8,10 +8,10 @@
 // four bytes each, so a seam that handed over the array's own storage would
 // give C the wrong numbers rather than a wrong pointer.
 
-@FFI.Extern { library: ffifixture; symbol: ffi_sum_floats; abi: c; }
-function ffiSumFloats(values: RawPtr, count: I32): F32;
-@FFI.Extern { library: ffifixture; symbol: ffi_sum_ints; abi: c; }
-function ffiSumInts(values: RawPtr, count: I32): I32;
+@FFI.Extern { library: ffifixture, symbol: ffi_sum_floats, abi: c }
+function ffiSumFloats(values: RawPtr, count: I32): F32
+@FFI.Extern { library: ffifixture, symbol: ffi_sum_ints, abi: c }
+function ffiSumInts(values: RawPtr, count: I32): I32
 
 @Native
 function sumFloats() -> Float {

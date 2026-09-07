@@ -10,7 +10,7 @@
 use kira_runtime_abi::{
     Execution, ForeignAggregates, ForeignCallback, ForeignImport, NativeStateTypeId,
 };
-use kira_semantics_model::{Type, TypeTable};
+use kira_semantics_model::{Type, TypeDescriptorTable, TypeTable};
 use la_arena::{Arena, Idx};
 
 /// The scalar-conversion machine kinds, reused from the analyzer so the IR does
@@ -33,6 +33,15 @@ pub struct IrProgram {
     /// Every shape the program's types name: the one source of field layout
     /// and of array element types.
     pub types: TypeTable,
+    /// The runtime identity of every type the program erases, tests, casts to,
+    /// or asks for with `value.type`.
+    ///
+    /// Built during lowering, while a `distinct` is still itself: the rewrite
+    /// that turns one into its representation is about the machine form of the
+    /// value, and the identity is what the language says the value is. A
+    /// backend looks rows up and never mints one, so both halves of a hybrid
+    /// program name a type by the same id.
+    pub descriptors: TypeDescriptorTable,
     /// Index of the `@Main` entrypoint within [`IrProgram::functions`], or
     /// `None` for a library.
     ///
@@ -40,6 +49,13 @@ pub struct IrProgram {
     /// single function that starts it. Backends read this to decide whether to
     /// emit an entry point at all.
     pub main: Option<u32>,
+    /// Indices of every `@MainThreadLifecycle` function within
+    /// [`IrProgram::functions`], in declaration order.
+    ///
+    /// Independent of [`IrProgram::main`]: these run on the process main
+    /// thread, several at a time, while the entrypoint runs on the application
+    /// thread.
+    pub main_thread_lifecycles: Vec<u32>,
     /// The `@Export` surface a library offers its consumer, in declaration
     /// order; empty for an application and for a library that exports nothing.
     ///
@@ -68,6 +84,24 @@ pub struct IrProgram {
     pub foreign_callbacks: Vec<ForeignCallback>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
+    /// Every module-scope constant, in evaluation order.
+    ///
+    /// The order is the contract: a backend fills the slots front to back,
+    /// once, before `main` runs — each row after every row it depends on, as
+    /// analysis ordered them. An [`IrExpr::ConstantGet`] indexes this vector.
+    pub constants: Vec<IrConstant>,
+}
+
+/// One module-scope `let`: a single value computed once before `main`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrConstant {
+    /// The constant's name, for diagnostics and disassembly.
+    pub name: String,
+    /// The constant's type; the backend's global slot is shaped by it.
+    pub ty: Type,
+    /// Index within [`IrProgram::functions`] of the synthesized zero-argument
+    /// function whose call computes the slot's value.
+    pub init: u32,
 }
 
 /// One foreign C function the program calls through the FFI seam.
@@ -148,13 +182,11 @@ impl IrProgram {
                 .get(*slot as usize)
                 .copied()
                 .unwrap_or(Type::Error),
-            IrExpr::Unary { op, .. } => match op {
-                IrUnOp::NegInt => Type::INT,
-                IrUnOp::NegFloat => Type::FLOAT,
-                IrUnOp::Not => Type::Bool,
-                IrUnOp::BitNot => Type::INT,
+            IrExpr::Unary { op, ty, .. } => unary_result_type(*op, *ty),
+            IrExpr::Binary { op, ty, .. } => match binop_result(*op) {
+                Type::INT => *ty,
+                other => other,
             },
-            IrExpr::Binary { op, .. } => binop_result(*op),
             IrExpr::Call { result, .. } => *result,
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             IrExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
@@ -166,6 +198,7 @@ impl IrProgram {
             | IrExpr::EnumPayload { ty, .. }
             | IrExpr::NativeState { ty, .. }
             | IrExpr::NativeRecover { ty, .. }
+            | IrExpr::NativeStateTake { ty, .. }
             | IrExpr::Convert { ty, .. }
             | IrExpr::FileSystem { ty, .. }
             | IrExpr::Compiler { ty, .. }
@@ -176,19 +209,27 @@ impl IrProgram {
             | IrExpr::StringOperation { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
+            IrExpr::TypeTest { .. } => Type::Bool,
+            IrExpr::TypeCast { ty, .. } => *ty,
+            IrExpr::ConstantGet { ty, .. } => *ty,
+            IrExpr::StringCharAt { .. } => Type::Int(kira_semantics_model::IntSpelling::U8),
             IrExpr::ArrayLen { .. }
             | IrExpr::StringLen { .. }
-            | IrExpr::StringCharAt { .. }
             | IrExpr::StringIndexOf { .. }
             | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::StringSubstring { .. } | IrExpr::StringOf { .. } => Type::String,
             IrExpr::CStringNew { .. } | IrExpr::CLayoutAddress { .. } => Type::CBlock,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::IntoAny { .. } => Type::Any,
-            IrExpr::Widen { to, .. } => *to,
-            IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
+            IrExpr::TypeConst { .. } | IrExpr::TypeOf { .. } => Type::RuntimeType,
+            IrExpr::TypeField { ty, .. } => *ty,
+            IrExpr::TypeCastResult { result, .. } => Type::Enum(*result),
+            IrExpr::MainThreadCall { ty, .. } | IrExpr::MainThreadJoin { ty, .. } => *ty,
+            IrExpr::ArrayAppend { .. }
+            | IrExpr::NativeStateRetain { .. }
+            | IrExpr::NativeStateRelease { .. } => Type::Void,
             // Every primitive answers with one machine word, spelled `Int`.
-            IrExpr::TaskOp { .. } => Type::INT,
+            IrExpr::TaskOp { .. } | IrExpr::ChannelOp { .. } => Type::INT,
         }
     }
 
@@ -230,6 +271,9 @@ fn binop_result(op: IrBinOp) -> Type {
         IrBinOp::AddInt
         | IrBinOp::SubInt
         | IrBinOp::MulInt
+        | IrBinOp::WrappingAddInt
+        | IrBinOp::WrappingSubInt
+        | IrBinOp::WrappingMulInt
         | IrBinOp::DivInt
         | IrBinOp::RemInt
         | IrBinOp::DivUInt
@@ -268,6 +312,8 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::NeStr
         | IrBinOp::EqAny
         | IrBinOp::NeAny
+        | IrBinOp::EqType
+        | IrBinOp::NeType
         | IrBinOp::And
         | IrBinOp::Or => Type::Bool,
     }
@@ -299,6 +345,8 @@ pub struct IrFunction {
     /// A hybrid build splits the program on this; a single-backend build
     /// resolves it against that backend's default.
     pub execution: Execution,
+    /// Whether this function is entered through the host main-thread runtime.
+    pub is_main_thread: bool,
     /// The parameter slots this function takes by reference, ascending.
     ///
     /// A statically-typed backend reads this to give those parameters a pointer
@@ -458,6 +506,25 @@ pub enum IrStmt {
     /// Jumps to the condition test. As with [`IrStmt::Break`], an enclosing
     /// loop is guaranteed by analysis.
     Continue,
+    /// Release the bindings that die here, because the block that declared
+    /// them is ending.
+    ///
+    /// Lowering places one at the end of every statement list whose bindings
+    /// are dead past it, and before every [`IrStmt::Break`] and
+    /// [`IrStmt::Continue`] — which end every block between themselves and
+    /// their loop at once. A `Return` needs none: a return releases the whole
+    /// frame plan anyway.
+    ///
+    /// The list names candidate slots as lowering computed them; each engine
+    /// releases those *its* release plan owns (a lent borrow parameter never
+    /// appears, but a slot's candidacy is engine-independent while ownership
+    /// is not). A slot whose value was moved out holds nothing and releases
+    /// nothing, so re-executing the same statement in a loop releases exactly
+    /// once per iteration.
+    ReleaseLocals {
+        /// The slots whose bindings die at this point, ascending.
+        locals: Vec<u32>,
+    },
 }
 
 /// One step of an [`IrPlace`]'s walk.
@@ -531,6 +598,23 @@ mod exprs;
 /// names it, and which file it is written in is this crate's business.
 pub use exprs::{IrCallee, IrExpr};
 
+/// What a unary operator applied to an operand of `ty` produces.
+///
+/// Every backend has to agree on this, and the one that decides it for itself
+/// is the one that diverges: the VM used to range-check `~` at the operand's
+/// written width, which made `~U8(0)` a trap there and `-1` on native. A
+/// bitwise operator acts on the raw 64 bits and answers `Int`, so there is no
+/// narrower width for the result to leave.
+#[must_use]
+pub fn unary_result_type(op: IrUnOp, ty: Type) -> Type {
+    match op {
+        IrUnOp::NegInt => ty,
+        IrUnOp::NegFloat => Type::FLOAT,
+        IrUnOp::Not => Type::Bool,
+        IrUnOp::BitNot => Type::INT,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,12 +625,15 @@ mod tests {
         IrProgram {
             functions: Vec::new(),
             types: TypeTable::default(),
+            descriptors: Default::default(),
             main: None,
+            main_thread_lifecycles: Vec::new(),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
             foreign_callbacks: Vec::new(),
             exprs: Arena::new(),
+            constants: Vec::new(),
         }
     }
 
