@@ -23,14 +23,14 @@ Measured on the merged tree, each run watched to completion:
   each, over identical case-name sets.
 - Lifecycle harness on `vm`, `llvm` and `hybrid`:
   `main-thread-lifecycle / 42 / manual-main-thread / 20021`, exit 0 on each.
-- FFI harness on `--backend hybrid`: **302**.
-- `cargo test -p kira-cli --test backend_parity`: **463**, zero failures.
+- FFI harness on `vm`, `llvm` and `hybrid`: **306** each.
+- `cargo test -p kira-cli --test backend_parity`: **464**, zero failures.
 - `cargo test -p kira-diagnostic-registry`: 10 unit and 5 integration, over
   **443** codes. The drift gate was proven by making it fail, not by reading it.
 - The receive-nothing-can-answer repro traps on all three engines inside
   `timeout 10`, one sentence between them.
 
-The pins in `crates/kira-cli/tests/kik_harness.rs` are 1502, 20021 and 302, each
+The pins in `crates/kira-cli/tests/kik_harness.rs` are 1502, 20021 and 306, each
 matching what the run reports.
 
 CI is green on `d4b7d8c`, every check: `fmt + clippy + build + test` on
@@ -175,12 +175,23 @@ collide with each other.
   kira-cli`.** After runtime-abi or native-bridge edits, build it explicitly or
   LLVM and hybrid silently run old code. The ABI-version guard catches the bad
   case by name, which it did this session on the 14→15 bump.
+- **Building the archive is not enough either.** `kira` dispatches through
+  `~/.kira/toolchains/dev/<version>/bin`, and the archive a built program links
+  is the *toolchain's* copy. After a native-bridge or runtime-abi edit run
+  `cargo build --workspace` and then `knvm binstall --debug`, or the program
+  links the archive from the last binstall and the edit is invisible. This cost
+  an hour of chasing a fix that was already correct.
+- **A new `kira_rt_*` symbol has to join `EXPORTED_SYMBOLS` in
+  `kira-runtime-abi/src/lib.rs`.** A hybrid program's native half is linked
+  with only those forced in, so a symbol left out is a load-time failure naming
+  the symbol — clear, but only on the hybrid path, so a full `backend_parity`
+  run is what finds it.
 - **Emscripten** installs at `~/emsdk` and works on aarch64 Linux:
   `./emsdk install latest && ./emsdk activate latest`, then
   `source ~/emsdk/emsdk_env.sh`. Without it the wasm end-to-end tests fail
   rather than skipping, so install it before trusting a green run.
 - Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1502** for
-  the harness, 20021 for the lifecycle output, 302 for the ffi harness. The
+  the harness, 20021 for the lifecycle output, 306 for the ffi harness. The
   harness tally is asserted whole, so adding a construct without re-measuring
   fails it — which is the point. Measure, never add up: every tally in this file
   that was arrived at by arithmetic has been wrong at least once.
