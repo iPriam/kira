@@ -173,3 +173,106 @@ a wrong one. That distinction is only visible by running both engines, and the
 parity suite cannot see finding 3 at all, because agreement on a wrong answer
 reads exactly like agreement on a right one. Each finding here was measured
 before it was accepted.
+
+# Second @codex review, on `01b22c6`: six findings
+
+All six were checked by running them before anything was changed. All six were
+right, which the first round's seven were not: two of those were wrong and
+proved so. The difference is worth naming — this round's findings are about
+what a program *can reach*, and every one of them turned out to be reachable.
+
+## 8. A hybrid program kept two channel tables — FIXED
+
+**Verified by running it.** A `@Runtime` `main` creating `Channel<Int>()` and
+handing the sender to a `@Native` function traps:
+
+```
+kira: runtime trap: channel end handle is not live
+```
+
+A channel end is one machine word, so it crosses the seam like any other
+scalar and the type checker lets it; what it names is a row in a table, and
+each half kept its own.
+
+The bytecode half now performs its channel primitives on the native half's
+table, the way it already reads and writes native state there — a host
+capability answering `None` by default, so every host but a hybrid session's
+keeps its own table. The archive gained `kira_rt_channel_try`, which answers a
+trap code instead of ending the process, because the VM raises its own trap
+rather than exiting.
+
+**Half of the finding was wrong, and it is the half worth recording.** It also
+claimed "boxed payloads would resolve against a different native-state store in
+the opposite engine". They do not: `Session::vm_state` is `Some` only when
+*every* function is `@Runtime`, so a program with a native half already routes
+its state to the library's store. One token domain, already. The channel table
+was the only split one.
+
+Four FFI-harness cases now cross the seam in both directions, one of them with
+an owned payload. None of the 302 cases already there could have failed on
+this: every one of them used both ends on the same side.
+
+## 9. Undelivered boxed payloads leaked at run teardown — FIXED
+
+**Verified by running it.** Three strings queued and never received, on the
+LLVM backend under `KIRA_HEAP_REPORT`:
+
+```
+kira: heap allocated=3 freed=0 live=3 retained=0 imbalance=+3
+```
+
+Closing a receiver already drained them; ending the run did not. The table is
+now told at creation whether a queued word is a token — by then there is no
+send left to ask — and hands the words back when it is emptied. The VM
+releases them on every path out of a run, trap included; the native half does
+it in `kira_rt_channel_reset`.
+
+**What the fix taught, which the finding did not say.** The generated entry
+started the channel scope and never ended it, and ending it in `main` was not
+enough: the table is thread-local, and under a native event loop the thread
+`@Main` runs on is not the one `main` returns on. A reset in `main` emptied a
+table nothing had put anything in — as quiet as no reset at all, and it looked
+like a fix. The scope now ends in the function that started it.
+
+## 10. Macros were visible without an import — FIXED
+
+**Verified by running it.** An application importing `Outer`, which imports
+`Inner`, calling `innerDouble!(21)` from `Inner` printed `42`. The same file's
+ordinary function was correctly refused with `KSEM061`. One rule, two answers.
+
+Macros expand before the analyzer's import table exists, so the imports are
+read off the token stream and `ImportTable::sees` answers the question — the
+same implementation, so a macro's visibility cannot drift from a function's.
+
+A file that can see none of a program's macros still runs the expansion pass.
+Skipping it would leave `name!(…)` in the text with nothing to say why, so the
+shortcut that keeps a macro-free program byte-identical now asks about the
+program rather than about the file.
+
+## 11. A shadowed macro survived in the other kind maps — FIXED
+
+The three kinds are three maps and lookups are by kind, so a claim that wrote
+only its own kind left the shadowed declaration reachable through another: an
+application's declarative `Name` took the name while `@Name` still ran a
+dependency's attribute macro. The regression test was checked against the old
+code and fails on it.
+
+## 12. `registry.rs` at 1,082 lines — FIXED
+
+Objectively true and the ceiling is unconditional. Split into what a
+declaration says, how one is read off a token stream, and what a program does
+with them: 291, 145, 566 and 208 lines. The visibility work above had taken it
+to 1,174 before the split.
+
+## 13. Pointer payloads only refused at the top level — FIXED
+
+**Verified by running it.** `Channel<RawPtr>()` is refused; `struct Envelope {
+let pointer: RawPtr }` and `Channel<Envelope>()` was accepted. The same
+address, one wrapper away from the rule. The question is now asked of the
+whole value — structs, arrays, enum payloads, distincts, cells — following the
+same walk that decides whether the native-state store can hold the type, and
+the refusal names the pointer it found.
+
+Filed P2 by the review. It is the one of the six that no program in the
+repository could have hit, because nothing declares a pointer-bearing payload;
+it is also the one that would have been silent rather than loud if it had.
