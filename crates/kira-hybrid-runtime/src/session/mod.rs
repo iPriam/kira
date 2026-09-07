@@ -38,8 +38,8 @@ use kira_dynamic_ffi::{ForeignLibrary, PROCESS_BINDING_MARKER};
 use kira_hybrid_definition::HybridManifest;
 use kira_libffi::{FfiClosure, LibffiRuntime, RawFfiCif};
 use kira_runtime_abi::{
-    BridgeValue, Execution, FileRequest, FileResponse, FileSystemError, ForeignArg,
-    ForeignCallError, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
+    BridgeValue, ChannelPrim, ChannelTrap, Execution, FileRequest, FileResponse, FileSystemError,
+    ForeignArg, ForeignCallError, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
     HostCapabilities, LinuxSyscall, NativeArg, NativeCallError, NativeResult, NativeReturn,
     NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
     NativeStateValue, SyscallError, file_system, native_state_walk, native_state_walk_mut, syscall,

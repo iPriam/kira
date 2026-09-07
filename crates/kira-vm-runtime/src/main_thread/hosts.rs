@@ -11,11 +11,11 @@ use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use kira_runtime_abi::{
-    CheckRequest, CompilerError, FileRequest, FileResponse, FileSystemError, ForeignArg,
-    ForeignCallError, ForeignResult, HostCapabilities, LinuxSyscall, MainThreadError,
-    MainThreadHandle, MainThreadRequest, MainThreadResponse, NativeArg, NativeCallError,
-    NativeReturn, NativeStateError, NativeStatePathStep, NativeStateToken, NativeStateTypeId,
-    NativeStateValue, SyscallError,
+    ChannelPrim, ChannelTrap, CheckRequest, CompilerError, FileRequest, FileResponse,
+    FileSystemError, ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, LinuxSyscall,
+    MainThreadError, MainThreadHandle, MainThreadRequest, MainThreadResponse, NativeArg,
+    NativeCallError, NativeReturn, NativeStateError, NativeStatePathStep, NativeStateToken,
+    NativeStateTypeId, NativeStateValue, SyscallError,
 };
 
 use super::{Job, MainLoop, MainThreadRunner};
@@ -150,6 +150,16 @@ macro_rules! impl_forwarding_host {
 
             fn syscall(&mut self, call: LinuxSyscall, args: &[i64]) -> Result<i64, SyscallError> {
                 lock_host(&self.shared).syscall(call, args)
+            }
+
+            fn channel_op(
+                &mut self,
+                prim: ChannelPrim,
+                a: i64,
+                b: i64,
+                c: i64,
+            ) -> Option<Result<i64, ChannelTrap>> {
+                lock_host(&self.shared).channel_op(prim, a, b, c)
             }
 
             fn native_state_create(

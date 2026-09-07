@@ -23,14 +23,14 @@ Measured on the merged tree, each run watched to completion:
   each, over identical case-name sets.
 - Lifecycle harness on `vm`, `llvm` and `hybrid`:
   `main-thread-lifecycle / 42 / manual-main-thread / 20021`, exit 0 on each.
-- FFI harness on `--backend hybrid`: **302**.
-- `cargo test -p kira-cli --test backend_parity`: **463**, zero failures.
+- FFI harness on `vm`, `llvm` and `hybrid`: **306** each.
+- `cargo test -p kira-cli --test backend_parity`: **464**, zero failures.
 - `cargo test -p kira-diagnostic-registry`: 10 unit and 5 integration, over
   **443** codes. The drift gate was proven by making it fail, not by reading it.
 - The receive-nothing-can-answer repro traps on all three engines inside
   `timeout 10`, one sentence between them.
 
-The pins in `crates/kira-cli/tests/kik_harness.rs` are 1502, 20021 and 302, each
+The pins in `crates/kira-cli/tests/kik_harness.rs` are 1502, 20021 and 306, each
 matching what the run reports.
 
 CI is green on `d4b7d8c`, every check: `fmt + clippy + build + test` on
@@ -175,12 +175,23 @@ collide with each other.
   kira-cli`.** After runtime-abi or native-bridge edits, build it explicitly or
   LLVM and hybrid silently run old code. The ABI-version guard catches the bad
   case by name, which it did this session on the 14→15 bump.
+- **Building the archive is not enough either.** `kira` dispatches through
+  `~/.kira/toolchains/dev/<version>/bin`, and the archive a built program links
+  is the *toolchain's* copy. After a native-bridge or runtime-abi edit run
+  `cargo build --workspace` and then `knvm binstall --debug`, or the program
+  links the archive from the last binstall and the edit is invisible. This cost
+  an hour of chasing a fix that was already correct.
+- **A new `kira_rt_*` symbol has to join `EXPORTED_SYMBOLS` in
+  `kira-runtime-abi/src/lib.rs`.** A hybrid program's native half is linked
+  with only those forced in, so a symbol left out is a load-time failure naming
+  the symbol — clear, but only on the hybrid path, so a full `backend_parity`
+  run is what finds it.
 - **Emscripten** installs at `~/emsdk` and works on aarch64 Linux:
   `./emsdk install latest && ./emsdk activate latest`, then
   `source ~/emsdk/emsdk_env.sh`. Without it the wasm end-to-end tests fail
   rather than skipping, so install it before trusting a green run.
 - Pinned tallies live in `crates/kira-cli/tests/kik_harness.rs`: **1502** for
-  the harness, 20021 for the lifecycle output, 302 for the ffi harness. The
+  the harness, 20021 for the lifecycle output, 306 for the ffi harness. The
   harness tally is asserted whole, so adding a construct without re-measuring
   fails it — which is the point. Measure, never add up: every tally in this file
   that was arrived at by arithmetic has been wrong at least once.
@@ -413,6 +424,46 @@ line: the CI log could say only "Io", and neither run could be told from the
 other. And the first occurrence was on Windows alone, which made a platform
 difference look like the explanation; it was not one, and the second occurrence
 on macOS is what said so.
+
+### Sanitizers: what CI now proves, and what it still cannot
+
+`--no-fail-fast` is on every CI run. The default stops at the first failure,
+and a run that stops has told you what is wrong *first* rather than what is
+wrong; for most of this feature's life it left roughly 3,200 of 4,080 tests
+unattempted on every platform, which is why two real defects arrived as first
+sightings rather than as regressions. It costs nothing on a green run — the
+only kind anyone waits on — and costs a slower red run, which is the run whose
+entire value is the list.
+
+The pinned LLVM bundle **does** ship an Address Sanitizer runtime, checked
+rather than assumed: `libclang_rt.asan.a` sits in the per-target resource
+directory the discovery looks in, `kira build --sanitize address` links it, and
+the resulting binary carries 582 `asan` symbols where an ordinary one carries
+none. `the_installed_bundle_sanitizes_what_it_builds` asserts both halves — the
+build succeeds and `__asan_init` is in the image — so a host whose bundle lacks
+the runtime fails by name instead of being discovered the next time somebody
+reaches for the flag. That matters here specifically: this repository's bundle
+for one host turned out to hold objects for a different architecture, under the
+right names, in archives that resolved every symbol a reader looked for.
+
+**The correction worth carrying: that sanitizer would not have caught either
+of the two undefined-behaviour defects this effort found.** `--sanitize
+address` instruments the *generated program*. The unchecked `unwrap<Function>`
+handed a call instruction was undefined behaviour inside the compiler, and the
+`dlclose` unmapping a library under its own live thread was undefined behaviour
+inside the host process. Both are Rust code this repository owns, and neither
+is in any program the sanitizer flag instruments.
+
+What would catch them is the Rust workspace itself built with
+`-Zsanitizer=address`, which needs a nightly toolchain and a full rebuild of
+the dependency graph. It is not wired, deliberately: there is no nightly on the
+development host, so nothing about such a job could be verified before shipping
+it, and a sanitizer job that quietly does nothing is worse than none because it
+reads as coverage. What it needs is a host with nightly, a targeted crate set
+(`kira-llvm-backend`, `kira-dynamic-ffi`, `kira-hybrid-runtime` are where both
+defects lived), and an assertion that the built test binary really is
+instrumented — the same `__asan_init` check as above — so the job cannot pass
+without having sanitized anything.
 
 ### A property that has nothing to do with time should not be stated in terms of it
 

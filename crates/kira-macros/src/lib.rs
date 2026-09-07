@@ -36,6 +36,7 @@ mod declarative;
 mod diagnostics;
 mod edits;
 mod eval;
+mod imports;
 mod invoke;
 mod ksl;
 mod probe;
@@ -273,6 +274,13 @@ pub struct FileMacros {
     owner: Option<String>,
     /// The macros it declares, in declaration order.
     registry: registry::FileRegistry,
+    /// Every import it writes, as `(module path, namespace root)`.
+    ///
+    /// An import is what makes another package's declarations nameable in
+    /// *this file*, macros included: expansion runs before the analyzer builds
+    /// its import table, so the imports are read off the token stream here —
+    /// with the root each one binds, because a root binds once per file.
+    imports: Vec<(String, String)>,
     /// Everything scanning it reported.
     diagnostics: Vec<Diagnostic>,
 }
@@ -295,6 +303,12 @@ impl FileMacros {
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
+
+    /// Every import this file writes, as `(module path, namespace root)`.
+    #[must_use]
+    pub fn imports(&self) -> &[(String, String)] {
+        &self.imports
+    }
 }
 
 /// Scans one file for the macros it declares.
@@ -310,6 +324,7 @@ pub fn scan(source: SourceId, owner: Option<&str>, text: &str) -> FileMacros {
         source,
         owner: owner.map(str::to_owned),
         registry,
+        imports: imports::written(&file),
         diagnostics: reporter.into_diagnostics(),
     }
 }
@@ -403,6 +418,13 @@ pub struct MacroEnvironment {
     templates: HashMap<String, procedural::WrapperTemplate>,
     /// Names declared twice inside one scope, reported once for the program.
     conflicts: Vec<Diagnostic>,
+    /// Whether the *program* declares any macro at all.
+    ///
+    /// Not the same question as whether this environment holds one: a file
+    /// that imports nothing declaring a macro sees an empty registry in a
+    /// program full of them, and skipping expansion for it would leave a
+    /// `name!(…)` in the text with nothing to say why it was not expanded.
+    program_declares: bool,
 }
 
 impl MacroEnvironment {
@@ -420,9 +442,45 @@ impl MacroEnvironment {
     ///
     /// Expansion is skipped entirely when this holds, which is what keeps a
     /// program that never mentions a macro byte-identical to its own source.
+    /// A file that can see none of a program's macros is not this: it still
+    /// runs the pass, so a call to one it may not name is reported rather than
+    /// left in the text.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.registry.is_empty()
+        !self.program_declares
+    }
+
+    /// This environment as one file sees it: only the macros declared in a
+    /// file `visible` names.
+    ///
+    /// A macro is a name a file writes, and a name a file writes is gated by
+    /// the file's own imports. The merge above is program-wide because a
+    /// conflict is, and because the resolution order between two packages is
+    /// the merge order; this is the same environment with everything the file
+    /// may not name taken out of it.
+    ///
+    /// The templates are recomputed rather than filtered: a wrapper template
+    /// is registered *by* a macro, so which templates exist is an answer about
+    /// the macros that are visible here.
+    #[must_use]
+    pub fn visible_to(
+        &self,
+        visible: &HashSet<SourceId>,
+        templates: &[&FileDeclarations],
+    ) -> MacroEnvironment {
+        let registry = self.registry.visible_to(visible);
+        let templates = procedural::wrapper_templates(
+            templates.iter().map(|file| file.declarations.as_slice()),
+            &registry,
+        );
+        MacroEnvironment {
+            registry,
+            templates,
+            // Reported once for the program by the caller that merged it, not
+            // once per file that can see the second declaration.
+            conflicts: Vec::new(),
+            program_declares: self.program_declares,
+        }
     }
 }
 
@@ -444,6 +502,7 @@ pub fn environment(macros: &[&FileMacros], templates: &[&FileDeclarations]) -> M
         &registry,
     );
     MacroEnvironment {
+        program_declares: !registry.is_empty(),
         registry,
         templates,
         conflicts,

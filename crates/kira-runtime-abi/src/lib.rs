@@ -81,7 +81,7 @@ pub fn foreign_adapter_name(index: usize) -> String {
 pub fn foreign_callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
 }
-pub use channels::{ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
+pub use channels::{BOXED_PAYLOAD, ChannelExecutor, ChannelPrim, ChannelReceive, ChannelTrap};
 pub use main_thread::*;
 pub use math_op::MathOp;
 pub use native_state::{
@@ -113,7 +113,7 @@ pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 15;
+pub const RUNTIME_ABI_VERSION: u32 = 16;
 
 /// Where a string object keeps its share count, as a field index.
 ///
@@ -145,7 +145,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_15";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_16";
 
 /// The fixed C symbol exported by a whole-program native live library.
 ///
@@ -231,6 +231,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_main_thread_lifecycle_pump_local",
     "kira_rt_main_thread_lifecycle_reset_local",
     "kira_rt_channel_reset",
+    "kira_rt_channel_try",
 ];
 
 /// An argument the VM hands to a native function.
@@ -415,6 +416,28 @@ pub trait HostCapabilities {
     ) -> Result<NativeReturn, NativeCallError> {
         let _ = (function_id, args);
         Err(NativeCallError::NoNativeHalf)
+    }
+
+    /// Carries out one channel primitive on a table the host owns.
+    ///
+    /// `None` — the default — means the host has no channel table and the
+    /// engine should use its own, which is every host but a hybrid session's.
+    ///
+    /// A hybrid session has one, because the two halves of a hybrid program
+    /// have to share a channel table. A channel end is an ordinary value: a
+    /// `@Runtime` function can create one and hand it to a `@Native` function,
+    /// or the other way round, and a handle is an index — so two tables mean
+    /// the receiving half looks the end up in a table that never had it and
+    /// traps on a program that is correct.
+    fn channel_op(
+        &mut self,
+        prim: ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Option<Result<i64, ChannelTrap>> {
+        let _ = (prim, a, b, c);
+        None
     }
 
     /// Services one request on the host's main-thread event loop.

@@ -58,6 +58,62 @@ fn address_sanitizer_never_falls_back_to_a_host_compiler_runtime() {
     let _ = std::fs::remove_dir_all(source.parent().expect("isolated source directory"));
 }
 
+/// The installed bundle really ships an Address Sanitizer runtime, and asking
+/// for it really instruments the program.
+///
+/// The refusal above proves the *absence* is loud. Nothing proved the presence,
+/// and a capability that is built, documented and never exercised is a
+/// capability nobody knows is broken: this repository's own LLVM bundle for one
+/// host turned out to hold objects for a different architecture, under the
+/// right names, in archives that resolved every symbol a reader looked for.
+///
+/// So this asserts both halves on whichever host runs it. A bundle missing the
+/// runtime fails here by name rather than being discovered the next time
+/// somebody reaches for `--sanitize`, and a build that quietly produced an
+/// uninstrumented binary — a sanitizer that reads as coverage and is not —
+/// fails on the symbol count.
+#[test]
+fn the_installed_bundle_sanitizes_what_it_builds() {
+    let source = write_isolated_source(PROGRAM);
+    let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .args(["build", "--backend", "llvm", "--sanitize", "address"])
+        .arg(&source)
+        .output()
+        .expect("run kira build");
+    assert!(
+        output.status.success(),
+        "this host's LLVM bundle cannot build with `--sanitize address`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let directory = source.parent().expect("isolated source directory");
+    let executable = directory
+        .join(".kira-build")
+        .join(kira_toolchain::executable_name("main"));
+    let bytes = std::fs::read(&executable).unwrap_or_else(|error| {
+        panic!(
+            "the sanitized build produced no `{}`: {error}",
+            executable.display()
+        )
+    });
+    // The runtime's own entry point, which every instrumented image carries and
+    // no ordinary one does. Searched as bytes rather than through `nm`, which
+    // is three different tools across these hosts and absent on one.
+    assert!(
+        contains(&bytes, b"__asan_init"),
+        "`--sanitize address` produced a binary with no sanitizer runtime in it"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Whether `haystack` contains `needle`.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
 #[test]
 fn sanitizer_is_refused_on_the_vm_and_web() {
     let source = write_isolated_source(PROGRAM);

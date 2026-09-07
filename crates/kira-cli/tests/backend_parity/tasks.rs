@@ -387,6 +387,40 @@ function main() {
     assert_eq!(output, "boxed\n42\n");
 }
 
+/// A run that ends with payloads still queued releases them too.
+///
+/// The other half of the same leak, one level up: nothing closes the receiver
+/// here, the program simply returns with three strings still waiting. Ending
+/// the run is then the only thing left that can free them, and a run that
+/// dropped its channel table without looking still prints exactly this and
+/// still exits zero — while in a hybrid session the storage stays in a store
+/// that outlives the process, once per run.
+#[test]
+fn a_run_that_ends_with_payloads_queued_releases_them() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+import Foundation
+
+async function fill(tx: Sender<String>) -> Int {
+    tx.send("one")
+    tx.send("two")
+    tx.send("three")
+    return 1
+}
+
+@Main
+function main() {
+    let tx = Channel<String>()
+    let rx = tx.receiver
+    var pending = Task { fill(tx) }
+    print(pending.await)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n");
+}
+
 /// Closing a receiver releases what it never delivered.
 ///
 /// This is the case a leak hides in. Three payloads are queued and none is

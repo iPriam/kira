@@ -22,6 +22,7 @@ use super::{FloatSpelling, IntSpelling, Type};
 /// here keeps one owner of the answer instead of a struct table and an array
 /// table that could disagree.
 mod identity;
+mod pointers;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TypeTable {

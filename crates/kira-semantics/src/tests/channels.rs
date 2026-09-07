@@ -47,6 +47,39 @@ fn a_payload_the_store_cannot_hold_is_still_refused() {
     );
 }
 
+/// An address inside the value is the same address.
+///
+/// The refusal is about what would arrive, so it is asked of the whole value.
+/// A rule that looked only at the outermost type would be one struct away from
+/// letting through exactly what `Channel<RawPtr>()` is refused for, and the
+/// wrapper costs an author nothing to write.
+#[test]
+fn a_payload_carrying_a_pointer_anywhere_inside_it_is_refused() {
+    let cases = [
+        "struct Envelope { let pointer: RawPtr }\nlet tx = Channel<Envelope>()",
+        "struct Envelope { let pointer: RawPtr }\nlet tx = Channel<[Envelope]>()",
+        "struct Envelope { let pointer: RawPtr }\n\
+         struct Outer { let inner: Envelope }\nlet tx = Channel<Outer>()",
+        "distinct Address = RawPtr\nstruct Envelope { let at: Address }\n\
+         let tx = Channel<Envelope>()",
+    ];
+    for case in cases {
+        let (declarations, body) = case.rsplit_once('\n').expect("a body");
+        let text = format!("{declarations}\n{}", program(body));
+        let items = diagnostics(&text);
+        let refusal = items
+            .iter()
+            .find(|item| item.has_code("KSEM365"))
+            .unwrap_or_else(|| panic!("expected a KSEM365 for `{case}`, got {items:?}"));
+        // The author wrote the outer type, so the message has to say which
+        // part of it is the problem.
+        assert!(
+            refusal.message.contains("it carries a "),
+            "{refusal:?} does not name the pointer it found"
+        );
+    }
+}
+
 /// The two ends are two types. A direction used the wrong way is a type error
 /// here rather than a trap at run time.
 #[test]

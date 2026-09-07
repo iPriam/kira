@@ -364,6 +364,69 @@ struct MacroContext<'db> {
     /// The compiled shaders behind the `Ksl` namespace.
     #[returns(ref)]
     shaders: PrecompiledShaders,
+    /// Which files each file may take macros from, in program order.
+    ///
+    /// A macro is a name a file writes, gated by that file's own imports like
+    /// every other name it writes. Computed here rather than looked up later
+    /// because expansion runs before the analyzer's import table exists, and
+    /// it belongs in the key: two compilations whose files import differently
+    /// expand differently.
+    #[returns(ref)]
+    visibility: Vec<(SourceId, Vec<SourceId>)>,
+}
+
+/// Which files each file may take macros from.
+///
+/// The same question the analyzer answers for every other name a file writes,
+/// asked earlier and against the same rule: [`ImportTable::sees`] decides it,
+/// so a macro's visibility cannot drift from a function's. The imports come
+/// off the token stream because expansion runs before anything is parsed, and
+/// the entries are built with the spelling the file wrote — an import naming
+/// no loaded module binds nothing here exactly as it binds nothing there.
+///
+/// Only the files that declare macros are listed against each file: they are
+/// the only ones an environment can be filtered down to, and the list is part
+/// of a query key.
+fn macro_visibility<'db>(
+    db: &'db dyn salsa::Database,
+    files: &[SourceFile<'db>],
+    scans: &[&kira_macros::FileMacros],
+    identities: &[(String, SourceId)],
+) -> Vec<(SourceId, Vec<SourceId>)> {
+    let entries: Vec<imports::ImportEntry> = files
+        .iter()
+        .zip(scans)
+        .flat_map(|(file, scan)| {
+            let source = *file.id(db);
+            scan.imports()
+                .iter()
+                .map(move |(module, root)| imports::ImportEntry {
+                    source,
+                    module: module.clone(),
+                    root: root.clone(),
+                    span: kira_source::Span::new(0, 0),
+                })
+        })
+        .collect();
+    let table = ImportTable::build(identities, &entries);
+    let declaring: Vec<SourceId> = files
+        .iter()
+        .zip(scans)
+        .filter(|(_, scan)| scan.declares_macro())
+        .map(|(file, _)| *file.id(db))
+        .collect();
+    files
+        .iter()
+        .map(|file| {
+            let source = *file.id(db);
+            let visible = declaring
+                .iter()
+                .copied()
+                .filter(|&declaration| table.sees(source, declaration))
+                .collect();
+            (source, visible)
+        })
+        .collect()
 }
 
 /// Every macro the program declares, merged from the per-file scans.
@@ -389,6 +452,32 @@ fn macro_environment<'db>(
     kira_macros::environment(&macros, &templates)
 }
 
+/// The macro environment one file expands against.
+///
+/// The program-wide merge with everything this file may not name taken out of
+/// it. Tracked per file so a file whose imports and bytes are unchanged pays
+/// for the filtering once.
+#[salsa::tracked(returns(ref))]
+fn file_environment<'db>(
+    db: &'db dyn salsa::Database,
+    file: SourceFile<'db>,
+    context: MacroContext<'db>,
+) -> kira_macros::MacroEnvironment {
+    let source = *file.id(db);
+    let visible: std::collections::HashSet<SourceId> = context
+        .visibility(db)
+        .iter()
+        .find(|(id, _)| *id == source)
+        .map(|(_, visible)| visible.iter().copied().collect())
+        .unwrap_or_default();
+    let templates: Vec<&kira_macros::FileDeclarations> = context
+        .templates(db)
+        .iter()
+        .map(|&file| file_declarations(db, file))
+        .collect();
+    macro_environment(db, context).visible_to(&visible, &templates)
+}
+
 /// One file's text after every macro in it was expanded.
 ///
 /// The unit of reuse. Expansion fixes the environment before any file runs and
@@ -402,7 +491,7 @@ fn expanded_file<'db>(
     file: SourceFile<'db>,
     context: MacroContext<'db>,
 ) -> kira_macros::FileExpansion {
-    let environment = macro_environment(db, context);
+    let environment = file_environment(db, file, context);
     let shaders = context.shaders(db);
     let pipeline: Option<&dyn kira_macros::ShaderCompiler> = if shaders.is_empty() {
         None
@@ -581,6 +670,14 @@ struct ProgramFiles<'db> {
 #[salsa::tracked]
 fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> ProgramFiles<'db> {
     let modules = source.modules(db);
+    // Kept beside the files because visibility is answered against module
+    // identities: which package a file belongs to, and which module an import
+    // names, are both read out of them.
+    let identities: Vec<(String, SourceId)> = modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| (module.module.clone(), module_source_id(index)))
+        .collect();
     let mut files: Vec<SourceFile<'db>> = modules
         .into_iter()
         .enumerate()
@@ -618,6 +715,7 @@ fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> Pr
             .filter(|&file| file_declarations(db, file).carries_template_for(&wrappers))
             .collect()
     };
+    let visibility = macro_visibility(db, &files, &scans, &identities);
     let context = MacroContext::new(
         db,
         declaring,
@@ -625,6 +723,7 @@ fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> Pr
         source.machine(db).platform().to_owned(),
         source.lint(db),
         source.shaders(db),
+        visibility,
     );
     ProgramFiles::new(db, files, context)
 }

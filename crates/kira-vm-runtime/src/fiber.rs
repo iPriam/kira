@@ -95,6 +95,12 @@ impl Fiber {
         if finished {
             vm.release_constants();
         }
+        // A trapped fiber is over too, and it still owns the storage its
+        // undelivered channel payloads name. A suspended one is not: its
+        // handles are still live and the values are still on their way.
+        if finished || outcome.is_err() {
+            vm.release_undelivered_channel_payloads();
+        }
         self.executors = vm.take_executors();
         let (heap, scratch) = vm.into_heap_and_scratch();
         self.heap = heap;

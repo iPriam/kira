@@ -145,12 +145,20 @@ jobs:
       # is broken, and skipping the whole job would say this platform is
       # untested. Everything that does not need the toolchain still runs,
       # including the refusal that is decided before `emcc` is ever invoked.
+      # `--no-fail-fast` because the default stops at the first failure, and a
+      # run that stops has not told you what is wrong — it has told you what is
+      # wrong *first*. For most of this feature's life that left roughly 3,200
+      # of 4,080 tests unattempted on every platform, and two real defects were
+      # found as first sightings rather than as regressions because nothing had
+      # ever reached them. It costs nothing on a green run, which is every run
+      # anyone waits on; it costs a slower red run, which is the run whose
+      # whole value is the list.
       - name: cargo nextest
         shell: bash
         run: |
           if [ "${{ matrix.emscripten }}" = "true" ]; then
-            cargo nextest run --workspace
+            cargo nextest run --workspace --no-fail-fast
           else
-            cargo nextest run --workspace \
+            cargo nextest run --workspace --no-fail-fast \
               -E 'not (test(/^web::/) or test(/^ffi_wasm::a_wasm_build_/))'
           fi
