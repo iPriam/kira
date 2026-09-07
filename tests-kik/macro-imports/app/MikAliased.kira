@@ -1,0 +1,9 @@
+import Foundation
+import MikInner as Aliased
+
+// A macro reached through a package imported under an alias. The alias binds
+// the namespace root, not the macro name, so the bare call still resolves —
+// what the import decides is whether this file may name the package at all.
+function mikAliasedHelper() -> Int {
+    return mikInnerDouble!(4)
+}

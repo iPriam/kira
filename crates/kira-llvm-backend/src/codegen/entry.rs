@@ -114,6 +114,20 @@ impl Codegen<'_> {
             if main_return == Type::String {
                 self.call_runtime(self.runtime.str_free, &mut [result], c"");
             }
+            // Ending the channel scope, not only starting it, and ending it in
+            // the function that started it: the table is thread-local, and
+            // under a native event loop this is not even the thread `main`
+            // returns on, so a reset over there empties a table nothing ever
+            // put anything in. A run can finish with values still queued — an
+            // early return, a receiver that stopped taking — and a queued
+            // payload that owns storage is a token naming it. Nothing else
+            // will take them, so without this the program prints the right
+            // answer, exits zero, and leaves the storage behind.
+            //
+            // Before the heap report below, not after it. What this releases
+            // is live storage until it runs, so a report taken first counts it
+            // and calls a clean program leaky.
+            self.call_runtime(self.runtime.channel_reset, &mut [], c"");
             // The constants go back before the heap is asked to balance, so a
             // clean program still reports every allocation reclaimed.
             //
@@ -138,15 +152,6 @@ impl Codegen<'_> {
                 // run pays one `getenv` here and nothing else.
                 self.call_runtime(self.runtime.heap_report, &mut [], c"");
             }
-            // Ending the channel scope, not only starting it, and ending it
-            // here because the table is thread-local: this function is the one
-            // that started it, and under a native event loop it is not even
-            // the thread `main` returns on. A run can finish with values still
-            // queued — an early return, a receiver that stopped taking — and a
-            // queued payload that owns storage is a token naming it. Nothing
-            // else will take them, so without this the program prints the
-            // right answer, exits zero, and leaves the storage behind.
-            self.call_runtime(self.runtime.channel_reset, &mut [], c"");
             LLVMBuildRet(self.builder, LLVMConstInt(self.types.i32, 0, 0));
 
             let main = LLVMAddFunction(self.module, symbol.as_ptr(), entry_ty);

@@ -398,15 +398,14 @@ fn macro_visibility<'db>(
         .zip(scans)
         .flat_map(|(file, scan)| {
             let source = *file.id(db);
-            scan.imports().iter().map(move |module| {
-                let root = module.rsplit('.').next().unwrap_or(module).to_owned();
-                imports::ImportEntry {
+            scan.imports()
+                .iter()
+                .map(move |(module, root)| imports::ImportEntry {
                     source,
                     module: module.clone(),
-                    root,
+                    root: root.clone(),
                     span: kira_source::Span::new(0, 0),
-                }
-            })
+                })
         })
         .collect();
     let table = ImportTable::build(identities, &entries);

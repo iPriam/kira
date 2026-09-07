@@ -171,7 +171,10 @@ Two things have nothing a slot can name, and both are `KSEM365`. `Void` is a
 value that is not there, so there would be nothing for `send` to take and
 nothing for `receive` to answer with. A pointer word names storage on the far
 side of a seam this language does not read, so what arrived would be an address
-whose meaning stayed behind.
+whose meaning stayed behind. The pointer question is asked of the whole value:
+a struct with a `RawPtr` field, an array of them, and an enum variant carrying
+one are all refused, because an address inside the value that crossed is the
+same address. The refusal names the pointer it found.
 
 A `Float` crosses as its exact bits and is converted at both ends, so it reads
 back as itself. A `distinct` keeps its identity: what comes out is the named
@@ -190,7 +193,10 @@ attempt {
 
 Closing a receiver discards whatever is still queued, and a queued payload that
 owns storage is released as it goes — a `close()` on a channel nobody drained
-frees every value still waiting in it.
+frees every value still waiting in it. A run that simply ends with values still
+queued releases them too: an early return, or a receiver that stopped taking,
+leaves storage nobody will collect, and ending the run is the last thing that
+can free it.
 
 `Sender<T>` and `Receiver<T>` are the same channel written as an annotation, so
 a payload a channel may not carry is refused where the annotation is written,
@@ -207,7 +213,10 @@ primitive. The VM and the native backend run the same wait rather than two that
 have to be kept in step.
 
 The channel table belongs to one run, exactly as the task table does, and an
-end handle carries a slot generation. Closing both ends reclaims the storage; a
+end handle carries a slot generation. In a hybrid program both halves share one
+table: an end is one word, so a `@Runtime` function can create a channel and
+hand it to a `@Native` one, or the other way round, and both look it up in the
+same place. Closing both ends reclaims the storage; a
 later channel may reuse it, but the old end cannot name the new channel.
 
 A `@MainThreadLifecycle` loop is one execution however many slices it runs in,

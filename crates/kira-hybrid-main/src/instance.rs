@@ -60,7 +60,8 @@ use kira_hybrid_runtime::NativeLibrary;
 use kira_main::{Handle, Instance as VmLibraryInstance, StdoutHost};
 use kira_runtime_abi::{
     HostCapabilities, MainThreadError, MainThreadHandle, MainThreadRequest, MainThreadResponse,
-    NativeArg, NativeCallError, NativeResult, NativeReturn, NativeStateValue,
+    NativeArg, NativeCallError, NativeResult, NativeReturn, NativeStateError, NativeStateToken,
+    NativeStateTypeId, NativeStateValue,
 };
 
 use crate::error::HybridMainError;
@@ -89,6 +90,15 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
         self.inner.write_line(text);
     }
 
+    /// The channel table both halves of this library share.
+    ///
+    /// The loaded native half's, not the consumer's host — a library is two
+    /// engines with a seam between them exactly as an application is, and a
+    /// channel end created by an exported `@Runtime` function is an ordinary
+    /// word an `@Native` one can be handed. Delegating to the consumer's host
+    /// answers `None`, which leaves the bytecode half on its own private table
+    /// and the native half on the archive's: the same two-table failure the
+    /// application surface had.
     fn channel_op(
         &mut self,
         prim: kira_runtime_abi::ChannelPrim,
@@ -96,7 +106,54 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
         b: i64,
         c: i64,
     ) -> Option<Result<i64, kira_runtime_abi::ChannelTrap>> {
-        self.inner.channel_op(prim, a, b, c)
+        Some(self.library.channel_op(prim, a, b, c))
+    }
+
+    /// Callback state lives in the native half's store, for the same reason.
+    ///
+    /// A boxed channel payload crosses as a token naming a row in a store, so
+    /// the two halves have to agree about which store that is. Without these
+    /// the bytecode half answers `NoStateHost` and a payload that owns storage
+    /// cannot cross this seam at all.
+    fn native_state_create(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.library.native_state_create(ty, value)
+    }
+
+    fn native_state_recover(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.library.native_state_recover(token, ty)
+    }
+
+    fn native_state_replace(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        self.library.native_state_replace(token, ty, value)
+    }
+
+    fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.library.native_state_retain(token)
+    }
+
+    fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.library.native_state_release(token)
+    }
+
+    fn native_state_check(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        self.library.native_state_recover(token, ty).map(|_| ())
     }
 
     fn call_native(

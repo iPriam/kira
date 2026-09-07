@@ -274,12 +274,13 @@ pub struct FileMacros {
     owner: Option<String>,
     /// The macros it declares, in declaration order.
     registry: registry::FileRegistry,
-    /// The module paths it imports, in the order they were written.
+    /// Every import it writes, as `(module path, namespace root)`.
     ///
     /// An import is what makes another package's declarations nameable in
     /// *this file*, macros included: expansion runs before the analyzer builds
-    /// its import table, so the paths are read off the token stream here.
-    imports: Vec<String>,
+    /// its import table, so the imports are read off the token stream here —
+    /// with the root each one binds, because a root binds once per file.
+    imports: Vec<(String, String)>,
     /// Everything scanning it reported.
     diagnostics: Vec<Diagnostic>,
 }
@@ -303,9 +304,9 @@ impl FileMacros {
         &self.diagnostics
     }
 
-    /// The module paths this file imports, as they were written.
+    /// Every import this file writes, as `(module path, namespace root)`.
     #[must_use]
-    pub fn imports(&self) -> &[String] {
+    pub fn imports(&self) -> &[(String, String)] {
         &self.imports
     }
 }

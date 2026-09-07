@@ -1,0 +1,8 @@
+Package RfxOuter {
+    let version = "0.1.0"
+    let kind = PackageKind.Library
+    let moduleRoot = "RfxOuter"
+    let dependencies = [
+        Dependency { name: "RfxInner", path: "../inner" }
+    ]
+}

@@ -1,0 +1,6 @@
+Package CtdTeardown {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "CtdTeardown"
+    let defaults = Defaults { executionMode: Backend.Hybrid, buildTarget: BuildTarget.Host }
+}
