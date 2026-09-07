@@ -91,7 +91,10 @@ fn the_installed_bundle_sanitizes_what_it_builds() {
         .join(".kira-build")
         .join(kira_toolchain::executable_name("main"));
     let bytes = std::fs::read(&executable).unwrap_or_else(|error| {
-        panic!("the sanitized build produced no `{}`: {error}", executable.display())
+        panic!(
+            "the sanitized build produced no `{}`: {error}",
+            executable.display()
+        )
     });
     // The runtime's own entry point, which every instrumented image carries and
     // no ordinary one does. Searched as bytes rather than through `nm`, which
