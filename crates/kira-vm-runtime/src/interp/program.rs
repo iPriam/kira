@@ -47,7 +47,11 @@ pub fn execute_with_debug(
 fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
-    let result = vm.enter(module, main, &[])?;
+    let outcome = vm.enter(module, main, &[]);
+    // Whether the run finished or trapped: a trapped run still owns the
+    // storage its undelivered payloads name, exactly as it still owns its heap.
+    vm.release_undelivered_channel_payloads();
+    let result = outcome?;
     // The program's result is no longer referenced by anything; drop it — and
     // the module constants with it — so heap accounting reflects a fully
     // reclaimed program.
@@ -66,7 +70,9 @@ fn run_entry_with_debug(
 ) -> Result<RunOutcome, VmError> {
     let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
-    let result = vm.enter_values_with_debug(module, main, Vec::new(), observer)?;
+    let outcome = vm.enter_values_with_debug(module, main, Vec::new(), observer);
+    vm.release_undelivered_channel_payloads();
+    let result = outcome?;
     vm.heap.drop_value(result);
     vm.release_constants();
     Ok(RunOutcome {
@@ -164,7 +170,11 @@ impl Program {
         check_signature(&self.module, function_id, args.len())?;
 
         let mut vm = Vm::new(host, Heap::new());
-        let (result, captured) = vm.enter_capturing(&self.module, function_id, args, capture)?;
+        let outcome = vm.enter_capturing(&self.module, function_id, args, capture);
+        // Before the outcome is unwrapped, so a run that trapped still gives
+        // back what it queued and never delivered.
+        vm.release_undelivered_channel_payloads();
+        let (result, captured) = outcome?;
         vm.release_constants();
         let mut writebacks = Vec::with_capacity(captured.len());
         for (slot, value) in captured {
@@ -204,7 +214,9 @@ impl Program {
             .iter()
             .map(|arg| vm.heap.from_native_state(arg))
             .collect();
-        let result = vm.enter_values(&self.module, function_id, lowered)?;
+        let outcome = vm.enter_values(&self.module, function_id, lowered);
+        vm.release_undelivered_channel_payloads();
+        let result = outcome?;
         vm.release_constants();
         if matches!(result, Value::Void) {
             vm.heap.drop_value(result);
@@ -255,8 +267,11 @@ impl Vm<'_> {
         let mut nested = Vm::new(host, heap);
         let outcome = nested.enter_capturing(module, function_id, args, capture);
         // The heap goes back to the outer VM below; the nested run's constants
-        // are dropped first so crossings do not accumulate copies in it.
+        // are dropped first so crossings do not accumulate copies in it, and
+        // the channels it created are its own — a nested run has its own table
+        // — so what it never delivered is released with them.
         nested.release_constants();
+        nested.release_undelivered_channel_payloads();
         let result = match outcome {
             Ok((value, captured)) => {
                 let mut writebacks = Vec::with_capacity(captured.len());

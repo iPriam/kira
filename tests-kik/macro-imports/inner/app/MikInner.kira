@@ -1,0 +1,13 @@
+import Foundation
+
+// The macro a consumer may call only by importing this package itself.
+macro mikInnerDouble(value: expr) {
+    expand {
+        value * 2
+    }
+}
+
+// The package's own use of its own macro, which no import gates.
+function mikInnerHelper() -> Int {
+    return mikInnerDouble!(3)
+}

@@ -1,0 +1,12 @@
+import Foundation
+
+// Declared here and nameable only by a file that imports this package.
+macro rfxInnerDouble(value: expr) {
+    expand {
+        value * 2
+    }
+}
+
+function rfxInnerHelper() -> Int {
+    return rfxInnerDouble!(3)
+}

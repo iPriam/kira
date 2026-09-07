@@ -640,7 +640,7 @@ pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
 /// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
 /// below is what keeps the two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_abi_version_15() {}
+pub extern "C" fn kira_rt_abi_version_16() {}
 
 #[cfg(test)]
 mod tests {
@@ -655,12 +655,12 @@ mod tests {
     fn the_abi_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::RUNTIME_ABI_MARKER,
-            "kira_rt_abi_version_15"
+            "kira_rt_abi_version_16"
         );
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 15);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 16);
         // Referenced so the marker cannot be dead-code-eliminated out of an
         // rlib build, and so a rename breaks this test rather than the link.
-        kira_rt_abi_version_15();
+        kira_rt_abi_version_16();
     }
 
     /// The backend reads `shares` out of this object, so its shape is a

@@ -32,6 +32,32 @@ impl HostCapabilities for Host<'_> {
         self.session.call_native(function_id, args)
     }
 
+    /// The channel table both halves of this program share.
+    ///
+    /// A channel end is an ordinary value — a `@Runtime` function can create
+    /// one and hand it to a `@Native` function, or the other way round — and a
+    /// handle is an index into the table that made it. Two tables would make a
+    /// correct program trap the moment an end crossed, so the bytecode half
+    /// uses the native half's, which is also the only one generated native
+    /// code can reach.
+    ///
+    /// `None` when there is no native half: an all-`@Runtime` program has no
+    /// library to route to, and its own table is the only one there is. That
+    /// is the same condition `vm_state` uses to decide who owns native state,
+    /// and for the same reason.
+    fn channel_op(
+        &mut self,
+        prim: ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Option<Result<i64, ChannelTrap>> {
+        match &self.session.vm_state {
+            Some(_) => None,
+            None => Some(self.session.library.channel_op(prim, a, b, c)),
+        }
+    }
+
     /// Enters this process's kernel, exactly as [`Self::file_system`] reaches
     /// this process's files.
     ///

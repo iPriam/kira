@@ -1,168 +1,86 @@
 //! Finding every `macro` and `comptime macro` declaration in a program, and
 //! the model of what one says.
 //!
-//! Declarations are located at brace depth 0 of each file: `macro` and
-//! `comptime` are contextual identifiers, so a local variable called `macro`
-//! inside a function body is never mistaken for one. A macro is *visible*
-//! program-wide rather than per file — the only top-level name a macro
-//! introduces is its own, and both call sites and `@Derive` targets are
-//! resolved against one table.
-//!
-//! Finding them is nonetheless a per-file question: [`collect_file`] reads one
-//! file and nothing else, and [`Registry::absorb`] merges the results in file
-//! order. Splitting it that way is what lets the frontend memoize the scan of a
+//! Finding them is a per-file question: [`collect_file`] reads one file and
+//! nothing else, and [`Registry::absorb`] merges the results in file order.
+//! Splitting it that way is what lets the frontend memoize the scan of a
 //! dependency that has not changed instead of redoing it every compilation.
+//!
+//! Using them is a per-file question too. The merge is program-wide because a
+//! name declared twice in one scope is, and because the order two packages
+//! resolve in is the merge order — but a macro is a name a file writes, so
+//! [`Registry::visible_to`] hands each file the declarations its own imports
+//! reach and nothing further.
+//!
+//! [`model`] is what a declaration says, [`scan`] is how one is read off a
+//! token stream, and this module is what a program does with them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kira_diagnostics::Diagnostic;
 use kira_source::{SourceId, Span};
-use kira_syntax_model::TokenKind;
 
-use crate::diagnostics::{self, Reporter};
-use crate::tokens::Lexed;
+use crate::diagnostics;
 
-/// Which invocation form a `comptime macro` wears.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProceduralKind {
-    /// `Name!(args)` in declaration, statement, or expression position.
-    Function,
-    /// `@Name` above a declaration.
-    Attribute,
-    /// `@Derive(Name, …)` above a declaration.
-    Derive,
-    /// `@Name` on a struct declares a wrapper template summoned by a field.
-    Wrapper,
-    /// Runs once for the whole program, over every declaration in it.
-    ///
-    /// The one kind that is not summoned by a site. Every other form is
-    /// attached to the declaration or call it rewrites, so none of them can
-    /// answer "which declarations does this program have?" — a suite runner
-    /// needs exactly that, and it must be able to ask without the compiler
-    /// knowing the family it is looking for.
-    ///
-    /// Its `expand` takes the declarations and returns the source of a file
-    /// appended to the program, rather than an edit to an existing one: there
-    /// is no site to splice into, and inventing one would make the answer
-    /// depend on file order.
-    Collector,
+pub(crate) mod model;
+mod scan;
+#[cfg(test)]
+mod scan_tests;
+
+pub(crate) use model::{
+    ComptimeFunction, Declarative, Fragment, FragmentKind, Procedural, ProceduralKind, kind_word,
+};
+pub(crate) use scan::collect_file;
+
+/// One declaration, whatever kind it is, with the scope that declared it.
+///
+/// A name is one declaration, and the three kinds are three ways of writing
+/// one — not three namespaces. Keeping them apart made `@Name` reach a
+/// dependency's attribute macro after an application's declarative `Name` had
+/// taken the name, because the lookups are by kind and only one map had been
+/// corrected.
+#[derive(Debug, Clone, PartialEq)]
+enum Declared {
+    Declarative(Declarative),
+    Procedural(Procedural),
+    Comptime(ComptimeFunction),
 }
 
-impl ProceduralKind {
-    /// The `kind { … }` word this variant is written with.
-    fn from_word(word: &str) -> Option<Self> {
-        match word {
-            "function" => Some(ProceduralKind::Function),
-            "attribute" => Some(ProceduralKind::Attribute),
-            "derive" => Some(ProceduralKind::Derive),
-            "wrapper" => Some(ProceduralKind::Wrapper),
-            "collector" => Some(ProceduralKind::Collector),
-            _ => None,
+impl Declared {
+    /// The file the declaration was written in.
+    fn source(&self) -> SourceId {
+        match self {
+            Declared::Declarative(declared) => declared.source,
+            Declared::Procedural(declared) => declared.source,
+            Declared::Comptime(declared) => declared.source,
         }
     }
 }
 
-/// What a declarative macro parameter captures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FragmentKind {
-    /// A single expression, captured call-by-value and evaluated once.
-    Expr,
-    /// An assignable lvalue path, substituted where the template reads or
-    /// writes it.
-    Place,
-}
-
-/// One declarative macro parameter.
+/// One claim on a name: who declared it and what they declared.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Fragment {
-    /// The parameter's name, as the template refers to it.
-    pub(crate) name: String,
-    /// What the parameter captures.
-    pub(crate) kind: FragmentKind,
-}
-
-/// A `macro Name(p: expr) { expand { … } }` declaration.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Declarative {
-    /// The macro's name.
-    pub(crate) name: String,
-    /// Its fragment parameters, in order.
-    pub(crate) fragments: Vec<Fragment>,
-    /// The text between the braces of `expand { … }`.
-    pub(crate) template: String,
-    /// Where it was written, for a diagnostic about the declaration itself.
-    pub(crate) source: SourceId,
-    /// The span of its name.
-    pub(crate) span: Span,
-}
-
-/// A `comptime function name(…) -> T { … }` declaration.
-///
-/// Ordinary Kira that runs during compilation. Its body goes on the same
-/// evaluator a `comptime macro`'s `expand` runs on — the difference is only what
-/// each hands back: a macro returns syntax to splice, and this returns a *value*
-/// that becomes a literal at the call site.
-///
-/// Which is why it needs no `!`. A macro is called `name!(…)` because what
-/// happens there is code substitution and the reader should see it; a comptime
-/// function's call site is a value, indistinguishable from writing the answer
-/// out, so it reads as the ordinary call it is.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ComptimeFunction {
-    /// The function's name.
-    pub(crate) name: String,
-    /// Its parameter names, in order.
-    pub(crate) parameters: Vec<String>,
-    /// The text between the braces of its body.
-    pub(crate) body: String,
-    /// The span that text covers, so a failure inside the body points at the
-    /// opener the author wrote rather than at the function's name.
-    pub(crate) body_span: Span,
-    /// Where it was written.
-    pub(crate) source: SourceId,
-    /// The span of its name.
-    pub(crate) span: Span,
-}
-
-/// A `comptime macro Name { … }` declaration.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Procedural {
-    /// The macro's name.
-    pub(crate) name: String,
-    /// Which invocation form it wears.
-    pub(crate) kind: ProceduralKind,
-    /// The declaration kinds it is legal on, for attribute/derive/wrapper.
-    pub(crate) applies_to: Vec<String>,
-    /// Whether a field annotation summons it over the enclosing declaration.
-    pub(crate) trigger_field: bool,
-    /// Whether its output replaces the annotated declaration.
-    pub(crate) replace: bool,
-    /// The `expand` parameter names, in order.
-    pub(crate) parameters: Vec<String>,
-    /// The text between the braces of `expand(…) -> Syntax { … }`.
-    pub(crate) body: String,
-    /// The span that text covers, so a failure inside the body points at the
-    /// opener the author wrote rather than at the macro's name.
-    pub(crate) body_span: Span,
-    /// Where the declaration was written, for diagnostics about it.
-    pub(crate) source: SourceId,
-    /// The span of the declaration's name.
-    pub(crate) span: Span,
+struct Claim {
+    /// The package that declared it, or `None` for the program's own scope.
+    owner: Option<String>,
+    declared: Declared,
 }
 
 /// Every macro a program declares.
+///
+/// Two views of the same declarations. `claims` is every one of them in file
+/// order, which is what a per-file view has to filter; the three kind maps are
+/// the *resolved* view — the one declaration each name means here — which is
+/// what every lookup reads. Resolving after filtering rather than before is
+/// what keeps one loaded package from taking a name away from another that a
+/// file actually imports.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Registry {
+    /// Every claim on every name, in the order the files were merged.
+    claims: HashMap<String, Vec<Claim>>,
     declarative: HashMap<String, Declarative>,
     procedural: HashMap<String, Procedural>,
     comptime_functions: HashMap<String, ComptimeFunction>,
     enums: HashMap<String, Vec<String>>,
-    /// Which package declared the macro now holding each name.
-    ///
-    /// A name is one declaration inside one scope, and this is what says
-    /// whether the declaration about to take a name is in the same scope as
-    /// the one already holding it.
-    owners: HashMap<String, Option<String>>,
 }
 
 impl Registry {
@@ -186,63 +104,33 @@ impl Registry {
         conflicts: &mut Vec<Diagnostic>,
     ) {
         for declared in &file.declarative {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.declarative
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Declarative(declared.clone()), conflicts);
         }
         for declared in &file.procedural {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.procedural
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Procedural(declared.clone()), conflicts);
         }
         for declared in &file.comptime_functions {
-            if self.claim(
-                &declared.name,
-                owner,
-                declared.source,
-                declared.span,
-                conflicts,
-            ) {
-                self.comptime_functions
-                    .insert(declared.name.clone(), declared.clone());
-            }
+            self.claim(owner, Declared::Comptime(declared.clone()), conflicts);
         }
         for (name, variants) in &file.enums {
             self.enums.insert(name.clone(), variants.clone());
         }
+        self.resolve();
     }
 
-    /// Records `name` as declared by `owner`, answering whether the
-    /// declaration takes the name.
+    /// Records one declaration's claim on its name.
     ///
-    /// It does not when its own scope already declared that name: the first
-    /// declaration keeps it, so which file was read first cannot change what
-    /// the program means, and the second is reported.
-    fn claim(
-        &mut self,
-        name: &str,
-        owner: Option<&str>,
-        source: SourceId,
-        span: Span,
-        conflicts: &mut Vec<Diagnostic>,
-    ) -> bool {
-        if let Some(held) = self.owners.get(name)
-            && held.as_deref() == owner
-        {
+    /// It is not recorded when its own scope already declared that name: the
+    /// first declaration keeps it, so which file was read first cannot change
+    /// what the program means, and the second is reported.
+    fn claim(&mut self, owner: Option<&str>, declared: Declared, conflicts: &mut Vec<Diagnostic>) {
+        let (name, source, span) = match &declared {
+            Declared::Declarative(item) => (item.name.clone(), item.source, item.span),
+            Declared::Procedural(item) => (item.name.clone(), item.source, item.span),
+            Declared::Comptime(item) => (item.name.clone(), item.source, item.span),
+        };
+        let claims = self.claims.entry(name.clone()).or_default();
+        if claims.iter().any(|claim| claim.owner.as_deref() == owner) {
             let scope = match owner {
                 Some(package) => format!("package `{package}`"),
                 None => "this program".to_owned(),
@@ -257,11 +145,79 @@ impl Registry {
                      program mean whichever file was read first"
                 ),
             ));
-            return false;
+            return;
         }
-        self.owners
-            .insert(name.to_owned(), owner.map(str::to_owned));
-        true
+        claims.push(Claim {
+            owner: owner.map(str::to_owned),
+            declared,
+        });
+    }
+
+    /// Rebuilds the resolved view from the claims.
+    ///
+    /// The last claim on a name wins, whatever kind it is, and lands in
+    /// exactly one of the three maps — so a name resolved as a declarative
+    /// macro is not also reachable as an attribute one.
+    fn resolve(&mut self) {
+        self.declarative.clear();
+        self.procedural.clear();
+        self.comptime_functions.clear();
+        for (name, claims) in &self.claims {
+            let Some(winner) = claims.last() else {
+                continue;
+            };
+            match &winner.declared {
+                Declared::Declarative(item) => {
+                    self.declarative.insert(name.clone(), item.clone());
+                }
+                Declared::Procedural(item) => {
+                    self.procedural.insert(name.clone(), item.clone());
+                }
+                Declared::Comptime(item) => {
+                    self.comptime_functions.insert(name.clone(), item.clone());
+                }
+            }
+        }
+    }
+
+    /// This registry as one file sees it.
+    ///
+    /// A macro is a name a file writes, so it is gated exactly as every other
+    /// name a file writes is: the program's own flat scope, the file's own
+    /// package, and the packages the file imports — and nothing further,
+    /// because visibility does not compose. Merging every package's macros
+    /// into one environment made a dependency's dependency's macros callable
+    /// from an application that never imported it.
+    ///
+    /// The claims are filtered and the winner picked afterwards, never the
+    /// other way round. Resolving first and filtering second let a package the
+    /// file has nothing to do with take the name and then vanish, leaving the
+    /// file's own valid call answered with "is not a macro".
+    ///
+    /// Enum cases are not filtered. They are not macro names: they are what an
+    /// evaluator needs to read `Backend.Glsl` in a template that is already
+    /// visible, and the template's own visibility is what decides whether it
+    /// runs at all.
+    pub(crate) fn visible_to(&self, visible: &HashSet<SourceId>) -> Registry {
+        let claims: HashMap<String, Vec<Claim>> = self
+            .claims
+            .iter()
+            .filter_map(|(name, claims)| {
+                let kept: Vec<Claim> = claims
+                    .iter()
+                    .filter(|claim| visible.contains(&claim.declared.source()))
+                    .cloned()
+                    .collect();
+                (!kept.is_empty()).then(|| (name.clone(), kept))
+            })
+            .collect();
+        let mut narrowed = Registry {
+            claims,
+            enums: self.enums.clone(),
+            ..Registry::default()
+        };
+        narrowed.resolve();
+        narrowed
     }
 
     /// Whether the program declares no macros at all.
@@ -269,9 +225,7 @@ impl Registry {
     /// The whole expansion pass is skipped when this holds, which is what keeps
     /// a program that never mentions a macro byte-identical to its own source.
     pub(crate) fn is_empty(&self) -> bool {
-        self.declarative.is_empty()
-            && self.procedural.is_empty()
-            && self.comptime_functions.is_empty()
+        self.claims.is_empty()
     }
 
     /// Every enum the program declares, by name, with its case names.
@@ -356,727 +310,5 @@ impl FileRegistry {
         self.declarative.is_empty()
             && self.procedural.is_empty()
             && self.comptime_functions.is_empty()
-    }
-}
-
-/// Collects every macro declaration in one file, reporting malformed ones.
-pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileRegistry {
-    let mut found = FileRegistry::default();
-    let mut index = 0usize;
-    while index < file.len() {
-        match file.kind(index) {
-            TokenKind::Eof => break,
-            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
-                match file.match_close(index) {
-                    Some(end) => index = end + 1,
-                    None => break,
-                }
-                continue;
-            }
-            _ => {}
-        }
-        // `enum Name { A B }` — read for its case names, so a macro body may
-        // name one. Only the shape is taken; what the cases mean is the
-        // program's business. A generic `enum Result<Value, Failure> { … }`
-        // carries its parameter list between the name and the body, so the
-        // body is found by walking that list rather than by assuming it is
-        // exactly two tokens away. The walk is bounded to what a parameter
-        // list can be — identifiers, commas, and angle brackets — so a
-        // malformed enum never swallows some later declaration's brace.
-        if file.kind(index) == TokenKind::Enum && file.is_ident(index + 1) {
-            let mut probe = index + 2;
-            let mut angle_depth = 0u32;
-            let mut body = None;
-            while probe < file.len() && probe <= index + 16 {
-                match file.kind(probe) {
-                    TokenKind::LBrace => {
-                        body = Some(probe);
-                        break;
-                    }
-                    TokenKind::Lt => angle_depth += 1,
-                    TokenKind::Gt => angle_depth = angle_depth.saturating_sub(1),
-                    TokenKind::Identifier | TokenKind::Comma if angle_depth > 0 => {}
-                    _ => break,
-                }
-                probe += 1;
-            }
-            let Some(brace) = body else {
-                index += 1;
-                continue;
-            };
-            let Some(end) = file.match_close(brace) else {
-                break;
-            };
-            let name = file.text_at(index + 1).to_owned();
-            let mut variants = Vec::new();
-            let mut at = brace + 1;
-            while at < end {
-                // A case is an identifier at the top of the body; anything
-                // nested belongs to a payload and is skipped whole.
-                match file.kind(at) {
-                    TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
-                        match file.match_close(at) {
-                            Some(close) => at = close + 1,
-                            None => break,
-                        }
-                        continue;
-                    }
-                    _ => {}
-                }
-                if file.is_ident(at) {
-                    variants.push(file.text_at(at).to_owned());
-                }
-                at += 1;
-            }
-            found.enums.push((name, variants));
-            index = end + 1;
-            continue;
-        }
-        // `function` is a keyword token, not a contextual identifier the way
-        // `macro` is, so it is matched by kind rather than by text.
-        if file.is_word(index, "comptime") && file.kind(index + 1) == TokenKind::Function {
-            match scan_comptime_function(file, index, reporter) {
-                Some((function, span, next)) => {
-                    found.spans.push(span);
-                    found.comptime_functions.push(function);
-                    index = next;
-                    continue;
-                }
-                // The definition's structure is unknowable past this point, so
-                // parsing the tail would report the raw `quote` text as broken
-                // Kira rather than anything the author wrote. Blank it: the
-                // scan error above already names the failure.
-                None => {
-                    blank_to_end(file, index, &mut found.spans);
-                    break;
-                }
-            }
-        }
-        if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
-            match scan_procedural(file, index, reporter) {
-                Some((macro_declaration, span, next)) => {
-                    found.spans.push(span);
-                    found.procedural.push(macro_declaration);
-                    index = next;
-                    continue;
-                }
-                None => {
-                    blank_to_end(file, index, &mut found.spans);
-                    break;
-                }
-            }
-        }
-        if file.is_word(index, "macro")
-            && file.is_ident(index + 1)
-            && file.kind(index + 2) == TokenKind::LParen
-        {
-            match scan_declarative(file, index, reporter) {
-                Some((macro_declaration, span, next)) => {
-                    found.spans.push(span);
-                    found.declarative.push(macro_declaration);
-                    index = next;
-                    continue;
-                }
-                None => {
-                    blank_to_end(file, index, &mut found.spans);
-                    break;
-                }
-            }
-        }
-        index += 1;
-    }
-    found
-}
-
-/// Blanks the file from `index` to its end, so a definition whose structure
-/// the scanner could not recover never reaches the parser as raw text.
-///
-/// Without this, an unclosed macro body leaves every later `#{` in place and
-/// each one is reported as an unexpected character, burying the scan error
-/// that names the actual failure under noise from text the author never meant
-/// as code.
-fn blank_to_end(file: &Lexed<'_>, index: usize, spans: &mut Vec<Span>) {
-    let start = file.span(index).start;
-    let end = file.text.len() as u32;
-    if start < end {
-        spans.push(Span::from_bounds(start, end));
-    }
-}
-
-/// Scans `macro Name(p: expr) { expand { … } }` starting at the `macro` word.
-fn scan_declarative(
-    file: &Lexed<'_>,
-    start: usize,
-    reporter: &mut Reporter,
-) -> Option<(Declarative, Span, usize)> {
-    let name = file.text_at(start + 1).to_owned();
-    let name_span = file.span(start + 1);
-    let open_params = start + 2;
-    let Some(close_params) = file.match_close(open_params) else {
-        // Reported rather than silent: a `None` here would otherwise stop the
-        // whole file's collection with no diagnostic, and every macro declared
-        // after this one would be reported as unknown at its call sites.
-        reporter.error(
-            file.source,
-            file.span(open_params),
-            diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
-        );
-        return None;
-    };
-    let mut fragments = Vec::new();
-    for (first, last) in file.split_group(open_params, close_params) {
-        let parameter_name = file.text_at(first).to_owned();
-        let kind = if file.kind(first + 1) == TokenKind::Colon {
-            match file.text_at(first + 2) {
-                "expr" => Some(FragmentKind::Expr),
-                "place" => Some(FragmentKind::Place),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        match kind {
-            Some(kind) => fragments.push(Fragment {
-                name: parameter_name,
-                kind,
-            }),
-            None => reporter.error(
-                file.source,
-                file.span_of(first, last),
-                diagnostics::FRAGMENT_KIND,
-                format!(
-                    "macro `{name}` parameter `{parameter_name}` must declare a fragment kind; \
-                     v1 has `expr` and `place`"
-                ),
-            ),
-        }
-    }
-
-    let open_body = close_params + 1;
-    if file.kind(open_body) != TokenKind::LBrace {
-        reporter.error(
-            file.source,
-            file.span(open_body),
-            diagnostics::EXPAND_SIGNATURE,
-            format!("macro `{name}` needs a body containing `expand {{ … }}`"),
-        );
-        return None;
-    }
-    let Some(close_body) = file.match_close(open_body) else {
-        reporter.error(
-            file.source,
-            file.span(open_body),
-            diagnostics::EXPAND_SIGNATURE,
-            format!(
-                "macro `{name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"
-            ),
-        );
-        return None;
-    };
-    let template = match find_expand_block(file, open_body, close_body) {
-        Some((open, close)) => file
-            .slice(Span::from_bounds(
-                file.span(open).end(),
-                file.span(close).start,
-            ))
-            .to_owned(),
-        None => {
-            reporter.error(
-                file.source,
-                file.span_of(start, open_body),
-                diagnostics::EXPAND_SIGNATURE,
-                format!("macro `{name}` has no `expand {{ … }}` template"),
-            );
-            return None;
-        }
-    };
-
-    Some((
-        Declarative {
-            name,
-            fragments,
-            template,
-            source: file.source,
-            span: name_span,
-        },
-        file.span_of(start, close_body),
-        close_body + 1,
-    ))
-}
-
-/// The `expand { … }` braces inside a declarative macro's body.
-fn find_expand_block(file: &Lexed<'_>, open: usize, close: usize) -> Option<(usize, usize)> {
-    let mut index = open + 1;
-    while index < close {
-        if file.is_word(index, "expand") && file.kind(index + 1) == TokenKind::LBrace {
-            let block_close = file.match_close(index + 1)?;
-            return Some((index + 1, block_close));
-        }
-        index += 1;
-    }
-    None
-}
-
-/// Scans `comptime function name(…) -> T { … }` starting at the `comptime` word.
-///
-/// The shape is an ordinary function declaration, so only the name, the
-/// parameter names and the body text are taken: the written types are the
-/// analyzer's business, and the evaluator binds arguments by position.
-fn scan_comptime_function(
-    file: &Lexed<'_>,
-    start: usize,
-    reporter: &mut Reporter,
-) -> Option<(ComptimeFunction, Span, usize)> {
-    let name_index = start + 2;
-    if !file.is_ident(name_index) {
-        reporter.error(
-            file.source,
-            file.span(name_index),
-            diagnostics::BAD_KIND,
-            "expected a name after `comptime function`",
-        );
-        return None;
-    }
-    let name = file.text_at(name_index).to_owned();
-    let name_span = file.span(name_index);
-    let open_parameters = name_index + 1;
-    if file.kind(open_parameters) != TokenKind::LParen {
-        reporter.error(
-            file.source,
-            name_span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` needs a parameter list"),
-        );
-        return None;
-    }
-    let Some(close_parameters) = file.match_close(open_parameters) else {
-        reporter.error(
-            file.source,
-            name_span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `( … )` parameter list; the rest of this file was skipped"),
-        );
-        return None;
-    };
-    let parameters = file
-        .split_group(open_parameters, close_parameters)
-        .into_iter()
-        .map(|(first, _)| file.text_at(first).to_owned())
-        .collect();
-    // Whatever sits between the parameters and the body is the written result
-    // type, which the evaluator does not need: the value it produces carries its
-    // own shape, and the analyzer checks the call site against the declaration.
-    let mut open_body = close_parameters + 1;
-    while open_body < file.len() && file.kind(open_body) != TokenKind::LBrace {
-        if file.kind(open_body) == TokenKind::Eof {
-            reporter.error(
-                file.source,
-                name_span,
-                diagnostics::EXPAND_SIGNATURE,
-                format!("`comptime function {name}` needs a `{{ … }}` body"),
-            );
-            return None;
-        }
-        open_body += 1;
-    }
-    let Some(close_body) = file.match_close(open_body) else {
-        reporter.error(
-            file.source,
-            name_span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime function {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
-        );
-        return None;
-    };
-    let body_span = Span::from_bounds(file.span(open_body).end(), file.span(close_body).start);
-    let body = file.slice(body_span).to_owned();
-    Some((
-        ComptimeFunction {
-            name,
-            parameters,
-            body,
-            body_span,
-            source: file.source,
-            span: name_span,
-        },
-        file.span_of(start, close_body),
-        close_body + 1,
-    ))
-}
-
-/// Scans `comptime macro Name { … }` starting at the `comptime` word.
-fn scan_procedural(
-    file: &Lexed<'_>,
-    start: usize,
-    reporter: &mut Reporter,
-) -> Option<(Procedural, Span, usize)> {
-    let name_index = start + 2;
-    if !file.is_ident(name_index) {
-        reporter.error(
-            file.source,
-            file.span(name_index),
-            diagnostics::BAD_KIND,
-            "expected a name after `comptime macro`",
-        );
-        return None;
-    }
-    let name = file.text_at(name_index).to_owned();
-    let open_body = name_index + 1;
-    if file.kind(open_body) != TokenKind::LBrace {
-        reporter.error(
-            file.source,
-            file.span(open_body),
-            diagnostics::BAD_KIND,
-            format!("`comptime macro {name}` needs a `{{ … }}` body"),
-        );
-        return None;
-    }
-    let Some(close_body) = file.match_close(open_body) else {
-        reporter.error(
-            file.source,
-            file.span(open_body),
-            diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime macro {name}` has an unclosed `{{ … }}` body; the rest of this file was skipped"),
-        );
-        return None;
-    };
-
-    let mut kind = None;
-    let mut applies_to = Vec::new();
-    let mut trigger_field = false;
-    let mut replace = false;
-    let mut parameters = Vec::new();
-    let mut body = None;
-
-    let mut index = open_body + 1;
-    while index < close_body {
-        if file.is_word(index, "expand") && file.kind(index + 1) == TokenKind::LParen {
-            let close_parameters = file.match_close(index + 1)?;
-            parameters = file
-                .split_group(index + 1, close_parameters)
-                .into_iter()
-                .map(|(first, _)| file.text_at(first).to_owned())
-                .collect();
-            let mut brace = close_parameters + 1;
-            while brace < close_body && file.kind(brace) != TokenKind::LBrace {
-                brace += 1;
-            }
-            let close_expand = file.match_close(brace)?;
-            let body_span =
-                Span::from_bounds(file.span(brace).end(), file.span(close_expand).start);
-            body = Some((file.slice(body_span).to_owned(), body_span));
-            index = close_expand + 1;
-            continue;
-        }
-        if file.is_ident(index) && file.kind(index + 1) == TokenKind::LBrace {
-            let member = file.text_at(index);
-            let close_member = file.match_close(index + 1)?;
-            // `function`, `struct`, `enum`, `class`, and `true` are all real
-            // keywords, so a member's words are read by *text* rather than by
-            // token kind: `kind { function }` names a macro form, not a
-            // declaration.
-            let words: Vec<&str> = (index + 2..close_member)
-                .filter(|&word| file.kind(word) != TokenKind::Comma)
-                .map(|word| file.text_at(word))
-                .collect();
-            match member {
-                "kind" => {
-                    kind = words
-                        .first()
-                        .and_then(|word| ProceduralKind::from_word(word))
-                }
-                "appliesTo" => {
-                    applies_to = words.iter().map(|word| (*word).to_owned()).collect();
-                }
-                "trigger" => trigger_field = words.contains(&"field"),
-                "replace" => replace = words.contains(&"true"),
-                _ => {}
-            }
-            index = close_member + 1;
-            continue;
-        }
-        index += 1;
-    }
-
-    let declaration_span = file.span_of(start, close_body);
-    let name_span = file.span(name_index);
-    let Some(kind) = kind else {
-        reporter.error(
-            file.source,
-            name_span,
-            diagnostics::BAD_KIND,
-            format!(
-                "`comptime macro {name}` needs `kind {{ function | attribute | derive | wrapper }}`"
-            ),
-        );
-        return None;
-    };
-    let Some((body, body_span)) = body else {
-        reporter.error(
-            file.source,
-            name_span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!("`comptime macro {name}` must define `expand`"),
-        );
-        return None;
-    };
-
-    let declared = Procedural {
-        name,
-        kind,
-        applies_to,
-        trigger_field,
-        replace,
-        parameters,
-        body,
-        body_span,
-        source: file.source,
-        span: name_span,
-    };
-    validate_shape(&declared, reporter);
-    Some((declared, declaration_span, close_body + 1))
-}
-
-/// Checks the members of a `comptime macro` against each other.
-fn validate_shape(declared: &Procedural, reporter: &mut Reporter) {
-    let Procedural {
-        name,
-        kind,
-        applies_to,
-        trigger_field,
-        replace,
-        parameters,
-        source,
-        span,
-        ..
-    } = declared;
-    let (source, span, kind) = (*source, *span, *kind);
-    match kind {
-        ProceduralKind::Collector if !applies_to.is_empty() => reporter.error(
-            source,
-            span,
-            diagnostics::APPLIES_TO_PRESENCE,
-            format!("`appliesTo` says which declarations a macro may annotate, so a `collector` macro like `{name}`, which annotates none, has none"),
-        ),
-        ProceduralKind::Function if !applies_to.is_empty() => reporter.error(
-            source,
-            span,
-            diagnostics::APPLIES_TO_PRESENCE,
-            format!("`appliesTo` says which declarations a macro may annotate, so a `function` macro like `{name}` has none"),
-        ),
-        ProceduralKind::Attribute | ProceduralKind::Derive | ProceduralKind::Wrapper
-            if applies_to.is_empty() =>
-        {
-            reporter.error(
-                source,
-                span,
-                diagnostics::APPLIES_TO_PRESENCE,
-                format!("`{name}` annotates a declaration, so it must list the declaration kinds it is legal on with `appliesTo {{ … }}`"),
-            );
-        }
-        _ => {}
-    }
-    if *trigger_field && !*replace {
-        reporter.error(
-            source,
-            span,
-            diagnostics::TRIGGER_WITHOUT_REPLACE,
-            format!(
-                "`{name}` is summoned by a field annotation, so it rewrites the declaration that \
-                 carries the field: it must also declare `replace {{ true }}`"
-            ),
-        );
-    }
-    let expected = if kind == ProceduralKind::Wrapper {
-        2
-    } else {
-        1
-    };
-    let parameter_count = parameters.len();
-    if parameter_count != expected {
-        reporter.error(
-            source,
-            span,
-            diagnostics::EXPAND_SIGNATURE,
-            format!(
-                "`{name}` is a `{}` macro, so its `expand` takes {expected} parameter(s), not \
-                 {parameter_count}",
-                kind_word(kind)
-            ),
-        );
-    }
-}
-
-/// The `kind { … }` word a [`ProceduralKind`] is written with.
-pub(crate) fn kind_word(kind: ProceduralKind) -> &'static str {
-    match kind {
-        ProceduralKind::Function => "function",
-        ProceduralKind::Attribute => "attribute",
-        ProceduralKind::Derive => "derive",
-        ProceduralKind::Wrapper => "wrapper",
-        ProceduralKind::Collector => "collector",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn collect_text(text: &str) -> (Registry, Vec<Diagnostic>) {
-        let mut reporter = Reporter::new();
-        let mut registry = Registry::default();
-        registry.absorb(
-            None,
-            &collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter),
-            &mut Vec::new(),
-        );
-        (registry, reporter.into_diagnostics())
-    }
-
-    /// A macro definition scans the same indented or not: the scanner reads
-    /// tokens, and tokens carry no columns.
-    #[test]
-    fn indentation_does_not_change_what_a_definition_is() {
-        let indented = "comptime macro BadName {\n    kind { function }\n    expand(input: Syntax) -> Syntax {\n        return quote { 42 }\n    }\n}\n";
-        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
-        for text in [indented, flat] {
-            let (registry, diagnostics) = collect_text(text);
-            assert!(diagnostics.is_empty(), "{text:?}: {diagnostics:?}");
-            assert!(registry.procedural("BadName").is_some(), "{text:?}");
-        }
-    }
-
-    /// The blanked span covers the whole definition, indented or not: what the
-    /// parser never sees cannot produce diagnostics.
-    #[test]
-    fn the_definition_span_covers_the_definition() {
-        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n";
-        let mut reporter = Reporter::new();
-        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
-        assert!(reporter.into_diagnostics().is_empty());
-        assert_eq!(found.spans.len(), 1);
-        let covered = &flat[found.spans[0].start as usize..found.spans[0].end() as usize];
-        assert!(covered.contains("return quote { 42 }"), "{covered:?}");
-    }
-
-    /// …and nothing else: a span running past the definition would blank the
-    /// `@Main` below it, and the program would lose its entrypoint.
-    #[test]
-    fn the_definition_span_stops_at_the_definition() {
-        let flat = "comptime macro BadName {\nkind { function }\nexpand(input: Syntax) -> Syntax {\nreturn quote { 42 }\n}\n}\n@Main\nfunction main() {\nprint(1)\nreturn\n}\n";
-        let mut reporter = Reporter::new();
-        let found = collect_file(&Lexed::new(SourceId::new(0), flat), &mut reporter);
-        assert!(reporter.into_diagnostics().is_empty());
-        assert_eq!(found.spans.len(), 1);
-        let end = found.spans[0].end() as usize;
-        assert!(flat[end..].contains("@Main"), "tail: {:?}", &flat[end..]);
-    }
-
-    #[test]
-    fn a_declarative_macro_registers_its_fragments_and_template() {
-        let (registry, diagnostics) = collect_text(
-            "macro square(value: expr) {\n    expand {\n        value * value\n    }\n}\n",
-        );
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let declared = registry.declarative("square").expect("the macro");
-        assert_eq!(declared.fragments.len(), 1);
-        assert_eq!(declared.fragments[0].kind, FragmentKind::Expr);
-        assert!(declared.template.contains("value * value"));
-    }
-
-    /// An unclosed macro body blanks the file from the breakage on: the
-    /// definition's raw `quote` text must never reach the parser, or every
-    /// surviving `#{` is reported as an unexpected character burying the scan
-    /// error that names the actual failure.
-    #[test]
-    fn an_unclosed_macro_body_blanks_its_tail() {
-        let text = "comptime macro Broken {\n    kind { derive }\n    expand(target: Declaration) -> Syntax {\n        return quote { x }\n";
-        let mut reporter = Reporter::new();
-        let found = collect_file(&Lexed::new(SourceId::new(0), text), &mut reporter);
-        let diagnostics = reporter.into_diagnostics();
-        assert!(
-            diagnostics.iter().any(|d| d.message.contains("unclosed")),
-            "{diagnostics:?}"
-        );
-        assert!(
-            !found.spans.is_empty(),
-            "the unscannable tail must be blanked"
-        );
-        let last = found.spans.last().expect("a span");
-        assert_eq!(last.end() as usize, text.len());
-    }
-
-    #[test]
-    fn a_place_fragment_is_recognized() {
-        let (registry, _) = collect_text("macro swap(a: place, b: place) { expand { a = b } }");
-        let declared = registry.declarative("swap").expect("the macro");
-        assert_eq!(declared.fragments.len(), 2);
-        assert!(
-            declared
-                .fragments
-                .iter()
-                .all(|fragment| fragment.kind == FragmentKind::Place)
-        );
-    }
-
-    #[test]
-    fn a_procedural_macro_records_every_member() {
-        let (registry, diagnostics) = collect_text(
-            "comptime macro Tracked {\n    kind { attribute }\n    appliesTo { form }\n\
-             \n    trigger { field }\n    replace { true }\n\
-             \n    expand(target: Declaration) -> Syntax {\n        return quote { }\n    }\n}\n",
-        );
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let declared = registry.procedural("Tracked").expect("the macro");
-        assert_eq!(declared.kind, ProceduralKind::Attribute);
-        assert_eq!(declared.applies_to, vec!["form".to_owned()]);
-        assert!(declared.trigger_field);
-        assert!(declared.replace);
-        assert_eq!(declared.parameters, vec!["target".to_owned()]);
-    }
-
-    #[test]
-    fn a_field_trigger_without_replace_is_refused() {
-        let (_, diagnostics) = collect_text(
-            "comptime macro T {\n    kind { attribute }\n    appliesTo { form }\n\
-             trigger { field }\n    expand(t: Declaration) -> Syntax { return quote { } }\n}\n",
-        );
-        assert!(
-            diagnostics.iter().any(|d| d.has_code("KMAC029")),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
-    fn a_missing_kind_is_refused() {
-        let (registry, diagnostics) = collect_text(
-            "comptime macro T {\n    expand(t: Declaration) -> Syntax { return quote { } }\n}\n",
-        );
-        assert!(registry.procedural("T").is_none());
-        assert!(
-            diagnostics.iter().any(|d| d.has_code("KMAC006")),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
-    fn a_function_macro_may_not_declare_applies_to() {
-        let (_, diagnostics) = collect_text(
-            "comptime macro bits {\n    kind { function }\n    appliesTo { struct }\n\
-             expand(input: Syntax) -> Syntax { return quote { } }\n}\n",
-        );
-        assert!(
-            diagnostics.iter().any(|d| d.has_code("KMAC008")),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
-    fn a_local_named_macro_is_not_a_declaration() {
-        let (registry, diagnostics) =
-            collect_text("function f() {\n    let macro = 1\n    return\n}\n");
-        assert!(registry.is_empty());
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }

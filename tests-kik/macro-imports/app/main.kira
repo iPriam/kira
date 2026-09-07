@@ -1,0 +1,23 @@
+// A macro is a name a file writes, so an import is what makes it nameable —
+// the same rule every other name obeys. This package is the allowed half: each
+// file that calls `mikInnerDouble!` imports the package that declares it,
+// directly or under an alias. The refused half is `tests-kik/refusals`, where
+// a file reaches for it through a package it never imported.
+//
+//   kira run --backend vm tests-kik/macro-imports
+//   kira run --backend llvm tests-kik/macro-imports
+//   kira run --backend hybrid tests-kik/macro-imports
+
+import Foundation
+import MikOuter
+import MikInner
+
+@Main
+function main() {
+    // 42 from this file's own direct import, 8 through the alias in a sibling
+    // file, 26 from the dependency using its own dependency's macro.
+    print(mikInnerDouble!(21))
+    print(mikAliasedHelper())
+    print(mikOuterHelper())
+    return
+}

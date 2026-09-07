@@ -170,6 +170,11 @@ impl Instance {
         let scratch = std::mem::take(&mut self.scratch);
         let mut vm = Vm::new_with_scratch(host, std::mem::take(&mut self.heap), scratch);
         let outcome = vm.enter_values(self.program.module(), function_id, lowered);
+        // A call is a run: its channel table is its own and dies with it, so
+        // what it queued and never delivered is released here — whether the
+        // call returned or trapped, for the same reason the heap comes back
+        // on both paths.
+        vm.release_undelivered_channel_payloads();
         let (heap, scratch) = vm.into_heap_and_scratch();
         self.heap = heap;
         self.scratch = scratch;

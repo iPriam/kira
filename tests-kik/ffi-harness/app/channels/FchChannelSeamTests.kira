@@ -1,0 +1,111 @@
+import Foundation
+
+// FchChannelSeamTests.kira — a channel end crossing the @Native/@Runtime seam.
+// All top-level names use the fch / Fch prefix.
+//
+// A channel end is one machine word, so it crosses the seam like any other
+// scalar and the type checker lets it. What it names is a row in a table, and
+// the two halves of a hybrid program are two engines: if each keeps its own
+// table, an end created on one side names nothing on the other and a correct
+// program traps. These cases are the ones a harness whose ends never cross
+// cannot fail — every case here has one end used on the far side of the seam
+// from where the channel was made.
+
+@Native
+function fchNativeSend(tx: Sender<Int>, value: Int) -> Int {
+    tx.send(value)
+    return 1
+}
+
+@Native
+function fchNativeSendString(tx: Sender<String>, value: String) -> Int {
+    tx.send(value)
+    return 1
+}
+
+@Native
+function fchNativeDrain(rx: Receiver<Int>) -> Int {
+    var total = 0
+    attempt {
+        let first = try rx.receive()
+        let second = try rx.receive()
+        total = first + second
+    } handle {
+        Closed { return 0 - 1 }
+    }
+    return total
+}
+
+@Runtime
+function fchRuntimeSend(tx: Sender<Int>, value: Int) -> Int {
+    tx.send(value)
+    return 1
+}
+
+// A channel made by the runtime half, sent into by the native half.
+construct FchNativeSendsIntoARuntimeChannel() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        let sent = fchNativeSend(tx, 41)
+        attempt {
+            let got = try rx.receive()
+            return sent + got
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// The other direction: the runtime half fills it and the native half drains it.
+construct FchNativeDrainsARuntimeChannel() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        tx.send(20)
+        tx.send(21)
+        return fchNativeDrain(rx) + 1
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// A payload that owns storage crosses the seam whole: the token names a row in
+// the state store, so this fails the same way if the two halves keep two of
+// those as well.
+construct FchNativeSendsAnOwnedPayload() extends Test {
+    test {
+        let tx = Channel<String>()
+        let rx = tx.receiver
+        let sent = fchNativeSendString(tx, "carried")
+        attempt {
+            let got = try rx.receive()
+            if got == "carried" { return sent + 41 }
+            return 0 - 1
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+// Both halves sending into one channel, so the order the two engines agree on
+// is the order the values arrive in.
+construct FchBothHalvesSendIntoOneChannel() extends Test {
+    test {
+        let tx = Channel<Int>()
+        let rx = tx.receiver
+        fchRuntimeSend(tx, 1)
+        fchNativeSend(tx, 2)
+        fchRuntimeSend(tx, 3)
+        attempt {
+            let a = try rx.receive()
+            let b = try rx.receive()
+            let c = try rx.receive()
+            return a * 100 + b * 10 + c
+        } handle {
+            Closed { return 0 - 1 }
+        }
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(123) return e }
+}

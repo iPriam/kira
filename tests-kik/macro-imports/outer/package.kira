@@ -1,0 +1,8 @@
+Package MikOuter {
+    let version = "0.1.0"
+    let kind = PackageKind.Library
+    let moduleRoot = "MikOuter"
+    let dependencies = [
+        Dependency { name: "MikInner", path: "../inner" }
+    ]
+}

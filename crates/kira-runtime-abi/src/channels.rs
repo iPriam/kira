@@ -56,6 +56,51 @@ pub enum ChannelTrap {
     Deadlock,
 }
 
+impl ChannelTrap {
+    /// Every trap, in wire order.
+    ///
+    /// The one place the set is written down. A trap crosses the C ABI as a
+    /// code because the symbol that carries a primitive answers an `i64` and
+    /// has nowhere else to put one, and indexing this rather than repeating a
+    /// match is what stops a new trap from being added to the enum and
+    /// forgotten by the decoder.
+    pub const ALL: [ChannelTrap; 5] = [
+        ChannelTrap::UnknownHandle,
+        ChannelTrap::ReceiverGone,
+        ChannelTrap::WrongDirection,
+        ChannelTrap::NotReady,
+        ChannelTrap::Deadlock,
+    ];
+
+    /// The code this trap travels as. Zero is reserved for "no trap".
+    ///
+    /// **Append-only**: a new trap takes the next free number and no existing
+    /// one ever moves.
+    #[must_use]
+    pub fn as_code(self) -> i64 {
+        Self::ALL
+            .iter()
+            .position(|trap| *trap == self)
+            .map_or(0, |index| index as i64 + 1)
+    }
+
+    /// The trap a code names, or `None` for zero and for anything unknown.
+    #[must_use]
+    pub fn from_code(code: i64) -> Option<Self> {
+        let index = usize::try_from(code).ok()?.checked_sub(1)?;
+        Self::ALL.get(index).copied()
+    }
+}
+
+/// The `Create` operand that says a queued word will be a native-state token.
+///
+/// Zero — every other value — is a channel whose queued word is the value
+/// itself, which is what a primitive's unused operands are already passed as.
+/// It travels in `Create`'s first operand because the table has to know it
+/// before anything is sent: a run that ends with values still queued has to
+/// release the storage they name, and there is no send left to ask by then.
+pub const BOXED_PAYLOAD: i64 = 1;
+
 /// One primitive of the channel table's runtime interface.
 ///
 /// The discriminants are a wire contract: they will travel in the operand
@@ -163,6 +208,14 @@ struct Channel {
     sender_live: bool,
     /// Whether the receiver end is still live.
     receiver_live: bool,
+    /// Whether a queued word is a native-state token rather than a value.
+    ///
+    /// The table never reads a queued word, but it has to know this one thing
+    /// about it: a run that ends with values still queued owns storage nobody
+    /// will take, and the engine tearing the table down is the last chance to
+    /// release it. By then the sends are long over, so the answer is recorded
+    /// when the channel is made.
+    boxed: bool,
 }
 
 /// One reusable channel-table position.
@@ -204,7 +257,11 @@ impl ChannelExecutor {
     }
 
     /// Creates a channel, answering its `(sender, receiver)` handles.
-    pub fn create(&mut self) -> Result<(i64, i64), ChannelTrap> {
+    ///
+    /// `boxed` says whether a queued word will be a native-state token, which
+    /// is what makes an undelivered value storage to release rather than a
+    /// number to forget.
+    pub fn create(&mut self, boxed: bool) -> Result<(i64, i64), ChannelTrap> {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
@@ -224,6 +281,7 @@ impl ChannelExecutor {
             queue: VecDeque::new(),
             sender_live: true,
             receiver_live: true,
+            boxed,
         });
         let generation = slot.generation;
         Ok((
@@ -330,7 +388,7 @@ impl ChannelExecutor {
     ) -> Result<i64, ChannelTrap> {
         match prim {
             ChannelPrim::Create => {
-                let (sender, _) = self.create()?;
+                let (sender, _) = self.create(a == BOXED_PAYLOAD)?;
                 Ok(sender)
             }
             ChannelPrim::Send => {
@@ -394,6 +452,32 @@ impl ChannelExecutor {
         channel.queue.pop_front().ok_or(ChannelTrap::NotReady)
     }
 
+    /// Empties the table, answering every undelivered token it was holding.
+    ///
+    /// A run can end with values still queued: an early return, a trap, a
+    /// receiver that stopped taking. A queued word of a boxed channel names
+    /// storage in a store that outlives the run — in a hybrid session, one
+    /// that outlives the process — so the engine tearing the table down
+    /// releases what it finds here. A receiver that closes is drained by
+    /// generated code first, so what is left is exactly what nobody took.
+    ///
+    /// Words of unboxed channels are not answered: they are the values
+    /// themselves and own nothing.
+    pub fn take_undelivered_tokens(&mut self) -> Vec<i64> {
+        let mut tokens = Vec::new();
+        for slot in &mut self.channels {
+            let Some(channel) = slot.channel.take() else {
+                continue;
+            };
+            if channel.boxed {
+                tokens.extend(channel.queue);
+            }
+        }
+        self.channels.clear();
+        self.free.clear();
+        tokens
+    }
+
     /// Reclaims one channel whose ends are both gone and advances its generation.
     fn reclaim(&mut self, index: usize, generation: u32) -> Result<(), ChannelTrap> {
         let slot = self
@@ -448,169 +532,5 @@ impl ChannelExecutor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Creates a channel and returns its ends.
-    fn channel(executor: &mut ChannelExecutor) -> (i64, i64) {
-        executor.create().expect("table has room for one channel")
-    }
-
-    #[test]
-    fn the_two_ends_name_one_channel_without_aliasing() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        assert_ne!(sender, receiver);
-        assert_eq!(executor.live(), 1);
-        assert_eq!(
-            executor.receive(receiver),
-            Ok(ChannelReceive::Empty),
-            "an untouched channel is open and empty"
-        );
-    }
-
-    #[test]
-    fn values_arrive_in_send_order() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor.send(sender, 1).unwrap();
-        executor.send(sender, 2).unwrap();
-        executor.send(sender, 3).unwrap();
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Value(1)));
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Value(2)));
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Value(3)));
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Empty));
-    }
-
-    #[test]
-    fn a_drained_closed_channel_reports_closure_rather_than_trapping() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor.send(sender, 7).unwrap();
-        executor.close_sender(sender).unwrap();
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Value(7)));
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Closed));
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Closed));
-    }
-
-    #[test]
-    fn a_closed_empty_channel_is_closed_at_once() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor.close_sender(sender).unwrap();
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Closed));
-    }
-
-    #[test]
-    fn sending_after_the_receiver_is_gone_traps() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor.close_receiver(receiver).unwrap();
-        assert_eq!(executor.send(sender, 1), Err(ChannelTrap::ReceiverGone));
-    }
-
-    #[test]
-    fn an_end_used_in_the_wrong_direction_traps() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        assert_eq!(executor.send(receiver, 1), Err(ChannelTrap::WrongDirection));
-        assert_eq!(executor.receive(sender), Err(ChannelTrap::WrongDirection));
-    }
-
-    #[test]
-    fn reclaiming_both_ends_stales_both_handles() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor.close_sender(sender).unwrap();
-        executor.close_receiver(receiver).unwrap();
-        assert_eq!(executor.live(), 0);
-        assert_eq!(executor.send(sender, 1), Err(ChannelTrap::UnknownHandle));
-        assert_eq!(executor.receive(receiver), Err(ChannelTrap::UnknownHandle));
-    }
-
-    #[test]
-    fn a_reused_slot_has_a_new_generation() {
-        let mut executor = ChannelExecutor::new();
-        let (stale_sender, stale_receiver) = channel(&mut executor);
-        executor.close_sender(stale_sender).unwrap();
-        executor.close_receiver(stale_receiver).unwrap();
-        let (sender, receiver) = channel(&mut executor);
-        assert_ne!((sender, receiver), (stale_sender, stale_receiver));
-        assert_eq!(
-            executor.receive(stale_receiver),
-            Err(ChannelTrap::UnknownHandle)
-        );
-        assert_eq!(executor.receive(receiver), Ok(ChannelReceive::Empty));
-    }
-
-    #[test]
-    fn zero_names_no_channel_end() {
-        let mut executor = ChannelExecutor::new();
-        assert_eq!(executor.receive(0), Err(ChannelTrap::UnknownHandle));
-        assert_eq!(executor.send(0, 1), Err(ChannelTrap::UnknownHandle));
-    }
-
-    #[test]
-    fn the_primitive_wire_bytes_are_pinned() {
-        // Spelled out literally: a reorder here silently redirects every
-        // already-compiled module, so it has to fail a test instead.
-        assert_eq!(ChannelPrim::Create.as_byte(), 0);
-        assert_eq!(ChannelPrim::Send.as_byte(), 1);
-        assert_eq!(ChannelPrim::Poll.as_byte(), 2);
-        assert_eq!(ChannelPrim::Take.as_byte(), 3);
-        assert_eq!(ChannelPrim::CloseSender.as_byte(), 4);
-        assert_eq!(ChannelPrim::CloseReceiver.as_byte(), 5);
-        assert_eq!(ChannelPrim::Deadlock.as_byte(), 6);
-    }
-
-    #[test]
-    fn every_primitive_round_trips_through_its_byte() {
-        for prim in ChannelPrim::ALL {
-            assert_eq!(ChannelPrim::from_byte(prim.as_byte()), Some(prim));
-        }
-    }
-
-    #[test]
-    fn an_unknown_byte_names_no_primitive() {
-        assert_eq!(ChannelPrim::from_byte(ChannelPrim::ALL.len() as u8), None);
-        assert_eq!(ChannelPrim::from_byte(u8::MAX), None);
-    }
-
-    #[test]
-    fn poll_and_take_agree_without_consuming_early() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(0));
-        executor.perform(ChannelPrim::Send, sender, 11, 0).unwrap();
-        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(1));
-        assert_eq!(
-            executor.perform(ChannelPrim::Poll, receiver, 0, 0),
-            Ok(1),
-            "polling twice must not consume the waiting value"
-        );
-        assert_eq!(executor.perform(ChannelPrim::Take, receiver, 0, 0), Ok(11));
-        assert_eq!(
-            executor.perform(ChannelPrim::Take, receiver, 0, 0),
-            Err(ChannelTrap::NotReady)
-        );
-    }
-
-    #[test]
-    fn a_closed_channel_polls_closed_once_drained() {
-        let mut executor = ChannelExecutor::new();
-        let (sender, receiver) = channel(&mut executor);
-        executor
-            .perform(ChannelPrim::CloseSender, sender, 0, 0)
-            .unwrap();
-        assert_eq!(executor.perform(ChannelPrim::Poll, receiver, 0, 0), Ok(2));
-    }
-
-    #[test]
-    fn the_deadlock_primitive_always_traps() {
-        let mut executor = ChannelExecutor::new();
-        assert_eq!(
-            executor.perform(ChannelPrim::Deadlock, 0, 0, 0),
-            Err(ChannelTrap::Deadlock)
-        );
-    }
-}
+#[path = "channels/executor_tests.rs"]
+mod executor_tests;

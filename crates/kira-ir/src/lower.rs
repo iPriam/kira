@@ -649,8 +649,16 @@ impl Lowerer<'_> {
                 return self.lower_task_spawn(target, &args, ty);
             }
             HirExpr::TaskJoin { handle, ty } => return self.lower_task_join(handle, ty),
-            HirExpr::ChannelCreate { .. } => {
-                return self.channel_op(ChannelPrim::Create, Vec::new());
+            HirExpr::ChannelCreate { wire, .. } => {
+                // The table is told at creation whether a queued word will be
+                // a token, because a run that ends with values still queued
+                // has to release what they name and there is no send left to
+                // ask by then.
+                let boxed = self.ir.exprs.alloc(IrExpr::Int(match wire.is_boxed() {
+                    true => kira_runtime_abi::BOXED_PAYLOAD,
+                    false => 0,
+                }));
+                return self.channel_op(ChannelPrim::Create, vec![boxed]);
             }
             HirExpr::ChannelReceiver { sender, .. } => {
                 // The two ends share an index and a generation and differ only

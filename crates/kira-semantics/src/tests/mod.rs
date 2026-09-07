@@ -29,6 +29,7 @@ mod foreign_field;
 mod generics;
 mod imports;
 mod libraries;
+mod macro_visibility;
 mod main_thread;
 mod markers;
 mod matches;
