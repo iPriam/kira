@@ -158,7 +158,11 @@ impl Analyzer<'_> {
     /// Two things it cannot. `Void` is a scalar with nothing in it, so a
     /// channel over it would carry no value; and a pointer word names storage
     /// on the far side of a seam this language does not read, so what would
-    /// arrive is an address whose meaning stayed behind.
+    /// arrive is an address whose meaning stayed behind. The pointer question
+    /// is asked of the whole value rather than its outermost shape: an address
+    /// inside the struct that crossed is the same address, and a rule that
+    /// only looked at the outside would be one wrapper away from being no rule
+    /// at all.
     fn channel_payload_refusal(&self, payload: Type) -> Option<(&'static str, String)> {
         let name = self.program.types.type_name(payload);
         if let Some(reason) = self.marker_reason(&name, payload, Marker::Send) {
@@ -178,12 +182,20 @@ impl Analyzer<'_> {
                     .to_owned(),
             ));
         }
-        if self.is_pointer_word(payload) {
+        if let Some(pointer) = self.program.types.pointer_word_within(payload) {
+            let pointer_name = self.program.types.type_name(pointer);
+            // The pointer is named separately when it is not the payload
+            // itself, because the author wrote the outer type and has to be
+            // told which part of it is the problem.
+            let found = match pointer == payload {
+                true => String::new(),
+                false => format!("it carries a `{pointer_name}`, and "),
+            };
             return Some((
                 "KSEM365",
                 format!(
-                    "a channel cannot carry `{name}`: a pointer word names storage on the far \
-                     side of a seam this language does not read, so what arrived would be an \
+                    "a channel cannot carry `{name}`: {found}a pointer word names storage on the \
+                     far side of a seam this language does not read, so what arrived would be an \
                      address whose meaning stayed behind"
                 ),
             ));
