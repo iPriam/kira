@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use kira_runtime_abi::{ChannelExecutor, ChannelPrim};
+use kira_runtime_abi::{ChannelExecutor, ChannelPrim, ChannelTrap};
 
 thread_local! {
     /// The channels this thread's program created.
@@ -52,21 +52,66 @@ pub extern "C" fn kira_rt_channel_reset() {
 /// rather than unwinding, the way every other native trap does.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_channel_op(prim: i64, a: i64, b: i64, c: i64) -> i64 {
-    let Some(prim) = u8::try_from(prim).ok().and_then(ChannelPrim::from_byte) else {
-        // Only generated code writes this byte, so an unknown one means the
-        // executable and this archive disagree, which is a link-time problem
-        // reported at run time rather than a program error.
-        eprintln!("kira: runtime trap: unknown channel primitive {prim}");
-        std::process::exit(1);
-    };
-    match CHANNELS.with_borrow_mut(|channels| channels.perform(prim, a, b, c)) {
-        Ok(answer) => answer,
-        Err(trap) => {
-            eprintln!("kira: runtime trap: {trap}");
+    let mut answer = 0;
+    // SAFETY: `answer` is a live, aligned local.
+    match unsafe { kira_rt_channel_try(prim, a, b, c, &mut answer) } {
+        0 => answer,
+        code => {
+            match ChannelTrap::from_code(code) {
+                Some(trap) => eprintln!("kira: runtime trap: {trap}"),
+                // Only generated code writes the primitive byte, so an unknown
+                // one means the executable and this archive disagree, which is
+                // a link-time problem reported at run time rather than a
+                // program error.
+                None => eprintln!("kira: runtime trap: unknown channel primitive {prim}"),
+            }
             std::process::exit(1);
         }
     }
 }
+
+/// Carries out one channel primitive, answering a trap instead of taking it.
+///
+/// The same table [`kira_rt_channel_op`] serves, reached by a caller that has
+/// somewhere to put a failure. The bytecode half of a hybrid program is that
+/// caller: the two halves share one channel table because a channel created on
+/// one side is an ordinary value on the other, and the VM raises its own trap
+/// rather than ending the process the way generated native code does.
+///
+/// Answers `0` and writes the primitive's result through `out` on success, or
+/// a [`ChannelTrap::as_code`] otherwise. An unrecognised primitive answers a
+/// code no trap claims, which is what tells a disagreeing archive from a
+/// program error.
+///
+/// # Safety
+///
+/// `out` must be a writable, aligned `i64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_channel_try(
+    prim: i64,
+    a: i64,
+    b: i64,
+    c: i64,
+    out: *mut i64,
+) -> i64 {
+    let Some(prim) = u8::try_from(prim).ok().and_then(ChannelPrim::from_byte) else {
+        return UNKNOWN_PRIMITIVE;
+    };
+    match CHANNELS.with_borrow_mut(|channels| channels.perform(prim, a, b, c)) {
+        Ok(answer) => {
+            // SAFETY: the caller promised a writable, aligned `i64`.
+            unsafe { out.write(answer) };
+            0
+        }
+        Err(trap) => trap.as_code(),
+    }
+}
+
+/// The code answered for a primitive byte no [`ChannelPrim`] claims.
+///
+/// Outside the trap codes deliberately: it is not a program error, it is this
+/// archive and the executable disagreeing about the wire.
+const UNKNOWN_PRIMITIVE: i64 = -1;
 
 #[cfg(test)]
 mod tests {

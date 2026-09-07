@@ -235,6 +235,16 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.write_line(text);
     }
 
+    fn channel_op(
+        &mut self,
+        prim: kira_runtime_abi::ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Option<Result<i64, kira_runtime_abi::ChannelTrap>> {
+        self.inner.channel_op(prim, a, b, c)
+    }
+
     fn call_native(
         &mut self,
         function_id: u32,

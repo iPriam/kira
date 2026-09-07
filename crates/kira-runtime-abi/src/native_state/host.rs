@@ -45,6 +45,16 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         self.inner.write_line(text);
     }
 
+    fn channel_op(
+        &mut self,
+        prim: crate::ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Option<Result<i64, crate::ChannelTrap>> {
+        self.inner.channel_op(prim, a, b, c)
+    }
+
     fn call_native(
         &mut self,
         function_id: u32,

@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use kira_hybrid_definition::HybridFunction;
 use kira_runtime_abi::{
-    BridgeValue, CBlockOffset, ForeignPointerWidth, NativeCBlock, NativeStateError,
-    NativeStateStatus, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+    BridgeValue, CBlockOffset, ChannelPrim, ChannelTrap, ForeignPointerWidth, NativeCBlock,
+    NativeStateError, NativeStateStatus, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    NativeStateValueTag,
 };
 
 use crate::error::HybridError;
@@ -77,6 +78,7 @@ type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type HeapReportFn = unsafe extern "C" fn();
 type TaskResetFn = unsafe extern "C" fn();
+type ChannelTryFn = unsafe extern "C" fn(i64, i64, i64, i64, *mut i64) -> i64;
 type MainThreadRunFn = unsafe extern "C" fn(extern "C" fn() -> i32) -> i32;
 type MainThreadInstallDispatcherFn = unsafe extern "C" fn(*mut c_void);
 type MainThreadDispatcherFn = unsafe extern "C" fn(u32, *mut BridgeValue, u32, *mut BridgeValue);
@@ -156,6 +158,7 @@ const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
 const TASK_RESET: &[u8] = b"kira_rt_task_reset\0";
 const CHANNEL_RESET: &[u8] = b"kira_rt_channel_reset\0";
+const CHANNEL_TRY: &[u8] = b"kira_rt_channel_try\0";
 const MAIN_THREAD_RUN: &[u8] = b"kira_rt_main_thread_run\0";
 const MAIN_THREAD_INSTALL_DISPATCHER: &[u8] = b"kira_rt_main_thread_install_dispatcher\0";
 const MAIN_THREAD_DISPATCHER: &[u8] = b"kira_main_thread_dispatch\0";
@@ -229,6 +232,9 @@ pub struct NativeLibrary {
     task_reset: TaskResetFn,
     /// Starts and ends the native channel table's per-run scope.
     channel_reset: TaskResetFn,
+    /// Carries out one channel primitive on that table, answering a trap
+    /// rather than ending the process the way generated native code does.
+    channel_try: ChannelTryFn,
     main_thread_run: MainThreadRunFn,
     main_thread_install_dispatcher: MainThreadInstallDispatcherFn,
     main_thread_dispatcher: Option<MainThreadDispatcherFn>,
@@ -343,6 +349,7 @@ impl NativeLibrary {
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
         let task_reset = bind(&library, path, TASK_RESET)?;
         let channel_reset = bind(&library, path, CHANNEL_RESET)?;
+        let channel_try = bind(&library, path, CHANNEL_TRY)?;
         let main_thread_run = bind(&library, path, MAIN_THREAD_RUN)?;
         let main_thread_install_dispatcher = bind(&library, path, MAIN_THREAD_INSTALL_DISPATCHER)?;
         let main_thread_dispatcher = bind(&library, path, MAIN_THREAD_DISPATCHER).ok();
@@ -438,6 +445,7 @@ impl NativeLibrary {
             heap_report,
             task_reset,
             channel_reset,
+            channel_try,
             main_thread_run,
             main_thread_install_dispatcher,
             main_thread_dispatcher,
@@ -511,6 +519,33 @@ impl NativeLibrary {
         // SAFETY: the symbol was bound from this library, which remains loaded
         // for as long as `self` and has no arguments or return value.
         unsafe { (self.task_reset)() };
+    }
+
+    /// Carries out one channel primitive on the native half's table.
+    ///
+    /// The table both halves of a hybrid program share. A channel end is an
+    /// ordinary value that either half can hand the other, and a handle is an
+    /// index, so two tables would make a correct program trap the moment an
+    /// end crossed.
+    pub fn channel_op(
+        &self,
+        prim: ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Result<i64, ChannelTrap> {
+        let mut answer = 0;
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self`, and `answer` is a live, aligned local.
+        let code = unsafe { (self.channel_try)(i64::from(prim.as_byte()), a, b, c, &mut answer) };
+        match ChannelTrap::from_code(code) {
+            Some(trap) => Err(trap),
+            // Zero is success. Anything else is the archive and this process
+            // disagreeing about the wire, which no channel end can name, so it
+            // is reported as the handle failure it will read as.
+            None if code == 0 => Ok(answer),
+            None => Err(ChannelTrap::UnknownHandle),
+        }
     }
 
     /// Starts or ends the channel scope associated with the current host thread.

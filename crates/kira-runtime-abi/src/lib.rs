@@ -231,6 +231,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_main_thread_lifecycle_pump_local",
     "kira_rt_main_thread_lifecycle_reset_local",
     "kira_rt_channel_reset",
+    "kira_rt_channel_try",
 ];
 
 /// An argument the VM hands to a native function.
@@ -415,6 +416,28 @@ pub trait HostCapabilities {
     ) -> Result<NativeReturn, NativeCallError> {
         let _ = (function_id, args);
         Err(NativeCallError::NoNativeHalf)
+    }
+
+    /// Carries out one channel primitive on a table the host owns.
+    ///
+    /// `None` — the default — means the host has no channel table and the
+    /// engine should use its own, which is every host but a hybrid session's.
+    ///
+    /// A hybrid session has one, because the two halves of a hybrid program
+    /// have to share a channel table. A channel end is an ordinary value: a
+    /// `@Runtime` function can create one and hand it to a `@Native` function,
+    /// or the other way round, and a handle is an index — so two tables mean
+    /// the receiving half looks the end up in a table that never had it and
+    /// traps on a program that is correct.
+    fn channel_op(
+        &mut self,
+        prim: ChannelPrim,
+        a: i64,
+        b: i64,
+        c: i64,
+    ) -> Option<Result<i64, ChannelTrap>> {
+        let _ = (prim, a, b, c);
+        None
     }
 
     /// Services one request on the host's main-thread event loop.
