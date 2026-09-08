@@ -245,6 +245,23 @@ comptime macro LintRunner {
                 if target.family == "Lint" {
                     continue
                 }
+                // `@Allow(KLINT002)` above the declaration turns this lint off
+                // for it alone.
+                //
+                // Some code is the exception the lint is written to find and is
+                // right anyway: a test *about* `while` has to keep its `while`,
+                // and without a per-site allow the only way to keep it is to
+                // turn the check off for the whole package. One site should not
+                // cost the other fifteen hundred.
+                var allowedHere: Bool = false
+                for annotation in target.annotations {
+                    if annotation.contains("Allow") && annotation.contains("KLINT002") {
+                        allowedHere = true
+                    }
+                }
+                if allowedHere {
+                    continue
+                }
                 // Bound once: reading `target.body` re-parses the declaration,
                 // and this walk looks at every statement twice.
                 let body = target.body

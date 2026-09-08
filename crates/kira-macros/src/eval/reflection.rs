@@ -97,6 +97,15 @@ pub(super) fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
                 .map(|statement| Value::Statement(Box::new(StatementValue::of(statement))))
                 .collect(),
         )),
+        // What was written above the declaration, so a lint can be told to
+        // leave one site alone without being turned off everywhere.
+        (Value::Declaration(declaration), "annotations") => Ok(Value::Array(
+            declaration
+                .annotations
+                .iter()
+                .map(|annotation| Value::Str(annotation.clone()))
+                .collect(),
+        )),
         (Value::Statement(statement), "kind") => Ok(Value::Str(statement.kind.to_owned())),
         (Value::Statement(statement), "syntax") => {
             Ok(Value::read(statement.syntax.clone(), statement.span))

@@ -45,6 +45,14 @@ pub struct LintPolicy {
     /// The level used when a code has no explicit override.
     pub default: LintLevel,
     overrides: BTreeMap<String, LintLevel>,
+    /// Whether this policy has an opinion at all.
+    ///
+    /// A policy that was never asked for must not flatten what the runner
+    /// already decided: the lints emitted at the levels a package configured,
+    /// and a default of `Warn` applied over them would quietly demote every
+    /// denied lint back to a warning. So "nobody asked" is its own state rather
+    /// than a default that happens to be common.
+    passthrough: bool,
 }
 
 impl Default for LintPolicy {
@@ -52,6 +60,7 @@ impl Default for LintPolicy {
         Self {
             default: LintLevel::Warn,
             overrides: BTreeMap::new(),
+            passthrough: false,
         }
     }
 }
@@ -63,7 +72,28 @@ impl LintPolicy {
         Self {
             default,
             overrides: BTreeMap::new(),
+            passthrough: false,
         }
+    }
+
+    /// A policy that leaves every diagnostic exactly as it was raised.
+    ///
+    /// What a run with no lint flag gets: the package's own configuration
+    /// already decided each level, and this carries that through rather than
+    /// replacing it with one.
+    #[must_use]
+    pub fn unchanged() -> Self {
+        Self {
+            default: LintLevel::Warn,
+            overrides: BTreeMap::new(),
+            passthrough: true,
+        }
+    }
+
+    /// Whether any code carries a level of its own.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.overrides.is_empty()
     }
 
     /// Sets or replaces one code-specific level.
@@ -80,6 +110,9 @@ impl LintPolicy {
     /// Applies the policy to lint diagnostics, leaving compiler diagnostics alone.
     #[must_use]
     pub fn apply(&self, diagnostics: &[Diagnostic]) -> Vec<Diagnostic> {
+        if self.passthrough {
+            return diagnostics.to_vec();
+        }
         diagnostics
             .iter()
             .filter_map(|diagnostic| {
