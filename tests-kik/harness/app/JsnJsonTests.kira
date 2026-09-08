@@ -226,6 +226,25 @@ construct JsnReadsTheWholeIntegerRange() extends Test {
     }
 }
 
+construct JsnIntAnswersItsFallbackForWhatHasNoInteger() extends Test {
+    test {
+        // NaN and the infinities, built directly rather than read: the format
+        // has no literal for any of them. NaN is the one that matters, because
+        // every comparison against it is false, so a bounds check cannot refuse
+        // it and the conversion behind that check traps. `jsonInt` promises a
+        // fallback, and a trap is not one.
+        let nan: JsonValue = .Number(0.0 / 0.0)
+        let up: JsonValue = .Number(1.0 / 0.0)
+        let down: JsonValue = .Number(0.0 - 1.0 / 0.0)
+        return String(jsonInt(nan, 42)) + " " + String(jsonInt(up, 42))
+            + " " + String(jsonInt(down, 42)) + " " + String(jsonInt(.Number(3.0), 42))
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("42 42 42 3")
+        return e
+    }
+}
+
 construct JsnScalesAFractionLongerThanItsMantissa() extends Test {
     test {
         // More fractional digits than an `Int` mantissa holds. Each digit the
