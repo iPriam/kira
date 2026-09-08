@@ -89,7 +89,7 @@ Both write members in the order the value holds them. Sorting would be a second 
 
 Only what the format requires is escaped, so a multi-byte scalar stays as itself rather than becoming a `\u` pair three times its length. A `Float` that is infinite or not a number is written `null`: JSON has no spelling for either, and losing every other member over one field would be the worse answer.
 
-Text written by `writeJson` reads back as the value it was given.
+Text written by `writeJson` reads back as the value it was given, for every finite number. A whole `Number` is written with a trailing `.0` to keep it one — `3` and `3.0` are different values, and a document that lost the difference on the way out would not read back as what it held. The exception is the one above: an infinity or a NaN is written `null` and reads back as `Null`, because JSON has no spelling to return it to.
 
 ## Reading a Response
 
