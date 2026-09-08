@@ -597,9 +597,28 @@ comptime macro LintRunner {
                     let first: String = returned.substring(0, 1)
                     isLiteral = "0123456789-".contains(first)
                 }
+                // An enum case is a constant too, in both spellings. `.Red`
+                // is unambiguous — nothing else opens with a dot. `Colour.Red`
+                // is read as one when what precedes the dot is capitalised,
+                // which is how Kira spells a type: `config.retries` is a field
+                // of something and might be anything, and is left alone.
+                if isLiteral == false && returned != "" {
+                    let opener: String = returned.substring(0, 1)
+                    if opener == "." {
+                        isLiteral = true
+                    }
+                    if "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(opener) && returned.contains(".") {
+                        isLiteral = true
+                    }
+                }
                 // Nothing that reaches for anything else, whatever it starts
                 // with: a call, an index, or a constructed value is not a
-                // literal even when it begins with a digit.
+                // literal even when it begins with a digit or names a type.
+                //
+                // `U8(3)` is excluded with them, and is the one exclusion worth
+                // naming: it *is* a constant, and a `let` would hold it. There
+                // is nothing in the text that tells a conversion from any other
+                // call, so admitting it would admit `readConfig()` beside it.
                 if returned.contains("(") || returned.contains("[") || returned.contains("{") {
                     isLiteral = false
                 }
