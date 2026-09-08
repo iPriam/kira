@@ -215,13 +215,18 @@ fn awaiting_a_cancelled_task_traps_on_every_engine() {
 #[test]
 fn joining_twice_traps_on_every_engine() {
     // The first join succeeded, so the trap is the second one and nothing else.
-    assert_trap_parity(
+    //
+    // The sentence is asserted, not just the refusal: the trap set is shared
+    // but the *rendering* is each engine's own, and a program that fails the
+    // same way on both has to be diagnosed the same way by both.
+    assert_trap_message_parity(
         &program(
             r#"    let handle = Task { tskSum(40, 2) }
     print(handle.await)
     print(handle.await)"#,
         ),
         "42\n",
+        "kira: runtime trap: task handle is not live",
     );
 }
 

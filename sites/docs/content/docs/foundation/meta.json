@@ -5,6 +5,7 @@
     "geometry-and-values",
     "filesystem",
     "images",
+    "json",
     "compiling-kira",
     "running-kira",
     "testing"

@@ -257,14 +257,54 @@ fn native_surface_key(
     sanitize: kira_llvm_backend::Sanitize,
 ) -> String {
     format!(
-        "kira-vm-native-surface-v3\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}\nsanitize={:?}",
+        "kira-vm-native-surface-v4\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}\nlinked={}\nsanitize={:?}",
         kira_runtime_abi::RUNTIME_ABI_MARKER,
         program.foreign_imports,
         program.foreign_aggregates,
         program.foreign_callbacks,
         foreign_link,
+        linked_files_key(foreign_link),
         sanitize,
     )
+}
+
+/// What the linked files *are*, beside where they are.
+///
+/// The archives are linked **into** the reused half, so a rebuilt one changes
+/// what that half does while every path in the key stays the same. Without this
+/// a program kept running the library it was first built against: the workflow
+/// both FFI examples document — build the archive, run, change the C, build
+/// again, run — silently answered with the old code on the hybrid engine while
+/// the VM and native engines answered with the new.
+///
+/// Size and modification time rather than a hash of the contents: an archive is
+/// tens of megabytes, this runs on every hybrid build, and a rebuild that left
+/// both identical would have to have produced the same bytes anyway.
+fn linked_files_key(foreign_link: &NativeLinkInputs) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let archives = foreign_link.archives().iter();
+    let statics = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(_, path)| path)
+        .chain(foreign_link.library_paths().iter().map(|(_, path)| path));
+    for path in archives.chain(statics) {
+        parts.push(match std::fs::metadata(path) {
+            Ok(data) => {
+                let modified = data
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|since| since.as_nanos())
+                    .unwrap_or_default();
+                format!("{}:{}:{modified}", path.display(), data.len())
+            }
+            // A path with nothing behind it is still part of the key: the file
+            // appearing later has to count as a change.
+            Err(_) => format!("{}:absent", path.display()),
+        });
+    }
+    parts.join(",")
 }
 
 /// Builds a hybrid bundle and runs it, returning the program's exit code.
