@@ -589,7 +589,11 @@ impl LinuxSyscall {
     /// about `--backend llvm` or the native half of `--backend hybrid`.
     pub const fn servable_by_an_interpreter(self) -> bool {
         match self {
-            Self::Read | Self::Write | Self::Ppoll | Self::Openat | Self::Close
+            Self::Read
+            | Self::Write
+            | Self::Ppoll
+            | Self::Openat
+            | Self::Close
             | Self::Ioctl
             | Self::Lseek
             | Self::Pread64
@@ -647,7 +651,11 @@ impl LinuxSyscall {
     /// caller has a reason to ask about.
     pub const fn interpreter_refusal(self) -> &'static str {
         match self {
-            Self::Read | Self::Write | Self::Ppoll | Self::Openat | Self::Close
+            Self::Read
+            | Self::Write
+            | Self::Ppoll
+            | Self::Openat
+            | Self::Close
             | Self::Ioctl
             | Self::Lseek
             | Self::Pread64
@@ -691,12 +699,8 @@ impl LinuxSyscall {
             Self::Mmap => {
                 "would map into the interpreter's own address space, where the program has no way to reach it and the interpreter did not ask for it"
             }
-            Self::Munmap => {
-                "would unmap part of the interpreter's own address space"
-            }
-            Self::Mprotect => {
-                "would change the permissions of the interpreter's own memory"
-            }
+            Self::Munmap => "would unmap part of the interpreter's own address space",
+            Self::Mprotect => "would change the permissions of the interpreter's own memory",
             Self::Clone => {
                 "would fork the interpreter, leaving two of them running the same program"
             }
@@ -715,9 +719,7 @@ impl LinuxSyscall {
             Self::Kill => {
                 "would signal a process of the developer's machine, chosen by a number the program made up"
             }
-            Self::Setsid => {
-                "would detach the interpreter from its own terminal"
-            }
+            Self::Setsid => "would detach the interpreter from its own terminal",
             Self::Dup3 => {
                 "would rewrite the interpreter's own descriptor table, where a number the program picked may be the interpreter's output"
             }
@@ -727,27 +729,15 @@ impl LinuxSyscall {
             Self::RtSigprocmask => {
                 "would block signals for the interpreter rather than for the program"
             }
-            Self::RtSigreturn => {
-                "would return from a handler the interpreter never entered"
-            }
+            Self::RtSigreturn => "would return from a handler the interpreter never entered",
             Self::Signalfd4 => {
                 "would take delivery of the interpreter's signals, which are not the program's to consume"
             }
-            Self::Mkdirat => {
-                "would create a directory on the developer's machine"
-            }
-            Self::Unlinkat => {
-                "would remove a file from the developer's machine"
-            }
-            Self::Renameat2 => {
-                "would move a file on the developer's machine"
-            }
-            Self::Fchmodat => {
-                "would change permissions on the developer's machine"
-            }
-            Self::Statfs => {
-                "would answer about a filesystem of the developer's machine"
-            }
+            Self::Mkdirat => "would create a directory on the developer's machine",
+            Self::Unlinkat => "would remove a file from the developer's machine",
+            Self::Renameat2 => "would move a file on the developer's machine",
+            Self::Fchmodat => "would change permissions on the developer's machine",
+            Self::Statfs => "would answer about a filesystem of the developer's machine",
         }
     }
 }

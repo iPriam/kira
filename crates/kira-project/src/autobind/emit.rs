@@ -150,8 +150,8 @@ pub fn array_type_name(element: &KiraType, count: u64) -> String {
 mod tests {
     use super::*;
     use crate::autobind::model::{
-        ArrayDecl, CallbackDecl, FieldDecl, FunctionDecl, OpaqueDecl, ParamDecl, PointerDecl,
-        ConstantDecl, SkippedDecl, StructDecl,
+        ArrayDecl, CallbackDecl, ConstantDecl, FieldDecl, FunctionDecl, OpaqueDecl, ParamDecl,
+        PointerDecl, SkippedDecl, StructDecl,
     };
 
     fn sample() -> BindingModule {

@@ -10,13 +10,17 @@ import Foundation
 // calling inherited + overridden methods in loops over arrays of instances.
 // Every result is folded into one deterministic Int checksum.
 //
-// PARITY NOTE: this module intentionally never lets an *inherited* base method
-// call `self.<m>()` where a descendant overrides `<m>`. That self-dispatch is
-// virtual on vm/hybrid but static on llvm (a known backend divergence), so it is
-// avoided here. "Calling up" is expressed only with parent-qualified
-// `Parent.method()` inside overrides, which is consistent on every backend.
-// Inherited methods here only read `self` fields or call parent-qualified
-// methods, both of which agree across backends.
+// PARITY NOTE: this module expresses "calling up" only with parent-qualified
+// `Parent.method()` inside overrides, and its inherited methods only read `self`
+// fields or call parent-qualified methods.
+//
+// It was written that way because an inherited base method calling `self.<m>()`
+// where a descendant overrides `<m>` used to be virtual on vm and hybrid and
+// static on llvm. That divergence is gone: monomorphization gives each
+// descendant its own copy of the parent's body with `self` statically the
+// concrete class, so both dispatches are the same dispatch. `StrxClassTests`
+// H9 pins it. This module is left as it is — it is a checksum over a different
+// set of shapes, and rewriting it would change what it measures.
 
 // ---------------------------------------------------------------------------
 // H1: three-level single inheritance, field-default overrides, super-calls.
