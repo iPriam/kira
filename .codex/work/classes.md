@@ -14,8 +14,8 @@ the design:
 > virtual on vm/hybrid but static on llvm (a known backend divergence), so it
 > is avoided here.
 
-So the oracle **does not pin virtual dispatch** — it has a live backend
-divergence there and steers around it. Everything the corpus does exercise is
+So the oracle **does not pin virtual dispatch** — it had a live backend
+divergence there and steered around it. Everything the corpus does exercise is
 resolvable statically:
 
 - No corpus site ever binds a derived instance to a base-typed name. The one
@@ -41,6 +41,14 @@ oracle documents cannot arise here, on any backend.
 This works because `Callable` already carries `receiver: Option<StructId>`
 separately from `function: &Function`. Registering a parent's AST body under the
 child's `StructId` is monomorphization for free, with no new machinery.
+
+**It holds.** The divergence the parity note steered around is gone, and was
+measured rather than assumed: three-level self-dispatch, an override calling up
+to a grandparent whose body dispatches back down through `self`, multiple
+inheritance, and instances reached through an array all answer identically on
+vm, llvm and hybrid. `StrxClassTests` H9 pins each of them, so a lowering that
+stops monomorphizing — a vtable, or any shared parent body — fails a test rather
+than quietly reintroducing a program whose answer depends on its backend.
 
 Fields flatten parent-first, keyed by `(owner, name)` so multiple inheritance
 keeps both `ClsAlpha.v` and `ClsBeta.v` as distinct slots. An `override let`

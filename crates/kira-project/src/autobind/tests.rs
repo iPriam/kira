@@ -122,7 +122,10 @@ fn enumerators_are_bound_as_module_scope_constants() {
 #[test]
 fn a_named_enumerator_the_headers_do_not_define_is_skipped_with_a_reason() {
     let package = TempPackage::new("missing-enumerator");
-    package.header("demo.h", "enum { DEMO_PRESENT = 1 };\n#define DEMO_MACRO 2\n");
+    package.header(
+        "demo.h",
+        "enum { DEMO_PRESENT = 1 };\n#define DEMO_MACRO 2\n",
+    );
     let mut spec = library(&["demo.h"]);
     spec = spec.with_autobind(AutobindSpec {
         module: Some("demo".to_owned()),
