@@ -209,14 +209,48 @@ construct JsnReadsNegativesAndExponents() extends Test {
 
 construct JsnReadsTheWholeIntegerRange() extends Test {
     test {
-        // The last `Int`, then one past it: the first stays exact, the second
-        // becomes the nearest `Float`, which is what a document past the range
-        // can mean.
-        return jsnRead("9223372036854775807") + " " + jsnRead("-9223372036854775807")
+        // Both ends of `Int`, then one past each: the ends stay exact, and what
+        // is past them becomes the nearest `Float`, which is what a document
+        // outside the range can mean.
+        //
+        // The negative end is the one worth naming. Its magnitude is one larger
+        // than the positive end's, so a reader that measures a literal's size
+        // before applying the sign refuses `-9223372036854775808` — a value
+        // that fits — and cannot offer it as an integer afterwards either.
+        return jsnRead("9223372036854775807") + " " + jsnRead("-9223372036854775808")
             + " " + jsnRead("9223372036854775808")
     }
     expect {
-        let e: Result<Any, TestFailure> = .Ok("9223372036854775807 -9223372036854775807 9223372036854776000")
+        let e: Result<Any, TestFailure> = .Ok("9223372036854775807 -9223372036854775808 9223372036854776000")
+        return e
+    }
+}
+
+construct JsnScalesAFractionLongerThanItsMantissa() extends Test {
+    test {
+        // More fractional digits than an `Int` mantissa holds. Each digit the
+        // mantissa cannot take still has to move the point, or the scale counts
+        // digits that were never multiplied in: this read as roughly
+        // `0.0012345678901234567` — a hundredfold error — rather than the
+        // nearest `Float`.
+        return jsnRead("0.123456789012345678901")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("0.12345678901234568")
+        return e
+    }
+}
+
+construct JsnBoundsAnAbsurdExponent() extends Test {
+    test {
+        // An exponent no `Float` can reach, at both ends. The answers were
+        // always these; what a bound changes is that arriving at them costs a
+        // handful of multiplications rather than a million, so a document full
+        // of them cannot spend a reader's CPU.
+        return jsnRead("1e1000000") + " " + jsnRead("1e-1000000")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("null 0")
         return e
     }
 }

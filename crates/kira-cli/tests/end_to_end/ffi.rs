@@ -199,6 +199,11 @@ fn a_rebuilt_archive_reaches_a_hybrid_program_that_already_ran() {
     .expect("program");
 
     let first = run(&["run", "--backend", "hybrid", entry.to_str().unwrap()]);
+    assert!(
+        first.status.success(),
+        "the first hybrid run did not exit successfully\nstderr: {}",
+        String::from_utf8_lossy(&first.stderr),
+    );
     assert_eq!(
         String::from_utf8_lossy(&first.stdout),
         "1\n",
@@ -209,6 +214,11 @@ fn a_rebuilt_archive_reaches_a_hybrid_program_that_already_ran() {
     build_probe_archive(&dir, 2);
     let second = run(&["run", "--backend", "hybrid", entry.to_str().unwrap()]);
 
+    assert!(
+        second.status.success(),
+        "the second hybrid run did not exit successfully\nstderr: {}",
+        String::from_utf8_lossy(&second.stderr),
+    );
     assert_eq!(
         String::from_utf8_lossy(&second.stdout),
         "2\n",

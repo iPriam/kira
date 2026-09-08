@@ -90,8 +90,9 @@ Foundation, so run it against the checkout's copy:
 
 ```sh
 KIRA_FOUNDATION_HOME=$PWD/../../foundation kira run --backend vm main.kira
-``` The Rust
-crate also has a direct end-to-end test and a runnable companion:
+```
+
+The Rust crate also has a direct end-to-end test and a runnable companion:
 
 ```sh
 cargo test -p kira-network --lib

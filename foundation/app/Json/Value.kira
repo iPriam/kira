@@ -42,7 +42,15 @@ struct JsonMember {
 // `Float` that large has no fractional part left to lose, so a caller reading a
 // count or an index is nowhere near it.
 function jsonIntLimit() -> Float {
-    return 9000000000000000000.0
+    // 2^63, which is exactly representable and is the first magnitude no `Int`
+    // holds. The bound is `< limit` for positives and `>= -limit` for
+    // negatives, so every integral `Float` that has an `Int` is accepted and
+    // nothing that would trap on conversion gets through.
+    //
+    // The round number this replaced stopped 9e18 short of the real edge, which
+    // refused a couple of hundred million whole values that convert perfectly
+    // well — including `Int`'s own minimum, whose magnitude is exactly this.
+    return 9223372036854775808.0
 }
 
 // Whether this is `null`.
@@ -89,7 +97,9 @@ function jsonInt(value: borrow JsonValue, fallback: Int) -> Int {
     match value {
         Integer(number) -> return number
         Number(number) -> {
-            if number > jsonIntLimit() || number < 0.0 - jsonIntLimit() {
+            // Asymmetric because the signed range is: the negative end
+            // reaches exactly `-2^63` and the positive end stops one below it.
+            if number >= jsonIntLimit() || number < 0.0 - jsonIntLimit() {
                 return fallback
             }
             let whole = Int(number)

@@ -26,10 +26,18 @@ struct ChatConfig {
     let maxTokens: Int
     let temperature: Float
     let timeoutMs: Int
-    // How many times to send before giving up, counting the first send.
-    let attempts: Int
     // A loopback server's port to trust, or 0 to trust the public roots.
     let trustPort: Int
+}
+
+// Whether a base URL will carry a credential safely.
+//
+// A prefix test rather than a parse, because this is the whole question: `https`
+// means the bearer token is inside a TLS session, and anything else means it is
+// not. Case-insensitive because a scheme is, and a comparison that missed
+// `HTTPS://` would refuse a URL that was never a problem.
+function chatIsSecureUrl(url: borrow String) -> Bool {
+    return url.lowercase().startsWith("https://")
 }
 
 // Why a completion did not arrive.
@@ -101,6 +109,19 @@ function chatComplete(
 ) -> Result<ChatReply, ChatFailure> {
     let body = chatRequestBody(config, messages)
     let url = config.baseUrl + "/chat/completions"
+    // A key goes over TLS or it does not go.
+    //
+    // `baseUrl` comes from the environment, so a mistyped or rewritten
+    // `OPENROUTER_BASE_URL` beginning `http://` would put the bearer token on
+    // the wire in cleartext, where anything between here and the service can
+    // read it — and a key that has leaked stays leaked. Refused rather than
+    // sent without the header, because a request that quietly drops its
+    // credential fails as an authorization error somewhere far from the cause.
+    if config.apiKey != "" && !chatIsSecureUrl(config.baseUrl) {
+        return .Error(.Malformed(
+            "the base URL is not https, and an API key must not be sent in cleartext"
+        ))
+    }
     var headers: [HttpHeader] = []
     headers.append(HttpHeader { name = "content-type", value = "application/json" })
     if config.apiKey != "" {
@@ -109,52 +130,29 @@ function chatComplete(
     // What OpenRouter attributes a call to; harmless anywhere else.
     headers.append(HttpHeader { name = "x-title", value = "Kira LLM pipeline" })
 
-    var sends = 1
-    var wait = 400
-    var last: ChatFailure = .Transport(0)
-    while sends <= config.attempts {
-        let answer = httpSend(
-            "POST",
-            url,
-            headers,
-            body,
-            config.timeoutMs,
-            config.trustPort
-        )
-        match chatReadAnswer(answer) {
-            Ok(reply) -> return .Ok(reply)
-            Error(failure) -> {
-                last = failure
-                if sends >= config.attempts || !chatWorthRetrying(last) {
-                    return .Error(last)
-                }
-                sleepMilliseconds(wait)
-                wait = wait * 2
-            }
-        }
-        sends = sends + 1
-    }
-    return .Error(last)
-}
-
-// Whether sending the same request again could answer differently.
-function chatWorthRetrying(failure: borrow ChatFailure) -> Bool {
-    match failure {
-        Transport(code) -> {
-            // A deadline, a refused connection, a broken read, a handshake that
-            // failed, a name that did not resolve. Not a URL this cannot parse
-            // or a configuration it cannot use: those answer the same way for
-            // as long as the program keeps asking.
-            return code == 0 - 110 || code == 0 - 103 || code == 0 - 105
-                || code == 0 - 104 || code == 0 - 113
-        }
-        Status(status) -> {
-            return status == 408 || status == 429 || status >= 500
-        }
-        Service(message) -> return false
-        Malformed(detail) -> return false
-        // The same request with the same budget stops in the same place.
-        Truncated(budget) -> return false
+    // Sent once, and only once.
+    //
+    // This POST creates a completion and is charged for it. A timeout or a
+    // dropped connection says nothing about whether the service processed the
+    // request — the answer may simply have been lost on the way back — so a
+    // second send can buy a second completion and a second charge for one
+    // asked-for answer. OpenRouter documents no idempotency key for chat
+    // completions, so there is nothing to make the repeat safe, and a key it
+    // ignored would be worse than none: it would read as protection.
+    //
+    // The caller decides what to do about a failure, because only the caller
+    // knows whether paying twice is worse than not answering.
+    let answer = httpSend(
+        "POST",
+        url,
+        headers,
+        body,
+        config.timeoutMs,
+        config.trustPort
+    )
+    match chatReadAnswer(answer) {
+        Ok(reply) -> return .Ok(reply)
+        Error(failure) -> return .Error(failure)
     }
 }
 

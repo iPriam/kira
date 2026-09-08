@@ -95,13 +95,13 @@ pub(crate) fn self_signed_localhost() -> Result<(Vec<u8>, Vec<u8>), NetworkError
 pub(crate) async fn connect(
     host: &str,
     port: u16,
-    config: rustls::ClientConfig,
+    config: Arc<rustls::ClientConfig>,
 ) -> Result<TlsStream<TcpStream>, NetworkError> {
     let name = ServerName::try_from(host.to_owned()).map_err(|_| NetworkError::InvalidUri)?;
     let stream = TcpStream::connect((host, port))
         .await
         .map_err(|_| NetworkError::Connect)?;
-    TlsConnector::from(Arc::new(config))
+    TlsConnector::from(config)
         .connect(name, stream)
         .await
         .map_err(|_| NetworkError::Protocol)
