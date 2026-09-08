@@ -97,6 +97,20 @@ function jsonInt(value: borrow JsonValue, fallback: Int) -> Int {
     match value {
         Integer(number) -> return number
         Number(number) -> {
+            // NaN first, because it is the one value the bounds below cannot
+            // refuse: every comparison against it is false, so it passes both
+            // and reaches a conversion that traps rather than answering. This
+            // function promises a fallback, and a trap is not one.
+            //
+            // Unreachable through `parseJson` — the format has no NaN literal,
+            // and the reader cannot produce one — but `JsonValue` is a public
+            // type and `Number` takes any `Float` a caller holds.
+            //
+            // The infinities need no such guard: they compare, and the bounds
+            // already refuse them.
+            if number != number {
+                return fallback
+            }
             // Asymmetric because the signed range is: the negative end
             // reaches exactly `-2^63` and the positive end stops one below it.
             if number >= jsonIntLimit() || number < 0.0 - jsonIntLimit() {
