@@ -112,6 +112,9 @@ pub struct RawAutobindingSection {
     /// Individually named structs to bind.
     #[serde(default)]
     pub structs: Vec<String>,
+    /// Individually named enumerators to bind.
+    #[serde(default)]
+    pub constants: Vec<String>,
 }
 
 /// The `[bindings]` section.

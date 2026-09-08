@@ -152,6 +152,8 @@ pub struct AutobindSpec {
     pub functions: Vec<String>,
     /// Individually named structs to bind.
     pub structs: Vec<String>,
+    /// Individually named enumerators to bind.
+    pub constants: Vec<String>,
     /// How much of the headers to expose.
     pub mode: AutobindMode,
     /// Where generated bindings are written, when the declaration names a path.
