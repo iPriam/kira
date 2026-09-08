@@ -134,6 +134,7 @@ pub fn lint(args: &[String]) -> i32 {
             // package allowed — an allowed lint never ran, so there is nothing
             // to raise.
             let owned = lint_policy(args).apply(&owned);
+            crate::diagnostics::emit_every(&owned, &compiled.sources);
             if kira_diagnostics::has_errors(&owned) {
                 return EXIT_FAILURE;
             }

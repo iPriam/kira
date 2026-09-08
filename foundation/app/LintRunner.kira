@@ -51,6 +51,19 @@ comptime macro LintRunner {
         var qualifiedLevel: String = "allow"
         var indexLoopLevel: String = "warn"
         var fileLengthLevel: String = "warn"
+        // Allowed by default, which is not where a finished lint sits.
+        //
+        // It is right about what it finds and cannot yet tell generated code
+        // from written code: a `quote { function name() -> Int { return #{n} } }`
+        // reaches the runner as an ordinary declaration carrying the macro's
+        // own path, so thirteen of the seventeen it finds in the kik harness
+        // are macro output nobody can rewrite. On by default, that is thirteen
+        // warnings a reader cannot act on, which is how a lint teaches people
+        // to ignore lints.
+        //
+        // Opt in with a `Lint` entry until a generated declaration can be told
+        // apart from a written one.
+        var constantFunctionLevel: String = "allow"
         // 700 is the ceiling every Kira repo here writes to, and a lint that
         // needed the number spelled in every `linter.kira` would drift between
         // packages. An entry's `limit` overrides it; leaving it out takes this.
@@ -73,6 +86,7 @@ comptime macro LintRunner {
                         qualifiedLevel = moved
                         indexLoopLevel = moved
                         fileLengthLevel = moved
+                        constantFunctionLevel = moved
                     }
                 }
             }
@@ -118,6 +132,9 @@ comptime macro LintRunner {
                     if code == "KLINT003" {
                         fileLengthLevel = level
                     }
+                    if code == "KLINT004" {
+                        constantFunctionLevel = level
+                    }
                 }
                 if code == "KLINT003" && limit > 0 {
                     fileLengthLimit = limit
@@ -128,6 +145,7 @@ comptime macro LintRunner {
         let qualifiedOn: Bool = qualifiedLevel != "allow"
         let indexLoopOn: Bool = indexLoopLevel != "allow"
         let fileLengthOn: Bool = fileLengthLevel != "allow"
+        let constantFunctionOn: Bool = constantFunctionLevel != "allow"
         var qualifiedSeverity: String = "warning"
         if qualifiedLevel == "deny" {
             qualifiedSeverity = "error"
@@ -148,6 +166,9 @@ comptime macro LintRunner {
         // finding, so the verb consumes it rather than printing it.
         var enabled: Int = 0
         if qualifiedOn {
+            enabled = enabled + 1
+        }
+        if constantFunctionOn {
             enabled = enabled + 1
         }
         if indexLoopOn {
@@ -490,6 +511,109 @@ comptime macro LintRunner {
                             fix: fixText
                         )
                     }
+                }
+            }
+        }
+
+        // KLINT004 — a zero-argument function returning a literal.
+        //
+        // `function limit() -> Int { return 700 }` is a constant written as a
+        // call. Kira has module-scope `let`, so it can be one: `let limit = 700`
+        // reads as the value it is, costs no call, and cannot be confused with
+        // something that computes.
+        //
+        // The shape is narrow on purpose, because everything outside it might
+        // do something:
+        //
+        //   * zero parameters, read off the head — a function taking anything
+        //     is not a constant;
+        //   * exactly one statement, and it a `return` — a body that branches
+        //     or binds is a body;
+        //   * the returned text a literal, not a name or a call. `return 700`
+        //     and `return "ok"` qualify; `return other()` and `return LIMIT`
+        //     do not, because what they read might change and a `let` would
+        //     fix the order they are read in.
+        //
+        // Annotated declarations are left alone entirely. `@Native`,
+        // `@FFI.Syscall` and `@Main` all mean the function is reached by
+        // something other than a Kira call, and `packages/linux` is written
+        // exactly this way — `@Native function linuxMountReadOnly() -> Int {
+        // return 1 }` is a constant to a reader and a symbol to the runtime.
+        // Rewriting one would take the symbol away.
+        if constantFunctionOn {
+            for target in declarations {
+                if target.kind != .Function {
+                    continue
+                }
+                var annotated: Bool = false
+                var allowedHere: Bool = false
+                for annotation in target.annotations {
+                    annotated = true
+                    if annotation.contains("Allow") && annotation.contains("KLINT004") {
+                        allowedHere = true
+                    }
+                }
+                if annotated || allowedHere {
+                    continue
+                }
+                let head: String = String(target.syntax)
+                // Zero parameters: the head reaches `()` before its body.
+                var signature: String = ""
+                for piece in head.split("{") {
+                    if signature == "" {
+                        signature = piece
+                    }
+                }
+                if signature.contains("()") == false {
+                    continue
+                }
+                let body = target.body
+                if body.count != 1 {
+                    continue
+                }
+                let only = body[0]
+                if only.kind != "return" {
+                    continue
+                }
+                var returned: String = String(only.syntax)
+                for piece in returned.split("return ") {
+                    returned = piece
+                }
+                returned = returned.trim()
+                // A literal and nothing else. Digits, a quoted string, or one
+                // of the two boolean words — anything naming something is left
+                // alone, because a `let` would decide when it is read.
+                var isLiteral: Bool = returned == "true" || returned == "false"
+                if returned.startsWith("\"") && returned.endsWith("\"") {
+                    isLiteral = true
+                }
+                // A number is recognised by what it starts with. A literal
+                // opens with a digit or a minus; a name never does, and a call
+                // or a collection opens with something else again. Read this
+                // way rather than by walking the characters, which the
+                // evaluator cannot do, or by `Int(text)`, which refuses a
+                // non-number outright rather than answering that it is not one.
+                if returned != "" && isLiteral == false {
+                    let first: String = returned.substring(0, 1)
+                    isLiteral = "0123456789-".contains(first)
+                }
+                // Nothing that reaches for anything else, whatever it starts
+                // with: a call, an index, or a constructed value is not a
+                // literal even when it begins with a digit.
+                if returned.contains("(") || returned.contains("[") || returned.contains("{") {
+                    isLiteral = false
+                }
+                if isLiteral == false {
+                    continue
+                }
+                let name: String = String(target.name.asString())
+                let constantMessage: String = "`" + name +
+                    "` takes nothing and returns a literal; `let " + name + " = " + returned +
+                    "` says the same thing as a value"
+                if constantFunctionLevel == "deny" {
+                    Diagnostics.error(constantMessage, at: target.syntax, code: "KLINT004")
+                } else {
+                    Diagnostics.warning(constantMessage, at: target.syntax, code: "KLINT004")
                 }
             }
         }
