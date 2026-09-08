@@ -46,8 +46,21 @@ jobs:
             host_key: aarch64-macos
           - os: windows-latest
             host_key: x86_64-windows-msvc
-          - os: windows-11-arm
-            host_key: aarch64-windows-msvc
+          # windows-11-arm is deliberately absent, not forgotten, and for the
+          # same reason `ci.yml` gives: the published `aarch64-windows-msvc`
+          # artifacts are built for the wrong architecture. `ci.yml` names the
+          # LLVM bundle; the pinned libffi has it too. Its
+          # `libffi-3.5.2-windows-arm64-static.zip` carries `ffi.obj` where the
+          # x64 archive carries `win64_intel.obj` and `ffiw64.obj`, so
+          # `link.exe` on that host skips the wrong-machine members and reports
+          # `ffi_call`, `ffi_prep_cif` and the rest as merely unresolved — which
+          # is what failed the v1.9.1 tag on its first run, after the other four
+          # targets had built and packaged cleanly.
+          #
+          # Restoring this entry needs both artifacts rebuilt for the target and
+          # republished. Until then it cannot link, and keeping it here blocks
+          # `publish` — which `needs: package` — so a whole release is held back
+          # by one artifact that was never right.
     runs-on: ${{ matrix.os }}
     defaults:
       run:
