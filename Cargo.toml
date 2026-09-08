@@ -104,6 +104,13 @@ http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1.11", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "server", "http1", "http2", "tokio"] }
+# TLS for the HTTP/1.1 and HTTP/2 client and server: rustls, reached through
+# hyper on the pooled path and through tokio-rustls on the streaming one.
+# `ring` everywhere, because quinn already pins that provider and two crypto
+# backends in one process is a linkage question nobody should have to answer.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-tokio", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

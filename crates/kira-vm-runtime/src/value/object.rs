@@ -391,8 +391,11 @@ impl Heap {
                 value
             }
             Value::Str(id) => {
-                let cloned = self.get(id).to_owned();
-                Value::Str(self.alloc(cloned))
+                let shared = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Str(text))) => Rc::clone(text),
+                    _ => Rc::from(""),
+                };
+                Value::Str(StrId(self.alloc_object(Object::Str(shared))))
             }
             // The fields are shared rather than copied, on the array's terms
             // below: a fresh handle onto the same block, and the first writer

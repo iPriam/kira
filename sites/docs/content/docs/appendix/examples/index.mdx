@@ -42,7 +42,8 @@ kira run --backend hybrid examples/structs/structs.kira
 | --- | --- |
 | `ffi` | Calling C with no `@Native`: one manifest, one C source, one Kira file, four engines. |
 | `library` | A Kira library and the Rust program that calls it, written to be read. |
-| `networking` | Async operations started from a task body and joined through the cooperative scheduler. |
+| `networking` | Async operations started from a task body and joined through the cooperative scheduler, including one verified HTTPS request whose response is read back as a `String`. |
+| `llm` | A chat-completions pipeline: a request built as JSON, sent over verified TLS, and an answer parsed back, with a conversation that keeps its history. |
 | `debug-lab` | A deliberately broken program for the debugger walkthrough. Its three `BUG` markers are logic faults, not traps. |
 
 ## Where to Start

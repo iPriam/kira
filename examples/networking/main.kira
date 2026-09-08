@@ -2,6 +2,8 @@
 // cooperative Task scheduler. The native functions only schedule Tokio work;
 // they never block the Kira task while a socket is doing I/O.
 
+import Foundation
+
 @FFI.Extern { library: kira_network, symbol: kira_network_http1_server, abi: c }
 function http1Server() -> Int
 @FFI.Extern { library: kira_network, symbol: kira_network_http1_client, abi: c }
@@ -36,6 +38,36 @@ function networkClose(handle: Int)
 @FFI.Extern { library: kira_network, symbol: kira_network_cancel, abi: c }
 function networkCancel(handle: Int)
 
+@FFI.Extern { library: kira_network, symbol: kira_network_https_server, abi: c }
+function httpsServer() -> Int
+
+// A request is assembled against a handle and then sent. Every part crosses as
+// a `CString`, which is the one direction text moves at a C boundary: Kira
+// copies its `String` out NUL-terminated for the length of the call.
+@FFI.Extern { library: kira_network, symbol: kira_network_request_new, abi: c }
+function requestNew(method: CString, url: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_header, abi: c }
+function requestHeader(request: Int, name: CString, value: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_body_text, abi: c }
+function requestBodyText(request: Int, text: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_version, abi: c }
+function requestVersion(request: Int, version: I32) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_trust_loopback, abi: c }
+function requestTrustLoopback(request: Int, port: U16) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_timeout_ms, abi: c }
+function requestTimeoutMs(request: Int, milliseconds: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_send, abi: c }
+function requestSend(request: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_discard, abi: c }
+function requestDiscard(request: Int)
+
+@FFI.Extern { library: kira_network, symbol: kira_network_response_status, abi: c }
+function responseStatus(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_response_select_body, abi: c }
+function responseSelectBody(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_response_read_scalar, abi: c }
+function responseReadScalar(handle: Int) -> Int
+
 // Polling is a Kira yield point, so the Kira scheduler keeps driving sibling
 // protocol tasks while Tokio completes the actual socket future.
 function waitOperation(handle: Int) -> Int {
@@ -50,6 +82,49 @@ function waitOperation(handle: Int) -> Int {
     let value = networkResult(handle)
     networkClose(handle)
     return value
+}
+
+// How long any request in this example may take before it is abandoned.
+//
+// Generous, because it is not a performance bound: it is the difference between
+// a peer that stops answering and a program that never finishes. Every request
+// here talks to a loopback server started three lines earlier, so reaching this
+// at all means something is wrong rather than slow.
+function requestDeadlineMs() -> Int {
+    return 30000
+}
+
+// Waits without releasing the handle, for a request whose response is read from
+// that same handle after it completes.
+//
+// The deadline is the library's, set on the request before it is sent, so a
+// peer that sends headers and then stops still completes this operation with a
+// timeout rather than leaving it pending. Without one this loop yields forever:
+// `networkPoll` answers 0 for as long as nothing has arrived, and nothing ever
+// arriving is exactly the case a timeout exists for.
+function waitResponse(handle: Int) -> Int {
+    if handle <= 0 {
+        return handle
+    }
+    var state = networkPoll(handle)
+    while state == 0 {
+        taskYield()
+        state = networkPoll(handle)
+    }
+    return networkResult(handle)
+}
+
+// The response arrives one Unicode scalar at a time, because a C function
+// returning `int64_t` has no way to hand back owned text; `scalarText` turns
+// each code point into the `String` this builds.
+function responseText(handle: Int) -> String {
+    var text = ""
+    var scalar = responseReadScalar(handle)
+    while scalar >= 0 {
+        text = text + scalarText(scalar)
+        scalar = responseReadScalar(handle)
+    }
+    return text
 }
 
 async function runHttp1() -> Int {
@@ -160,6 +235,138 @@ async function runCancellation() -> Int {
     return -1
 }
 
+// One real HTTPS request. TLS is verified, not skipped: the loopback server
+// generates its certificate at startup, and `requestTrustLoopback` adds that one
+// certificate to the public roots for this request. A request to a public
+// service is the same code without that line.
+async function runHttpsRequest() -> Int {
+    let server = httpsServer()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let request = requestNew("POST", "https://127.0.0.1:" + String(port) + "/echo")
+    if request <= 0 {
+        networkClose(server)
+        return request
+    }
+    // Every setter answers 0 or a negative error code, so one carried value
+    // says whether the request is still whole. A request that is not gets
+    // discarded rather than sent: it holds native storage until it is.
+    var configured = requestTrustLoopback(request, U16(port))
+    if configured >= 0 {
+        configured = requestVersion(request, I32(2))
+    }
+    if configured >= 0 {
+        configured = requestHeader(request, "x-kira-test", "carried")
+    }
+    if configured >= 0 {
+        configured = requestBodyText(request, "{\"hello\":\"kira\"}")
+    }
+    if configured < 0 {
+        requestDiscard(request)
+        networkClose(server)
+        return configured
+    }
+    requestTimeoutMs(request, requestDeadlineMs())
+    let operation = requestSend(request)
+    if operation <= 0 {
+        networkClose(server)
+        return operation
+    }
+    let status = waitResponse(operation)
+    let reported = responseStatus(operation)
+    let length = responseSelectBody(operation)
+    let text = responseText(operation)
+    networkClose(operation)
+    networkClose(server)
+    if status != 200 || reported != status || length <= 0 {
+        return -1
+    }
+    // The server answers with a transcript of what arrived, so this checks the
+    // method, the header and the body actually crossed rather than that some
+    // 200 came back.
+    if text.contains("method=POST") && text.contains("x-kira-test=carried")
+        && text.contains("body={\"hello\":\"kira\"}") {
+        return 1
+    }
+    return -1
+}
+
+// The same request, answered as JSON and read as JSON.
+//
+// This is the shape a program calling a service actually writes: the response
+// is a document, not a transcript to search, so it goes to `parseJson` and the
+// fields come out by name. Nothing here knows the body was a network response —
+// `responseText` produced an ordinary `String`, and Foundation reads it.
+async function runJsonRequest() -> Int {
+    let server = httpsServer()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let request = requestNew("POST", "https://127.0.0.1:" + String(port) + "/json")
+    if request <= 0 {
+        networkClose(server)
+        return request
+    }
+    var configured = requestTrustLoopback(request, U16(port))
+    if configured >= 0 {
+        configured = requestHeader(request, "x-kira-test", "carried")
+    }
+    if configured >= 0 {
+        configured = requestBodyText(request, "{\"hello\":\"kira\"}")
+    }
+    if configured < 0 {
+        requestDiscard(request)
+        networkClose(server)
+        return configured
+    }
+    requestTimeoutMs(request, requestDeadlineMs())
+    let operation = requestSend(request)
+    if operation <= 0 {
+        networkClose(server)
+        return operation
+    }
+    let status = waitResponse(operation)
+    let length = responseSelectBody(operation)
+    let text = responseText(operation)
+    networkClose(operation)
+    networkClose(server)
+    if status != 200 || length <= 0 {
+        return -1
+    }
+    match parseJson(text) {
+        Ok(document) -> {
+            if jsonText(jsonField(document, "method"), "") != "POST" {
+                return -1
+            }
+            if jsonText(jsonField(document, "marker"), "") != "carried" {
+                return -1
+            }
+            let body = jsonText(jsonField(document, "body"), "")
+            if body != "{\"hello\":\"kira\"}" {
+                return -1
+            }
+            // The server counted the bytes it received, so this agrees only if
+            // the body crossed whole.
+            if jsonInt(jsonField(document, "length"), 0 - 1) != body.count {
+                return -1
+            }
+            return 1
+        }
+        Error(problem) -> return -1
+    }
+}
+
 async function runAllNetworking() -> Int {
     let http1 = Task { runHttp1() }
     let http2 = Task { runHttp2() }
@@ -167,7 +374,10 @@ async function runAllNetworking() -> Int {
     let websocket = Task { runWebsocket() }
     let io = Task { runIo() }
     let cancellation = Task { runCancellation() }
+    let https = Task { runHttpsRequest() }
+    let json = Task { runJsonRequest() }
     return http1.await + http2.await + http3.await + websocket.await + io.await + cancellation.await
+        + https.await + json.await
 }
 
 @Main function main() {

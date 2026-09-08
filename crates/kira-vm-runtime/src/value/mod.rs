@@ -210,8 +210,16 @@ struct VmCBlockChild {
 /// What a heap slot holds.
 #[derive(Debug, Clone, PartialEq)]
 enum Object {
-    /// A string's bytes.
-    Str(String),
+    /// A string's bytes, shared by every value that copied it.
+    ///
+    /// Shared for the reason the three below are, and more simply than any of
+    /// them: a Kira `String` is never written through — `+` builds a fresh one
+    /// — so a copy needs no object of its own and no first-writer path. What
+    /// this replaced copied the whole text to read one byte of it, which made
+    /// `charAt` cost the string's length and scanning a document cost its
+    /// length squared: 200,000 reads took 0.27s against 64 bytes and 3.4s
+    /// against 708 KB, for the same 200,000 bytes read.
+    Str(Rc<str>),
     /// A struct's fields, in declaration order, shared until one holder writes.
     ///
     /// Shared for the reason an array's elements are, and it is the same
@@ -400,7 +408,7 @@ impl Heap {
 
     /// Allocates `value` on the heap, returning its handle.
     pub fn alloc(&mut self, value: String) -> StrId {
-        StrId(self.alloc_object(Object::Str(value)))
+        StrId(self.alloc_object(Object::Str(Rc::from(value))))
     }
 
     /// Allocates a struct of `fields` on the heap, returning its handle.

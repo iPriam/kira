@@ -1,0 +1,145 @@
+// A chat pipeline, end to end: a question goes out over TLS, the answer comes
+// back as JSON, and the conversation remembers what was said.
+//
+// Run it with a key to talk to a real service:
+//
+//     OPENROUTER_API_KEY=... kira run --backend llvm examples/llm/main.kira
+//
+// Run it with no key and it drives the same code against the loopback service
+// `kira-network` ships, so the pipeline is runnable — and checkable — on a
+// machine with no key and no internet. Nothing in `chat.kira` knows which of
+// the two it is talking to; only the base URL differs.
+//
+// `OPENROUTER_MODEL` chooses the model and `OPENROUTER_BASE_URL` the service,
+// so pointing this at anything that speaks the same shape needs no edit.
+
+import Foundation
+import chat
+import http
+
+// How many turns to take, and what to ask on each. The second question means
+// nothing on its own, which is what makes it a test of the history.
+function llmQuestions() -> [String] {
+    return [
+        "Name one thing a compiler does. Answer in five words or fewer.",
+        "Say that again in French."
+    ]
+}
+
+@Main
+function main() {
+    let session = Task { runPipeline() }
+    print(session.await)
+    return
+}
+
+async function runPipeline() -> Int {
+    let key = environmentValue("OPENROUTER_API_KEY")
+    var base = environmentValue("OPENROUTER_BASE_URL")
+    var model = environmentValue("OPENROUTER_MODEL")
+    var server = 0
+    var trustPort = 0
+    let live = key != ""
+
+    if live {
+        if base == "" {
+            base = "https://openrouter.ai/api/v1"
+        }
+        if model == "" {
+            model = "openai/gpt-5-nano"
+        }
+        printLine("llm: " + model + " at " + base)
+    } else {
+        server = httpsServer()
+        if server <= 0 {
+            printLine("the loopback service did not start: " + String(server))
+            return 1
+        }
+        let port = serverPort(server)
+        if port <= 0 {
+            networkClose(server)
+            printLine("the loopback service has no port: " + String(port))
+            return 1
+        }
+        trustPort = port
+        base = "https://127.0.0.1:" + String(port) + "/v1"
+        model = "loopback/echo"
+        printLine("llm: no OPENROUTER_API_KEY, running against the loopback service")
+    }
+
+    let config = ChatConfig {
+        baseUrl = base,
+        apiKey = key,
+        model = model,
+        maxTokens = 2000,
+        temperature = 0.2,
+        timeoutMs = 60000,
+        trustPort = trustPort
+    }
+
+    var conversation = Conversation {}
+    conversation.system("You are terse. Answer in one short sentence.")
+
+    var failures = 0
+    let questions = llmQuestions()
+    var index = 0
+    while index < questions.count {
+        let question = questions[index]
+        match conversation.ask(config, question) {
+            Ok(reply) -> {
+                if live {
+                    printLine("> " + question)
+                    printLine(reply.content)
+                    printLine(
+                        "  [" + reply.model + " " + reply.finishReason + " "
+                            + String(reply.promptTokens) + "+"
+                            + String(reply.completionTokens) + " tokens]"
+                    )
+                } else {
+                    // The loopback service answers with the request it was
+                    // given, so the check is that this turn's question crossed
+                    // and that the history went with it.
+                    let carried = reply.content.contains(question)
+                    let remembered = reply.content.contains("assistant")
+                    let historyHeld = remembered || index == 0
+                    printLine(
+                        "turn " + String(index + 1) + ": carried=" + String(carried)
+                            + " history=" + String(historyHeld)
+                            + " tokens=" + String(reply.promptTokens) + "+"
+                            + String(reply.completionTokens)
+                    )
+                    // Counted, not only printed. These are the assertions the
+                    // loopback run exists to make — that the question crossed
+                    // and that the history went with it — and a check that
+                    // only reaches stdout lets a run where neither happened
+                    // exit zero and be read as a working backend.
+                    if !carried || !historyHeld {
+                        failures = failures + 1
+                    }
+                }
+            }
+            Error(failure) -> {
+                failures = failures + 1
+                printLine("turn " + String(index + 1) + " failed: " + chatFailureText(failure))
+            }
+        }
+        index = index + 1
+    }
+
+    // Two turns asked, two answered, and the history holds the system message,
+    // both questions and both answers.
+    printLine("history " + String(conversation.messages.count))
+    // Asserted only against the loopback service, whose answers are known. A
+    // live run's turn may legitimately fail for reasons that are not this
+    // program's — and a count checked after those would report the wrong thing.
+    if !live && failures == 0 && conversation.messages.count != 5 {
+        printLine(
+            "history is " + String(conversation.messages.count) + ", expected 5"
+        )
+        failures = failures + 1
+    }
+    if server > 0 {
+        networkClose(server)
+    }
+    return failures
+}

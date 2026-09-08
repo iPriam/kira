@@ -1,0 +1,286 @@
+// A chat-completions client: messages in, a reply out.
+//
+// The whole pipeline is here — build the request document, send it, read what
+// came back, and say which of the four different things that can go wrong did.
+// Everything above this file works in `ChatMessage` and `ChatReply` and never
+// sees JSON or a socket.
+//
+// The service is named by a base URL rather than compiled in, so the same code
+// reaches OpenRouter, any other endpoint that speaks the same shape, and the
+// loopback server this repository ships for running without a key.
+
+import Foundation
+import http
+
+// One turn of a conversation.
+struct ChatMessage {
+    let role: String
+    let content: String
+}
+
+// Everything about *where* and *how* a request goes, separate from what it says.
+struct ChatConfig {
+    let baseUrl: String
+    let apiKey: String
+    let model: String
+    let maxTokens: Int
+    let temperature: Float
+    let timeoutMs: Int
+    // A loopback server's port to trust, or 0 to trust the public roots.
+    let trustPort: Int
+}
+
+// Whether a base URL will carry a credential safely.
+//
+// A prefix test rather than a parse, because this is the whole question: `https`
+// means the bearer token is inside a TLS session, and anything else means it is
+// not. Case-insensitive because a scheme is, and a comparison that missed
+// `HTTPS://` would refuse a URL that was never a problem.
+function chatIsSecureUrl(url: borrow String) -> Bool {
+    return url.lowercase().startsWith("https://")
+}
+
+// Why a completion did not arrive.
+//
+// Five kinds, because there are five different things to do about them: retry,
+// fix the request, fix the credentials, ask for more room, or report that the
+// service answered something this does not understand.
+enum ChatFailure {
+    // The service was never reached: a negative code from the network library.
+    Transport(Int)
+    // An HTTP status with no error document to explain it.
+    Status(Int)
+    // The service's own error text, which is the one worth showing a user.
+    Service(String)
+    // A body that is not the document this expects.
+    Malformed(String)
+    // The answer ran out of room before it said anything: the token budget,
+    // and nothing to show for it.
+    //
+    // Its own answer rather than an empty success because it has its own fix —
+    // ask for more room. A model that reasons before it writes can spend the
+    // whole budget thinking, and a caller that got `""` back with no
+    // explanation would go looking for the bug in its own parsing.
+    Truncated(Int)
+}
+
+// A completion, with what it cost.
+struct ChatReply {
+    let content: String
+    let model: String
+    let finishReason: String
+    let promptTokens: Int
+    let completionTokens: Int
+}
+
+// The request document, as the chat-completions API defines it.
+//
+// Built as a `JsonValue` and written, rather than assembled by pasting strings
+// together: a message containing a quote or a newline is ordinary — it is the
+// user's text — and a hand-built body would produce a document the service
+// refuses, or worse, a different one than the user typed.
+function chatRequestBody(config: borrow ChatConfig, messages: borrow [ChatMessage]) -> String {
+    var turns: [JsonValue] = []
+    var index = 0
+    while index < messages.count {
+        var fields: [JsonMember] = []
+        fields.append(JsonMember { name = "role", value = .Text(messages[index].role) })
+        fields.append(JsonMember { name = "content", value = .Text(messages[index].content) })
+        turns.append(.Object(move fields))
+        index = index + 1
+    }
+    var body: [JsonMember] = []
+    body.append(JsonMember { name = "model", value = .Text(config.model) })
+    body.append(JsonMember { name = "messages", value = .Array(move turns) })
+    body.append(JsonMember { name = "max_tokens", value = .Integer(config.maxTokens) })
+    body.append(JsonMember { name = "temperature", value = .Number(config.temperature) })
+    return writeJson(.Object(move body))
+}
+
+// Sends `messages` and answers with the completion, or with why there is none.
+//
+// Retries what is worth retrying — a deadline, a refused connection, a rate
+// limit, a server that failed — and does not retry what will fail the same way
+// every time, like a malformed URL or a rejected key. The wait doubles, so a
+// service that is briefly busy is given room without a program hammering it.
+function chatComplete(
+    config: borrow ChatConfig,
+    messages: borrow [ChatMessage]
+) -> Result<ChatReply, ChatFailure> {
+    let body = chatRequestBody(config, messages)
+    let url = config.baseUrl + "/chat/completions"
+    // A key goes over TLS or it does not go.
+    //
+    // `baseUrl` comes from the environment, so a mistyped or rewritten
+    // `OPENROUTER_BASE_URL` beginning `http://` would put the bearer token on
+    // the wire in cleartext, where anything between here and the service can
+    // read it — and a key that has leaked stays leaked. Refused rather than
+    // sent without the header, because a request that quietly drops its
+    // credential fails as an authorization error somewhere far from the cause.
+    if config.apiKey != "" && !chatIsSecureUrl(config.baseUrl) {
+        return .Error(.Malformed(
+            "the base URL is not https, and an API key must not be sent in cleartext"
+        ))
+    }
+    var headers: [HttpHeader] = []
+    headers.append(HttpHeader { name = "content-type", value = "application/json" })
+    if config.apiKey != "" {
+        headers.append(HttpHeader { name = "authorization", value = "Bearer " + config.apiKey })
+    }
+    // What OpenRouter attributes a call to; harmless anywhere else.
+    headers.append(HttpHeader { name = "x-title", value = "Kira LLM pipeline" })
+
+    // Sent once, and only once.
+    //
+    // This POST creates a completion and is charged for it. A timeout or a
+    // dropped connection says nothing about whether the service processed the
+    // request — the answer may simply have been lost on the way back — so a
+    // second send can buy a second completion and a second charge for one
+    // asked-for answer. OpenRouter documents no idempotency key for chat
+    // completions, so there is nothing to make the repeat safe, and a key it
+    // ignored would be worse than none: it would read as protection.
+    //
+    // The caller decides what to do about a failure, because only the caller
+    // knows whether paying twice is worse than not answering.
+    let answer = httpSend(
+        "POST",
+        url,
+        headers,
+        body,
+        config.timeoutMs,
+        config.trustPort
+    )
+    match chatReadAnswer(answer) {
+        Ok(reply) -> return .Ok(reply)
+        Error(failure) -> return .Error(failure)
+    }
+}
+
+// Reads one HTTP answer as a completion.
+function chatReadAnswer(answer: borrow HttpAnswer) -> Result<ChatReply, ChatFailure> {
+    if answer.code < 0 {
+        return .Error(.Transport(answer.code))
+    }
+    if answer.body == "" {
+        return .Error(.Status(answer.status))
+    }
+    match parseJson(answer.body) {
+        Error(problem) -> {
+            // A body that is not JSON is usually a proxy or a gateway
+            // answering instead of the service, so the status is the useful
+            // half of what to report.
+            return .Error(.Malformed(
+                "the body is not JSON (byte " + String(problem.at)
+                    + ", status " + String(answer.status) + ")"
+            ))
+        }
+        Ok(document) -> {
+            // An error document can arrive with any status, including 200.
+            let error = jsonField(document, "error")
+            if !jsonIsNull(error) {
+                let message = jsonText(jsonField(error, "message"), "")
+                if message != "" {
+                    return .Error(.Service(message))
+                }
+                return .Error(.Status(answer.status))
+            }
+            if answer.status != 200 {
+                return .Error(.Status(answer.status))
+            }
+            return chatReadCompletion(document)
+        }
+    }
+}
+
+// Reads the completion document itself.
+function chatReadCompletion(document: borrow JsonValue) -> Result<ChatReply, ChatFailure> {
+    let choices = jsonField(document, "choices")
+    if jsonCount(choices) == 0 {
+        return .Error(.Malformed("the answer carries no choices"))
+    }
+    let first = jsonAt(choices, 0)
+    let message = jsonField(first, "message")
+    if jsonIsNull(message) {
+        return .Error(.Malformed("the first choice carries no message"))
+    }
+    let usage = jsonField(document, "usage")
+    let content = jsonText(jsonField(message, "content"), "")
+    let finishReason = jsonText(jsonField(first, "finish_reason"), "")
+    let completionTokens = jsonInt(jsonField(usage, "completion_tokens"), 0)
+    if content == "" && finishReason == "length" {
+        return .Error(.Truncated(completionTokens))
+    }
+    return .Ok(ChatReply {
+        content = content,
+        model = jsonText(jsonField(document, "model"), ""),
+        finishReason = finishReason,
+        promptTokens = jsonInt(jsonField(usage, "prompt_tokens"), 0),
+        completionTokens = completionTokens
+    })
+}
+
+// A conversation that keeps its own history.
+//
+// The service is stateless — every request carries the whole exchange — so the
+// history has to live somewhere, and a caller that had to rebuild the array on
+// each turn would eventually send one that disagrees with what was said.
+class Conversation {
+    var messages: [ChatMessage] = []
+
+    function system(text: borrow String) {
+        self.messages.append(ChatMessage { role = "system", content = text })
+        return
+    }
+
+    // Asks `question` in the context of everything said so far, and keeps the
+    // answer so the next turn has it.
+    function ask(
+        config: borrow ChatConfig,
+        question: borrow String
+    ) -> Result<ChatReply, ChatFailure> {
+        self.messages.append(ChatMessage { role = "user", content = question })
+        match chatComplete(config, self.messages) {
+            Ok(reply) -> {
+                self.messages.append(ChatMessage {
+                    role = "assistant",
+                    content = reply.content
+                })
+                return .Ok(reply)
+            }
+            Error(failure) -> {
+                // The failed turn does not stay in the history: sending it
+                // again on the next turn would ask the service to answer a
+                // question it already refused.
+                self.messages = chatWithoutLast(self.messages)
+                return .Error(failure)
+            }
+        }
+    }
+}
+
+// Everything but the last message.
+//
+// An array grows at the end and does not shrink, so taking a turn back is a
+// fresh array. The alternative — leaving the question in and sending it again
+// next turn — would ask the service to answer something it already refused.
+function chatWithoutLast(messages: borrow [ChatMessage]) -> [ChatMessage] {
+    var kept: [ChatMessage] = []
+    var index = 0
+    while index + 1 < messages.count {
+        kept.append(messages[index])
+        index = index + 1
+    }
+    return kept
+}
+
+// What to print when a turn did not produce an answer.
+function chatFailureText(failure: borrow ChatFailure) -> String {
+    match failure {
+        Transport(code) -> return "the service was not reached (network code " + String(code) + ")"
+        Status(status) -> return "the service answered " + String(status)
+        Service(message) -> return "the service refused: " + message
+        Malformed(detail) -> return "the answer could not be read: " + detail
+        Truncated(budget) -> return "the answer ran out of room after "
+            + String(budget) + " tokens with nothing written; raise max_tokens"
+    }
+}

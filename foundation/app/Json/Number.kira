@@ -1,0 +1,215 @@
+// Turning JSON's digits into Kira's numbers.
+//
+// Split from the reader beside it because it is a different question: the
+// reader decides where a literal starts and stops, and this decides what the
+// digits in it mean. The second one is arithmetic, and the arithmetic is where
+// a number parser is right or wrong.
+
+// The largest `Int` a run of digits can reach before the next digit overflows.
+function jsonIntCeiling() -> Int {
+    return 922337203685477580
+}
+
+// The largest exponent for which `10^exponent` is exact as a `Float`, and so
+// the range over which a decimal literal converts by a single multiplication
+// with nothing lost. Beyond it the conversion scales step by step and lands on
+// a value that may be one unit in the last place away.
+function jsonExactPowerLimit() -> Int {
+    return 22
+}
+
+// The value of one hex digit, or `-1` for a byte that is not one.
+function jsonHexValue(byte: Int) -> Int {
+    if byte >= 48 && byte <= 57 {
+        return byte - 48
+    }
+    if byte >= 97 && byte <= 102 {
+        return byte - 87
+    }
+    if byte >= 65 && byte <= 70 {
+        return byte - 55
+    }
+    return 0 - 1
+}
+
+// The digits in `text[start..stop)` as an `Int`, saturating rather than
+// overflowing: this reads an exponent, and one past a few hundred is already
+// past every finite `Float` in either direction.
+function jsonDigitsToInt(text: borrow String, start: Int, stop: Int) -> Int {
+    var value = 0
+    var index = start
+    while index < stop {
+        if value > 100000 {
+            return 1000000
+        }
+        value = value * 10 + (Int(text.charAt(index)) - 48)
+        index = index + 1
+    }
+    return value
+}
+
+// A literal with no fraction and no exponent as an `Int`, or `None` when it
+// does not fit — the caller reads those as a `Float` instead.
+function jsonWholeNumber(text: borrow String) -> Option<Int> {
+    var index = 0
+    var negative = false
+    if text.charAt(0) == U8(45) {
+        negative = true
+        index = 1
+    }
+    // Accumulated downwards, as a non-positive number, so that the whole
+    // signed range is reachable.
+    //
+    // A positive accumulator cannot hold `Int`'s own minimum: its magnitude is
+    // 9223372036854775808, one past the largest positive `Int`, so
+    // `-9223372036854775808` — a value that fits perfectly well — was refused
+    // here and read as a `Float` instead, and could not be recovered as an
+    // integer afterwards either. Negating at the end has the same flaw for the
+    // same reason, so nothing is negated: positive results are negated once, at
+    // the end, where they are known to fit.
+    var value = 0
+    while index < text.count {
+        let digit = Int(text.charAt(index)) - 48
+        if value < 0 - jsonIntCeiling() {
+            return .None
+        }
+        value = value * 10
+        // The last digit of `Int`'s range is not reachable by the guard above,
+        // so the subtraction is checked on its own.
+        if value < 0 - 9223372036854775807 - 1 + digit {
+            return .None
+        }
+        value = value - digit
+        index = index + 1
+    }
+    if negative {
+        return .Some(value)
+    }
+    // `value` is non-positive here, and a positive literal never reaches
+    // `Int`'s minimum, so this negation always fits.
+    if value == 0 - 9223372036854775807 - 1 {
+        return .None
+    }
+    return .Some(0 - value)
+}
+
+// `10^exponent` for a non-negative exponent, exact up to `jsonExactPowerLimit`.
+function jsonPowerOfTen(exponent: Int) -> Float {
+    var result: Float = 1.0
+    var index = 0
+    while index < exponent {
+        result = result * 10.0
+        index = index + 1
+    }
+    return result
+}
+
+// The `Float` a decimal literal names.
+//
+// The digits are accumulated as an `Int` for as long as one fits, because
+// `Int` to `Float` rounds to the nearest representable value in one step while
+// a digit-by-digit `Float` accumulation rounds at every digit. What is left
+// over is a power of ten, applied to the integer while that is still exact and
+// to the `Float` after it is not.
+//
+// So a literal with fifteen or fewer significant digits and a scale within the
+// range where `10^n` is itself exact converts to the value it names, exactly.
+// Past that the answer is the nearest `Float` to what the digits say, give or
+// take a unit in the last place — the range where a document is carrying a
+// measurement rather than an identity.
+function jsonDecimalToFloat(
+    text: borrow String,
+    negative: Bool,
+    fractionDigits: Int,
+    exponent: Int
+) -> Float {
+    var mantissa = 0
+    var overflowed = false
+    var index = 0
+    if negative {
+        index = 1
+    }
+    var seenPoint = false
+    var dropped = 0
+    while index < text.count {
+        let byte = Int(text.charAt(index))
+        if byte == Int(".".charAt(0)) {
+            seenPoint = true
+            index = index + 1
+        } else {
+            if byte == Int("e".charAt(0)) || byte == Int("E".charAt(0)) {
+                index = text.count
+            } else {
+                let digit = byte - 48
+                // Every digit the mantissa could not take adjusts the scale,
+                // on whichever side of the point it fell.
+                //
+                // Left of the point it multiplies what remains, so the scale
+                // rises. Right of it the reason is less obvious and the size of
+                // being wrong is the same: `fractionDigits` counted that digit,
+                // and the scale subtracts that count, so a digit the mantissa
+                // never took would be divided out of a number it was never
+                // multiplied into. `0.123456789012345678901` came back as
+                // roughly `0.0012345678901234567` — a hundredfold error rather
+                // than the nearest `Float`.
+                if overflowed {
+                    dropped = dropped + 1
+                } else {
+                    if mantissa > (9223372036854775807 - digit) / 10 {
+                        overflowed = true
+                        dropped = dropped + 1
+                    } else {
+                        mantissa = mantissa * 10 + digit
+                    }
+                }
+                index = index + 1
+            }
+        }
+    }
+    var scale = exponent - fractionDigits + dropped
+    // Clamped before any of it is applied, because the exponent is the peer's.
+    //
+    // `jsonDigitsToInt` accepts an exponent up to a million, and the loops
+    // below step by `jsonExactPowerLimit` with that many multiplications each,
+    // so `1e1000000` cost about a million of them — for a result that was
+    // always going to be an infinity. A `Float` saturates far sooner: the
+    // largest is near `1e308` and the smallest subnormal near `1e-324`, and the
+    // mantissa contributes at most nineteen digits on top. Past this bound
+    // every further step multiplies an infinity or divides a zero, so the
+    // answer is the same and only the waiting differs.
+    let scaleBound = 400
+    if scale > scaleBound {
+        scale = scaleBound
+    }
+    if scale < 0 - scaleBound {
+        scale = 0 - scaleBound
+    }
+    // Scaling up as an integer for as long as it stays exact, which is what
+    // makes `1e3` the integer 1000 rather than a float three multiplications
+    // away from it.
+    while scale > 0 && mantissa != 0 && mantissa <= jsonIntCeiling() {
+        mantissa = mantissa * 10
+        scale = scale - 1
+    }
+    var value = Float(mantissa)
+    while scale > 0 {
+        var step = scale
+        if step > jsonExactPowerLimit() {
+            step = jsonExactPowerLimit()
+        }
+        value = value * jsonPowerOfTen(step)
+        scale = scale - step
+    }
+    while scale < 0 {
+        var step = 0 - scale
+        if step > jsonExactPowerLimit() {
+            step = jsonExactPowerLimit()
+        }
+        value = value / jsonPowerOfTen(step)
+        scale = scale + step
+    }
+    if negative {
+        return 0.0 - value
+    }
+    return value
+}

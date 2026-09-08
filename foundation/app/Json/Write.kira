@@ -1,0 +1,200 @@
+// Writing a `JsonValue` back out as text.
+//
+// What `writeJson` produces parses back to the value it was given, which is the
+// property worth having: a document read, changed in one place and written out
+// is the same document everywhere else.
+//
+// Object members are written in the order the value holds them, repeats and
+// all. Sorting them would be a second opinion about a document somebody else
+// wrote, and a signature computed over the text would stop matching.
+
+// The value as compact JSON, with no space that the format does not require.
+function writeJson(value: borrow JsonValue) -> String {
+    return jsonWrite(value, 0 - 1, 0)
+}
+
+// The value as JSON indented two spaces per level, one element to a line.
+//
+// For a document a person is going to read: a diff of two of these is a diff of
+// what changed, while a diff of two compact documents is one long line.
+function writeJsonPretty(value: borrow JsonValue) -> String {
+    return jsonWrite(value, 2, 0)
+}
+
+// Both forms, because they differ only in what goes between the tokens.
+//
+// `spacing` is the number of spaces one level indents by, or `-1` for compact.
+function jsonWrite(value: borrow JsonValue, spacing: Int, level: Int) -> String {
+    match value {
+        Null -> return "null"
+        Boolean(flag) -> {
+            if flag {
+                return "true"
+            }
+            return "false"
+        }
+        Integer(number) -> return String(number)
+        Number(number) -> return jsonWriteNumber(number)
+        Text(text) -> return jsonWriteText(text)
+        Array(items) -> {
+            if items.count == 0 {
+                return "[]"
+            }
+            let inner = jsonIndent(spacing, level + 1)
+            let outer = jsonIndent(spacing, level)
+            var out = "[" + inner
+            var index = 0
+            while index < items.count {
+                if index > 0 {
+                    out = out + "," + inner
+                }
+                out = out + jsonWrite(items[index], spacing, level + 1)
+                index = index + 1
+            }
+            return out + outer + "]"
+        }
+        Object(members) -> {
+            if members.count == 0 {
+                return "{}"
+            }
+            let inner = jsonIndent(spacing, level + 1)
+            let outer = jsonIndent(spacing, level)
+            var separator = ":"
+            if spacing >= 0 {
+                separator = ": "
+            }
+            var out = "{" + inner
+            var index = 0
+            while index < members.count {
+                if index > 0 {
+                    out = out + "," + inner
+                }
+                out = out + jsonWriteText(members[index].name) + separator
+                out = out + jsonWrite(members[index].value, spacing, level + 1)
+                index = index + 1
+            }
+            return out + outer + "}"
+        }
+    }
+}
+
+// The line break and indent before an element, or nothing when compact.
+function jsonIndent(spacing: Int, level: Int) -> String {
+    if spacing < 0 {
+        return ""
+    }
+    var out = "\n"
+    var count = spacing * level
+    while count > 0 {
+        out = out + " "
+        count = count - 1
+    }
+    return out
+}
+
+// A number as JSON.
+//
+// JSON has no spelling for a value that is not a number, so a `Float` that is
+// infinite or not a number is written `null` rather than as text no parser
+// would read back. Arithmetic that produced one is a fact about the program
+// that made this value, and the alternative — refusing to write the document at
+// all — loses every other member over one field.
+function jsonWriteNumber(value: Float) -> String {
+    if !jsonIsFinite(value) {
+        return "null"
+    }
+    let text = String(value)
+    // A `Number` that happens to be whole still has to read back as one.
+    //
+    // `String(3.0)` is `3`, and `3` parses as an `Integer` — so a document
+    // written from a `Number` and read again would come back a different
+    // variant, which is exactly the distinction `Integer` and `Number` exist to
+    // keep. A trailing `.0` costs two bytes and preserves it.
+    if jsonLooksWhole(text) {
+        return text + ".0"
+    }
+    return text
+}
+
+// Whether a formatted float carries nothing that marks it as one.
+//
+// A fraction or an exponent is enough for a reader to answer `Number`, and one
+// of the two is present in every spelling except the whole ones.
+function jsonLooksWhole(text: borrow String) -> Bool {
+    return !text.contains(".") && !text.contains("e") && !text.contains("E")
+}
+
+// Whether a `Float` is an ordinary finite number.
+//
+// Written as arithmetic rather than against a largest-finite constant because
+// the language has no exponent in a float literal, and a 309-digit constant
+// would be a worse way to say the same thing. Halving is exact for every finite
+// value, so only an infinity is unchanged by it, and only a NaN differs from
+// itself.
+function jsonIsFinite(value: Float) -> Bool {
+    if value != value {
+        return false
+    }
+    if value == 0.0 {
+        return true
+    }
+    return value * 0.5 != value
+}
+
+// A string as a quoted JSON string.
+//
+// Bytes are copied in runs between the ones that need escaping, so text that
+// needs none costs one copy. Only what the format requires is escaped: a
+// multi-byte UTF-8 scalar is already legal JSON and stays as it is, rather than
+// becoming a `\u` pair that says the same thing in three times the bytes.
+function jsonWriteText(text: borrow String) -> String {
+    let quote = U8(34)
+    let backslash = U8(92)
+    var out = "\""
+    var runStart = 0
+    var index = 0
+    while index < text.count {
+        let byte = text.charAt(index)
+        var escape = ""
+        if byte == quote {
+            escape = "\\\""
+        } else {
+            if byte == backslash {
+                escape = "\\\\"
+            } else {
+                if Int(byte) < 32 {
+                    escape = jsonControlEscape(Int(byte))
+                }
+            }
+        }
+        if escape != "" {
+            out = out + text.substring(runStart, index) + escape
+            runStart = index + 1
+        }
+        index = index + 1
+    }
+    return out + text.substring(runStart, text.count) + "\""
+}
+
+// The escape for a control byte: the five the format names, and `\u00xx` for
+// the rest, which is the only spelling they have.
+function jsonControlEscape(byte: Int) -> String {
+    if byte == 8 {
+        return "\\b"
+    }
+    if byte == 9 {
+        return "\\t"
+    }
+    if byte == 10 {
+        return "\\n"
+    }
+    if byte == 12 {
+        return "\\f"
+    }
+    if byte == 13 {
+        return "\\r"
+    }
+    let digits = "0123456789abcdef"
+    return "\\u00" + digits.substring(byte / 16, byte / 16 + 1)
+        + digits.substring(byte % 16, byte % 16 + 1)
+}
