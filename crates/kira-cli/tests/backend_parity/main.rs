@@ -400,9 +400,25 @@ fn assert_parity_results(source: &str, runs: &[(&str, Output)]) -> String {
 /// A trap is the one case where stdout alone would prove too little — a program
 /// that printed nothing and exited cleanly would pass a stdout comparison.
 fn assert_trap_parity(source: &str, before_the_trap: &str) {
+    assert_trap(source, before_the_trap, None);
+}
+
+/// Asserts every backend refuses `source` the same way *and says the same
+/// sentence about it*.
+///
+/// The wording is part of the behavior: a trap diagnosed one way on the VM and
+/// another on native would make the same program's failure a different finding
+/// depending on where it ran, which is exactly what a parity suite exists to
+/// refuse.
+fn assert_trap_message_parity(source: &str, before_the_trap: &str, message: &str) {
+    assert_trap(source, before_the_trap, Some(message));
+}
+
+fn assert_trap(source: &str, before_the_trap: &str, message: Option<&str>) {
     let path = write_source(source);
     for backend in BACKENDS {
         let run = run_on(&path, backend);
+        let stderr = String::from_utf8_lossy(&run.stderr);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             before_the_trap,
@@ -412,9 +428,15 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
         assert_eq!(
             run.status.code(),
             Some(1),
-            "the {backend} backend did not trap for:\n{source}\nstderr: {}",
-            String::from_utf8_lossy(&run.stderr),
+            "the {backend} backend did not trap for:\n{source}\nstderr: {stderr}",
         );
+        if let Some(message) = message {
+            assert!(
+                stderr.contains(message),
+                "the {backend} backend trapped with a different message than \
+                 `{message}` for:\n{source}\nstderr: {stderr}",
+            );
+        }
     }
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 }

@@ -162,3 +162,40 @@ jobs:
             cargo nextest run --workspace --no-fail-fast \
               -E 'not (test(/^web::/) or test(/^ffi_wasm::a_wasm_build_/))'
           fi
+
+      # The example parity sweep skips a directory that ships native libraries,
+      # because it cannot build the archive. This one can: the library is a
+      # workspace crate, so the example that calls it is proved here on all
+      # three engines rather than left to the sweep that has to skip it.
+      - name: Build the native networking library
+        run: cargo build -p kira-network
+
+      - name: Kira LLM pipeline on every backend
+        shell: bash
+        # No key in CI, so this drives the pipeline against the loopback
+        # service: the same code, a different base URL.
+        env:
+          KIRA_FOUNDATION_HOME: ${{ github.workspace }}/foundation
+        run: |
+          for backend in vm llvm hybrid; do
+            output="$(cargo run -p kira-cli -- run --backend "$backend" examples/llm | tail -1)"
+            if [ "$output" != "0" ]; then
+              echo "the $backend backend reported $output failed turns" >&2
+              exit 1
+            fi
+          done
+
+      - name: Kira networking example on every backend
+        shell: bash
+        # The example reads its response with Foundation's JSON, so it needs the
+        # checkout's Foundation rather than whichever one is installed.
+        env:
+          KIRA_FOUNDATION_HOME: ${{ github.workspace }}/foundation
+        run: |
+          for backend in vm llvm hybrid; do
+            output="$(cargo run -p kira-cli -- run --backend "$backend" examples/networking/main.kira)"
+            if [ "$output" != "12" ]; then
+              echo "the $backend backend printed \"$output\" rather than 12" >&2
+              exit 1
+            fi
+          done

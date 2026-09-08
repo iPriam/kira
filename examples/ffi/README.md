@@ -11,6 +11,10 @@ reference. This directory is the worked example.
 
 ## Build the C archive, then run
 
+`package.kira` carries `allowThinFfiShim = true`: a host run opens its native
+library at run time, and this one is a static archive, so the package has to say
+that the thin shared carrier is wanted.
+
 The archives are not checked in. Build them from `NativeLibs/ffimath.c` with the
 managed toolchain, into `NativeLibs/lib/`:
 

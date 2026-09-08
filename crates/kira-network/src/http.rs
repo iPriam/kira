@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Buf, Bytes};
-use http::{Request, Response, StatusCode};
+use http::{HeaderValue, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::client::conn::{http1, http2};
@@ -14,7 +14,9 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use quinn::{ClientConfig, Endpoint, EndpointConfig, ServerConfig};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::TlsAcceptor;
 
+use crate::api::tls;
 use crate::runtime::NetworkError;
 
 const BODY: &[u8] = b"kira-network";
@@ -108,6 +110,144 @@ pub(crate) async fn client_http2(port: u16) -> Result<i64, NetworkError> {
     verify_response(response).await
 }
 
+/// Binds the HTTPS loopback server and returns its port and certificate.
+///
+/// The certificate is published to the operation registry beside the port, so a
+/// request naming this port can trust it without the certificate ever being
+/// written to disk or having to be carried through Kira.
+pub(crate) fn bind_https()
+-> Result<(std::net::TcpListener, u16, Vec<u8>, rustls::ServerConfig), NetworkError> {
+    let (certificate, key) = tls::self_signed_localhost()?;
+    let config = tls::server_config(
+        certificate.clone(),
+        key,
+        &[tls::ALPN_HTTP2, tls::ALPN_HTTP1],
+    )?;
+    let (listener, port) = bind_tcp()?;
+    Ok((listener, port, certificate, config))
+}
+
+/// Serves TLS connections until the operation is cancelled.
+///
+/// A server operation has no completed value: it accepts for as long as its
+/// owner keeps the handle, and ends when `kira_network_cancel` aborts it. The
+/// one-request loopback servers beside it answer a different question — whether
+/// one exchange completed — and finish because that answer arrives.
+pub(crate) async fn serve_https(
+    listener: std::net::TcpListener,
+    config: rustls::ServerConfig,
+) -> Result<i64, NetworkError> {
+    let listener = TcpListener::from_std(listener)?;
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let acceptor = acceptor.clone();
+        tokio::spawn(async move {
+            let Ok(stream) = acceptor.accept(stream).await else {
+                return;
+            };
+            let http2 = stream.get_ref().1.alpn_protocol() == Some(tls::ALPN_HTTP2);
+            let io = TokioIo::new(stream);
+            if http2 {
+                let _ = server_http2::Builder::new(TokioExecutor::new())
+                    .serve_connection(io, service_fn(echo))
+                    .await;
+            } else {
+                let _ = server_http1::Builder::new()
+                    .serve_connection(io, service_fn(echo))
+                    .await;
+            }
+        });
+    }
+}
+
+/// Answers with a readable transcript of the request that arrived.
+///
+/// Echoing rather than returning a fixed body is what makes a round trip
+/// through the C surface checkable: a caller reading this text sees the method,
+/// the path, the header and the body it sent, so a request that lost any of
+/// them fails visibly instead of returning the same 200 either way.
+///
+/// `/json` answers the same transcript as a JSON object, for a caller that
+/// parses what it receives rather than searching it.
+async fn echo(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let marker = request
+        .headers()
+        .get("x-kira-test")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = request.into_body().collect().await?.to_bytes();
+    let body = String::from_utf8_lossy(&body).into_owned();
+    // A chat completion shaped like the one an LLM service answers with, so a
+    // client can be driven end to end without one. The content is the request
+    // that arrived, which is what lets a caller check its own message crossed.
+    if path == "/v1/chat/completions" {
+        let text = format!(
+            "{{\"id\":\"chatcmpl-loopback\",\"object\":\"chat.completion\",\
+             \"model\":\"loopback/echo\",\"choices\":[{{\"index\":0,\
+             \"message\":{{\"role\":\"assistant\",\"content\":{}}},\
+             \"finish_reason\":\"stop\"}}],\
+             \"usage\":{{\"prompt_tokens\":{},\"completion_tokens\":{},\"total_tokens\":{}}}}}",
+            json_string(&body),
+            body.len(),
+            body.len() / 2,
+            body.len() + body.len() / 2,
+        );
+        let mut response = Response::new(Full::new(Bytes::from(text)));
+        response.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        return Ok(response);
+    }
+    if path == "/json" {
+        let text = format!(
+            "{{\"method\":{},\"path\":{},\"marker\":{},\"body\":{},\"length\":{}}}",
+            json_string(method.as_str()),
+            json_string(&path),
+            json_string(&marker),
+            json_string(&body),
+            body.len(),
+        );
+        let mut response = Response::new(Full::new(Bytes::from(text)));
+        response.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        return Ok(response);
+    }
+    let text = format!("method={method}\npath={path}\nx-kira-test={marker}\nbody={body}\n");
+    Ok(Response::new(Full::new(Bytes::from(text))))
+}
+
+/// One JSON string literal, escaped as the format requires.
+///
+/// Written here rather than pulled in with a serializer: this crate owes the
+/// example one small document, and a dependency that produced it would be a
+/// dependency every Kira program linking this library also carries.
+fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            ordinary => out.push(ordinary),
+        }
+    }
+    out.push('"');
+    out
+}
+
 async fn verify_response(response: Response<Incoming>) -> Result<i64, NetworkError> {
     if response.status() != StatusCode::OK {
         return Err(NetworkError::Protocol);
@@ -131,10 +271,7 @@ pub(crate) fn bind_http3() -> Result<(std::net::UdpSocket, u16, Vec<u8>, ServerC
     use quinn::crypto::rustls::QuicServerConfig;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-    let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
-        .map_err(|_| NetworkError::Protocol)?;
-    let certificate = generated.cert.der().to_vec();
-    let key = generated.key_pair.serialize_der();
+    let (certificate, key) = tls::self_signed_localhost()?;
     let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
