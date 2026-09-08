@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::{Builder, Handle};
 use tokio::task::AbortHandle;
 
+use crate::request::{Cursor, ResponseData};
 use crate::{http, io, websocket};
 
 /// A stable operation identifier passed through Kira as an `Int`.
@@ -81,9 +82,38 @@ pub enum NetworkError {
     Unsupported,
     /// A configuration value was invalid.
     InvalidConfig,
+    /// Bytes a caller asked for as text are not valid UTF-8.
+    Encoding,
 }
 
 impl NetworkError {
+    /// Every error this crate can report.
+    ///
+    /// Listed so a check over the C ABI can be exhaustive: the public header
+    /// has to name a constant for each of these, and a variant added without
+    /// one is caught by the test that walks this rather than by whoever first
+    /// reads `-118` out of a Kira program.
+    pub const ALL: [Self; 18] = [
+        Self::RuntimeInit,
+        Self::UnknownHandle,
+        Self::Bind,
+        Self::Connect,
+        Self::Protocol,
+        Self::Io,
+        Self::NotReady,
+        Self::MissingCertificate,
+        Self::IdExhausted,
+        Self::InvalidUri,
+        Self::Timeout,
+        Self::Canceled,
+        Self::BodyTooLarge,
+        Self::Dns,
+        Self::Header,
+        Self::Unsupported,
+        Self::InvalidConfig,
+        Self::Encoding,
+    ];
+
     /// The stable negative code returned through the C ABI.
     pub const fn code(self) -> i64 {
         match self {
@@ -104,6 +134,7 @@ impl NetworkError {
             Self::Header => -114,
             Self::Unsupported => -115,
             Self::InvalidConfig => -116,
+            Self::Encoding => -117,
         }
     }
 }
@@ -128,6 +159,7 @@ impl std::fmt::Display for NetworkError {
             Self::Header => "network header is invalid",
             Self::Unsupported => "network operation is unsupported",
             Self::InvalidConfig => "network configuration is invalid",
+            Self::Encoding => "network bytes are not UTF-8 text",
         })
     }
 }
@@ -145,10 +177,33 @@ pub fn error_code(error: NetworkError) -> i64 {
     error.code()
 }
 
+/// What a finished operation produced.
+///
+/// A loopback operation answers with one number, and a request answers with a
+/// whole response. Both are the same handle to a caller, which is what lets one
+/// poll, one result, and one cancel serve every operation this crate starts.
+#[derive(Debug)]
+pub(crate) enum OperationValue {
+    /// The completed value of an operation whose answer is a number.
+    Code(i64),
+    /// The response an HTTP request received.
+    Response(Box<ResponseData>),
+}
+
+impl OperationValue {
+    /// The number `kira_network_result` reports for this value.
+    fn code(&self) -> i64 {
+        match self {
+            Self::Code(value) => *value,
+            Self::Response(response) => i64::from(response.status()),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum OperationStatus {
     Pending,
-    Ready(i64),
+    Ready(OperationValue),
     Failed(NetworkError),
 }
 
@@ -158,6 +213,12 @@ struct Operation {
     port: Option<u16>,
     is_server: bool,
     abort: AbortHandle,
+    /// Where the next response read starts, for the operations that have one.
+    ///
+    /// The cursor belongs to the operation rather than to the reader because
+    /// the C surface hands out no reader: a caller holds the same handle it
+    /// polled, and reading advances state that has to survive between calls.
+    cursor: Mutex<Cursor>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,7 +294,7 @@ fn register<F>(
     certificate: Option<Arc<[u8]>>,
 ) -> Result<OperationId, NetworkError>
 where
-    F: Future<Output = Result<i64, NetworkError>> + Send + 'static,
+    F: Future<Output = Result<OperationValue, NetworkError>> + Send + 'static,
 {
     let runtime = runtime()?;
     let id = next_id(runtime)?;
@@ -254,6 +315,7 @@ where
         port,
         is_server,
         abort: task.abort_handle(),
+        cursor: Mutex::new(Cursor::default()),
     };
     let mut operations = runtime
         .operations
@@ -285,14 +347,41 @@ fn register_server<F>(
 where
     F: Future<Output = Result<i64, NetworkError>> + Send + 'static,
 {
-    register(future, Some(port), true, certificate)
+    register(
+        async move { future.await.map(OperationValue::Code) },
+        Some(port),
+        true,
+        certificate,
+    )
 }
 
 fn register_client<F>(future: F) -> Result<OperationId, NetworkError>
 where
     F: Future<Output = Result<i64, NetworkError>> + Send + 'static,
 {
-    register(future, None, false, None)
+    register(
+        async move { future.await.map(OperationValue::Code) },
+        None,
+        false,
+        None,
+    )
+}
+
+/// Registers a request whose completed value is a whole response.
+pub(crate) fn register_request<F>(future: F) -> Result<OperationId, NetworkError>
+where
+    F: Future<Output = Result<ResponseData, NetworkError>> + Send + 'static,
+{
+    register(
+        async move {
+            future
+                .await
+                .map(|response| OperationValue::Response(Box::new(response)))
+        },
+        None,
+        false,
+        None,
+    )
 }
 
 /// Starts an HTTP/1.1 server future after binding its TCP listener.
@@ -333,6 +422,16 @@ pub fn start_http3_client(port: u16) -> Result<OperationId, NetworkError> {
     register_client(http::client_http3(port, certificate))
 }
 
+/// Starts the HTTPS loopback server, publishing its certificate for clients.
+pub fn start_https_server() -> Result<OperationId, NetworkError> {
+    let (listener, port, certificate, config) = http::bind_https()?;
+    register_server(
+        http::serve_https(listener, config),
+        port,
+        Some(Arc::from(certificate)),
+    )
+}
+
 /// Starts a WebSocket server future after binding its TCP listener.
 pub fn start_websocket_server() -> Result<OperationId, NetworkError> {
     let (listener, port) = websocket::bind_tcp()?;
@@ -350,7 +449,8 @@ pub fn start_io_roundtrip() -> Result<OperationId, NetworkError> {
     register_client(io::roundtrip(listener, port))
 }
 
-fn server_certificate(port: u16) -> Result<Arc<[u8]>, NetworkError> {
+/// The certificate published by the loopback server bound to `port`.
+pub(crate) fn server_certificate(port: u16) -> Result<Arc<[u8]>, NetworkError> {
     let runtime = runtime()?;
     let servers = runtime
         .servers
@@ -407,10 +507,43 @@ pub fn result(handle: OperationId) -> Result<i64, NetworkError> {
         .status
         .lock()
         .map_err(|_| NetworkError::RuntimeInit)?;
-    match *status {
+    match &*status {
         OperationStatus::Pending => Err(NetworkError::NotReady),
-        OperationStatus::Ready(value) => Ok(value),
-        OperationStatus::Failed(error) => Err(error),
+        OperationStatus::Ready(value) => Ok(value.code()),
+        OperationStatus::Failed(error) => Err(*error),
+    }
+}
+
+/// Reads from a completed request's response, advancing its cursor.
+///
+/// Failing with `NotReady` before the future finishes rather than answering
+/// from an empty response: a caller that skipped polling would otherwise read
+/// zero bytes and take that for an empty body.
+pub(crate) fn with_response<T>(
+    handle: OperationId,
+    action: impl FnOnce(&ResponseData, &mut Cursor) -> T,
+) -> Result<T, NetworkError> {
+    let runtime = runtime()?;
+    let operations = runtime
+        .operations
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    let operation = operations.get(&handle).ok_or(NetworkError::UnknownHandle)?;
+    let status = operation
+        .status
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    let mut cursor = operation
+        .cursor
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    match &*status {
+        OperationStatus::Pending => Err(NetworkError::NotReady),
+        OperationStatus::Failed(error) => Err(*error),
+        OperationStatus::Ready(OperationValue::Code(_)) => Err(NetworkError::Unsupported),
+        OperationStatus::Ready(OperationValue::Response(response)) => {
+            Ok(action(response, &mut cursor))
+        }
     }
 }
 

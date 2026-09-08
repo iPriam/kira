@@ -96,11 +96,11 @@ fetch LLVM would have to be built before the bundle it installs.
 
 ## Examples
 
-Twenty-two readable packages live in `examples/`, each exercising one part of the
+Twenty-three readable packages live in `examples/`, each exercising one part of the
 language: `hello`, `fib`, `arrays`, `structs`, `classes`, `enums`, `generics`,
 `closures`, `ownership`, `match`, `loops`, `strings`, `widths`, `bitwise`,
 `aliases`, `imports`, `attempt`, `library`, `foundation`, `ffi`, `networking`,
-and `debug-lab`.
+`llm`, and `debug-lab`.
 
 ```bash
 kira run examples/generics/generics.kira

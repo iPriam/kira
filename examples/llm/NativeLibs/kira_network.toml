@@ -1,0 +1,25 @@
+name = "kira_network"
+
+# Build the workspace crate first:
+#     cargo build -p kira-network
+# Paths are relative to this manifest.
+
+[[target]]
+triple = "x86_64-windows-msvc"
+staticLib = "../../../target/debug/kira_network.lib"
+
+[[target]]
+triple = "x86_64-linux-gnu"
+staticLib = "../../../target/debug/libkira_network.a"
+
+[[target]]
+triple = "aarch64-linux-gnu"
+staticLib = "../../../target/debug/libkira_network.a"
+
+[[target]]
+triple = "x86_64-macos-none"
+staticLib = "../../../target/debug/libkira_network.a"
+
+[[target]]
+triple = "aarch64-macos-none"
+staticLib = "../../../target/debug/libkira_network.a"

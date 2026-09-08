@@ -55,6 +55,20 @@ compiler_flags = ["--use-port=emdawnwebgpu"]
 
 Both decode into one model, so where a library was written never changes what it means.
 
+## Static Archives on the Shared FFI Path
+
+A host build reaches its C through a library the process opens at run time, and a `.Static` archive is not something a loader can open. Kira answers by linking a thin shared carrier that holds the archive's symbols, and it does that only for a package that asked for it:
+
+```kira
+Package networking {
+    let allowThinFfiShim = true
+}
+```
+
+Without the field, a `.Static` row naming an archive is refused before anything is built, with `static native library <name> is not allowed on the shared FFI path`. The opt-in is per package and covers every library that package declares.
+
+A wasm build never reaches this: the module has no loader and no second image, so the archive is linked into the module itself and the field is not consulted.
+
 ## Target Selection
 
 Selection is exact and structural: a host build picks the row whose triple matches this machine, and `--device wasm32` picks the `wasm32-emscripten-unknown` row. A library declared only for the host and asked for wasm is refused before `emcc` runs, with a diagnostic naming the library and the target.

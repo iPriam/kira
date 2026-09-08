@@ -48,6 +48,9 @@ jobs:
       - name: networking tests
         run: cargo test -p kira-network --all-targets -- --nocapture
 
+      # The Kira program that calls this library runs in the CI workflow
+      # instead: it needs the managed LLVM and the pinned libffi that the
+      # toolchain provisions, and this workflow provisions neither.
       - name: build native networking library
         run: cargo build -p kira-network
 
@@ -59,12 +62,3 @@ jobs:
 
       - name: pooled load and cancellation example
         run: cargo run -p kira-network --example network_load
-
-      - name: Kira VM networking integration
-        run: cargo run -p kira-cli -- run --backend vm examples/networking/main.kira
-
-      - name: Kira LLVM networking integration
-        run: cargo run -p kira-cli -- run --backend llvm examples/networking/main.kira
-
-      - name: Kira hybrid networking integration
-        run: cargo run -p kira-cli -- run --backend hybrid examples/networking/main.kira
