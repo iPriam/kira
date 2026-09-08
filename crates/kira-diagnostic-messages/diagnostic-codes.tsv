@@ -454,4 +454,5 @@ KLINT000	the lint runner's receipt, naming how many lints ran, so silence can be
 KLINT001	an enum variant written with the type it already belongs to
 KLINT002	a `while` counting an index by hand where a `for` says it
 KLINT003	a file past the line ceiling the package configured
+KLINT004	a zero-argument function returning a literal, where a module-scope `let` says it
 KIC001	an internal compiler error with no more specific code
