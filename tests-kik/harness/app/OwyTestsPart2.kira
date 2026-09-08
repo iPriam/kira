@@ -177,10 +177,8 @@ construct OwyStringDeepValueParity() extends Test {
         }
 
         var acc = ""
-        var k = 0
-        while k < 5 {
+        for k in 0..5 {
             acc = acc + names[0] + "-" + panel.title
-            k = k + 1
         }
         if acc != "" {
             okCount = okCount + 1
@@ -219,10 +217,8 @@ construct OwyStructParamMoveIntoArrayParity() extends Test {
         var total = 0
         while frame < 3 {
             let items = owyBuild15(3)
-            var i = 0
-            while i < items.count {
+            for i in 0..items.count {
                 total = total + items[i].v
-                i = i + 1
             }
             frame = frame + 1
         }

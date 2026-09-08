@@ -31,10 +31,8 @@ struct ColxGrid {
 
     function sum() -> Int {
         var t = 0
-        var i = 0
-        while i < self.cells.count {
+        for i in 0..self.cells.count {
             t = t + self.cells[i]
-            i = i + 1
         }
         return t
     }

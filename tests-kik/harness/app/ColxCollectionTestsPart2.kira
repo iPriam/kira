@@ -103,10 +103,8 @@ construct ColxSquaresIndex7() extends Test {
 construct ColxModifyInLoop() extends Test {
     test {
         var xs = colxBuildRange(5)
-        var j = 0
-        while j < xs.count {
+        for j in 0..xs.count {
             xs[j] = xs[j] * 3
-            j = j + 1
         }
         return colxSum(xs)
     }
@@ -332,10 +330,8 @@ construct ColxPtSumX() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             s = s + pts[j].x
-            j = j + 1
         }
         return s
     }
@@ -352,10 +348,8 @@ construct ColxPtSumY() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             s = s + pts[j].y
-            j = j + 1
         }
         return s
     }
@@ -372,10 +366,8 @@ construct ColxPtSumBoth() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             s = s + pts[j].x + pts[j].y
-            j = j + 1
         }
         return s
     }
@@ -407,10 +399,8 @@ construct ColxPtBuildLarge() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             s = s + pts[j].x + pts[j].y
-            j = j + 1
         }
         return s
     }
@@ -425,10 +415,8 @@ construct ColxBoxSumSizes() extends Test {
         boxes.append(ColxBox { lo: 5, hi: 15 })
         boxes.append(ColxBox { lo: 2, hi: 8 })
         var s = 0
-        var i = 0
-        while i < boxes.count {
+        for i in 0..boxes.count {
             s = s + boxes[i].size()
-            i = i + 1
         }
         return s
     }
@@ -443,10 +431,8 @@ construct ColxBoxSumMids() extends Test {
         boxes.append(ColxBox { lo: 4, hi: 12 })
         boxes.append(ColxBox { lo: 6, hi: 20 })
         var s = 0
-        var i = 0
-        while i < boxes.count {
+        for i in 0..boxes.count {
             s = s + boxes[i].mid()
-            i = i + 1
         }
         return s
     }
@@ -462,18 +448,14 @@ construct ColxPtWritebackLoop() extends Test {
             pts.append(ColxPt { x: i, y: i })
             i = i + 1
         }
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             var local = pts[j]
             local.x = local.x * 2
             pts[j] = local
-            j = j + 1
         }
         var s = 0
-        var k = 0
-        while k < pts.count {
+        for k in 0..pts.count {
             s = s + pts[k].x + pts[k].y
-            k = k + 1
         }
         return s
     }
@@ -503,10 +485,8 @@ construct ColxPtSumX20() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             s = s + pts[j].x
-            j = j + 1
         }
         return s
     }

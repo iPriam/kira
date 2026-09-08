@@ -54,10 +54,8 @@ construct EnxEventIndexedFold() extends Test {
         events.append(.Key(3))
         events.append(.Scroll(1))
         var acc = 0
-        var j = 0
-        while j < events.count {
+        for j in 0..events.count {
             acc = acc + enxEventScore(events[j])
-            j = j + 1
         }
         return acc
     }
@@ -126,11 +124,9 @@ construct EnxStatusFailedDirect() extends Test {
 construct EnxStatusFold12() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let s = enxStatusFor(i)
             acc = acc + enxStatusCode(s)
-            i = i + 1
         }
         return acc
     }
@@ -141,8 +137,7 @@ construct EnxStatusFold12() extends Test {
 construct EnxStatusCountActive() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let s = enxStatusFor(i)
             var active = 0
             match s {
@@ -152,7 +147,6 @@ construct EnxStatusCountActive() extends Test {
                 Failed(n)  -> { active = 0 }
             }
             count = count + active
-            i = i + 1
         }
         return count
     }
@@ -163,8 +157,7 @@ construct EnxStatusCountActive() extends Test {
 construct EnxStatusRunningSum() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let s = enxStatusFor(i)
             var v = 0
             match s {
@@ -174,7 +167,6 @@ construct EnxStatusRunningSum() extends Test {
                 Failed(n)  -> { v = 0 }
             }
             acc = acc + v
-            i = i + 1
         }
         return acc
     }
@@ -193,10 +185,8 @@ construct EnxStatusIndexedFold() extends Test {
         statuses.append(.Failed(3))
         statuses.append(.Running(20))
         var acc = 0
-        var j = 0
-        while j < statuses.count {
+        for j in 0..statuses.count {
             acc = acc + enxStatusCode(statuses[j])
-            j = j + 1
         }
         return acc
     }
@@ -246,10 +236,8 @@ construct EnxNodeIndexedFold() extends Test {
         nodes.append(.Empty)
         nodes.append(.Leaf(10))
         var acc = 0
-        var j = 0
-        while j < nodes.count {
+        for j in 0..nodes.count {
             acc = acc + enxNodeVal(nodes[j])
-            j = j + 1
         }
         return acc
     }
@@ -326,11 +314,9 @@ construct EnxItemLiteralArrayFold() extends Test {
 construct EnxItemDynFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             let item = EnxItem { priority: enxPriorityFor(i), value: i + 1 }
             acc = acc + enxItemScore(item)
-            i = i + 1
         }
         return acc
     }
@@ -348,12 +334,10 @@ construct EnxItemDynFold() extends Test {
 construct EnxDirSeasonCombinedFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             let dw = enxDirWeight(enxDirFor(i))
             let sc = enxSeasonCode(enxSeasonFor(i))
             acc = acc + dw + sc
-            i = i + 1
         }
         return acc
     }
@@ -371,12 +355,10 @@ construct EnxDirSeasonCombinedFold() extends Test {
 construct EnxTokenPriorityPairFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             let tv = enxTokenVal(enxTokenFor(i))
             let pv = enxPriorityScore(enxPriorityFor(i))
             acc = acc + tv + pv
-            i = i + 1
         }
         return acc
     }
@@ -389,11 +371,9 @@ construct EnxDirPlusSeasonFolds() extends Test {
     test {
         var dirAcc = 0
         var seaAcc = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             dirAcc = dirAcc + enxDirWeight(enxDirFor(i))
             seaAcc = seaAcc + enxSeasonCode(enxSeasonFor(i))
-            i = i + 1
         }
         return dirAcc + seaAcc
     }
@@ -409,12 +389,10 @@ construct EnxDirPlusSeasonFolds() extends Test {
 construct EnxTokenPriorityMultiplyFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 9 {
+        for i in 0..9 {
             let tv = enxTokenVal(enxTokenFor(i))
             let ps = enxPriorityScore(enxPriorityFor(i))
             acc = acc + tv * ps
-            i = i + 1
         }
         return acc
     }
@@ -434,10 +412,8 @@ construct EnxEventPlusDirFold() extends Test {
             eAcc = eAcc + enxEventScore(ev)
         }
         var dAcc = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             dAcc = dAcc + enxDirWeight(enxDirFor(i))
-            i = i + 1
         }
         return eAcc + dAcc
     }
@@ -453,10 +429,8 @@ construct EnxEventPlusDirFold() extends Test {
 construct EnxStatusRunningProgress() extends Test {
     test {
         var n = 7
-        var steps = 0
-        while steps < 3 {
+        for steps in 0..3 {
             n = n + 5
-            steps = steps + 1
         }
         return enxStatusCode(.Running(n))
     }

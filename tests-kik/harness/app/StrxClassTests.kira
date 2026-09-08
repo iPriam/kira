@@ -3,10 +3,12 @@ import Foundation
 // StrxClassTests.kira — deep class/inheritance coverage for `kira test`.
 // PREFIX: strx / Strx  (all top-level names use this prefix).
 //
-// PARITY RULE: no inherited base method ever calls self.<m>() where a
-// descendant overrides <m>. Super-calls use only parent-qualified
-// Parent.method() inside overrides. Inherited methods read only self fields
-// or call parent-qualified methods, which is consistent across all backends.
+// PARITY: an inherited base method calling self.<m>() where a descendant
+// overrides <m> was once virtual on vm and hybrid and static on llvm, and this
+// file avoided the shape entirely. It no longer diverges — classes are
+// monomorphized, so a parent's body is registered per descendant with `self`
+// statically the concrete class — and H9 at the end of this file pins the cases
+// that used to differ, on every backend.
 
 // ---------------------------------------------------------------------------
 // H1: Three-level single inheritance, field-default overrides, super-calls
@@ -436,10 +438,8 @@ construct StrxClsMixCLoop() extends Test {
     test {
         let m = StrxCMix()
         var sum = 0
-        var n = 0
-        while n < 5 {
+        for n in 0..5 {
             sum = sum + m.cSum(n)
-            n = n + 1
         }
         return sum
     }
@@ -451,10 +451,8 @@ construct StrxClsMixWLoopMul() extends Test {
     test {
         let m = StrxCMix()
         var acc = 0
-        var k = 0
-        while k < 4 {
+        for k in 0..4 {
             acc = acc + m.wSum() * k
-            k = k + 1
         }
         return acc
     }
@@ -540,10 +538,8 @@ construct StrxClsArrTriLoop() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].area(2)
-            j = j + 1
         }
         return total
     }
@@ -560,10 +556,8 @@ construct StrxClsArrTriSides() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].sides
-            j = j + 1
         }
         return total
     }
@@ -582,10 +576,8 @@ construct StrxClsArrTriAcc() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].area(2) + tris[j].sides + tris[j].baseFee()
-            j = j + 1
         }
         return total
     }
@@ -605,10 +597,8 @@ construct StrxClsArrRectLoop() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < rects.count {
+        for j in 0..rects.count {
             total = total + rects[j].area(1)
-            j = j + 1
         }
         return total
     }
@@ -625,10 +615,8 @@ construct StrxClsArrRectSides() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < rects.count {
+        for j in 0..rects.count {
             total = total + rects[j].sides
-            j = j + 1
         }
         return total
     }
@@ -636,3 +624,155 @@ construct StrxClsArrRectSides() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
+
+// ---------------------------------------------------------------------------
+// H9: self-dispatch from an inherited body, which the parity rule above used
+// to avoid.
+//
+// The rule at the top of this file says no inherited base method may call
+// `self.<m>()` where a descendant overrides `<m>`, because that dispatch was
+// virtual on vm and hybrid and static on llvm. It is not any more: classes are
+// monomorphized, so a parent's body is registered once per descendant with the
+// receiver typed as the concrete class, and `self` is therefore statically the
+// leaf on every backend. Static and virtual dispatch coincide, and the case the
+// rule steered around has one answer everywhere.
+//
+// These are the cases that would have diverged. They are here so that a change
+// which reintroduces a shared parent body — a vtable, or any lowering that
+// stops monomorphizing — fails rather than quietly bringing back a program
+// whose answer depends on its backend.
+// ---------------------------------------------------------------------------
+
+class StrxCDispatchBase {
+    function tier() -> Int {
+        return 1
+    }
+
+    // The shape the parity rule forbade: an inherited body reaching a method
+    // the descendant replaced.
+    function viaSelf() -> Int {
+        return 100 + self.tier()
+    }
+
+    // Two hops, so a lowering that resolved the first correctly and the second
+    // statically is caught as well.
+    function viaSelfTwice() -> Int {
+        return self.viaSelf() + self.tier()
+    }
+}
+
+class StrxCDispatchMiddle extends StrxCDispatchBase {
+    override function tier() -> Int {
+        return 2
+    }
+}
+
+class StrxCDispatchLeaf extends StrxCDispatchMiddle {
+    override function tier() -> Int {
+        return 3
+    }
+
+    // Calls up to the grandparent's body, which itself dispatches back down
+    // through `self` — the two directions in one expression.
+    override function viaSelf() -> Int {
+        return 1000 + StrxCDispatchBase.viaSelf() + self.tier()
+    }
+}
+
+construct StrxClsSelfDispatchAtTheBase() extends Test {
+    test {
+        let base = StrxCDispatchBase()
+        return base.viaSelf()
+    }
+    // 100 + 1: nothing overrides anything.
+    expect { let e: Result<Any, TestFailure> = .Ok(101) return e }
+}
+
+construct StrxClsSelfDispatchReachesTheOverride() extends Test {
+    test {
+        let middle = StrxCDispatchMiddle()
+        return middle.viaSelf()
+    }
+    // 100 + 2: the inherited body reaches the descendant's `tier`, not its own.
+    expect { let e: Result<Any, TestFailure> = .Ok(102) return e }
+}
+
+construct StrxClsSelfDispatchThroughTwoHops() extends Test {
+    test {
+        let middle = StrxCDispatchMiddle()
+        return middle.viaSelfTwice()
+    }
+    // (100 + 2) + 2.
+    expect { let e: Result<Any, TestFailure> = .Ok(104) return e }
+}
+
+construct StrxClsSelfDispatchUpThenDown() extends Test {
+    test {
+        let leaf = StrxCDispatchLeaf()
+        return leaf.viaSelf()
+    }
+    // 1000 + (100 + 3) + 3: the grandparent's body runs against the leaf, so
+    // its `self.tier()` is the leaf's.
+    expect { let e: Result<Any, TestFailure> = .Ok(1106) return e }
+}
+
+construct StrxClsSelfDispatchUpThenDownTwice() extends Test {
+    test {
+        let leaf = StrxCDispatchLeaf()
+        return leaf.viaSelfTwice()
+    }
+    // The inherited `viaSelfTwice` calls the leaf's `viaSelf` (1106) and then
+    // the leaf's `tier` (3).
+    expect { let e: Result<Any, TestFailure> = .Ok(1109) return e }
+}
+
+class StrxCDispatchLeft {
+    function who() -> Int {
+        return 1
+    }
+}
+
+class StrxCDispatchRight {
+    function tag() -> Int {
+        return 20
+    }
+}
+
+class StrxCDispatchMulti extends StrxCDispatchLeft, StrxCDispatchRight {
+    override function who() -> Int {
+        return 5
+    }
+
+    function both() -> Int {
+        return self.who() + self.tag()
+    }
+}
+
+construct StrxClsSelfDispatchAcrossTwoParents() extends Test {
+    test {
+        let multi = StrxCDispatchMulti()
+        return multi.both()
+    }
+    // 5 + 20: the override on one side and the inherited method on the other,
+    // reached through the same `self`.
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
+}
+
+construct StrxClsSelfDispatchOverAnArray() extends Test {
+    test {
+        var items: [StrxCDispatchMiddle] = []
+        var i = 0
+        while i < 3 {
+            items.append(StrxCDispatchMiddle())
+            i = i + 1
+        }
+        var total = 0
+        for j in 0..items.count {
+            total = total + items[j].viaSelf()
+        }
+        return total
+    }
+    // 3 * 102, so the dispatch holds for an instance reached through storage
+    // rather than a binding.
+    expect { let e: Result<Any, TestFailure> = .Ok(306) return e }
+}

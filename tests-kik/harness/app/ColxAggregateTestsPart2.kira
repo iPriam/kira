@@ -315,12 +315,10 @@ construct ColxAPtFilteredSumXY() extends Test {
             i = i + 1
         }
         var s = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             if pts[j].x > 5 {
                 s = s + pts[j].x + pts[j].y
             }
-            j = j + 1
         }
         return s
     }
@@ -349,11 +347,9 @@ construct ColxABoxStatSum() extends Test {
     test {
         // Build 8 boxes (lo=i, hi=i+i+2), sum their sizes
         var s = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             let box = ColxBox { lo: i, hi: i + i + 2 }
             s = s + box.size()
-            i = i + 1
         }
         return s
     }
@@ -409,10 +405,8 @@ construct ColxATrapDivByArrayElement() extends Test {
         xs.append(0)
         xs.append(3)
         var acc = 0
-        var i = 0
-        while i < xs.count {
+        for i in 0..xs.count {
             acc = acc + 10 / xs[i]
-            i = i + 1
         }
         return acc
     }

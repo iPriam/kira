@@ -345,10 +345,8 @@ construct JsnListsMemberNamesInDocumentOrder() extends Test {
     test {
         let names = jsonNames(jsnValue("{\"b\":1,\"a\":2,\"b\":3}"))
         var out = ""
-        var index = 0
-        while index < names.count {
+        for index in 0..names.count {
             out = out + names[index]
-            index = index + 1
         }
         return out
     }

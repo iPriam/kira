@@ -6,9 +6,8 @@
 // type because a construct-backed form requires them:
 //
 //     construct QualifiedVariant() extends Lint {
-//         let code: String = "KLINT001"
-//         let severity: String = "warning"
-//         let enabled: Bool = true
+//         let code: KiraError = .KLINT001
+//         let level: LintLevel = .Allow
 //     }
 //
 // The package root, beside `package.kira` — not under `app/`. What governs a
@@ -35,44 +34,115 @@
 // Adding a lint is a branch in the runner plus an entry in a `linter.kira` —
 // both ordinary Kira, neither a compiler release.
 
-// How loudly a lint speaks, as the string an entry writes.
+// What a lint does, as one value.
 //
-// Spelled as text rather than an enum because the runner reads it back through
-// reflection, where a field's value arrives as the source text it was written
-// with. `"error"` fails the build; `"warning"` and `"note"` do not.
-enum LintSeverity {
-    Error
-    Warning
-    Note
+// Whether a lint runs and how loudly it speaks are the same question, so they
+// are one field. They used to be two — an `enabled: Bool` beside a
+// `severity: String` — which made `enabled = false, severity = "error"` a state
+// that parses, reads as emphatic, and means nothing. Three levels, one of which
+// is off.
+//
+// The same three the toolchain already had: `kira-linter`'s `LintLevel` is
+// `Allow | Warn | Deny`, and only the surface a package writes disagreed.
+enum LintLevel {
+    // The lint does not run. Not "runs and is ignored": nothing is walked, so
+    // an allowed lint costs nothing.
+    Allow
+    // Reported, and the build carries on. The default for almost everything: a
+    // lint has an opinion about code that already compiles.
+    Warn
+    // Reported, and the build fails.
+    Deny
 }
 
-// The severity an entry's `severity` text names, defaulting to a warning.
+// The level an entry's `level` text names, defaulting to a warning.
 //
-// A lint that stops a build is the exception rather than the rule: a lint has
-// an opinion about code that already compiles, and a misspelled severity should
-// not be the thing that decides a build fails.
-function lintSeverityFromText(text: borrow String) -> LintSeverity {
-    if text == "error" {
-        return .Error
+// Read from text because a member's value arrives at a macro as the source it
+// was written with — `.Warn`, `LintLevel.Warn`, both — so the spelling is
+// matched rather than the value compared. A misspelling warns rather than
+// denying: a typo in configuration should not be what fails a build.
+function lintLevelFromText(text: borrow String) -> LintLevel {
+    if text.contains("Allow") {
+        return .Allow
     }
-    if text == "note" {
-        return .Note
+    if text.contains("Deny") {
+        return .Deny
     }
-    return .Warning
+    return .Warn
+}
+
+// Which family of judgement a lint belongs to, and so how eagerly it runs.
+//
+// Severity says what a finding *costs*; a group says whether the lint is asked
+// in the first place. The two are independent: a pedantic lint can be denied by
+// a package that opted into pedantry, and a correctness lint can be allowed by
+// a package that disagrees with it.
+//
+// The default set is everything except `Pedantic` and `Restriction`, which is
+// what makes `kira lint` useful without configuration and quiet enough to keep
+// reading.
+enum LintGroup {
+    // Almost certainly a bug. On by default, and the group a lint belongs in
+    // only when being wrong about it would be a defect rather than a taste.
+    Correctness
+    // How the language is written here. On by default: mechanical, uncontested
+    // rewrites like a counted `while` that a `for` says.
+    Style
+    // Doing in several steps what one step does. On by default.
+    Complexity
+    // Work the program does not need to do. On by default.
+    Perf
+    // Right, and noisy. Off by default: a lint lands here when it is correct
+    // about what it finds and finds things a reader may reasonably keep —
+    // including code a generator wrote and nobody can rewrite.
+    Pedantic
+    // A rule a project chooses rather than a defect anyone would recognise: a
+    // line ceiling, a banned construct. Never on by default, because it is a
+    // policy and not an opinion about correctness.
+    Restriction
 }
 
 // One lint's configuration, as a `linter.kira` writes it.
 //
-// Every member is required: an entry that left its code out would report under
-// no name, and one that left `enabled` out would leave a reader guessing
-// whether silence meant "clean" or "off".
-// `limit` is the exception, and it is optional because most lints have nothing
-// to measure: a lint that asks "is this over a threshold" needs the threshold,
-// and one that asks "is this written the long way" does not. Left out, it is 0,
-// which a lint reads as "use my own default" rather than as "allow nothing".
+// An override, not a switch. Every lint has a level before any package says
+// anything, so a `linter.kira` states what *differs* — and a package with no
+// `linter.kira` at all gets the standard set rather than silence. Silence used
+// to mean "nothing was asked for", which reads exactly like "nothing was
+// found".
+//
+// `code` is the only required member. It is what an entry is matched by: the
+// declaration's own name is a label for a reader, and matching on it made the
+// name load-bearing, so renaming an entry silently turned its lint off.
+//
+// `limit` is for the lints that measure something. Left out it is 0, which a
+// lint reads as "use my own default" rather than as "allow nothing".
 construct Lint {
-    @Required let code: String
-    @Required let severity: String
-    @Required let enabled: Bool
+    // The code this entry configures, as the generated case rather than as
+    // text. `KiraError` is written from the same table the compiler emits
+    // against, so a typo is a name that does not exist rather than an entry
+    // that silently matches nothing — which is what `"KLNT002"` used to be.
+    @Required let code: KiraError
+    let level: LintLevel = .Warn
     let limit: Int = 0
+}
+
+// A package's default level, when it wants one other than the built-in.
+//
+// One entry, no code: it moves every lint that has no entry of its own. A
+// package that wants its lints to fail the build writes `.Deny` here rather
+// than repeating it per lint, and a package that wants them quiet during a
+// refactor writes `.Allow`.
+construct LintDefaults {
+    let level: LintLevel = .Warn
+    // The groups this package asks for, as one text of comma-separated names.
+    //
+    // Written as text rather than as a list of cases because a macro reads a
+    // member's value back as the source it was written with, and one string is
+    // one thing to parse. `"style, pedantic"` adds pedantry to the default set;
+    // `"all"` asks for everything, which is what a survey of a codebase wants
+    // and what nobody should leave switched on.
+    //
+    // Empty means the default set: every group except `Pedantic` and
+    // `Restriction`.
+    let groups: [LintGroup] = []
 }

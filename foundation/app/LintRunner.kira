@@ -36,74 +36,171 @@ comptime macro LintRunner {
         if !Build.linting() {
             return quote { }
         }
-        // The configuration, read from the `Lint` entries before anything is
-        // judged. A package with no `linter.kira` declares no entries, every
-        // lint stays off, and the run reports nothing — silence that means
-        // "nothing was asked for" rather than "nothing was found".
-        var qualifiedOn: Bool = false
-        var qualifiedSeverity: String = "warning"
-        var indexLoopOn: Bool = false
-        var fileLengthOn: Bool = false
-        var fileLengthSeverity: String = "warning"
-        // 700 is the ceiling every Kira repo here writes to, and a lint that
-        // needed the number spelled in every `linter.kira` would drift between
-        // packages. An entry's `limit` overrides it; leaving it out takes this.
-        var fileLengthLimit: Int = 700
+        // The configuration: a built-in level per lint, moved by whatever the
+        // package said.
+        //
+        // Every lint has a level before a `linter.kira` exists, so `kira lint`
+        // in a package that configured nothing runs the standard set. It used
+        // to run nothing at all, and printed `ok` while doing it.
+        //
+        // Three layers, each overriding the one before: the built-in default,
+        // a `LintDefaults` entry moving all of them, then a `Lint` entry
+        // moving one. Entries are matched by their `code`, never by the
+        // declaration's name — a name is a label for whoever reads the file,
+        // and matching on it meant renaming an entry turned its lint off.
+        var qualifiedLevel: LintLevel = .Allow
+        var indexLoopLevel: LintLevel = .Warn
+        // Restriction: a line ceiling is a policy a project chooses, not a
+        // defect. Off unless asked for by group or named outright.
+        var fileLengthLevel: LintLevel = .Allow
+        // Which groups this run asks for.
+        //
+        // A lint belongs to a group, and a group decides whether it is asked at
+        // all — separately from the level, which decides what a finding costs.
+        // The default set is everything except pedantry and policy, which is
+        // what makes `kira lint` worth running in a package that configured
+        // nothing.
+        var askPedantic: Bool = false
+        var askRestriction: Bool = false
         for entry in declarations {
-            if entry.family == "Lint" {
-                if entry.name.asString() == "QualifiedVariant" {
-                    for member in entry.fields {
-                        // An initializer arrives as the text it was written
-                        // with, so a string's quotes are part of it.
-                        if member.name.asString() == "enabled" {
-                            if member.initializer == "true" {
-                                qualifiedOn = true
-                            }
+            if entry.family == "LintDefaults" {
+                for member in entry.fields {
+                    if member.name.asString() == "groups" {
+                        // The cases as written. A member's value reaches a
+                        // macro as its source text, so the list is matched by
+                        // the case names in it rather than compared as values —
+                        // the one place text is unavoidable, and it is a
+                        // boundary rather than a representation.
+                        let asked = String(member.initializer)
+                        if asked.contains("Pedantic") {
+                            askPedantic = true
                         }
-                        if member.name.asString() == "severity" {
-                            if member.initializer.contains("error") {
-                                qualifiedSeverity = "error"
-                            }
-                            if member.initializer.contains("note") {
-                                qualifiedSeverity = "note"
-                            }
-                        }
-                    }
-                }
-                if entry.name.asString() == "ManualIndexLoop" {
-                    for member in entry.fields {
-                        if member.name.asString() == "enabled" {
-                            if member.initializer == "true" {
-                                indexLoopOn = true
-                            }
-                        }
-                    }
-                }
-                if entry.name.asString() == "FileLength" {
-                    for member in entry.fields {
-                        if member.name.asString() == "enabled" {
-                            if member.initializer == "true" {
-                                fileLengthOn = true
-                            }
-                        }
-                        if member.name.asString() == "severity" {
-                            if member.initializer.contains("error") {
-                                fileLengthSeverity = "error"
-                            }
-                            if member.initializer.contains("note") {
-                                fileLengthSeverity = "note"
-                            }
-                        }
-                        if member.name.asString() == "limit" {
-                            let written = Int(member.initializer)
-                            if written > 0 {
-                                fileLengthLimit = written
-                            }
+                        if asked.contains("Restriction") {
+                            askRestriction = true
                         }
                     }
                 }
             }
         }
+
+        // Allowed by default, which is not where a finished lint sits.
+        //
+        // It is right about what it finds and cannot yet tell generated code
+        // from written code: a `quote { function name() -> Int { return #{n} } }`
+        // reaches the runner as an ordinary declaration carrying the macro's
+        // own path, so thirteen of the seventeen it finds in the kik harness
+        // are macro output nobody can rewrite. On by default, that is thirteen
+        // warnings a reader cannot act on, which is how a lint teaches people
+        // to ignore lints.
+        //
+        // Opt in with a `Lint` entry until a generated declaration can be told
+        // apart from a written one.
+        var constantFunctionLevel: LintLevel = .Allow
+        // Whether a `Lint` entry named these outright, which beats a group.
+        var fileLengthNamed: Bool = false
+        var constantFunctionNamed: Bool = false
+        // 700 is the ceiling every Kira repo here writes to, and a lint that
+        // needed the number spelled in every `linter.kira` would drift between
+        // packages. An entry's `limit` overrides it; leaving it out takes this.
+        var fileLengthLimit: Int = 700
+
+        // A package-wide default first, so a per-lint entry can still move one
+        // back out of it.
+        for entry in declarations {
+            if entry.family == "LintDefaults" {
+                for member in entry.fields {
+                    if member.name.asString() == "level" {
+                        let written = String(member.initializer)
+                        var moved: LintLevel = .Warn
+                        if written.contains("Allow") {
+                            moved = .Allow
+                        }
+                        if written.contains("Deny") {
+                            moved = .Deny
+                        }
+                        qualifiedLevel = moved
+                        indexLoopLevel = moved
+                        fileLengthLevel = moved
+                        constantFunctionLevel = moved
+                    }
+                }
+            }
+        }
+
+        for entry in declarations {
+            if entry.family == "Lint" {
+                var code: String = ""
+                var level: LintLevel = .Warn
+                var levelWritten: Bool = false
+                var limit: Int = 0
+                for member in entry.fields {
+                    // An initializer arrives as the text it was written with,
+                    // so a string's quotes are part of it and an enum case
+                    // arrives as `.Warn` or `LintLevel.Warn`.
+                    let written = String(member.initializer)
+                    // Written as `.KLINT002` or `KiraError.KLINT002`, so the
+                    // case name is what is matched. The quotes a string
+                    // initializer carried are gone with the string.
+                    if member.name.asString() == "code" {
+                        for known in ["KLINT001", "KLINT002", "KLINT003", "KLINT004"] {
+                            if written.contains(known) {
+                                code = known
+                            }
+                        }
+                    }
+                    if member.name.asString() == "level" {
+                        levelWritten = true
+                        level = .Warn
+                        if written.contains("Allow") {
+                            level = .Allow
+                        }
+                        if written.contains("Deny") {
+                            level = .Deny
+                        }
+                    }
+                    if member.name.asString() == "limit" {
+                        limit = Int(written)
+                    }
+                }
+                if levelWritten {
+                    if code == "KLINT003" {
+                        fileLengthNamed = true
+                    }
+                    if code == "KLINT004" {
+                        constantFunctionNamed = true
+                    }
+                    if code == "KLINT001" {
+                        qualifiedLevel = level
+                    }
+                    if code == "KLINT002" {
+                        indexLoopLevel = level
+                    }
+                    if code == "KLINT003" {
+                        fileLengthLevel = level
+                    }
+                    if code == "KLINT004" {
+                        constantFunctionLevel = level
+                    }
+                }
+                if code == "KLINT003" && limit > 0 {
+                    fileLengthLimit = limit
+                }
+            }
+        }
+
+        let qualifiedOn: Bool = qualifiedLevel != .Allow
+        let indexLoopOn: Bool = indexLoopLevel != .Allow
+        let fileLengthOn: Bool = fileLengthLevel != .Allow
+        // A group turns its lints on where nothing named them. An entry that
+        // named one still wins, in either direction: asking for pedantry does
+        // not override a package that allowed this one by hand.
+        if askPedantic && constantFunctionNamed == false {
+            constantFunctionLevel = .Warn
+        }
+        if askRestriction && fileLengthNamed == false {
+            fileLengthLevel = .Warn
+        }
+        let constantFunctionOn: Bool = constantFunctionLevel != .Allow
 
         // KLINT000 — the receipt. Always emitted, before any lint runs.
         //
@@ -116,6 +213,9 @@ comptime macro LintRunner {
         // finding, so the verb consumes it rather than printing it.
         var enabled: Int = 0
         if qualifiedOn {
+            enabled = enabled + 1
+        }
+        if constantFunctionOn {
             enabled = enabled + 1
         }
         if indexLoopOn {
@@ -170,13 +270,10 @@ comptime macro LintRunner {
                     if target.syntax.contains(qualified) {
                         let message = "`" + qualified +
                             "…` names the enum a leading dot already resolves to"
-                        if qualifiedSeverity == "error" {
+                        if qualifiedLevel == .Deny {
                             Diagnostics.error(message, at: target.syntax, code: "KLINT001")
                         }
-                        if qualifiedSeverity == "note" {
-                            Diagnostics.note(message, at: target.syntax, code: "KLINT001")
-                        }
-                        if qualifiedSeverity == "warning" {
+                        if qualifiedLevel != .Deny {
                             Diagnostics.warning(message, at: target.syntax, code: "KLINT001")
                         }
                     }
@@ -211,6 +308,23 @@ comptime macro LintRunner {
         if indexLoopOn {
             for target in declarations {
                 if target.family == "Lint" {
+                    continue
+                }
+                // `@Allow(KLINT002)` above the declaration turns this lint off
+                // for it alone.
+                //
+                // Some code is the exception the lint is written to find and is
+                // right anyway: a test *about* `while` has to keep its `while`,
+                // and without a per-site allow the only way to keep it is to
+                // turn the check off for the whole package. One site should not
+                // cost the other fifteen hundred.
+                var allowedHere: Bool = false
+                for annotation in target.annotations {
+                    if annotation.contains("Allow") && annotation.contains("KLINT002") {
+                        allowedHere = true
+                    }
+                }
+                if allowedHere {
                     continue
                 }
                 // Bound once: reading `target.body` re-parses the declaration,
@@ -292,9 +406,6 @@ comptime macro LintRunner {
                     if compound {
                         continue
                     }
-                    if statement.head.contains(".count") == false {
-                        continue
-                    }
                     var counter: String = ""
                     var bound: String = ""
                     for piece in statement.head.split(" < ") {
@@ -302,6 +413,30 @@ comptime macro LintRunner {
                             counter = piece
                         }
                         bound = piece
+                    }
+                    // The bound has to be the same on every turn, because a
+                    // `for` reads it once where a `while` re-reads it.
+                    //
+                    // A `.count` qualifies when the body leaves the collection
+                    // alone, which the `mutates` check below settles. A literal
+                    // qualifies always: it cannot change. Anything else — a
+                    // variable, a call — might change under the loop, so it is
+                    // left alone rather than guessed at.
+                    //
+                    // Only `.count` used to qualify, which is why a counted
+                    // loop over a fixed number was never reported.
+                    var boundIsFixed: Bool = bound.contains(".count")
+                    if boundIsFixed == false && bound != "" {
+                        var allDigits: Bool = true
+                        for character in bound.split("") {
+                            if character != "" && "0123456789".contains(character) == false {
+                                allDigits = false
+                            }
+                        }
+                        boundIsFixed = allDigits
+                    }
+                    if boundIsFixed == false {
+                        continue
                     }
                     var last: String = ""
                     if kids.count > 0 {
@@ -399,13 +534,149 @@ comptime macro LintRunner {
                             fixText = fixText + "\n" + kept
                         }
                     }
-                    Diagnostics.warning(
-                        "this `while` counts an index by hand; `for " + counter +
-                            " in 0.." + bound + "` does it for you, and the counter is not read after the loop",
-                        at: reportAt,
-                        code: "KLINT002",
-                        fix: fixText
-                    )
+                    let indexLoopMessage: String = "this `while` counts an index by hand; `for " +
+                        counter + " in 0.." + bound +
+                        "` does it for you, and the counter is not read after the loop"
+                    // Emitted at the level the package asked for, like every
+                    // other lint. This one always warned, so a `linter.kira`
+                    // that denied it got a warning and a build that passed.
+                    if indexLoopLevel == .Deny {
+                        Diagnostics.error(
+                            indexLoopMessage,
+                            at: reportAt,
+                            code: "KLINT002",
+                            fix: fixText
+                        )
+                    } else {
+                        Diagnostics.warning(
+                            indexLoopMessage,
+                            at: reportAt,
+                            code: "KLINT002",
+                            fix: fixText
+                        )
+                    }
+                }
+            }
+        }
+
+        // KLINT004 — a zero-argument function returning a literal.
+        //
+        // `function limit() -> Int { return 700 }` is a constant written as a
+        // call. Kira has module-scope `let`, so it can be one: `let limit = 700`
+        // reads as the value it is, costs no call, and cannot be confused with
+        // something that computes.
+        //
+        // The shape is narrow on purpose, because everything outside it might
+        // do something:
+        //
+        //   * zero parameters, read off the head — a function taking anything
+        //     is not a constant;
+        //   * exactly one statement, and it a `return` — a body that branches
+        //     or binds is a body;
+        //   * the returned text a literal, not a name or a call. `return 700`
+        //     and `return "ok"` qualify; `return other()` and `return LIMIT`
+        //     do not, because what they read might change and a `let` would
+        //     fix the order they are read in.
+        //
+        // Annotated declarations are left alone entirely. `@Native`,
+        // `@FFI.Syscall` and `@Main` all mean the function is reached by
+        // something other than a Kira call, and `packages/linux` is written
+        // exactly this way — `@Native function linuxMountReadOnly() -> Int {
+        // return 1 }` is a constant to a reader and a symbol to the runtime.
+        // Rewriting one would take the symbol away.
+        if constantFunctionOn {
+            for target in declarations {
+                if target.kind != .Function {
+                    continue
+                }
+                var annotated: Bool = false
+                var allowedHere: Bool = false
+                for annotation in target.annotations {
+                    annotated = true
+                    if annotation.contains("Allow") && annotation.contains("KLINT004") {
+                        allowedHere = true
+                    }
+                }
+                if annotated || allowedHere {
+                    continue
+                }
+                let head: String = String(target.syntax)
+                // Zero parameters: the head reaches `()` before its body.
+                var signature: String = ""
+                for piece in head.split("{") {
+                    if signature == "" {
+                        signature = piece
+                    }
+                }
+                if signature.contains("()") == false {
+                    continue
+                }
+                let body = target.body
+                if body.count != 1 {
+                    continue
+                }
+                let only = body[0]
+                if only.kind != "return" {
+                    continue
+                }
+                var returned: String = String(only.syntax)
+                for piece in returned.split("return ") {
+                    returned = piece
+                }
+                returned = returned.trim()
+                // A literal and nothing else. Digits, a quoted string, or one
+                // of the two boolean words — anything naming something is left
+                // alone, because a `let` would decide when it is read.
+                var isLiteral: Bool = returned == "true" || returned == "false"
+                if returned.startsWith("\"") && returned.endsWith("\"") {
+                    isLiteral = true
+                }
+                // A number is recognised by what it starts with. A literal
+                // opens with a digit or a minus; a name never does, and a call
+                // or a collection opens with something else again. Read this
+                // way rather than by walking the characters, which the
+                // evaluator cannot do, or by `Int(text)`, which refuses a
+                // non-number outright rather than answering that it is not one.
+                if returned != "" && isLiteral == false {
+                    let first: String = returned.substring(0, 1)
+                    isLiteral = "0123456789-".contains(first)
+                }
+                // An enum case is a constant too, in both spellings. `.Red`
+                // is unambiguous — nothing else opens with a dot. `Colour.Red`
+                // is read as one when what precedes the dot is capitalised,
+                // which is how Kira spells a type: `config.retries` is a field
+                // of something and might be anything, and is left alone.
+                if isLiteral == false && returned != "" {
+                    let opener: String = returned.substring(0, 1)
+                    if opener == "." {
+                        isLiteral = true
+                    }
+                    if "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(opener) && returned.contains(".") {
+                        isLiteral = true
+                    }
+                }
+                // Nothing that reaches for anything else, whatever it starts
+                // with: a call, an index, or a constructed value is not a
+                // literal even when it begins with a digit or names a type.
+                //
+                // `U8(3)` is excluded with them, and is the one exclusion worth
+                // naming: it *is* a constant, and a `let` would hold it. There
+                // is nothing in the text that tells a conversion from any other
+                // call, so admitting it would admit `readConfig()` beside it.
+                if returned.contains("(") || returned.contains("[") || returned.contains("{") {
+                    isLiteral = false
+                }
+                if isLiteral == false {
+                    continue
+                }
+                let name: String = String(target.name.asString())
+                let constantMessage: String = "`" + name +
+                    "` takes nothing and returns a literal; `let " + name + " = " + returned +
+                    "` says the same thing as a value"
+                if constantFunctionLevel == .Deny {
+                    Diagnostics.error(constantMessage, at: target.syntax, code: "KLINT004")
+                } else {
+                    Diagnostics.warning(constantMessage, at: target.syntax, code: "KLINT004")
                 }
             }
         }
@@ -461,13 +732,10 @@ comptime macro LintRunner {
                         let message = "this file is " + String(pendingLines) +
                             " lines, past the " + String(fileLengthLimit) +
                             "-line ceiling; split it into cohesive modules"
-                        if fileLengthSeverity == "error" {
+                        if fileLengthLevel == .Deny {
                             Diagnostics.error(message, at: pendingAt, code: "KLINT003")
                         }
-                        if fileLengthSeverity == "note" {
-                            Diagnostics.note(message, at: pendingAt, code: "KLINT003")
-                        }
-                        if fileLengthSeverity == "warning" {
+                        if fileLengthLevel != .Deny {
                             Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
                         }
                     }
@@ -481,13 +749,10 @@ comptime macro LintRunner {
                 let message = "this file is " + String(pendingLines) +
                     " lines, past the " + String(fileLengthLimit) +
                     "-line ceiling; split it into cohesive modules"
-                if fileLengthSeverity == "error" {
+                if fileLengthLevel == .Deny {
                     Diagnostics.error(message, at: pendingAt, code: "KLINT003")
                 }
-                if fileLengthSeverity == "note" {
-                    Diagnostics.note(message, at: pendingAt, code: "KLINT003")
-                }
-                if fileLengthSeverity == "warning" {
+                if fileLengthLevel != .Deny {
                     Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
                 }
             }

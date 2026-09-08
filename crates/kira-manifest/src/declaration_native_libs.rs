@@ -132,6 +132,7 @@ fn autobind_value(value: &str) -> Result<AutobindSpec, DeclarationError> {
             "headers" => autobind.headers = string_array(value)?,
             "functions" => autobind.functions = string_array(value)?,
             "structs" => autobind.structs = string_array(value)?,
+            "constants" => autobind.constants = string_array(value)?,
             "mode" => {
                 autobind.mode =
                     AutobindMode::parse(qualified_case(value)).ok_or_else(|| malformed(KEY))?;

@@ -111,6 +111,15 @@ pub fn render(module: &BindingModule) -> String {
         );
     }
 
+    for constant in &module.constants {
+        let _ = write!(
+            out,
+            "\nlet {name}: Int = {value}\n",
+            name = constant.name,
+            value = constant.value
+        );
+    }
+
     if !module.skipped.is_empty() {
         let _ = write!(
             out,
@@ -141,8 +150,8 @@ pub fn array_type_name(element: &KiraType, count: u64) -> String {
 mod tests {
     use super::*;
     use crate::autobind::model::{
-        ArrayDecl, CallbackDecl, FieldDecl, FunctionDecl, OpaqueDecl, ParamDecl, PointerDecl,
-        SkippedDecl, StructDecl,
+        ArrayDecl, CallbackDecl, ConstantDecl, FieldDecl, FunctionDecl, OpaqueDecl, ParamDecl,
+        PointerDecl, SkippedDecl, StructDecl,
     };
 
     fn sample() -> BindingModule {
@@ -186,6 +195,7 @@ mod tests {
                 }],
                 result: KiraType::Named("kira_text_engine_ptr".to_owned()),
             }],
+            constants: Vec::new(),
             skipped: vec![SkippedDecl {
                 name: "kira_text_printf".to_owned(),
                 reason: "a variadic C function has no fixed signature to bind".to_owned(),
@@ -226,6 +236,27 @@ mod tests {
             text.contains("// kira_text_printf: a variadic C function has no fixed signature"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_constant_is_written_as_a_module_scope_let() {
+        let module = BindingModule {
+            library: "demo".to_owned(),
+            constants: vec![
+                ConstantDecl {
+                    name: "DEMO_ONE".to_owned(),
+                    value: 1,
+                },
+                ConstantDecl {
+                    name: "DEMO_BACKWARDS".to_owned(),
+                    value: -3,
+                },
+            ],
+            ..BindingModule::default()
+        };
+        let text = render(&module);
+        assert!(text.contains("\nlet DEMO_ONE: Int = 1\n"), "{text}");
+        assert!(text.contains("\nlet DEMO_BACKWARDS: Int = -3\n"), "{text}");
     }
 
     #[test]

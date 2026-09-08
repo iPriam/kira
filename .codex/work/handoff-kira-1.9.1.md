@@ -133,19 +133,24 @@ A-O as ground truth. Corrected mapping:
 | 6 | Nominal identity | Mostly: package-qualified identity, `TypeCastError`. Box Drop metadata open |
 | 7 | Generic compat / NativeState refcount | Refcount done, widening removal done. **Generic inference rewrite not started** |
 | 8 | Traits / async / tasks | Done: `CallableSignature`, contract diffs, generation-tagged handles, channels including heap payloads — anything `Send` crosses, carried as a native-state token, and a closing receiver releases what it never delivered |
-| 9 | Classes | Barely started: only the `KSEM357` specialization cap |
+| 9 | Classes | Done, and further than this table said. Single, multi-level and multiple inheritance; `override let` on a field default and `override function` on a method; parent-qualified super-calls; positional constructor arguments filling the default-less slots, parents' first; value semantics. Verified on vm and llvm. Labelled constructor arguments are the open gap — `Spot(x: 3)` is `KSEM062`. `KSEM357` is one cap inside it, not the whole of it |
 | 10 | Ownership / Copy / Drop | Partial: `copy` vs `@Derive(Copy)` split, drop order. All-path release open |
 | 11 | comptime / macros | Done: `Identifier()`, `KMAC014`, splices, comptime `substring`, hygiene over every binding form (`match`/`handle` payloads and closure parameters, not only `let`/`var`/`for`), and one-name-one-declaration inside a scope (`KMAC031`) |
 | 12 | Derives / Serde grammar | Done |
-| 13 | FFI / ABI / target model | Done and merged: Bool ABI at the C seam, `RawPtr.null` as a member, FFI validation, and a foreign result read at its own size rather than the word libffi rounded it to. Verified on the merged tree: ffi harness 302 on hybrid |
+| 13 | FFI / ABI / target model | Done and merged: Bool ABI at the C seam, `RawPtr.null` as a member, FFI validation, and a foreign result read at its own size rather than the word libffi rounded it to. Verified on the merged tree: ffi harness 302 on hybrid. Since extended: autobind carries a header's enumerators as module-scope `let`s, selected by `constants:` in both manifest spellings — a `#define` still cannot be reached, because the preprocessor has consumed it before clang has a cursor |
 | 14 | C layout / Web shims | Not started |
 | 15 | Hot reload / ABI versions | Partial: ABI bumped to 15 with the guard proven. Migration not started |
 | 16 | KIK parity / tooling / diagnostics registry | Registry done: `diagnostic-codes.tsv` is the table, `kira-diagnostic-registry` writes `KiraError`, `kiraErrorFromCode`, and the appendix from it, and its tests fail on drift. It was 290 listed against 438 emitted, 129 in common: 309 codes a program could not name, 161 names for codes nothing emits, and 3 more (`KLEX004`-`006`) the enum listed but the lookup never answered |
 
-Section O: channels done. Not started: maps and sets, iterators with declared
-element ownership, async closures, big-endian, Wasm64, opt-in runtime
+Section O: channels done. Not started, and checked rather than assumed: maps and
+sets (`[String: Int]` is not syntax and Foundation declares neither), iterators
+with declared element ownership, async closures, big-endian, opt-in runtime
 reflection metadata, the unsafe-capability model behind packed structs and
 unions, versioned hot state migration, annotation-driven schema evolution.
+
+Two of those are less absent than "not started" suggests: `Wasm64` is a declared
+target in `kira-backend-api/src/lib.rs`, and a `c_layout` flag already threads
+through the LLVM backend. Neither is finished; both have somewhere to start.
 
 ## 4. Suggested next work, in disjoint substrates
 
@@ -153,12 +158,19 @@ Everything the previous handoff listed here is done and merged: the diagnostics
 registry (step 16), the FFI/ABI seam (step 13), and macro visibility and hygiene
 (step 11). What is left, roughly largest first:
 
-- **Classes** (step 9), barely started: only the `KSEM357` specialization cap.
 - **The generic inference rewrite** (step 7), not started.
 - **Hot state migration** (step 15), and **C layout / Web shims** (step 14).
+- **Maps and sets**, which nothing in the language reaches for yet and which
+  every program will.
+- **Labelled constructor arguments** for classes, the one gap left in step 9.
+  Positional arguments work; `Spot(x: 3, y: 4)` does not, so a three-field class
+  reads as `Spot3(1, 2, 10)` at the call site and adding a default-less field to
+  a parent silently shifts every descendant's argument order.
 
-Classes and the generic inference rewrite both sit in `kira-semantics` and would
-collide with each other.
+Classes were listed here as the largest item and were not: the feature is done
+and the table row was stale. Anything read out of this document is worth a
+five-minute probe before it is planned around — three of its claims were out of
+date on the day they were checked, and all three understated the tree.
 
 ## 5. Environment notes learned the hard way
 

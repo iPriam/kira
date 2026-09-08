@@ -274,6 +274,10 @@ fn push_native_library(text: &mut String, library: &NativeLibrarySpec) {
             inline_separator(text, &mut first);
             push_inline_string_array(text, "structs", &autobind.structs);
         }
+        if !autobind.constants.is_empty() {
+            inline_separator(text, &mut first);
+            push_inline_string_array(text, "constants", &autobind.constants);
+        }
         inline_separator(text, &mut first);
         text.push_str("mode: .");
         text.push_str(match autobind.mode {

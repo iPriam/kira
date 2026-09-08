@@ -78,6 +78,136 @@ pub enum LinuxSyscall {
     /// once it has nothing left to start; unlike a `wait4` loop it costs no
     /// processor time while doing it.
     Ppoll = 9,
+    /// `chdir(path)` — change this process's working directory.
+    Chdir = 10,
+    /// `chroot(path)` — change this process's idea of `/`.
+    ///
+    /// The pair with `chdir` is what moves a userland out of the initramfs it
+    /// booted in and into the volume holding the system: rootfs cannot be
+    /// unmounted or pivoted away from, so the system volume is moved onto `/`
+    /// and the process is re-anchored into it. Either one alone leaves a process
+    /// whose root and whose working directory disagree about which filesystem it
+    /// is on, which is why they arrive together.
+    Chroot = 11,
+    /// `openat(dirfd, path, flags, mode)` — open a file, relative to a directory.
+    ///
+    /// `openat` rather than `open`: the generic system-call table every
+    /// architecture added since 2012 carries only this one, so AArch64 has no
+    /// `open` to name. A caller with an absolute path passes `AT_FDCWD` and the
+    /// two are the same call.
+    Openat = 12,
+    /// `close(fd)` — release a file descriptor.
+    Close = 13,
+    /// `ioctl(fd, request, argument)` — the call every driver answers on.
+    ///
+    /// Untyped by design: the request number says what the third argument
+    /// points at, and the kernel fills it in. That makes it the whole of
+    /// modesetting, of a GPU's resource management, and of most of what a
+    /// device does that reading and writing cannot express.
+    Ioctl = 14,
+    /// `mmap(addr, length, prot, flags, fd, offset)` — map memory.
+    Mmap = 15,
+    /// `munmap(addr, length)` — release a mapping.
+    Munmap = 16,
+    /// `mprotect(addr, length, prot)` — change a mapping's permissions.
+    Mprotect = 17,
+    /// `lseek(fd, offset, whence)` — move a descriptor's file offset.
+    Lseek = 18,
+    /// `pread64(fd, buffer, count, offset)` — read at an offset, without moving the descriptor's own.
+    Pread64 = 19,
+    /// `pwrite64(fd, buffer, count, offset)` — write at an offset, leaving the descriptor's own where it was.
+    Pwrite64 = 20,
+    /// `fstat(fd, statbuf)` — what a descriptor refers to, and how large it is.
+    Fstat = 21,
+    /// `statx(dirfd, path, flags, mask, statxbuf)` — the same, by path and with a say in what is asked for.
+    Statx = 22,
+    /// `clock_gettime(clock, timespec)` — what time it is, on the clock named.
+    ///
+    /// An interpreter serves it because a program asking the time is asking
+    /// the machine, and the machine is the same one either way.
+    ClockGettime = 23,
+    /// `nanosleep(request, remain)` — wait, without spending a processor doing it.
+    Nanosleep = 24,
+    /// `epoll_create1(flags)` — a descriptor that watches other descriptors.
+    EpollCreate1 = 25,
+    /// `epoll_ctl(epfd, op, fd, event)` — add, change, or remove one of the watched.
+    EpollCtl = 26,
+    /// `epoll_pwait(epfd, events, maxevents, timeout, sigmask)` — wait for any of them.
+    EpollPwait = 27,
+    /// `clone(flags, stack, parent_tid, tls, child_tid)` — a second process.
+    ///
+    /// The call an init needs before it can start anything: `execve` replaces
+    /// the process that makes it, so a program that must still be there
+    /// afterwards has to split first.
+    Clone = 28,
+    /// `getpid()` — this process's identifier.
+    Getpid = 29,
+    /// `kill(pid, signal)` — send a signal.
+    Kill = 30,
+    /// `setsid()` — a new session, detached from any terminal.
+    Setsid = 31,
+    /// `pipe2(fds, flags)` — a pair of descriptors, one writing into the other.
+    Pipe2 = 32,
+    /// `dup3(oldfd, newfd, flags)` — make one descriptor number refer to another's file.
+    Dup3 = 33,
+    /// `fcntl(fd, cmd, argument)` — a descriptor's own flags and locks.
+    Fcntl = 34,
+    /// `rt_sigaction(signal, action, old, size)` — what happens when a signal arrives.
+    RtSigaction = 35,
+    /// `rt_sigprocmask(how, set, old, size)` — which signals are blocked.
+    RtSigprocmask = 36,
+    /// `rt_sigreturn()` — return from a signal handler, which no caller writes by hand.
+    RtSigreturn = 37,
+    /// `signalfd4(fd, mask, size, flags)` — signals as a descriptor to read.
+    Signalfd4 = 38,
+    /// `mkdirat(dirfd, path, mode)` — create a directory.
+    Mkdirat = 39,
+    /// `unlinkat(dirfd, path, flags)` — remove a name.
+    Unlinkat = 40,
+    /// `renameat2(olddirfd, old, newdirfd, new, flags)` — move a name, atomically.
+    ///
+    /// The call an installer finishes with: a rename either happened or did
+    /// not, so what it replaces is never half-written.
+    Renameat2 = 41,
+    /// `ftruncate(fd, length)` — set a file's size.
+    Ftruncate = 42,
+    /// `fdatasync(fd)` — flush one file's contents, rather than every filesystem the machine has.
+    Fdatasync = 43,
+    /// `getdents64(fd, buffer, count)` — what is in a directory.
+    Getdents64 = 44,
+    /// `fchmodat(dirfd, path, mode, flags)` — a file's permissions.
+    Fchmodat = 45,
+    /// `syncfs(fd)` — flush the filesystem a descriptor lives on, and no other.
+    Syncfs = 46,
+    /// `statfs(path, buf)` — how much room a filesystem has.
+    Statfs = 47,
+    /// `clone3(args, size)` — a second process, described by a structure.
+    ///
+    /// The one to reach for rather than `clone`. Legacy `clone` takes its
+    /// arguments positionally and the last two are in a different order on
+    /// aarch64 than on x86-64, so the same call is a different call per
+    /// architecture and the mistake is silent. `clone3` takes a
+    /// `struct clone_args` and a size, identically everywhere.
+    ///
+    /// It also carries `CLONE_PIDFD`, which answers with a descriptor for the
+    /// child. A supervisor can then wait for a process to end in the same
+    /// `ppoll` as everything else it waits on, and can signal it without the
+    /// race that a recycled process identifier is.
+    Clone3 = 48,
+    /// `waitid(idtype, id, infop, options, rusage)` — reap a child, by pidfd.
+    ///
+    /// `wait4` reaps by process identifier, which is the number `CLONE_PIDFD`
+    /// exists to stop anyone using. `waitid` takes `P_PIDFD`, so the thing that
+    /// is waited for is the thing that was started rather than whatever now
+    /// holds that number.
+    Waitid = 49,
+    /// `pidfd_send_signal(pidfd, signal, info, flags)` — signal a descriptor.
+    ///
+    /// `kill` names its target by a number the kernel is free to reuse the
+    /// moment the process ends, so a supervisor that signals a stopped service
+    /// can signal whatever started next. A descriptor refers to one process for
+    /// as long as it is open, and to nothing at all afterwards.
+    PidfdSendSignal = 50,
 }
 
 /// Every system call this table knows, in tag order.
@@ -85,7 +215,7 @@ pub enum LinuxSyscall {
 /// A total list rather than a search: the frontend prints it when it refuses an
 /// unknown name, and a name that is in the enum but missing from here would be
 /// a call the author cannot discover.
-pub const LINUX_SYSCALLS: [LinuxSyscall; 10] = [
+pub const LINUX_SYSCALLS: [LinuxSyscall; 51] = [
     LinuxSyscall::Read,
     LinuxSyscall::Write,
     LinuxSyscall::Mount,
@@ -96,6 +226,47 @@ pub const LINUX_SYSCALLS: [LinuxSyscall; 10] = [
     LinuxSyscall::ExitGroup,
     LinuxSyscall::Sync,
     LinuxSyscall::Ppoll,
+    LinuxSyscall::Chdir,
+    LinuxSyscall::Chroot,
+    LinuxSyscall::Openat,
+    LinuxSyscall::Close,
+    LinuxSyscall::Ioctl,
+    LinuxSyscall::Mmap,
+    LinuxSyscall::Munmap,
+    LinuxSyscall::Mprotect,
+    LinuxSyscall::Lseek,
+    LinuxSyscall::Pread64,
+    LinuxSyscall::Pwrite64,
+    LinuxSyscall::Fstat,
+    LinuxSyscall::Statx,
+    LinuxSyscall::ClockGettime,
+    LinuxSyscall::Nanosleep,
+    LinuxSyscall::EpollCreate1,
+    LinuxSyscall::EpollCtl,
+    LinuxSyscall::EpollPwait,
+    LinuxSyscall::Clone,
+    LinuxSyscall::Getpid,
+    LinuxSyscall::Kill,
+    LinuxSyscall::Setsid,
+    LinuxSyscall::Pipe2,
+    LinuxSyscall::Dup3,
+    LinuxSyscall::Fcntl,
+    LinuxSyscall::RtSigaction,
+    LinuxSyscall::RtSigprocmask,
+    LinuxSyscall::RtSigreturn,
+    LinuxSyscall::Signalfd4,
+    LinuxSyscall::Mkdirat,
+    LinuxSyscall::Unlinkat,
+    LinuxSyscall::Renameat2,
+    LinuxSyscall::Ftruncate,
+    LinuxSyscall::Fdatasync,
+    LinuxSyscall::Getdents64,
+    LinuxSyscall::Fchmodat,
+    LinuxSyscall::Syncfs,
+    LinuxSyscall::Statfs,
+    LinuxSyscall::Clone3,
+    LinuxSyscall::Waitid,
+    LinuxSyscall::PidfdSendSignal,
 ];
 
 /// How many arguments a Linux system call can take.
@@ -125,6 +296,47 @@ impl LinuxSyscall {
             7 => Some(Self::ExitGroup),
             8 => Some(Self::Sync),
             9 => Some(Self::Ppoll),
+            10 => Some(Self::Chdir),
+            11 => Some(Self::Chroot),
+            12 => Some(Self::Openat),
+            13 => Some(Self::Close),
+            14 => Some(Self::Ioctl),
+            15 => Some(Self::Mmap),
+            16 => Some(Self::Munmap),
+            17 => Some(Self::Mprotect),
+            18 => Some(Self::Lseek),
+            19 => Some(Self::Pread64),
+            20 => Some(Self::Pwrite64),
+            21 => Some(Self::Fstat),
+            22 => Some(Self::Statx),
+            23 => Some(Self::ClockGettime),
+            24 => Some(Self::Nanosleep),
+            25 => Some(Self::EpollCreate1),
+            26 => Some(Self::EpollCtl),
+            27 => Some(Self::EpollPwait),
+            28 => Some(Self::Clone),
+            29 => Some(Self::Getpid),
+            30 => Some(Self::Kill),
+            31 => Some(Self::Setsid),
+            32 => Some(Self::Pipe2),
+            33 => Some(Self::Dup3),
+            34 => Some(Self::Fcntl),
+            35 => Some(Self::RtSigaction),
+            36 => Some(Self::RtSigprocmask),
+            37 => Some(Self::RtSigreturn),
+            38 => Some(Self::Signalfd4),
+            39 => Some(Self::Mkdirat),
+            40 => Some(Self::Unlinkat),
+            41 => Some(Self::Renameat2),
+            42 => Some(Self::Ftruncate),
+            43 => Some(Self::Fdatasync),
+            44 => Some(Self::Getdents64),
+            45 => Some(Self::Fchmodat),
+            46 => Some(Self::Syncfs),
+            47 => Some(Self::Statfs),
+            48 => Some(Self::Clone3),
+            49 => Some(Self::Waitid),
+            50 => Some(Self::PidfdSendSignal),
             _ => None,
         }
     }
@@ -147,6 +359,47 @@ impl LinuxSyscall {
             Self::ExitGroup => "exit_group",
             Self::Sync => "sync",
             Self::Ppoll => "ppoll",
+            Self::Chdir => "chdir",
+            Self::Chroot => "chroot",
+            Self::Openat => "openat",
+            Self::Close => "close",
+            Self::Ioctl => "ioctl",
+            Self::Mmap => "mmap",
+            Self::Munmap => "munmap",
+            Self::Mprotect => "mprotect",
+            Self::Lseek => "lseek",
+            Self::Pread64 => "pread64",
+            Self::Pwrite64 => "pwrite64",
+            Self::Fstat => "fstat",
+            Self::Statx => "statx",
+            Self::ClockGettime => "clock_gettime",
+            Self::Nanosleep => "nanosleep",
+            Self::EpollCreate1 => "epoll_create1",
+            Self::EpollCtl => "epoll_ctl",
+            Self::EpollPwait => "epoll_pwait",
+            Self::Clone => "clone",
+            Self::Getpid => "getpid",
+            Self::Kill => "kill",
+            Self::Setsid => "setsid",
+            Self::Pipe2 => "pipe2",
+            Self::Dup3 => "dup3",
+            Self::Fcntl => "fcntl",
+            Self::RtSigaction => "rt_sigaction",
+            Self::RtSigprocmask => "rt_sigprocmask",
+            Self::RtSigreturn => "rt_sigreturn",
+            Self::Signalfd4 => "signalfd4",
+            Self::Mkdirat => "mkdirat",
+            Self::Unlinkat => "unlinkat",
+            Self::Renameat2 => "renameat2",
+            Self::Ftruncate => "ftruncate",
+            Self::Fdatasync => "fdatasync",
+            Self::Getdents64 => "getdents64",
+            Self::Fchmodat => "fchmodat",
+            Self::Syncfs => "syncfs",
+            Self::Statfs => "statfs",
+            Self::Clone3 => "clone3",
+            Self::Waitid => "waitid",
+            Self::PidfdSendSignal => "pidfd_send_signal",
         }
     }
 
@@ -180,6 +433,47 @@ impl LinuxSyscall {
                 Self::ExitGroup => 94,
                 Self::Sync => 81,
                 Self::Ppoll => 73,
+                Self::Chdir => 49,
+                Self::Chroot => 51,
+                Self::Openat => 56,
+                Self::Close => 57,
+                Self::Ioctl => 29,
+                Self::Mmap => 222,
+                Self::Munmap => 215,
+                Self::Mprotect => 226,
+                Self::Lseek => 62,
+                Self::Pread64 => 67,
+                Self::Pwrite64 => 68,
+                Self::Fstat => 80,
+                Self::Statx => 291,
+                Self::ClockGettime => 113,
+                Self::Nanosleep => 101,
+                Self::EpollCreate1 => 20,
+                Self::EpollCtl => 21,
+                Self::EpollPwait => 22,
+                Self::Clone => 220,
+                Self::Getpid => 172,
+                Self::Kill => 129,
+                Self::Setsid => 157,
+                Self::Pipe2 => 59,
+                Self::Dup3 => 24,
+                Self::Fcntl => 25,
+                Self::RtSigaction => 134,
+                Self::RtSigprocmask => 135,
+                Self::RtSigreturn => 139,
+                Self::Signalfd4 => 74,
+                Self::Mkdirat => 34,
+                Self::Unlinkat => 35,
+                Self::Renameat2 => 276,
+                Self::Ftruncate => 46,
+                Self::Fdatasync => 83,
+                Self::Getdents64 => 61,
+                Self::Fchmodat => 53,
+                Self::Syncfs => 267,
+                Self::Statfs => 43,
+                Self::Clone3 => 435,
+                Self::Waitid => 95,
+                Self::PidfdSendSignal => 424,
             },
             SyscallArch::X86_64 => match self {
                 Self::Read => 0,
@@ -192,6 +486,47 @@ impl LinuxSyscall {
                 Self::ExitGroup => 231,
                 Self::Sync => 162,
                 Self::Ppoll => 271,
+                Self::Chdir => 80,
+                Self::Chroot => 161,
+                Self::Openat => 257,
+                Self::Close => 3,
+                Self::Ioctl => 16,
+                Self::Mmap => 9,
+                Self::Munmap => 11,
+                Self::Mprotect => 10,
+                Self::Lseek => 8,
+                Self::Pread64 => 17,
+                Self::Pwrite64 => 18,
+                Self::Fstat => 5,
+                Self::Statx => 332,
+                Self::ClockGettime => 228,
+                Self::Nanosleep => 35,
+                Self::EpollCreate1 => 291,
+                Self::EpollCtl => 233,
+                Self::EpollPwait => 281,
+                Self::Clone => 56,
+                Self::Getpid => 39,
+                Self::Kill => 62,
+                Self::Setsid => 112,
+                Self::Pipe2 => 293,
+                Self::Dup3 => 292,
+                Self::Fcntl => 72,
+                Self::RtSigaction => 13,
+                Self::RtSigprocmask => 14,
+                Self::RtSigreturn => 15,
+                Self::Signalfd4 => 289,
+                Self::Mkdirat => 258,
+                Self::Unlinkat => 263,
+                Self::Renameat2 => 316,
+                Self::Ftruncate => 77,
+                Self::Fdatasync => 75,
+                Self::Getdents64 => 217,
+                Self::Fchmodat => 268,
+                Self::Syncfs => 306,
+                Self::Statfs => 137,
+                Self::Clone3 => 435,
+                Self::Waitid => 247,
+                Self::PidfdSendSignal => 424,
             },
         }
     }
@@ -254,13 +589,56 @@ impl LinuxSyscall {
     /// about `--backend llvm` or the native half of `--backend hybrid`.
     pub const fn servable_by_an_interpreter(self) -> bool {
         match self {
-            Self::Read | Self::Write | Self::Ppoll => true,
+            Self::Read
+            | Self::Write
+            | Self::Ppoll
+            | Self::Openat
+            | Self::Close
+            | Self::Ioctl
+            | Self::Lseek
+            | Self::Pread64
+            | Self::Pwrite64
+            | Self::Fstat
+            | Self::Statx
+            | Self::ClockGettime
+            | Self::Nanosleep
+            | Self::EpollCreate1
+            | Self::EpollCtl
+            | Self::EpollPwait
+            | Self::Pipe2
+            | Self::Fcntl
+            | Self::Ftruncate
+            | Self::Fdatasync
+            | Self::Getdents64
+            | Self::Syncfs => true,
             Self::Sync
             | Self::Mount
             | Self::Umount2
             | Self::Reboot
             | Self::Execve
             | Self::Wait4
+            | Self::Chdir
+            | Self::Chroot
+            | Self::Mmap
+            | Self::Munmap
+            | Self::Mprotect
+            | Self::Clone
+            | Self::Clone3
+            | Self::Waitid
+            | Self::PidfdSendSignal
+            | Self::Getpid
+            | Self::Kill
+            | Self::Setsid
+            | Self::Dup3
+            | Self::RtSigaction
+            | Self::RtSigprocmask
+            | Self::RtSigreturn
+            | Self::Signalfd4
+            | Self::Mkdirat
+            | Self::Unlinkat
+            | Self::Renameat2
+            | Self::Fchmodat
+            | Self::Statfs
             | Self::ExitGroup => false,
         }
     }
@@ -273,7 +651,28 @@ impl LinuxSyscall {
     /// caller has a reason to ask about.
     pub const fn interpreter_refusal(self) -> &'static str {
         match self {
-            Self::Read | Self::Write | Self::Ppoll => "",
+            Self::Read
+            | Self::Write
+            | Self::Ppoll
+            | Self::Openat
+            | Self::Close
+            | Self::Ioctl
+            | Self::Lseek
+            | Self::Pread64
+            | Self::Pwrite64
+            | Self::Fstat
+            | Self::Statx
+            | Self::ClockGettime
+            | Self::Nanosleep
+            | Self::EpollCreate1
+            | Self::EpollCtl
+            | Self::EpollPwait
+            | Self::Pipe2
+            | Self::Fcntl
+            | Self::Ftruncate
+            | Self::Fdatasync
+            | Self::Getdents64
+            | Self::Syncfs => "",
             Self::Sync => {
                 "would flush every filesystem mounted on the machine running the interpreter, \
                  taking no descriptor that could bound it to the program's own files"
@@ -289,6 +688,56 @@ impl LinuxSyscall {
             Self::ExitGroup => {
                 "would end the interpreter itself, in the middle of the program it is running"
             }
+            Self::Chdir => {
+                "would move the interpreter's own working directory, so every relative path \
+                 the interpreter resolves afterwards would resolve somewhere else"
+            }
+            Self::Chroot => {
+                "would confine the interpreter itself to the program's new root, leaving it \
+                 unable to reach the rest of the developer's machine"
+            }
+            Self::Mmap => {
+                "would map into the interpreter's own address space, where the program has no way to reach it and the interpreter did not ask for it"
+            }
+            Self::Munmap => "would unmap part of the interpreter's own address space",
+            Self::Mprotect => "would change the permissions of the interpreter's own memory",
+            Self::Clone => {
+                "would fork the interpreter, leaving two of them running the same program"
+            }
+            Self::Clone3 => {
+                "would fork the interpreter, leaving two of them running the same program"
+            }
+            Self::Waitid => {
+                "would reap a child of the interpreter, which is not the program's to reap"
+            }
+            Self::PidfdSendSignal => {
+                "would signal a process of the developer's machine through a descriptor the interpreter owns"
+            }
+            Self::Getpid => {
+                "would answer with the interpreter's identifier, which is not the program's"
+            }
+            Self::Kill => {
+                "would signal a process of the developer's machine, chosen by a number the program made up"
+            }
+            Self::Setsid => "would detach the interpreter from its own terminal",
+            Self::Dup3 => {
+                "would rewrite the interpreter's own descriptor table, where a number the program picked may be the interpreter's output"
+            }
+            Self::RtSigaction => {
+                "would install a handler in the interpreter, which is the process the signal would reach"
+            }
+            Self::RtSigprocmask => {
+                "would block signals for the interpreter rather than for the program"
+            }
+            Self::RtSigreturn => "would return from a handler the interpreter never entered",
+            Self::Signalfd4 => {
+                "would take delivery of the interpreter's signals, which are not the program's to consume"
+            }
+            Self::Mkdirat => "would create a directory on the developer's machine",
+            Self::Unlinkat => "would remove a file from the developer's machine",
+            Self::Renameat2 => "would move a file on the developer's machine",
+            Self::Fchmodat => "would change permissions on the developer's machine",
+            Self::Statfs => "would answer about a filesystem of the developer's machine",
         }
     }
 }
@@ -460,6 +909,10 @@ mod tests {
         assert_eq!(LinuxSyscall::ExitGroup.tag(), 7);
         assert_eq!(LinuxSyscall::Sync.tag(), 8);
         assert_eq!(LinuxSyscall::Ppoll.tag(), 9);
+        assert_eq!(LinuxSyscall::Chdir.tag(), 10);
+        assert_eq!(LinuxSyscall::Chroot.tag(), 11);
+        assert_eq!(LinuxSyscall::Openat.tag(), 12);
+        assert_eq!(LinuxSyscall::Close.tag(), 13);
     }
 
     #[test]
@@ -468,7 +921,14 @@ mod tests {
             assert_eq!(LinuxSyscall::from_tag(syscall.tag()), Some(syscall));
             assert_eq!(LinuxSyscall::parse(syscall.label()), Some(syscall));
         }
-        assert_eq!(LinuxSyscall::from_tag(10), None);
+        // One past the last tag, derived rather than written: tags are assigned
+        // densely from zero, so the table's length *is* the first unassigned
+        // one. A literal here was 48, which stopped meaning "unassigned" the
+        // day the table grew past it and turned this into a test that the
+        // newest call does not exist.
+        let first_unassigned =
+            u8::try_from(LINUX_SYSCALLS.len()).expect("the table is far below the tag width");
+        assert_eq!(LinuxSyscall::from_tag(first_unassigned), None);
     }
 
     /// A name this table does not carry resolves to nothing at all. The near
@@ -478,7 +938,7 @@ mod tests {
     #[test]
     fn a_name_this_table_does_not_carry_resolves_to_nothing() {
         assert_eq!(LinuxSyscall::parse("exitGroup"), None);
-        assert_eq!(LinuxSyscall::parse("openat"), None);
+        assert_eq!(LinuxSyscall::parse("bpf"), None);
         assert_eq!(LinuxSyscall::parse(""), None);
         assert_eq!(LinuxSyscall::parse("WRITE"), None);
     }

@@ -5,7 +5,7 @@ description: Every code the Kira toolchain emits, by family, with what each one 
 
 {/* Generated from `crates/kira-diagnostic-messages/diagnostic-codes.tsv`. Run `cargo run -p kira-diagnostic-registry -- write` to refresh it. */}
 
-The toolchain emits 443 codes. A code is the stable part of a diagnostic: a message may be reworded, `KSEM107` will always be a use after move.
+The toolchain emits 444 codes. A code is the stable part of a diagnostic: a message may be reworded, `KSEM107` will always be a use after move.
 
 ## KLEX
 
@@ -532,6 +532,7 @@ The package's own linter, including lints written in Kira.
 | `KLINT001` | an enum variant written with the type it already belongs to |
 | `KLINT002` | a `while` counting an index by hand where a `for` says it |
 | `KLINT003` | a file past the line ceiling the package configured |
+| `KLINT004` | a zero-argument function returning a literal, where a module-scope `let` says it |
 
 ## KIC
 

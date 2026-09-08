@@ -324,10 +324,8 @@ construct StxoBorrowInLoop() extends Test {
     test {
         let v = StxoVec { x: 1, y: 2, z: 3 }
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             acc = acc + stxoVecSum(v)
-            i = i + 1
         }
         return acc
     }
@@ -477,10 +475,8 @@ construct StxoDoubleLoop5() extends Test {
     // v={1,1,1}, 5x double → v.x=2^5=32
     test {
         var v = StxoVec { x: 1, y: 1, z: 1 }
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             stxoDoubleVec(v)
-            i = i + 1
         }
         return v.x
     }
@@ -523,10 +519,8 @@ construct StxoScaleLoop3() extends Test {
     // v={1,2,3}, 3x scale(2): v.x = 1*2*2*2=8
     test {
         var v = StxoVec { x: 1, y: 2, z: 3 }
-        var i = 0
-        while i < 3 {
+        for i in 0..3 {
             stxoScaleVec(v, 2)
-            i = i + 1
         }
         return v.x
     }
