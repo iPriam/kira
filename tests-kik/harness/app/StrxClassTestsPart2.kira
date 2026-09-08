@@ -43,10 +43,8 @@ construct StrxClsVehicleLoop() extends Test {
     test {
         let v = StrxCVehicle()
         var acc = 0
-        var km = 0
-        while km < 5 {
+        for km in 0..5 {
             acc = acc + v.cost(km)
-            km = km + 1
         }
         return acc
     }
@@ -58,10 +56,8 @@ construct StrxClsCarLoop() extends Test {
     test {
         let c = StrxCCar()
         var acc = 0
-        var km = 0
-        while km < 5 {
+        for km in 0..5 {
             acc = acc + c.cost(km)
-            km = km + 1
         }
         return acc
     }
@@ -73,10 +69,8 @@ construct StrxClsTruckLoop() extends Test {
     test {
         let t = StrxCTruck()
         var acc = 0
-        var km = 0
-        while km < 5 {
+        for km in 0..5 {
             acc = acc + t.cost(km)
-            km = km + 1
         }
         return acc
     }
@@ -175,10 +169,8 @@ construct StrxClsCounterLoop() extends Test {
 construct StrxClsCounterReset() extends Test {
     test {
         var c = StrxCCounter()
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let _ = c.increment()
-            i = i + 1
         }
         let _ = c.reset()
         return c.getCount()
@@ -208,10 +200,8 @@ construct StrxClsSmartStep() extends Test {
 construct StrxClsSmartLoop5() extends Test {
     test {
         var sc = StrxCSmartCounter()
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let _ = sc.addStep()
-            i = i + 1
         }
         return sc.getCount()
     }
@@ -223,10 +213,8 @@ construct StrxClsSmartCustomStep() extends Test {
     test {
         var sc = StrxCSmartCounter()
         sc.step = 5
-        var i = 0
-        while i < 3 {
+        for i in 0..3 {
             let _ = sc.addStep()
-            i = i + 1
         }
         return sc.getCount()
     }
@@ -250,14 +238,12 @@ construct StrxClsSmartMixedOps() extends Test {
 construct StrxClsCounterMultiple() extends Test {
     test {
         var total = 0
-        var k = 0
-        while k < 5 {
+        for k in 0..5 {
             var c = StrxCCounter()
             let _ = c.increment()
             let _ = c.increment()
             let _ = c.increment()
             total = total + c.getCount()
-            k = k + 1
         }
         return total
     }
@@ -327,10 +313,8 @@ construct StrxClsLeafArr() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < leaves.count {
+        for j in 0..leaves.count {
             total = total + leaves[j].describe()
-            j = j + 1
         }
         return total
     }
@@ -373,10 +357,8 @@ construct StrxClsDeepArr() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < ds.count {
+        for j in 0..ds.count {
             total = total + ds[j].describe()
-            j = j + 1
         }
         return total
     }
@@ -418,12 +400,10 @@ construct StrxClsDeepMutDesc() extends Test {
 construct StrxClsNodeDescLoop() extends Test {
     test {
         var total = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             var n = StrxCNode()
             n.value = i
             total = total + n.describe()
-            i = i + 1
         }
         return total
     }

@@ -73,20 +73,14 @@ struct AggBag {
 
     function total() -> Int {
         var t = self.label
-        var i = 0
-        while i < self.xs.count {
+        for i in 0..self.xs.count {
             t = t + self.xs[i]
-            i = i + 1
         }
-        var j = 0
-        while j < self.ys.count {
+        for j in 0..self.ys.count {
             t = t + self.ys[j]
-            j = j + 1
         }
-        var k = 0
-        while k < self.zs.count {
+        for k in 0..self.zs.count {
             t = t + self.zs[k]
-            k = k + 1
         }
         return t
     }
@@ -300,10 +294,8 @@ function aggSection() -> Int {
         scale: 40
     }
     var copyRoot = origRoot
-    var ci = 0
-    while ci < 5 {
+    for ci in 0..5 {
         aggBumpRoot(copyRoot)
-        ci = ci + 1
     }
     acc = acc + origRoot.sum() + copyRoot.sum()
 

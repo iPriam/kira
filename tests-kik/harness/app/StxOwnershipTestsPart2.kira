@@ -197,12 +197,10 @@ construct StxoWrapUnwrapLoop() extends Test {
     // i=0..4: v={i,i,i}, wrap(i), unwrap=i+i+i+i=4i; total=0+4+8+12+16=40
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let v = StxoVec { x: i, y: i, z: i }
             let c = stxoWrap(move v, i)
             acc = acc + stxoUnwrap(move c)
-            i = i + 1
         }
         return acc
     }
@@ -317,12 +315,10 @@ construct StxoPipeAddLoop() extends Test {
     // i=0..4: v={i,i,i}, add(i)→{2i,2i,2i}, consume→6i; total=0+6+12+18+24=60
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let v = StxoVec { x: i, y: i, z: i }
             let w = stxoPipeAdd(move v, i)
             acc = acc + stxoConsumeVec(move w)
-            i = i + 1
         }
         return acc
     }
@@ -405,13 +401,11 @@ construct StxoCopyLoopIndep() extends Test {
     // i=0..4: copy v={i,i,i}, zero copy.x, acc += v.x=i; sum=0+1+2+3+4=10
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let v = StxoVec { x: i, y: i, z: i }
             var w = v
             w.x = 0
             acc = acc + v.x
-            i = i + 1
         }
         return acc
     }

@@ -125,8 +125,8 @@ pub fn lint(args: &[String]) -> i32 {
                 // does not is the same class of lie as claiming a clean run.
                 Some(0) => {
                     out!(
-                        "ok: {path} — no lint is enabled, so nothing was checked. \
-                         Enable one in `linter.kira` beside `package.kira`."
+                        "ok: {path} — every lint is allowed, so nothing was checked. \
+                         Raise one to `.Warn` in `linter.kira` beside `package.kira`."
                     );
                     EXIT_OK
                 }

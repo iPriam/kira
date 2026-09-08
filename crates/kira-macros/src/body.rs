@@ -65,16 +65,77 @@ pub(crate) struct Statement {
 /// question for the real frontend rather than something to report twice.
 pub(crate) fn statements_of(syntax: &str, at: Option<FileSpan>) -> Vec<Statement> {
     let parsed = kira_parser::parse(SourceId::new(0), syntax);
-    let Some(Item::Function(function)) = parsed.tree.items().first() else {
-        return Vec::new();
-    };
     let reader = Reader {
         tree: &parsed.tree,
         text: syntax,
         shared: Arc::from(syntax),
         at,
     };
-    reader.block(&function.body)
+    let Some(item) = parsed.tree.items().first() else {
+        return Vec::new();
+    };
+    // Every form that can hold statements, and not one form only.
+    //
+    // This answered for a function and returned nothing for everything else,
+    // which made every lint that walks statements silently inert outside a
+    // free function. It was not a small blind spot: the kik harness is written
+    // as constructs, so the structural lints ran over the corpus the compiler
+    // is judged against and reported nothing for as long as the corpus has
+    // existed — 48 manual index loops sat in it, each one the exact shape
+    // KLINT002 is written to find.
+    //
+    // A body is a body wherever it is written, so the answer is to enumerate
+    // the forms rather than to privilege one. Each contributes its members'
+    // bodies in written order, and a form with no statements in it —
+    // `type`, `distinct`, `import`, an enum's variants — contributes none
+    // because it has none, not because it was forgotten.
+    //
+    // `Unsupported` is deliberately empty as well: it is a declaration the
+    // parser recorded so semantics can refuse it precisely, and walking a body
+    // the compiler is about to reject would report lints against code that will
+    // never compile.
+    let bodies: Vec<&Block> = match item {
+        Item::Function(function) => vec![&function.body],
+        Item::Struct(declaration) => declaration
+            .methods
+            .iter()
+            .map(|method| &method.body)
+            .collect(),
+        Item::Class(declaration) => declaration
+            .methods
+            .iter()
+            .map(|method| &method.function.body)
+            .collect(),
+        Item::Construct(declaration) => declaration
+            .methods
+            .iter()
+            .map(|method| &method.function.body)
+            .chain(declaration.inits.iter().map(|init| &init.body))
+            .collect(),
+        Item::Extend(declaration) => declaration
+            .methods
+            .iter()
+            .map(|method| &method.body)
+            .collect(),
+        // A requirement carries an empty body that stands for the absence of
+        // one; only a written default has statements to walk.
+        Item::Trait(declaration) => declaration
+            .members
+            .iter()
+            .filter(|member| member.has_body)
+            .map(|member| &member.function.body)
+            .collect(),
+        Item::Enum(_)
+        | Item::TypeAlias(_)
+        | Item::Distinct(_)
+        | Item::Constant(_)
+        | Item::Import(_)
+        | Item::Unsupported(_) => Vec::new(),
+    };
+    bodies
+        .into_iter()
+        .flat_map(|body| reader.block(body))
+        .collect()
 }
 
 /// Walks one parsed body, carrying what every statement needs to describe
@@ -185,6 +246,62 @@ fn kind_of(stmt: &Stmt) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every declaration form that can hold statements reports them.
+    ///
+    /// One test over all of them, because the failure this guards against is a
+    /// form being *forgotten* rather than a form being read wrongly: reading
+    /// only functions made every structural lint silently inert everywhere
+    /// else, and nothing failed to say so.
+    #[test]
+    fn every_form_that_holds_statements_reports_them() {
+        let cases = [
+            ("function", "function f() {\n    let x = 1\n}\n"),
+            (
+                "struct",
+                "struct S {\n    var n: Int\n    function m() {\n        let x = 1\n    }\n}\n",
+            ),
+            (
+                "class",
+                "class C {\n    var n: Int\n    function m() {\n        let x = 1\n    }\n}\n",
+            ),
+            (
+                "construct",
+                "construct P() extends Test {\n    test {\n        let x = 1\n        return x\n    }\n}\n",
+            ),
+            (
+                "extend",
+                "extend S: T {\n    function m() {\n        let x = 1\n    }\n}\n",
+            ),
+            (
+                "trait default",
+                "trait T {\n    function required() -> Int\n    function m() -> Int {\n        let x = 1\n        return x\n    }\n}\n",
+            ),
+        ];
+        for (form, source) in cases {
+            let body = statements_of(source, None);
+            assert!(
+                body.iter().any(|statement| statement.kind == "let"),
+                "a {form} body reported no statements: {body:?}"
+            );
+        }
+    }
+
+    /// A form with no statements reports none, rather than reporting the
+    /// declaration's own tokens as though they were a body.
+    #[test]
+    fn a_form_without_statements_reports_none() {
+        for source in [
+            "enum E {\n    A\n    B\n}\n",
+            "distinct D = Int\n",
+            "type A = Int\n",
+        ] {
+            assert!(
+                statements_of(source, None).is_empty(),
+                "expected no statements from `{source}`"
+            );
+        }
+    }
 
     #[test]
     fn a_body_reports_its_statements_in_order() {

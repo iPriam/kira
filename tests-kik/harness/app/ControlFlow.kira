@@ -296,8 +296,7 @@ function cfFloatFold() -> Int {
 
     // Comparison ladder folded across a loop.
     var fv = 0.0
-    var i = 0
-    while i < 8 {
+    for i in 0..8 {
         fv = fv + 0.25
         if fv > 1.0 {
             acc = acc + 2
@@ -305,7 +304,6 @@ function cfFloatFold() -> Int {
         if fv == 2.0 {
             acc = acc + 11
         }
-        i = i + 1
     }
 
     // Negative float arithmetic (consistent for +/-/*).

@@ -238,8 +238,7 @@ construct CfxSwitchFoldModulo() extends Test {
 construct CfxSwitchManyArms() extends Test {
     test {
         var s = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             var v = 0
             if i == 0 {
                 v = 0
@@ -269,7 +268,6 @@ construct CfxSwitchManyArms() extends Test {
                 v = 0
             }
             s = s + v
-            i = i + 1
         }
         // sum of i^2 for i=0..11 = 0+1+4+9+16+25+36+49+64+81+100+121 = 506
         return s

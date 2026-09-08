@@ -258,10 +258,8 @@ construct OwxArrayStructElementsParity() extends Test {
         var total = 0
         while frame < 3 {
             let cells = owxBuild(4)
-            var i = 0
-            while i < cells.count {
+            for i in 0..cells.count {
                 total = total + cells[i].a + cells[i].b
-                i = i + 1
             }
             frame = frame + 1
         }

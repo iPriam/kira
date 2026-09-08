@@ -90,10 +90,8 @@ construct SgxConcatGreet() extends Test {
 construct SgxConcatLoopAccum() extends Test {
     test {
         var s = ""
-        var i = 0
-        while i < 4 {
+        for i in 0..4 {
             s = s + "ab"
-            i = i + 1
         }
         return s
     }
@@ -103,10 +101,8 @@ construct SgxConcatLoopAccum() extends Test {
 construct SgxConcatLoopEquality() extends Test {
     test {
         var s = ""
-        var i = 0
-        while i < 4 {
+        for i in 0..4 {
             s = s + "ab"
-            i = i + 1
         }
         return s == "abababab"
     }

@@ -188,10 +188,8 @@ construct ColxChurnStructs40() extends Test {
                 i = i + 1
             }
             var s = 0
-            var j = 0
-            while j < pts.count {
+            for j in 0..pts.count {
                 s = s + pts[j].x
-                j = j + 1
             }
             total = total + s
             round = round + 1

@@ -393,12 +393,10 @@ construct StrxBoxCopyIndep() extends Test {
 construct StrxBoxLoopBuild() extends Test {
     test {
         var total = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let nm = strxPk(i)
             let b = StrxBox { name: move nm, code: i }
             total = total + b.nameLen()
-            i = i + 1
         }
         return total
     }
@@ -409,12 +407,10 @@ construct StrxBoxLoopBuild() extends Test {
 construct StrxBoxLoopAcc() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             let nm = strxPk(i)
             let b = StrxBox { name: move nm, code: i }
             acc = acc + b.nameLen() + b.code
-            i = i + 1
         }
         return acc
     }

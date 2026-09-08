@@ -22,10 +22,8 @@ struct ColxARow {
 
     function rowSum() -> Int {
         var t = 0
-        var i = 0
-        while i < self.vals.count {
+        for i in 0..self.vals.count {
             t = t + self.vals[i]
-            i = i + 1
         }
         return t
     }
@@ -270,10 +268,8 @@ construct ColxAStatEvenOnly() extends Test {
 construct ColxAStatAccumLoop() extends Test {
     test {
         var stat = ColxAStat { count: 0, sum: 0, minVal: 0, maxVal: 0 }
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             colxaAccumStat(stat, i * 2 + 1)
-            i = i + 1
         }
         return stat.sum
     }

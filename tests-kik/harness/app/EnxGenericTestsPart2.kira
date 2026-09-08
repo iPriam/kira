@@ -18,10 +18,8 @@ construct EnxGRangeOk5() extends Test {
         var out = 0
         match r {
             Ok(xs) -> {
-                var i = 0
-                while i < xs.count {
+                for i in 0..xs.count {
                     out = out + xs[i]
-                    i = i + 1
                 }
             }
             Error(e) -> { out = enxGErrCode(e) }
@@ -38,10 +36,8 @@ construct EnxGRangeOk10() extends Test {
         var out = 0
         match r {
             Ok(xs) -> {
-                var i = 0
-                while i < xs.count {
+                for i in 0..xs.count {
                     out = out + xs[i]
-                    i = i + 1
                 }
             }
             Error(e) -> { out = enxGErrCode(e) }
@@ -103,10 +99,8 @@ construct EnxGRangeSumFold() extends Test {
             let r = enxGBuildRange(m)
             match r {
                 Ok(xs) -> {
-                    var i = 0
-                    while i < xs.count {
+                    for i in 0..xs.count {
                         total = total + xs[i]
-                        i = i + 1
                     }
                 }
                 Error(e) -> { total = total + enxGErrCode(e) }
@@ -298,10 +292,8 @@ construct EnxGSlotMixedFold() extends Test {
         slots.append(EnxGSlot { tag: 3, r: .Ok(20) })
         slots.append(EnxGSlot { tag: 4, r: .Error(.Empty) })
         var acc = 0
-        var j = 0
-        while j < slots.count {
+        for j in 0..slots.count {
             acc = acc + enxGSlotVal(slots[j])
-            j = j + 1
         }
         return acc
     }
@@ -331,10 +323,8 @@ construct EnxGResultArrayFold() extends Test {
             i = i + 1
         }
         var acc = 0
-        var j = 0
-        while j < results.count {
+        for j in 0..results.count {
             acc = acc + enxGResultIntVal(results[j])
-            j = j + 1
         }
         return acc
     }
@@ -352,10 +342,8 @@ construct EnxGResultArrayDivFold() extends Test {
             j = j + 1
         }
         var acc = 0
-        var k = 0
-        while k < results.count {
+        for k in 0..results.count {
             acc = acc + enxGResultIntVal(results[k])
-            k = k + 1
         }
         return acc
     }
@@ -374,10 +362,8 @@ construct EnxGResultArrayCountErrors() extends Test {
             i = i + 1
         }
         var errCount = 0
-        var j = 0
-        while j < results.count {
+        for j in 0..results.count {
             errCount = errCount + enxGIsError(results[j])
-            j = j + 1
         }
         return errCount
     }
@@ -418,10 +404,8 @@ construct EnxGCombineToneAndRange() extends Test {
         var rngSum = 0
         match rng {
             Ok(xs) -> {
-                var i = 0
-                while i < xs.count {
+                for i in 0..xs.count {
                     rngSum = rngSum + xs[i]
-                    i = i + 1
                 }
             }
             Error(e) -> { rngSum = enxGErrCode(e) }

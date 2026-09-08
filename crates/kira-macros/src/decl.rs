@@ -44,6 +44,13 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         },
         TokenKind::Function => (DeclarationKind::Function, head + 1),
         TokenKind::Distinct => (DeclarationKind::Distinct, head + 1),
+        TokenKind::Trait => (DeclarationKind::Trait, head + 1),
+        // `extend` is contextual — an ordinary identifier everywhere else — so
+        // it is recognised by text rather than by a token of its own, the same
+        // way the parser decides it.
+        TokenKind::Identifier if file.text_at(head) == "extend" => {
+            (DeclarationKind::Extend, head + 1)
+        }
         _ => (DeclarationKind::Other, head),
     };
     let name = if file.is_ident(name_index) {
@@ -83,7 +90,7 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
                 end = Some(index);
                 break;
             }
-            kind if index > head && starts_declaration(kind) => {
+            kind if index > head && starts_declaration(kind, file.text_at(index)) => {
                 end = Some(index);
                 break;
             }

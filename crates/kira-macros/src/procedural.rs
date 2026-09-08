@@ -114,7 +114,13 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
             | TokenKind::Enum
             | TokenKind::Construct
             | TokenKind::Distinct
+            | TokenKind::Trait
             | TokenKind::Function => {}
+            // `extend` is contextual: an ordinary identifier that begins a
+            // declaration only here. Matched by text, because every other
+            // identifier at file scope begins nothing and treating them alike
+            // would scan a declaration out of every stray name.
+            TokenKind::Identifier if file.text_at(index) == "extend" => {}
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 match file.match_close(index) {
                     Some(close) => index = close + 1,
@@ -728,6 +734,34 @@ pub(crate) fn expand_call(
                 );
                 None
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod top_level_tests {
+    use kira_source::SourceId;
+
+    use super::*;
+
+    /// Every declaration form a file can open with is found at file scope.
+    ///
+    /// `trait` and `extend` were absent, so a macro or lint walking a
+    /// program's declarations never saw one — the scan stopped at the keyword
+    /// and stepped past it a token at a time.
+    #[test]
+    fn top_level_finds_every_declaration_form() {
+        let source = concat!(
+            "trait T {\n    function m() -> Int {\n        return 1\n    }\n}\n",
+            "extend S: T {\n    function m() -> Int {\n        return 2\n    }\n}\n",
+            "struct S {\n    var n: Int\n}\n",
+            "function f() {\n    return\n}\n",
+        );
+        let file = Lexed::at(SourceId::new(0), source, "x.kira");
+        let found = top_level(&file);
+        let kinds: Vec<&str> = found.iter().map(|one| one.kind.variant()).collect();
+        for expected in ["Trait", "Extend", "Struct", "Function"] {
+            assert!(kinds.contains(&expected), "no {expected} found: {kinds:?}");
         }
     }
 }
