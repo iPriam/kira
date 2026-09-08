@@ -31,6 +31,13 @@ pub struct HttpClientConfig {
     pub pool_idle_timeout: Duration,
     /// Maximum number of idle connections retained for one host.
     pub pool_max_idle_per_host: usize,
+    /// DER trust anchors accepted in addition to the public roots.
+    ///
+    /// Empty is the ordinary case: an `https` URI is verified against the
+    /// compiled-in public roots. A caller adds an anchor to reach a server the
+    /// public set cannot vouch for — a loopback server's generated certificate,
+    /// or a private CA — without loosening anything else.
+    pub root_certificates: Vec<Vec<u8>>,
 }
 
 impl Default for HttpClientConfig {
@@ -41,6 +48,7 @@ impl Default for HttpClientConfig {
             max_response_body: 16 * 1024 * 1024,
             pool_idle_timeout: Duration::from_secs(30),
             pool_max_idle_per_host: 8,
+            root_certificates: Vec::new(),
         }
     }
 }
@@ -171,8 +179,17 @@ impl HttpResponse {
 /// A pooled HTTP/1.1 or HTTP/2 client with deadlines and cancellation.
 #[derive(Clone)]
 pub struct HttpClient {
-    inner: PooledClient<HttpConnector, Full<Bytes>>,
+    inner: PooledClient<HttpsConnector<HttpConnector>, Full<Bytes>>,
     config: HttpClientConfig,
+    /// This client's TLS configuration, built once and shared by every
+    /// connection it opens.
+    ///
+    /// Rebuilding it per connection copied the whole Mozilla anchor set each
+    /// time and, because a `ClientConfig` owns the session-resumption store,
+    /// gave every connection a private one — so resumption never applied and
+    /// each connection paid a full handshake. Both roots and ALPN are fixed for
+    /// the life of a client, so there is nothing per-connection to vary.
+    tls: Arc<rustls::ClientConfig>,
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -182,6 +199,33 @@ impl std::fmt::Debug for HttpClient {
             .field("config", &self.config)
             .finish_non_exhaustive()
     }
+}
+
+/// Wraps a cleartext connector in the TLS layer an `https` URI needs.
+///
+/// The ALPN offer is left to the connector builder, which sets it from the
+/// versions enabled below and refuses a configuration that arrived with one
+/// already chosen. Enabling exactly the configured version is what keeps the
+/// offer honest: a client told to speak HTTP/2 that also offered `http/1.1`
+/// would let a server downgrade it silently, and the caller asked a question
+/// about the protocol, not a preference.
+fn https_connector(
+    config: &HttpClientConfig,
+    http: HttpConnector,
+) -> Result<HttpsConnector<HttpConnector>, NetworkError> {
+    if config.version == HttpVersion::Http3 {
+        return Err(NetworkError::Unsupported);
+    }
+    let tls = tls::client_config(&config.root_certificates, &[])?;
+    let builder = HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        // An `http` URI keeps working: this connector serves both schemes, and
+        // which one a request gets is decided by the URI it names.
+        .https_or_http();
+    Ok(match config.version {
+        HttpVersion::Http2 => builder.enable_http2().wrap_connector(http),
+        _ => builder.enable_http1().wrap_connector(http),
+    })
 }
 
 impl HttpClient {
@@ -195,6 +239,10 @@ impl HttpClient {
         }
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);
+        // `enforce_http` off because the connector now sees `https` URIs too:
+        // left on, it refuses them before the TLS layer above it is ever asked.
+        connector.enforce_http(false);
+        let connector = https_connector(&config, connector)?;
         let mut builder = PooledClient::builder(TokioExecutor::new());
         builder
             .pool_timer(TokioTimer::new())
@@ -203,10 +251,49 @@ impl HttpClient {
         if config.version == HttpVersion::Http2 {
             builder.http2_only(true);
         }
+        let alpn: &[&[u8]] = match config.version {
+            HttpVersion::Http1 => &[tls::ALPN_HTTP1],
+            HttpVersion::Http2 => &[tls::ALPN_HTTP2],
+            HttpVersion::Http3 => return Err(NetworkError::Unsupported),
+        };
+        let tls = Arc::new(tls::client_config(&config.root_certificates, alpn)?);
         Ok(Self {
             inner: builder.build(connector),
             config,
+            tls,
         })
+    }
+
+    /// Opens the transport one streamed request needs.
+    ///
+    /// An HTTP/2 caller requires the peer to have selected `h2`: without ALPN
+    /// agreement the connection would carry HTTP/2 frames to a server that
+    /// announced nothing, and the failure would surface as a parse error on the
+    /// first response rather than as the handshake disagreement it is.
+    async fn connect_stream(
+        &self,
+        host: &str,
+        port: u16,
+        secure: bool,
+    ) -> Result<tls::ClientStream, NetworkError> {
+        if !secure {
+            let stream = TcpStream::connect((host, port))
+                .await
+                .map_err(|_| NetworkError::Connect)?;
+            return Ok(tls::ClientStream::Plain(stream));
+        }
+        let stream = tls::ClientStream::Tls(Box::new(
+            tls::connect(host, port, Arc::clone(&self.tls)).await?,
+        ));
+        let negotiated = stream.negotiated_protocol();
+        let agreed = match self.config.version {
+            HttpVersion::Http2 => negotiated == tls::ALPN_HTTP2,
+            _ => negotiated.is_empty() || negotiated == tls::ALPN_HTTP1,
+        };
+        if !agreed {
+            return Err(NetworkError::Protocol);
+        }
+        Ok(stream)
     }
 
     /// Sends a request using this client's configured timeout.
@@ -307,13 +394,11 @@ impl HttpClient {
         use hyper::client::conn::{http1, http2};
 
         let (method, uri, headers, buffered) = request.into_parts();
-        // This path connects with a plain `TcpStream` and speaks cleartext. An
-        // `https` URI would otherwise fall through the `unwrap_or(80)` below and
-        // be sent unencrypted: the caller asked for TLS and would get none, with
-        // nothing in the result to say so.
-        if uri.scheme_str() != Some("http") {
-            return Err(NetworkError::Unsupported);
-        }
+        let secure = match uri.scheme_str() {
+            Some("http") => false,
+            Some("https") => true,
+            _ => return Err(NetworkError::InvalidUri),
+        };
         // A request built with `with_body` and then sent through the streaming
         // path had its buffered bytes silently dropped. Carrying two bodies is a
         // configuration mistake rather than a question of which one wins.
@@ -322,11 +407,11 @@ impl HttpClient {
         }
         let authority = uri.authority().ok_or(NetworkError::InvalidUri)?;
         let host = authority.host();
-        let port = authority.port_u16().unwrap_or(80);
+        let port = authority
+            .port_u16()
+            .unwrap_or(if secure { 443 } else { 80 });
         let authority_text = authority.as_str().to_owned();
-        let stream = TcpStream::connect((host, port))
-            .await
-            .map_err(|_| NetworkError::Connect)?;
+        let stream = self.connect_stream(host, port, secure).await?;
         let body_stream = chunks
             .map(|chunk| Ok::<_, Infallible>(Frame::data(chunk)))
             .boxed();

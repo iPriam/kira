@@ -1,0 +1,531 @@
+// Reading JSON text into a `JsonValue`.
+//
+// Strict about the grammar RFC 8259 defines, because the text usually comes
+// from somewhere else and a parser that accepted more than the format would let
+// a document mean one thing here and another wherever it goes next: no trailing
+// commas, no comments, no unquoted names, no single quotes, no leading `+`, no
+// bare `.5`, and no control character inside a string that the format requires
+// escaped.
+//
+// Every refusal carries the byte offset it happened at. A parser that answered
+// only "malformed" would leave a caller holding a 700 KB response with nothing
+// to look at, which is the moment the offset is worth having.
+
+// Why a document could not be read.
+enum JsonFailure {
+    // The text ended in the middle of a value.
+    UnexpectedEnd
+    // A byte the grammar does not allow where it appeared.
+    UnexpectedCharacter
+    // Digits that do not spell a number: `01`, `1.`, `1e`, a lone `-`.
+    InvalidNumber
+    // A `\` followed by something that is not an escape.
+    InvalidEscape
+    // A string containing a raw control character, or a `\u` escape naming half
+    // a surrogate pair with no other half.
+    InvalidText
+    // A string with no closing quote.
+    UnterminatedText
+    // Nesting deeper than `jsonMaxDepth`.
+    DepthExceeded
+    // A complete value followed by something other than whitespace.
+    TrailingText
+}
+
+// A refusal, and where in the text it happened.
+struct JsonError {
+    let reason: JsonFailure
+    let at: Int
+}
+
+// How deep arrays and objects may nest.
+//
+// The reader recurses, so depth is stack: without a limit a document nested
+// deeply enough would exhaust it, and a program reading text off a network
+// would have a crash that its caller chose the input for. Well past what a
+// document written to be read ever reaches.
+function jsonMaxDepth() -> Int {
+    return 128
+}
+
+// Reads one document, or names where it stopped being one.
+function parseJson(text: borrow String) -> Result<JsonValue, JsonError> {
+    var reader = JsonReader {}
+    reader.data = text
+    reader.size = text.count
+    let value = reader.readDocument()
+    if reader.stopped {
+        return .Error(JsonError { reason = reader.reason, at = reader.errorAt })
+    }
+    return .Ok(value)
+}
+
+// A cursor over the text, and the first refusal it met.
+//
+// The failure is carried rather than returned because every read is written to
+// answer a `JsonValue`: a reader that returned a `Result` at each step would
+// spell the same match at every call site, and the caller of `parseJson` is the
+// only one that can do anything about it.
+class JsonReader {
+    var data: String = ""
+    // The text's length, read once. Every loop below tests the cursor against
+    // it, and asking the string for its length per byte is work the answer
+    // cannot change: the text does not grow while it is being read.
+    var size: Int = 0
+    var at: Int = 0
+    var depth: Int = 0
+    var stopped: Bool = false
+    var reason: JsonFailure = .UnexpectedEnd
+    var errorAt: Int = 0
+
+    // Records the first refusal. Later ones are consequences of it, and the
+    // offset a caller wants is where the text stopped making sense.
+    function fail(reason: JsonFailure, at: Int) {
+        if self.stopped {
+            return
+        }
+        self.stopped = true
+        self.reason = reason
+        self.errorAt = at
+        return
+    }
+
+    // The byte at the cursor, or `-1` at the end of the text.
+    function peek() -> Int {
+        if self.at >= self.size {
+            return 0 - 1
+        }
+        return Int(self.data.charAt(self.at))
+    }
+
+    function skipWhitespace() {
+        while self.at < self.size {
+            let byte = Int(self.data.charAt(self.at))
+            // Space, tab, newline, carriage return — the four the format allows
+            // between tokens, and nothing else.
+            if byte != 32 && byte != 9 && byte != 10 && byte != 13 {
+                return
+            }
+            self.at = self.at + 1
+        }
+        return
+    }
+
+    function readDocument() -> JsonValue {
+        self.skipWhitespace()
+        let value = self.readValue()
+        if self.stopped {
+            return .Null
+        }
+        self.skipWhitespace()
+        if self.at < self.size {
+            self.fail(.TrailingText, self.at)
+            return .Null
+        }
+        return value
+    }
+
+    function readValue() -> JsonValue {
+        let byte = self.peek()
+        if byte < 0 {
+            self.fail(.UnexpectedEnd, self.at)
+            return .Null
+        }
+        if byte == Int("{".charAt(0)) {
+            return self.readObject()
+        }
+        if byte == Int("[".charAt(0)) {
+            return self.readArray()
+        }
+        if byte == Int("\"".charAt(0)) {
+            let text = self.readText()
+            if self.stopped {
+                return .Null
+            }
+            return .Text(text)
+        }
+        if byte == Int("t".charAt(0)) {
+            if self.readKeyword("true") {
+                return .Boolean(true)
+            }
+            return .Null
+        }
+        if byte == Int("f".charAt(0)) {
+            if self.readKeyword("false") {
+                return .Boolean(false)
+            }
+            return .Null
+        }
+        if byte == Int("n".charAt(0)) {
+            if self.readKeyword("null") {
+                return .Null
+            }
+            return .Null
+        }
+        if byte == Int("-".charAt(0)) || (byte >= 48 && byte <= 57) {
+            return self.readNumber()
+        }
+        self.fail(.UnexpectedCharacter, self.at)
+        return .Null
+    }
+
+    // Consumes `word` whole, or refuses at the byte that broke it.
+    function readKeyword(word: borrow String) -> Bool {
+        let stop = self.at + word.count
+        if stop > self.size {
+            self.fail(.UnexpectedEnd, self.size)
+            return false
+        }
+        // Byte by byte rather than one substring comparison, so that the
+        // offset reported is the one that broke the keyword. Comparing the
+        // whole word can only say that it did not match, and answering `at`
+        // for every failure points at the `t` of `trxe` rather than the `x`.
+        var index = 0
+        while index < word.count {
+            if self.data.charAt(self.at + index) != word.charAt(index) {
+                self.fail(.UnexpectedCharacter, self.at + index)
+                return false
+            }
+            index = index + 1
+        }
+        self.at = stop
+        return true
+    }
+
+    function readArray() -> JsonValue {
+        self.depth = self.depth + 1
+        if self.depth > jsonMaxDepth() {
+            self.fail(.DepthExceeded, self.at)
+            return .Null
+        }
+        // Past the '['.
+        self.at = self.at + 1
+        var items: [JsonValue] = []
+        self.skipWhitespace()
+        if self.peek() == Int("]".charAt(0)) {
+            self.at = self.at + 1
+            self.depth = self.depth - 1
+            return .Array(move items)
+        }
+        var reading = true
+        while reading {
+            self.skipWhitespace()
+            let item = self.readValue()
+            if self.stopped {
+                return .Null
+            }
+            items.append(item)
+            self.skipWhitespace()
+            let byte = self.peek()
+            if byte == Int(",".charAt(0)) {
+                self.at = self.at + 1
+            } else {
+                if byte == Int("]".charAt(0)) {
+                    self.at = self.at + 1
+                    reading = false
+                } else {
+                    if byte < 0 {
+                        self.fail(.UnexpectedEnd, self.at)
+                    } else {
+                        self.fail(.UnexpectedCharacter, self.at)
+                    }
+                    return .Null
+                }
+            }
+        }
+        self.depth = self.depth - 1
+        return .Array(move items)
+    }
+
+    function readObject() -> JsonValue {
+        self.depth = self.depth + 1
+        if self.depth > jsonMaxDepth() {
+            self.fail(.DepthExceeded, self.at)
+            return .Null
+        }
+        // Past the '{'.
+        self.at = self.at + 1
+        var members: [JsonMember] = []
+        self.skipWhitespace()
+        if self.peek() == Int("}".charAt(0)) {
+            self.at = self.at + 1
+            self.depth = self.depth - 1
+            return .Object(move members)
+        }
+        var reading = true
+        while reading {
+            self.skipWhitespace()
+            if self.peek() != Int("\"".charAt(0)) {
+                if self.peek() < 0 {
+                    self.fail(.UnexpectedEnd, self.at)
+                } else {
+                    self.fail(.UnexpectedCharacter, self.at)
+                }
+                return .Null
+            }
+            let name = self.readText()
+            if self.stopped {
+                return .Null
+            }
+            self.skipWhitespace()
+            if self.peek() != Int(":".charAt(0)) {
+                if self.peek() < 0 {
+                    self.fail(.UnexpectedEnd, self.at)
+                } else {
+                    self.fail(.UnexpectedCharacter, self.at)
+                }
+                return .Null
+            }
+            self.at = self.at + 1
+            self.skipWhitespace()
+            let value = self.readValue()
+            if self.stopped {
+                return .Null
+            }
+            members.append(JsonMember { name = name, value = value })
+            self.skipWhitespace()
+            let byte = self.peek()
+            if byte == Int(",".charAt(0)) {
+                self.at = self.at + 1
+            } else {
+                if byte == Int("}".charAt(0)) {
+                    self.at = self.at + 1
+                    reading = false
+                } else {
+                    if byte < 0 {
+                        self.fail(.UnexpectedEnd, self.at)
+                    } else {
+                        self.fail(.UnexpectedCharacter, self.at)
+                    }
+                    return .Null
+                }
+            }
+        }
+        self.depth = self.depth - 1
+        return .Object(move members)
+    }
+
+    // Reads a quoted string, starting at its opening quote.
+    //
+    // Bytes between escapes are copied as a run rather than one at a time, so
+    // text that carries no escape — which is most of it — costs one copy per
+    // string instead of one per byte, and multi-byte UTF-8 crosses untouched
+    // because nothing here looks inside it.
+    function readText() -> String {
+        let quote = Int("\"".charAt(0))
+        let backslash = Int("\\".charAt(0))
+        // Past the opening quote.
+        self.at = self.at + 1
+        var out = ""
+        var runStart = self.at
+        while self.at < self.size {
+            let byte = Int(self.data.charAt(self.at))
+            if byte == quote {
+                out = out + self.data.substring(runStart, self.at)
+                self.at = self.at + 1
+                return out
+            }
+            if byte == backslash {
+                out = out + self.data.substring(runStart, self.at)
+                self.at = self.at + 1
+                out = out + self.readEscape()
+                if self.stopped {
+                    return ""
+                }
+                runStart = self.at
+            } else {
+                if byte < 32 {
+                    self.fail(.InvalidText, self.at)
+                    return ""
+                }
+                self.at = self.at + 1
+            }
+        }
+        self.fail(.UnterminatedText, self.size)
+        return ""
+    }
+
+    // Reads what follows a `\`, with the cursor on it.
+    function readEscape() -> String {
+        if self.at >= self.size {
+            self.fail(.InvalidEscape, self.size)
+            return ""
+        }
+        let byte = Int(self.data.charAt(self.at))
+        let escapeAt = self.at
+        self.at = self.at + 1
+        if byte == Int("\"".charAt(0)) {
+            return "\""
+        }
+        if byte == Int("\\".charAt(0)) {
+            return "\\"
+        }
+        if byte == Int("/".charAt(0)) {
+            return "/"
+        }
+        if byte == Int("b".charAt(0)) {
+            return scalarText(8)
+        }
+        if byte == Int("f".charAt(0)) {
+            return scalarText(12)
+        }
+        if byte == Int("n".charAt(0)) {
+            return "\n"
+        }
+        if byte == Int("r".charAt(0)) {
+            return "\r"
+        }
+        if byte == Int("t".charAt(0)) {
+            return "\t"
+        }
+        if byte == Int("u".charAt(0)) {
+            return self.readUnicodeEscape(escapeAt)
+        }
+        self.fail(.InvalidEscape, escapeAt)
+        return ""
+    }
+
+    // Reads the four hex digits of a `\u`, and the second escape when the first
+    // named the high half of a surrogate pair.
+    //
+    // A pair is how the format spells a scalar above U+FFFF, so the two halves
+    // are one character and are read together. Half a pair on its own is not a
+    // character at all, and passing it through would build a `String` that is
+    // not UTF-8.
+    function readUnicodeEscape(escapeAt: Int) -> String {
+        let first = self.readHexQuad(escapeAt)
+        if self.stopped {
+            return ""
+        }
+        if first >= 55296 && first <= 56319 {
+            let backslash = Int("\\".charAt(0))
+            if self.at + 1 >= self.size {
+                self.fail(.InvalidText, escapeAt)
+                return ""
+            }
+            if Int(self.data.charAt(self.at)) != backslash
+                || Int(self.data.charAt(self.at + 1)) != Int("u".charAt(0)) {
+                self.fail(.InvalidText, escapeAt)
+                return ""
+            }
+            self.at = self.at + 2
+            let second = self.readHexQuad(escapeAt)
+            if self.stopped {
+                return ""
+            }
+            if second < 56320 || second > 57343 {
+                self.fail(.InvalidText, escapeAt)
+                return ""
+            }
+            return scalarText(65536 + ((first - 55296) * 1024) + (second - 56320))
+        }
+        // The low half with no high half before it names nothing.
+        if first >= 56320 && first <= 57343 {
+            self.fail(.InvalidText, escapeAt)
+            return ""
+        }
+        return scalarText(first)
+    }
+
+    // Four hex digits, with the cursor on the first.
+    function readHexQuad(escapeAt: Int) -> Int {
+        if self.at + 4 > self.size {
+            self.fail(.InvalidEscape, escapeAt)
+            return 0
+        }
+        var value = 0
+        var index = 0
+        while index < 4 {
+            let digit = jsonHexValue(Int(self.data.charAt(self.at + index)))
+            if digit < 0 {
+                self.fail(.InvalidEscape, self.at + index)
+                return 0
+            }
+            value = value * 16 + digit
+            index = index + 1
+        }
+        self.at = self.at + 4
+        return value
+    }
+
+    // Reads a number literal, with the cursor on its first byte.
+    function readNumber() -> JsonValue {
+        let start = self.at
+        var negative = false
+        if self.peek() == Int("-".charAt(0)) {
+            negative = true
+            self.at = self.at + 1
+        }
+        let integerStart = self.at
+        if !self.readDigits() {
+            self.fail(.InvalidNumber, start)
+            return .Null
+        }
+        // A leading zero may not be followed by another digit: `01` is two
+        // tokens in the format, not the number one.
+        if self.at - integerStart > 1 && Int(self.data.charAt(integerStart)) == 48 {
+            self.fail(.InvalidNumber, integerStart)
+            return .Null
+        }
+        var fractionDigits = 0
+        var hasFraction = false
+        if self.peek() == Int(".".charAt(0)) {
+            hasFraction = true
+            self.at = self.at + 1
+            let fractionStart = self.at
+            if !self.readDigits() {
+                self.fail(.InvalidNumber, start)
+                return .Null
+            }
+            fractionDigits = self.at - fractionStart
+        }
+        var exponent = 0
+        var hasExponent = false
+        let lowerE = Int("e".charAt(0))
+        let upperE = Int("E".charAt(0))
+        if self.peek() == lowerE || self.peek() == upperE {
+            hasExponent = true
+            self.at = self.at + 1
+            var exponentNegative = false
+            if self.peek() == Int("-".charAt(0)) {
+                exponentNegative = true
+                self.at = self.at + 1
+            } else {
+                if self.peek() == Int("+".charAt(0)) {
+                    self.at = self.at + 1
+                }
+            }
+            let exponentStart = self.at
+            if !self.readDigits() {
+                self.fail(.InvalidNumber, start)
+                return .Null
+            }
+            exponent = jsonDigitsToInt(self.data, exponentStart, self.at)
+            if exponentNegative {
+                exponent = 0 - exponent
+            }
+        }
+        let text = self.data.substring(start, self.at)
+        if !hasFraction && !hasExponent {
+            let whole = jsonWholeNumber(text)
+            match whole {
+                Some(value) -> return .Integer(value)
+                None -> { }
+            }
+        }
+        return .Number(jsonDecimalToFloat(text, negative, fractionDigits, exponent))
+    }
+
+    // One or more digits, answering whether there was at least one.
+    function readDigits() -> Bool {
+        let first = self.at
+        while self.at < self.size {
+            let byte = Int(self.data.charAt(self.at))
+            if byte < 48 || byte > 57 {
+                return self.at > first
+            }
+            self.at = self.at + 1
+        }
+        return self.at > first
+    }
+}

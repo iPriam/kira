@@ -1,0 +1,129 @@
+// The HTTP seam this pipeline stands on.
+//
+// `kira-network` schedules the socket work on Tokio and hands back an operation
+// handle; nothing here blocks the Kira task while that runs. Every declaration
+// below is one C symbol, and the two functions at the bottom are the only shape
+// the rest of the program needs: send a request, get an answer back.
+
+import Foundation
+
+@FFI.Extern { library: kira_network, symbol: kira_network_https_server, abi: c }
+function httpsServer() -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_server_port, abi: c }
+function serverPort(handle: Int) -> Int
+
+@FFI.Extern { library: kira_network, symbol: kira_network_request_new, abi: c }
+function requestNew(method: CString, url: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_header, abi: c }
+function requestHeader(request: Int, name: CString, value: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_body_text, abi: c }
+function requestBodyText(request: Int, text: CString) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_timeout_ms, abi: c }
+function requestTimeoutMs(request: Int, milliseconds: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_trust_loopback, abi: c }
+function requestTrustLoopback(request: Int, port: U16) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_send, abi: c }
+function requestSend(request: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_discard, abi: c }
+function requestDiscard(request: Int)
+
+@FFI.Extern { library: kira_network, symbol: kira_network_poll, abi: c }
+function networkPoll(handle: Int) -> I32
+@FFI.Extern { library: kira_network, symbol: kira_network_result, abi: c }
+function networkResult(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_close, abi: c }
+function networkClose(handle: Int)
+
+@FFI.Extern { library: kira_network, symbol: kira_network_response_select_body, abi: c }
+function responseSelectBody(handle: Int) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_response_read_scalar, abi: c }
+function responseReadScalar(handle: Int) -> Int
+
+// One header a request carries.
+struct HttpHeader {
+    let name: String
+    let value: String
+}
+
+// What a request came back with.
+//
+// `status` is the HTTP status when one arrived, and `code` is the library's own
+// negative code when nothing did — a connection refused, a certificate that
+// verified against nothing, a deadline. Keeping the two apart is the difference
+// between "the service said no" and "the service was never reached", which are
+// different things to do about.
+struct HttpAnswer {
+    let status: Int
+    let code: Int
+    let body: String
+}
+
+// Sends one request and waits for its answer, yielding while it is in flight.
+//
+// `trustPort` is a loopback server's port whose generated certificate this
+// request should accept, or 0 for the ordinary case where the public roots
+// decide.
+function httpSend(
+    method: borrow String,
+    url: borrow String,
+    headers: borrow [HttpHeader],
+    body: borrow String,
+    timeoutMs: Int,
+    trustPort: Int
+) -> HttpAnswer {
+    let request = requestNew(method, url)
+    if request <= 0 {
+        return HttpAnswer { status = 0, code = request, body = "" }
+    }
+    var configured = requestTimeoutMs(request, timeoutMs)
+    if configured >= 0 && trustPort > 0 {
+        configured = requestTrustLoopback(request, U16(trustPort))
+    }
+    var index = 0
+    while configured >= 0 && index < headers.count {
+        configured = requestHeader(request, headers[index].name, headers[index].value)
+        index = index + 1
+    }
+    if configured >= 0 && body != "" {
+        configured = requestBodyText(request, body)
+    }
+    if configured < 0 {
+        requestDiscard(request)
+        return HttpAnswer { status = 0, code = configured, body = "" }
+    }
+    let operation = requestSend(request)
+    if operation <= 0 {
+        return HttpAnswer { status = 0, code = operation, body = "" }
+    }
+    // Polling is a yield point, so the scheduler keeps running whatever else
+    // this program has while Tokio drives the socket.
+    var state = networkPoll(operation)
+    while state == 0 {
+        taskYield()
+        state = networkPoll(operation)
+    }
+    let result = networkResult(operation)
+    if result < 0 {
+        networkClose(operation)
+        return HttpAnswer { status = 0, code = result, body = "" }
+    }
+    responseSelectBody(operation)
+    let text = httpReadText(operation)
+    networkClose(operation)
+    return HttpAnswer { status = result, code = 0, body = text }
+}
+
+// The selected response part as text.
+//
+// The C surface returns scalars, so the text is rebuilt here: `scalarText`
+// turns each code point back into a `String`, which is the one direction text
+// crosses a boundary that returns `int64_t`.
+function httpReadText(handle: Int) -> String {
+    var text = ""
+    var scalar = responseReadScalar(handle)
+    while scalar >= 0 {
+        text = text + scalarText(scalar)
+        scalar = responseReadScalar(handle)
+    }
+    return text
+}

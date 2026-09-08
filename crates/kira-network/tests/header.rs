@@ -1,36 +1,51 @@
-#[test]
-fn public_header_contains_the_complete_c_abi() {
-    let header = include_str!("../include/kira_network.h");
+//! The public header is the C ABI's declaration of itself, so it is checked
+//! against the exports rather than against a list someone maintains beside
+//! them: a symbol added to the library and not to the header is a symbol every
+//! C and Kira caller has to declare by hand.
 
-    for symbol in [
-        "kira_network_http1_server",
-        "kira_network_http1_client",
-        "kira_network_http2_server",
-        "kira_network_http2_client",
-        "kira_network_http3_server",
-        "kira_network_http3_client",
-        "kira_network_websocket_server",
-        "kira_network_websocket_client",
-        "kira_network_io_roundtrip",
-        "kira_network_server_port",
-        "kira_network_poll",
-        "kira_network_result",
-        "kira_network_cancel",
-        "kira_network_close",
-    ] {
+use kira_network::NetworkError;
+
+const HEADER: &str = include_str!("../include/kira_network.h");
+const LIBRARY: &str = include_str!("../src/lib.rs");
+
+/// The name of every `extern "C"` function the library exports.
+fn exported_symbols() -> Vec<&'static str> {
+    LIBRARY
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let rest = line
+                .strip_prefix("pub extern \"C\" fn ")
+                .or_else(|| line.strip_prefix("pub unsafe extern \"C\" fn "))?;
+            rest.split('(').next()
+        })
+        .collect()
+}
+
+#[test]
+fn public_header_declares_every_exported_symbol() {
+    let symbols = exported_symbols();
+    assert!(
+        symbols.len() >= 30,
+        "found only {} exported symbols, so the scan is not reading the library",
+        symbols.len()
+    );
+
+    for symbol in symbols {
         assert!(
-            header.contains(symbol),
-            "missing {symbol} from public header"
+            HEADER.contains(symbol),
+            "missing {symbol} from the public header"
         );
     }
+}
 
-    for code in [
-        "KIRA_NETWORK_ERROR_RUNTIME_INIT (-100)",
-        "KIRA_NETWORK_ERROR_UNKNOWN_HANDLE (-101)",
-        "KIRA_NETWORK_ERROR_TIMEOUT (-110)",
-        "KIRA_NETWORK_ERROR_CANCELED (-111)",
-        "KIRA_NETWORK_ERROR_INVALID_CONFIG (-116)",
-    ] {
-        assert!(header.contains(code), "missing {code} from public header");
+#[test]
+fn public_header_defines_a_constant_for_every_error() {
+    for error in NetworkError::ALL {
+        let code = format!("({})", error.code());
+        assert!(
+            HEADER.contains(&code),
+            "missing the constant for {error} ({code}) from the public header"
+        );
     }
 }

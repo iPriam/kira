@@ -1,0 +1,110 @@
+---
+title: JSON
+description: Reading JSON into a value, asking it questions without trapping, the integer and number split, where a refusal happened, and writing a value back out.
+---
+
+`Json/` reads JSON text into a `JsonValue` and writes one back out.
+
+```kira
+match parseJson(body) {
+    Ok(document) -> {
+        let content = jsonText(jsonField(jsonField(document, "message"), "content"), "")
+        printLine(content)
+    }
+    Error(problem) -> { printLine("not JSON at byte " + String(problem.at)) }
+}
+```
+
+## The Value
+
+```kira
+enum JsonValue {
+    Null
+    Boolean(Bool)
+    Integer(Int)
+    Number(Float)
+    Text(String)
+    Array([JsonValue])
+    Object([JsonMember])
+}
+
+struct JsonMember {
+    let name: String
+    let value: JsonValue
+}
+```
+
+An object is a **list of members**, not a map, because that is what JSON is: names may repeat, and they have the order the document chose. Keeping both is what lets a document be read, changed in one place, and written back out as the same document everywhere else.
+
+## Integers and Numbers
+
+JSON has one number type and Kira has two, so the split follows how the literal was written. A number with no fraction and no exponent that fits an `Int` reads as `Integer`; everything else reads as `Number`.
+
+`jsonInt` and `jsonFloat` each accept both, so a caller never has to know which one arrived. A service that starts writing `3.0` where it wrote `3` has not changed what it means, and `jsonInt` still answers `3`. A value that is fractional, or past `Int`'s range, has no whole number to answer with, and `jsonInt` gives the fallback rather than truncating.
+
+A literal with fifteen or fewer significant digits at an ordinary scale converts to the value it names, exactly. Past that it converts to the nearest `Float`, within a unit in the last place.
+
+## Asking a Document Questions
+
+Every accessor is total. An absent name, an index past the end, and a value of the wrong shape all answer — none of them traps. JSON arrives from somewhere else, and a reader that trapped on a surprise would turn a remote schema change into a crash in a program that could have carried on.
+
+| Written | Answers |
+| --- | --- |
+| `jsonField(value, name)` | The member named `name`, or `Null`. The **last** one, when a document repeats a name. |
+| `jsonAt(value, index)` | The array element, or the object member's value by position; `Null` past the end. |
+| `jsonHas(value, name)` | Whether the object carries that member at all. |
+| `jsonNames(value)` | Every member name, in document order, repeats kept. |
+| `jsonCount(value)` | Elements in an array, members in an object, `0` for anything else. |
+| `jsonBool` / `jsonInt` / `jsonFloat` / `jsonText` | The value, or the fallback the caller passed. |
+| `jsonIsNull(value)` | Whether this is `null`. |
+
+`jsonHas` and `jsonIsNull` are separate questions on purpose: a member set to `null` and a member that was never written both read as `Null`, and to a caller deciding whether to fill in a default those are opposite answers.
+
+## Failure
+
+`parseJson` answers `Result<JsonValue, JsonError>`, and a `JsonError` carries the byte offset it stopped at as well as the reason. A parser that answered only "malformed" would leave a caller holding a 700 KB response with nothing to look at.
+
+| Variant | Means |
+| --- | --- |
+| `UnexpectedEnd` | The text ended in the middle of a value. |
+| `UnexpectedCharacter` | A byte the grammar does not allow where it appeared. |
+| `InvalidNumber` | Digits that do not spell a number: `01`, `1.`, `1e`, a lone `-`. |
+| `InvalidEscape` | A `\` followed by something that is not an escape. |
+| `InvalidText` | A raw control character in a string, or a `\u` naming half a surrogate pair with no other half. |
+| `UnterminatedText` | A string with no closing quote. |
+| `DepthExceeded` | Arrays or objects nested deeper than `jsonMaxDepth()`. |
+| `TrailingText` | A complete value followed by something other than whitespace. |
+
+## What Is Refused
+
+The grammar RFC 8259 defines, and nothing beyond it: no trailing commas, no comments, no unquoted or single-quoted names, no leading `+`, no bare `.5`, and no control character inside a string that the format requires escaped. Text that arrived from elsewhere is going somewhere else too, and a parser that accepted more than the format would let a document mean one thing here and another wherever it goes next.
+
+Nesting is bounded by `jsonMaxDepth()`. The reader recurses, so depth is stack, and a document nested deeply enough would exhaust it — a crash whose input the caller did not choose.
+
+## Writing
+
+`writeJson` produces compact text; `writeJsonPretty` indents two spaces per level, one element to a line, for a document a person is going to read.
+
+Both write members in the order the value holds them. Sorting would be a second opinion about a document somebody else wrote, and a signature computed over the text would stop matching.
+
+Only what the format requires is escaped, so a multi-byte scalar stays as itself rather than becoming a `\u` pair three times its length. A `Float` that is infinite or not a number is written `null`: JSON has no spelling for either, and losing every other member over one field would be the worse answer.
+
+Text written by `writeJson` reads back as the value it was given, for every finite number. A whole `Number` is written with a trailing `.0` to keep it one — `3` and `3.0` are different values, and a document that lost the difference on the way out would not read back as what it held. The exception is the one above: an infinity or a NaN is written `null` and reads back as `Null`, because JSON has no spelling to return it to.
+
+## Reading a Response
+
+The bytes of an HTTP response are a `String` like any other, so a body arrives at `parseJson` directly:
+
+```kira
+match parseJson(responseText(operation)) {
+    Ok(document) -> {
+        let choices = jsonField(document, "choices")
+        var index = 0
+        while index < jsonCount(choices) {
+            printLine(jsonText(jsonField(jsonAt(choices, index), "text"), ""))
+            index = index + 1
+        }
+    }
+    Error(problem) -> { printLine(String(problem.at)) }
+}
+```

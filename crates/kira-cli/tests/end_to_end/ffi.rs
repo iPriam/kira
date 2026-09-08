@@ -128,6 +128,106 @@ fn a_vm_run_calls_c_through_direct_libffi_bindings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Builds `libffifixture.a` under `dir` from one function answering `answer`.
+fn build_probe_archive(dir: &Path, answer: i32) {
+    let llvm = kira_toolchain::discover(None).expect("the managed LLVM is present");
+    let lib = dir.join("NativeLibs/lib");
+    std::fs::create_dir_all(&lib).expect("native-lib directory");
+    let source = lib.join("probe.c");
+    std::fs::write(
+        &source,
+        format!("int ffi_cache_probe(void) {{ return {answer}; }}\n"),
+    )
+    .expect("probe source");
+    let object = lib.join("probe.o");
+    let compile = Command::new(llvm.clang())
+        .args(["-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("clang runs");
+    assert!(
+        compile.status.success(),
+        "compiling the probe failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let archive = lib.join("libffifixture.a");
+    let _ = std::fs::remove_file(&archive);
+    let ar = Command::new(llvm.llvm_ar())
+        .arg("crs")
+        .arg(&archive)
+        .arg(&object)
+        .output()
+        .expect("llvm-ar runs");
+    assert!(
+        ar.status.success(),
+        "archiving the probe failed: {}",
+        String::from_utf8_lossy(&ar.stderr)
+    );
+}
+
+/// A rebuilt archive reaches a hybrid program that already ran once.
+///
+/// The hybrid engine reuses its native half when the crossing surface is
+/// unchanged, and the archive is linked *into* that half — so a key made of the
+/// paths alone let a program keep answering with the C it was first built
+/// against. That is the workflow both FFI examples document: build the archive,
+/// run, change the C, build again, run. The VM and native engines read the
+/// archive on every run and never had the question.
+#[test]
+fn a_rebuilt_archive_reaches_a_hybrid_program_that_already_ran() {
+    let dir = scratch("archive-rebuild");
+    build_probe_archive(&dir, 1);
+    std::fs::write(
+        dir.join("package.kira"),
+        "Package FfiRebuild {\n    let allowThinFfiShim = true\n}\n",
+    )
+    .expect("package manifest");
+    std::fs::write(dir.join("NativeLibs/ffifixture.toml"), HOST_MANIFEST).expect("manifest");
+    let entry = dir.join("main.kira");
+    std::fs::write(
+        &entry,
+        "@FFI.Extern { library: ffifixture, symbol: ffi_cache_probe, abi: c }\n\
+         function probe() -> I32\n\
+         \n\
+         @Main function main() {\n\
+         \x20   print(probe())\n\
+         \x20   return\n\
+         }\n",
+    )
+    .expect("program");
+
+    let first = run(&["run", "--backend", "hybrid", entry.to_str().unwrap()]);
+    assert!(
+        first.status.success(),
+        "the first hybrid run did not exit successfully\nstderr: {}",
+        String::from_utf8_lossy(&first.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&first.stdout),
+        "1\n",
+        "the first hybrid run did not reach the archive\nstderr: {}",
+        String::from_utf8_lossy(&first.stderr),
+    );
+
+    build_probe_archive(&dir, 2);
+    let second = run(&["run", "--backend", "hybrid", entry.to_str().unwrap()]);
+
+    assert!(
+        second.status.success(),
+        "the second hybrid run did not exit successfully\nstderr: {}",
+        String::from_utf8_lossy(&second.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        "2\n",
+        "the hybrid engine kept the archive it first linked\nstderr: {}",
+        String::from_utf8_lossy(&second.stderr),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn an_undeclared_native_library_is_a_typed_diagnostic() {
     // The program declares `@FFI.Extern` imports naming `ffifixture`, but the

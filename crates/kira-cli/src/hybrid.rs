@@ -257,14 +257,81 @@ fn native_surface_key(
     sanitize: kira_llvm_backend::Sanitize,
 ) -> String {
     format!(
-        "kira-vm-native-surface-v3\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}\nsanitize={:?}",
+        "kira-vm-native-surface-v4\nruntime-abi={}\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}\nlinked={}\nsanitize={:?}",
         kira_runtime_abi::RUNTIME_ABI_MARKER,
         program.foreign_imports,
         program.foreign_aggregates,
         program.foreign_callbacks,
         foreign_link,
+        linked_files_key(foreign_link),
         sanitize,
     )
+}
+
+/// What the linked files *are*, beside where they are.
+///
+/// The archives are linked **into** the reused half, so a rebuilt one changes
+/// what that half does while every path in the key stays the same. Without this
+/// a program kept running the library it was first built against: the workflow
+/// both FFI examples document — build the archive, run, change the C, build
+/// again, run — silently answered with the old code on the hybrid engine while
+/// the VM and native engines answered with the new.
+///
+/// Contents rather than size and modification time.
+///
+/// The cheaper key was wrong in a way that produced a wrong *answer* rather
+/// than a slow one: an archive replaced by different bytes of the same length,
+/// with its mtime preserved, left the key unchanged and the hybrid backend
+/// silently reused the native half built from the old contents. A
+/// metadata-preserving copy does exactly that, and so does any filesystem whose
+/// timestamp granularity is coarser than the gap between two builds.
+///
+/// Hashed in chunks because these archives are tens of megabytes and this runs
+/// on every hybrid build; the read is sequential and the hash is not
+/// cryptographic, because the question is whether the bytes changed by
+/// accident, not whether someone forged them.
+fn linked_files_key(foreign_link: &NativeLinkInputs) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let archives = foreign_link.archives().iter();
+    let statics = foreign_link
+        .static_archives()
+        .iter()
+        .map(|(_, path)| path)
+        .chain(foreign_link.library_paths().iter().map(|(_, path)| path));
+    for path in archives.chain(statics) {
+        parts.push(match file_digest(path) {
+            Some((length, digest)) => format!("{}:{length}:{digest:016x}", path.display()),
+            // A path with nothing behind it is still part of the key: the file
+            // appearing later has to count as a change.
+            None => format!("{}:absent", path.display()),
+        });
+    }
+    parts.join(",")
+}
+
+/// One file's length and a hash of its contents, or `None` when it cannot be
+/// read.
+///
+/// A read that fails part way is `None` rather than a partial digest: a key
+/// derived from half a file would be stable while the file was not, which is
+/// the failure this whole function exists to avoid.
+fn file_digest(path: &Path) -> Option<(u64, u64)> {
+    use std::hash::{Hash, Hasher};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut length: u64 = 0;
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        buffer[..read].hash(&mut hasher);
+        length += read as u64;
+    }
+    Some((length, hasher.finish()))
 }
 
 /// Builds a hybrid bundle and runs it, returning the program's exit code.

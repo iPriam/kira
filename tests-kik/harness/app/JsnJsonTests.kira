@@ -1,0 +1,408 @@
+import Foundation
+
+// Kira Test coverage for Foundation's JSON: what the grammar accepts, what it
+// refuses and where, how numbers land on `Integer` or `Number`, what the
+// accessors answer for a document that is not shaped the way a caller hoped,
+// and that writing a value back out produces text that reads as the same value.
+//
+// The refusals carry their offset here as well as their reason. An offset that
+// drifted would still be "a refusal", so a test that only asked whether the
+// parse failed would pass while the one useful thing about the failure rotted.
+
+// A parse rendered as text: what it read, or why it stopped and where.
+function jsnRead(text: borrow String) -> String {
+    match parseJson(text) {
+        Ok(value) -> return writeJson(value)
+        Error(problem) -> return jsnFailureName(problem.reason) + "@" + String(problem.at)
+    }
+}
+
+function jsnFailureName(reason: borrow JsonFailure) -> String {
+    match reason {
+        UnexpectedEnd -> return "UnexpectedEnd"
+        UnexpectedCharacter -> return "UnexpectedCharacter"
+        InvalidNumber -> return "InvalidNumber"
+        InvalidEscape -> return "InvalidEscape"
+        InvalidText -> return "InvalidText"
+        UnterminatedText -> return "UnterminatedText"
+        DepthExceeded -> return "DepthExceeded"
+        TrailingText -> return "TrailingText"
+    }
+}
+
+// The parsed document, or `Null` when the text was refused.
+function jsnValue(text: borrow String) -> JsonValue {
+    match parseJson(text) {
+        Ok(value) -> return value
+        Error(problem) -> return .Null
+    }
+}
+
+construct JsnReadsEveryScalar() extends Test {
+    test {
+        return jsnRead("null") + " " + jsnRead("true") + " " + jsnRead("false")
+            + " " + jsnRead("0") + " " + jsnRead("\"text\"")
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("null true false 0 \"text\"") return e }
+}
+
+construct JsnReadsAnObjectAndWritesItBack() extends Test {
+    test { return jsnRead("{\"a\":1,\"b\":[true,null],\"c\":\"x\"}") }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("{\"a\":1,\"b\":[true,null],\"c\":\"x\"}")
+        return e
+    }
+}
+
+construct JsnIgnoresWhitespaceBetweenTokens() extends Test {
+    test { return jsnRead("  {\n\t\"a\" : [ 1 , 2 ]\r\n}  ") }
+    expect { let e: Result<Any, TestFailure> = .Ok("{\"a\":[1,2]}") return e }
+}
+
+construct JsnReadsEmptyContainers() extends Test {
+    test { return jsnRead("[]") + jsnRead("{}") + jsnRead("[[],{}]") }
+    expect { let e: Result<Any, TestFailure> = .Ok("[]{}[[],{}]") return e }
+}
+
+construct JsnReadsEveryTwoCharacterEscape() extends Test {
+    test {
+        let value = jsnValue("\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"")
+        let text = jsonText(value, "")
+        // Eight escapes, each one byte once read: the quote, the backslash and
+        // the solidus, then the five control characters.
+        return String(text.count) + ":" + String(Int(text.charAt(0)))
+            + "," + String(Int(text.charAt(1))) + "," + String(Int(text.charAt(2)))
+            + "," + String(Int(text.charAt(3))) + "," + String(Int(text.charAt(7)))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("8:34,92,47,8,9") return e }
+}
+
+construct JsnDecodesAUnicodeEscape() extends Test {
+    test {
+        let text = jsonText(jsnValue("\"\\u00e9\\u0041\""), "")
+        // Three bytes: two for the é, one for the A.
+        return String(text.count) + ":" + text
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("3:éA") return e }
+}
+
+construct JsnDecodesASurrogatePair() extends Test {
+    test {
+        let text = jsonText(jsnValue("\"\\ud83d\\ude00\""), "")
+        return String(text.count) + ":" + text
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("4:😀") return e }
+}
+
+construct JsnRefusesHalfASurrogatePair() extends Test {
+    test { return jsnRead("\"\\ud83d\"") + " " + jsnRead("\"\\ude00\"") }
+    expect { let e: Result<Any, TestFailure> = .Ok("InvalidText@2 InvalidText@2") return e }
+}
+
+construct JsnRefusesAnUnknownEscape() extends Test {
+    test { return jsnRead("\"a\\qb\"") }
+    expect { let e: Result<Any, TestFailure> = .Ok("InvalidEscape@3") return e }
+}
+
+construct JsnRefusesAnUnterminatedString() extends Test {
+    test { return jsnRead("\"abc") }
+    expect { let e: Result<Any, TestFailure> = .Ok("UnterminatedText@4") return e }
+}
+
+construct JsnRefusesARawControlCharacterInAString() extends Test {
+    test { return jsnRead("\"a\nb\"") }
+    expect { let e: Result<Any, TestFailure> = .Ok("InvalidText@2") return e }
+}
+
+construct JsnCarriesUtf8ThroughUnescaped() extends Test {
+    test { return jsnRead("[\"héllo 😀\"]") }
+    expect { let e: Result<Any, TestFailure> = .Ok("[\"héllo 😀\"]") return e }
+}
+
+construct JsnRefusesTrailingText() extends Test {
+    test { return jsnRead("{\"a\":1} x") }
+    expect { let e: Result<Any, TestFailure> = .Ok("TrailingText@8") return e }
+}
+
+construct JsnRefusesATrailingComma() extends Test {
+    test { return jsnRead("[1,]") + " " + jsnRead("{\"a\":1,}") }
+    expect { let e: Result<Any, TestFailure> = .Ok("UnexpectedCharacter@3 UnexpectedCharacter@7") return e }
+}
+
+construct JsnRefusesWhatIsNotTheFormat() extends Test {
+    test {
+        return jsnRead("{'a':1}") + " " + jsnRead("{a:1}") + " " + jsnRead("")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("UnexpectedCharacter@1 UnexpectedCharacter@1 UnexpectedEnd@0")
+        return e
+    }
+}
+
+construct JsnRefusesNumbersThatAreNotNumbers() extends Test {
+    test {
+        return jsnRead("01") + " " + jsnRead("1.") + " " + jsnRead("1e")
+            + " " + jsnRead("-") + " " + jsnRead("+1")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("InvalidNumber@0 InvalidNumber@0 InvalidNumber@0 InvalidNumber@0 UnexpectedCharacter@0")
+        return e
+    }
+}
+
+construct JsnRefusesAnUnclosedContainer() extends Test {
+    test { return jsnRead("[1,2") + " " + jsnRead("{\"a\":") }
+    expect { let e: Result<Any, TestFailure> = .Ok("UnexpectedEnd@4 UnexpectedEnd@5") return e }
+}
+
+construct JsnRefusesNestingPastTheDepthLimit() extends Test {
+    test {
+        var deep = ""
+        var index = 0
+        while index < jsonMaxDepth() + 1 {
+            deep = deep + "["
+            index = index + 1
+        }
+        // Reaching the limit exactly is not the failure; one past it is.
+        var atLimit = ""
+        index = 0
+        while index < jsonMaxDepth() {
+            atLimit = atLimit + "["
+            index = index + 1
+        }
+        index = 0
+        while index < jsonMaxDepth() {
+            atLimit = atLimit + "]"
+            index = index + 1
+        }
+        return jsnFailureNameOf(deep) + " " + String(jsnRead(atLimit).count)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("DepthExceeded 256") return e }
+}
+
+// The reason a text is refused, or `"read"` when it is not.
+function jsnFailureNameOf(text: borrow String) -> String {
+    match parseJson(text) {
+        Ok(value) -> return "read"
+        Error(problem) -> return jsnFailureName(problem.reason)
+    }
+}
+
+construct JsnSplitsIntegersFromNumbers() extends Test {
+    test {
+        // Same number, written two ways: the split follows the spelling and
+        // survives being written back, because `Integer` and `Number` are
+        // different values and `writeJson` promises to return the one it was
+        // given. `jsonInt` answers for both, which is the point of the split
+        // being about spelling rather than about what the number is worth.
+        let whole = jsnValue("3")
+        let fractional = jsnValue("3.0")
+        return writeJson(whole) + " " + writeJson(fractional) + " "
+            + String(jsonInt(whole, 0 - 1)) + " " + String(jsonInt(fractional, 0 - 1))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("3 3.0 3 3") return e }
+}
+
+construct JsnReadsNegativesAndExponents() extends Test {
+    test {
+        return jsnRead("[-3,1e3,2.5e-2,-0.5,1E+2]")
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("[-3,1000.0,0.025,-0.5,100.0]") return e }
+}
+
+construct JsnReadsTheWholeIntegerRange() extends Test {
+    test {
+        // Both ends of `Int`, then one past each: the ends stay exact, and what
+        // is past them becomes the nearest `Float`, which is what a document
+        // outside the range can mean.
+        //
+        // The negative end is the one worth naming. Its magnitude is one larger
+        // than the positive end's, so a reader that measures a literal's size
+        // before applying the sign refuses `-9223372036854775808` — a value
+        // that fits — and cannot offer it as an integer afterwards either.
+        return jsnRead("9223372036854775807") + " " + jsnRead("-9223372036854775808")
+            + " " + jsnRead("9223372036854775808")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("9223372036854775807 -9223372036854775808 9223372036854776000.0")
+        return e
+    }
+}
+
+construct JsnIntAnswersItsFallbackForWhatHasNoInteger() extends Test {
+    test {
+        // NaN and the infinities, built directly rather than read: the format
+        // has no literal for any of them. NaN is the one that matters, because
+        // every comparison against it is false, so a bounds check cannot refuse
+        // it and the conversion behind that check traps. `jsonInt` promises a
+        // fallback, and a trap is not one.
+        let nan: JsonValue = .Number(0.0 / 0.0)
+        let up: JsonValue = .Number(1.0 / 0.0)
+        let down: JsonValue = .Number(0.0 - 1.0 / 0.0)
+        return String(jsonInt(nan, 42)) + " " + String(jsonInt(up, 42))
+            + " " + String(jsonInt(down, 42)) + " " + String(jsonInt(.Number(3.0), 42))
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("42 42 42 3")
+        return e
+    }
+}
+
+construct JsnScalesAFractionLongerThanItsMantissa() extends Test {
+    test {
+        // More fractional digits than an `Int` mantissa holds. Each digit the
+        // mantissa cannot take still has to move the point, or the scale counts
+        // digits that were never multiplied in: this read as roughly
+        // `0.0012345678901234567` — a hundredfold error — rather than the
+        // nearest `Float`.
+        return jsnRead("0.123456789012345678901")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("0.12345678901234568")
+        return e
+    }
+}
+
+construct JsnBoundsAnAbsurdExponent() extends Test {
+    test {
+        // An exponent no `Float` can reach, at both ends. The answers were
+        // always these; what a bound changes is that arriving at them costs a
+        // handful of multiplications rather than a million, so a document full
+        // of them cannot spend a reader's CPU.
+        return jsnRead("1e1000000") + " " + jsnRead("1e-1000000")
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("null 0.0")
+        return e
+    }
+}
+
+construct JsnConvertsDecimalsToTheNearestFloat() extends Test {
+    test {
+        return jsnRead("0.1") + " " + jsnRead("[1.5,0.0625]") + " "
+            + String(jsonFloat(jsnValue("0.1"), 0.0) + jsonFloat(jsnValue("0.2"), 0.0))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("0.1 [1.5,0.0625] 0.30000000000000004") return e }
+}
+
+construct JsnRefusesAWholeNumberThatDoesNotFit() extends Test {
+    test {
+        // `jsonInt` has no whole number to answer with for a fractional value
+        // or one past the range, and says so rather than truncating.
+        return String(jsonInt(jsnValue("1.5"), 0 - 1))
+            + " " + String(jsonInt(jsnValue("1e30"), 0 - 1))
+            + " " + String(jsonInt(jsnValue("\"7\""), 0 - 1))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("-1 -1 -1") return e }
+}
+
+construct JsnAccessorsAnswerForEveryShape() extends Test {
+    test {
+        let document = jsnValue("{\"n\":2,\"t\":\"x\",\"f\":true,\"a\":[10,20],\"z\":null}")
+        return String(jsonInt(jsonField(document, "n"), 0))
+            + jsonText(jsonField(document, "t"), "?")
+            + String(jsonBool(jsonField(document, "f"), false))
+            + String(jsonCount(jsonField(document, "a")))
+            + String(jsonInt(jsonAt(jsonField(document, "a"), 1), 0))
+            + String(jsonIsNull(jsonField(document, "z")))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("2xtrue2" + "20" + "true") return e }
+}
+
+construct JsnAccessorsAnswerRatherThanTrap() extends Test {
+    test {
+        let document = jsnValue("{\"a\":[1]}")
+        // Absent name, index past the end, negative index, and a value of the
+        // wrong shape: every one answers.
+        return String(jsonIsNull(jsonField(document, "missing")))
+            + String(jsonIsNull(jsonAt(jsonField(document, "a"), 5)))
+            + String(jsonIsNull(jsonAt(jsonField(document, "a"), 0 - 1)))
+            + String(jsonInt(document, 7))
+            + jsonText(jsonField(document, "a"), "fallback")
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("truetruetrue" + "7" + "fallback") return e }
+}
+
+construct JsnTellsAbsentFromNull() extends Test {
+    test {
+        let document = jsnValue("{\"here\":null}")
+        return String(jsonHas(document, "here")) + " " + String(jsonHas(document, "gone"))
+            + " " + String(jsonIsNull(jsonField(document, "here")))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("true false true") return e }
+}
+
+construct JsnKeepsRepeatedNamesAndReadsTheLast() extends Test {
+    test {
+        let document = jsnValue("{\"a\":1,\"a\":2}")
+        return String(jsonInt(jsonField(document, "a"), 0)) + " " + String(jsonCount(document))
+            + " " + writeJson(document)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("2 2 {\"a\":1,\"a\":2}") return e }
+}
+
+construct JsnListsMemberNamesInDocumentOrder() extends Test {
+    test {
+        let names = jsonNames(jsnValue("{\"b\":1,\"a\":2,\"b\":3}"))
+        var out = ""
+        var index = 0
+        while index < names.count {
+            out = out + names[index]
+            index = index + 1
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("bab") return e }
+}
+
+construct JsnWritesEscapesTheFormatRequires() extends Test {
+    test {
+        var members: [JsonMember] = []
+        members.append(JsonMember { name = "quote\"", value = .Text("a\\b\nc" + scalarText(1)) })
+        let document: JsonValue = .Object(move members)
+        return writeJson(document)
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("{\"quote\\\"\":\"a\\\\b\\nc\\u0001\"}")
+        return e
+    }
+}
+
+construct JsnWritesNonFiniteNumbersAsNull() extends Test {
+    test {
+        let zero: Float = 0.0
+        let one: Float = 1.0
+        var items: [JsonValue] = []
+        items.append(.Number(one / zero))
+        items.append(.Number(zero / zero))
+        items.append(.Number(0.0 - one / zero))
+        items.append(.Number(1.5))
+        return writeJson(.Array(move items))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("[null,null,null,1.5]") return e }
+}
+
+construct JsnPrettyPrintsOneElementToALine() extends Test {
+    test { return writeJsonPretty(jsnValue("{\"a\":[1,{}],\"b\":{\"c\":true}}")) }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("{\n  \"a\": [\n    1,\n    {}\n  ],\n  \"b\": {\n    \"c\": true\n  }\n}")
+        return e
+    }
+}
+
+construct JsnWrittenTextReadsBackAsTheSameValue() extends Test {
+    test {
+        let source = "{\"a\":[1,-2.5,\"t\\n\",true,null,{}],\"b\":{\"c\":[[]]}}"
+        let once = writeJson(jsnValue(source))
+        let twice = writeJson(jsnValue(once))
+        let pretty = writeJson(jsnValue(writeJsonPretty(jsnValue(source))))
+        if once == twice && once == pretty {
+            return once
+        }
+        return "diverged: " + once + " / " + twice + " / " + pretty
+    }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok("{\"a\":[1,-2.5,\"t\\n\",true,null,{}],\"b\":{\"c\":[[]]}}")
+        return e
+    }
+}

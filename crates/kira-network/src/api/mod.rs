@@ -21,6 +21,7 @@ use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client as PooledClient;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -105,6 +106,7 @@ impl Default for CancellationToken {
 mod client;
 mod server;
 mod socket;
+pub(crate) mod tls;
 
 pub use client::*;
 pub use server::*;
@@ -176,6 +178,62 @@ mod tests {
             Bytes::from_static(b"second")
         );
         stop_server(token, task).await;
+    }
+
+    /// The streaming path over TLS, on both versions.
+    ///
+    /// This path builds its own connection rather than going through the pool,
+    /// so its TLS is separate code from the pooled client's and needs its own
+    /// proof — including that HTTP/2 only proceeds when the peer selected `h2`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_streamed_request_crosses_tls_on_both_versions() {
+        for version in [HttpVersion::Http1, HttpVersion::Http2] {
+            let (listener, port, certificate, config) =
+                crate::http::bind_https().expect("an HTTPS loopback server");
+            let server = tokio::spawn(crate::http::serve_https(listener, config));
+            let client = HttpClient::new(HttpClientConfig {
+                version,
+                root_certificates: vec![certificate],
+                ..HttpClientConfig::default()
+            })
+            .expect("a client trusting the loopback certificate");
+            let request = HttpRequest::new(Method::POST, &format!("https://127.0.0.1:{port}/echo"))
+                .expect("request");
+
+            let response = client
+                .request_streaming(request, stream::iter([Bytes::from_static(b"streamed-tls")]))
+                .await
+                .expect("a streamed TLS response");
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.bytes().await.expect("body");
+            let text = String::from_utf8_lossy(&body);
+            assert!(text.contains("body=streamed-tls"), "{text}");
+            server.abort();
+        }
+    }
+
+    /// An `https` URI whose certificate nothing vouches for fails, and a URI
+    /// naming a scheme this client cannot speak is refused before it connects.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_streamed_request_refuses_an_unverified_peer_and_an_unknown_scheme() {
+        let (listener, port, _, config) = crate::http::bind_https().expect("an HTTPS server");
+        let server = tokio::spawn(crate::http::serve_https(listener, config));
+        let client = HttpClient::new(HttpClientConfig::default()).expect("a client");
+
+        let request = HttpRequest::new(Method::POST, &format!("https://127.0.0.1:{port}/echo"))
+            .expect("request");
+        let refused = client
+            .request_streaming(request, stream::iter([Bytes::from_static(b"x")]))
+            .await;
+        assert!(matches!(refused, Err(NetworkError::Protocol)));
+
+        let request = HttpRequest::new(Method::GET, "ftp://127.0.0.1/file").expect("request");
+        let refused = client
+            .request_streaming(request, stream::iter([Bytes::new()]))
+            .await;
+        assert!(matches!(refused, Err(NetworkError::InvalidUri)));
+        server.abort();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -1,0 +1,289 @@
+// JSON, as a value.
+//
+// A document is a tree of `JsonValue`, and every way of asking it a question is
+// total: a field that is absent, an index past the end, and a value of the
+// wrong shape all answer rather than trap. That is deliberate. JSON arrives
+// from somewhere else — a file someone edited, a service that changed its
+// schema between deployments — so a reader that trapped on a surprise would
+// turn every remote change into a crash in a program that could have carried on.
+//
+// The number split is the one place this differs from the format. JSON has one
+// number type; Kira has `Int` and `Float`, and a document carrying an account
+// number or a byte count means the integer, not the nearest double. So a
+// literal written without a fraction or an exponent, and small enough to hold,
+// reads as `Integer`, and everything else reads as `Number`. `jsonInt` and
+// `jsonFloat` each accept both, so a caller that does not care never has to ask
+// which one arrived.
+
+enum JsonValue {
+    Null
+    Boolean(Bool)
+    Integer(Int)
+    Number(Float)
+    Text(String)
+    Array([JsonValue])
+    Object([JsonMember])
+}
+
+// One `"name": value` pair.
+//
+// An object is a list rather than a map because JSON is: names may repeat, and
+// they have an order the document chose. Keeping both is what lets a value be
+// written back out as it arrived. `jsonField` answers the question that order
+// raises — see it for which of two same-named members wins.
+struct JsonMember {
+    let name: String
+    let value: JsonValue
+}
+
+// The largest and smallest `Float` this converts to an `Int` without asking the
+// runtime to trap. Well inside `Int`'s range on both sides, because the point is
+// to refuse before the conversion rather than to find the exact boundary: a
+// `Float` that large has no fractional part left to lose, so a caller reading a
+// count or an index is nowhere near it.
+function jsonIntLimit() -> Float {
+    // 2^63, which is exactly representable and is the first magnitude no `Int`
+    // holds. The bound is `< limit` for positives and `>= -limit` for
+    // negatives, so every integral `Float` that has an `Int` is accepted and
+    // nothing that would trap on conversion gets through.
+    //
+    // The round number this replaced stopped 9e18 short of the real edge, which
+    // refused a couple of hundred million whole values that convert perfectly
+    // well — including `Int`'s own minimum, whose magnitude is exactly this.
+    return 9223372036854775808.0
+}
+
+// Whether this is `null`.
+//
+// Separate from the accessors below because "absent", "null" and "0" are three
+// different answers, and a caller that only has `jsonInt` cannot tell them
+// apart: use this with `jsonHas` when the difference decides something.
+function jsonIsNull(value: borrow JsonValue) -> Bool {
+    match value {
+        Null -> return true
+        Boolean(flag) -> return false
+        Integer(number) -> return false
+        Number(number) -> return false
+        Text(text) -> return false
+        Array(items) -> return false
+        Object(members) -> return false
+    }
+}
+
+// The boolean this holds, or `fallback` for anything else.
+//
+// Only a real `true` or `false` answers. A truthiness rule — "non-empty text is
+// true", "0 is false" — would make a document's meaning depend on a convention
+// the document never stated.
+function jsonBool(value: borrow JsonValue, fallback: Bool) -> Bool {
+    match value {
+        Boolean(flag) -> return flag
+        Null -> return fallback
+        Integer(number) -> return fallback
+        Number(number) -> return fallback
+        Text(text) -> return fallback
+        Array(items) -> return fallback
+        Object(members) -> return fallback
+    }
+}
+
+// The whole number this holds, or `fallback`.
+//
+// A `Number` answers when it is integral and fits: a service that writes `3.0`
+// where it used to write `3` has not changed what it means, and a caller reading
+// a count should not have to notice. One that is fractional or too large does
+// not answer, because there is no whole number it could be.
+function jsonInt(value: borrow JsonValue, fallback: Int) -> Int {
+    match value {
+        Integer(number) -> return number
+        Number(number) -> {
+            // NaN first, because it is the one value the bounds below cannot
+            // refuse: every comparison against it is false, so it passes both
+            // and reaches a conversion that traps rather than answering. This
+            // function promises a fallback, and a trap is not one.
+            //
+            // Unreachable through `parseJson` — the format has no NaN literal,
+            // and the reader cannot produce one — but `JsonValue` is a public
+            // type and `Number` takes any `Float` a caller holds.
+            //
+            // The infinities need no such guard: they compare, and the bounds
+            // already refuse them.
+            if number != number {
+                return fallback
+            }
+            // Asymmetric because the signed range is: the negative end
+            // reaches exactly `-2^63` and the positive end stops one below it.
+            if number >= jsonIntLimit() || number < 0.0 - jsonIntLimit() {
+                return fallback
+            }
+            let whole = Int(number)
+            if Float(whole) == number {
+                return whole
+            }
+            return fallback
+        }
+        Null -> return fallback
+        Boolean(flag) -> return fallback
+        Text(text) -> return fallback
+        Array(items) -> return fallback
+        Object(members) -> return fallback
+    }
+}
+
+// The number this holds as a `Float`, or `fallback`.
+//
+// An `Integer` answers, for the reason `jsonInt` accepts an integral `Number`:
+// which side of the split a literal landed on is a property of how it was
+// written, not of what it means.
+function jsonFloat(value: borrow JsonValue, fallback: Float) -> Float {
+    match value {
+        Number(number) -> return number
+        Integer(number) -> return Float(number)
+        Null -> return fallback
+        Boolean(flag) -> return fallback
+        Text(text) -> return fallback
+        Array(items) -> return fallback
+        Object(members) -> return fallback
+    }
+}
+
+// The text this holds, or `fallback`.
+//
+// A number or a boolean does not answer. Rendering one as text here would make
+// `jsonText` succeed on a document that carries the wrong shape, which is the
+// one thing a caller reaching for a string wants to be told about.
+function jsonText(value: borrow JsonValue, fallback: borrow String) -> String {
+    match value {
+        Text(text) -> return text
+        Null -> return fallback
+        Boolean(flag) -> return fallback
+        Integer(number) -> return fallback
+        Number(number) -> return fallback
+        Array(items) -> return fallback
+        Object(members) -> return fallback
+    }
+}
+
+// How many elements an array holds, or how many members an object holds.
+//
+// Zero for everything else, so a `while` over `jsonCount` walks whatever it was
+// given without asking first.
+function jsonCount(value: borrow JsonValue) -> Int {
+    match value {
+        Array(items) -> return items.count
+        Object(members) -> return members.count
+        Null -> return 0
+        Boolean(flag) -> return 0
+        Integer(number) -> return 0
+        Number(number) -> return 0
+        Text(text) -> return 0
+    }
+}
+
+// The element at `index`, or `Null` when there is none.
+//
+// An object answers by position too, in the order the document wrote its
+// members, so a caller walking `jsonCount` reaches every one of them.
+function jsonAt(value: borrow JsonValue, index: Int) -> JsonValue {
+    if index < 0 {
+        return .Null
+    }
+    match value {
+        Array(items) -> {
+            if index >= items.count {
+                return .Null
+            }
+            return items[index]
+        }
+        Object(members) -> {
+            if index >= members.count {
+                return .Null
+            }
+            return members[index].value
+        }
+        Null -> return .Null
+        Boolean(flag) -> return .Null
+        Integer(number) -> return .Null
+        Number(number) -> return .Null
+        Text(text) -> return .Null
+    }
+}
+
+// The member named `name`, or `Null` when the object carries none.
+//
+// The *last* member with that name, which is what a document repeating a name
+// means by it: every writer that collapses duplicates keeps the last, and a
+// reader that kept the first would disagree with the tool that produced the
+// text. Both are still in the tree, so writing the value back out preserves
+// what arrived.
+function jsonField(value: borrow JsonValue, name: borrow String) -> JsonValue {
+    match value {
+        Object(members) -> {
+            var found: Int = 0 - 1
+            var index = 0
+            while index < members.count {
+                if members[index].name == name {
+                    found = index
+                }
+                index = index + 1
+            }
+            if found < 0 {
+                return .Null
+            }
+            return members[found].value
+        }
+        Null -> return .Null
+        Boolean(flag) -> return .Null
+        Integer(number) -> return .Null
+        Number(number) -> return .Null
+        Text(text) -> return .Null
+        Array(items) -> return .Null
+    }
+}
+
+// Whether the object carries a member named `name`, however that member reads.
+//
+// The question `jsonField` cannot answer: a member explicitly set to `null` and
+// a member that was never written both read as `Null`, and to a caller deciding
+// whether to fill in a default those are opposite answers.
+function jsonHas(value: borrow JsonValue, name: borrow String) -> Bool {
+    match value {
+        Object(members) -> {
+            var index = 0
+            while index < members.count {
+                if members[index].name == name {
+                    return true
+                }
+                index = index + 1
+            }
+            return false
+        }
+        Null -> return false
+        Boolean(flag) -> return false
+        Integer(number) -> return false
+        Number(number) -> return false
+        Text(text) -> return false
+        Array(items) -> return false
+    }
+}
+
+// Every member name, in document order, with repeats kept.
+function jsonNames(value: borrow JsonValue) -> [String] {
+    var names: [String] = []
+    match value {
+        Object(members) -> {
+            var index = 0
+            while index < members.count {
+                names.append(members[index].name)
+                index = index + 1
+            }
+        }
+        Null -> { }
+        Boolean(flag) -> { }
+        Integer(number) -> { }
+        Number(number) -> { }
+        Text(text) -> { }
+        Array(items) -> { }
+    }
+    return names
+}
