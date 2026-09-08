@@ -15,6 +15,28 @@ fn linux_aarch64() -> BuildMachine {
     BuildMachine::new("linux", "aarch64")
 }
 
+/// A real Linux system call the compiler has no number for, used by the tests
+/// below that need a name to be refused.
+///
+/// It has to be a name the table does not carry, and the table grows: this was
+/// `openat` until the table gained it, at which point two tests about refusal
+/// were silently asserting that an accepted call is accepted. The guard below
+/// fails on the day this one is added too, and says what to do about it.
+const A_CALL_WITH_NO_NUMBER: &str = "bpf";
+
+/// The stand-in above is only a test of refusal while the table really has no
+/// number for it. Checked here rather than trusted, because the failure it
+/// prevents is a test that passes for the wrong reason.
+#[test]
+fn the_stand_in_for_an_unknown_call_is_really_unknown() {
+    assert!(
+        kira_runtime_abi::syscall::LinuxSyscall::parse(A_CALL_WITH_NO_NUMBER).is_none(),
+        "`{A_CALL_WITH_NO_NUMBER}` is in the table now, so it no longer tests a \
+         refusal. Point `A_CALL_WITH_NO_NUMBER` at a call the table still does \
+         not carry."
+    );
+}
+
 /// The diagnostics of a single-file program analyzed for `machine`.
 fn machine_diagnostics(text: &str, machine: BuildMachine) -> Vec<Diagnostic> {
     let db = salsa::DatabaseImpl::new();
@@ -116,13 +138,16 @@ fn a_call_with_no_arguments_and_one_with_six_are_both_accepted() {
 /// number that means something else in the kernel's table.
 #[test]
 fn a_syscall_name_the_compiler_has_no_number_for_is_refused() {
-    let text = "@FFI.Syscall { name: openat }\n\
-         function sysOpenat(dirfd: Int, path: CString, flags: Int) -> Int\n\
-         @Main function main() { return }";
+    let text = format!(
+        "@FFI.Syscall {{ name: {A_CALL_WITH_NO_NUMBER} }}\n\
+         function sysUnknown(dirfd: Int, path: CString, flags: Int) -> Int\n\
+         @Main function main() {{ return }}"
+    );
+    let text = text.as_str();
     assert_eq!(codes(text, linux_aarch64()), vec!["KSEM279"]);
     let reported = message(text, linux_aarch64());
     assert!(
-        reported.contains("`openat` is not a system call"),
+        reported.contains(&format!("`{A_CALL_WITH_NO_NUMBER}` is not a system call")),
         "{reported}"
     );
     // The message lists what *is* available, so the fix does not need a source
@@ -339,10 +364,12 @@ fn a_syscall_name_cannot_repeat_a_function_name() {
 /// function rather than a call against a contract nothing checked.
 #[test]
 fn a_refused_declaration_leaves_no_callable_behind() {
-    let text = "@FFI.Syscall { name: openat }\n\
-         function sysOpenat(path: CString) -> Int\n\
-         @Main function main() { let n = sysOpenat(\"/x\") return }";
-    let reported = codes(text, linux_aarch64());
+    let text = format!(
+        "@FFI.Syscall {{ name: {A_CALL_WITH_NO_NUMBER} }}\n\
+         function sysUnknown(path: CString) -> Int\n\
+         @Main function main() {{ let n = sysUnknown(\"/x\") return }}"
+    );
+    let reported = codes(text.as_str(), linux_aarch64());
     assert!(reported.contains(&"KSEM279".to_owned()), "{reported:?}");
     assert!(reported.contains(&"KSEM061".to_owned()), "{reported:?}");
 }

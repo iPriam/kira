@@ -921,7 +921,14 @@ mod tests {
             assert_eq!(LinuxSyscall::from_tag(syscall.tag()), Some(syscall));
             assert_eq!(LinuxSyscall::parse(syscall.label()), Some(syscall));
         }
-        assert_eq!(LinuxSyscall::from_tag(48), None);
+        // One past the last tag, derived rather than written: tags are assigned
+        // densely from zero, so the table's length *is* the first unassigned
+        // one. A literal here was 48, which stopped meaning "unassigned" the
+        // day the table grew past it and turned this into a test that the
+        // newest call does not exist.
+        let first_unassigned =
+            u8::try_from(LINUX_SYSCALLS.len()).expect("the table is far below the tag width");
+        assert_eq!(LinuxSyscall::from_tag(first_unassigned), None);
     }
 
     /// A name this table does not carry resolves to nothing at all. The near
