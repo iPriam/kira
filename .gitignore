@@ -11,5 +11,9 @@
 Cargo.lock
 kira.lock
 
+# The archives an example's README tells a reader to build. They are outputs of
+# the commands beside them, per platform, and a checkout builds its own.
+examples/*/NativeLibs/lib/
+
 # A stray compiler output in the root is never ours to keep.
 /a.out

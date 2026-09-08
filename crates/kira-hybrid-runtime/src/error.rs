@@ -112,6 +112,11 @@ pub enum HybridError {
         ownership: kira_runtime_abi::Ownership,
     },
     /// The program trapped while running.
-    #[error("{0}")]
+    ///
+    /// Named as a trap here rather than left to the caller's `kira: {error}`:
+    /// the VM and native engines both say `runtime trap:` before the sentence,
+    /// and a program that fails the same way on all three has to be diagnosed
+    /// the same way by all three.
+    #[error("runtime trap: {0}")]
     Trap(#[source] kira_vm_runtime::VmError),
 }

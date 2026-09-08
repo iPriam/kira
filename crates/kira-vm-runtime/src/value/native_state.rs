@@ -17,7 +17,7 @@ impl Heap {
             Value::Bool(value) => NativeStateValue::Bool(value),
             Value::RawPtr(value) => NativeStateValue::RawPtr(value),
             Value::Str(id) => match self.take_object(id.0) {
-                Some(Object::Str(value)) => NativeStateValue::String(value),
+                Some(Object::Str(value)) => NativeStateValue::String(value.to_string()),
                 _ => return Err("a string whose storage was already taken"),
             },
             Value::Struct(id) => {

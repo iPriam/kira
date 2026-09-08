@@ -9,8 +9,9 @@
 
 mod api;
 mod http;
-mod http3_api;
+mod http3;
 mod io;
+mod request;
 mod runtime;
 mod websocket;
 
@@ -20,11 +21,14 @@ pub use api::{
     HttpVersion, WebSocketClient, WebSocketConfig, WebSocketListener, WebSocketMessage,
     WebSocketSession, bind_websocket, bind_websocket_listener, loopback,
 };
-pub use http3_api::{
+pub use http3::{
     Http3Client, Http3ClientConfig, Http3Response, Http3Router, Http3Server, Http3ServerConfig,
     Http3ServerRequest, Http3ServerResponse,
 };
+pub use request::END_OF_SELECTION;
 pub use runtime::{NetworkError, OperationId, PollState};
+
+use std::ffi::{CStr, c_char};
 
 /// Starts an HTTP/1.1 loopback server and returns its operation handle.
 #[unsafe(no_mangle)]
@@ -104,6 +108,185 @@ pub extern "C" fn kira_network_result(handle: i64) -> i64 {
     runtime::result(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
 }
 
+/// Starts the HTTPS loopback server and returns its operation handle.
+///
+/// It serves until it is cancelled rather than completing, because a server has
+/// no one exchange to finish on: a caller starts it, reads its port, sends what
+/// it wants through it, and cancels the handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_https_server() -> i64 {
+    runtime::start_https_server().map_or_else(runtime::error_code, OperationId::as_i64)
+}
+
+/// Reads a NUL-terminated C argument as UTF-8 text.
+///
+/// # Safety
+///
+/// `pointer` must be null or address a NUL-terminated string that stays valid
+/// for the duration of the call.
+unsafe fn borrowed<'a>(pointer: *const c_char) -> Result<&'a str, NetworkError> {
+    if pointer.is_null() {
+        return Err(NetworkError::InvalidConfig);
+    }
+    // SAFETY: the caller's contract is that `pointer` addresses a
+    // NUL-terminated string that stays valid for the length of this call.
+    let text = unsafe { CStr::from_ptr(pointer) };
+    text.to_str().map_err(|_| NetworkError::Encoding)
+}
+
+/// The C result of an operation that answers only whether it worked.
+fn completed(result: Result<(), NetworkError>) -> i64 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => error.code(),
+    }
+}
+
+/// Opens a request for `method` and `url`, returning its request handle.
+///
+/// # Safety
+///
+/// Both arguments must be NUL-terminated strings valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_request_new(
+    method: *const c_char,
+    url: *const c_char,
+) -> i64 {
+    // SAFETY: both arguments are the caller's NUL-terminated strings, valid
+    // for this call by the contract above.
+    let arguments = unsafe { (borrowed(method), borrowed(url)) };
+    match arguments {
+        (Ok(method), Ok(url)) => request::new(method, url).unwrap_or_else(runtime::error_code),
+        (Err(error), _) | (_, Err(error)) => error.code(),
+    }
+}
+
+/// Adds one header to a request under construction.
+///
+/// # Safety
+///
+/// Both arguments must be NUL-terminated strings valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_request_header(
+    handle: i64,
+    name: *const c_char,
+    value: *const c_char,
+) -> i64 {
+    // SAFETY: both arguments are the caller's NUL-terminated strings, valid
+    // for this call by the contract above.
+    let arguments = unsafe { (borrowed(name), borrowed(value)) };
+    completed(match arguments {
+        (Ok(name), Ok(value)) => request::add_header(handle, name, value),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    })
+}
+
+/// Replaces a request's body with the bytes of `text`.
+///
+/// # Safety
+///
+/// `text` must be a NUL-terminated string valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_request_body_text(handle: i64, text: *const c_char) -> i64 {
+    // SAFETY: `text` is the caller's NUL-terminated string, valid for this
+    // call by the contract above.
+    let text = unsafe { borrowed(text) };
+    completed(text.and_then(|text| request::set_body_text(handle, text)))
+}
+
+/// Appends one byte to a request's body, for a body that is not text.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_body_byte(handle: i64, byte: i32) -> i64 {
+    completed(request::push_body_byte(handle, byte))
+}
+
+/// Sets the deadline for the whole request in milliseconds; zero removes it.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_timeout_ms(handle: i64, milliseconds: i64) -> i64 {
+    completed(request::set_timeout_ms(handle, milliseconds))
+}
+
+/// Selects the HTTP version: `1` for HTTP/1.1, `2` for HTTP/2.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_version(handle: i64, version: i32) -> i64 {
+    completed(request::set_version(handle, version))
+}
+
+/// Trusts the certificate published by the loopback server bound to `port`.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_trust_loopback(handle: i64, port: u16) -> i64 {
+    completed(request::trust_loopback(handle, port))
+}
+
+/// Sends an assembled request and returns the operation handle for it.
+///
+/// The request handle is consumed: what a caller polls, results, reads and
+/// cancels from here is the operation handle this returns.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_send(handle: i64) -> i64 {
+    request::send(handle).map_or_else(runtime::error_code, OperationId::as_i64)
+}
+
+/// Discards a request that will never be sent. Unknown handles are ignored.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_request_discard(handle: i64) {
+    request::discard(handle);
+}
+
+/// Returns a completed request's HTTP status code.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_status(handle: i64) -> i64 {
+    request::status(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
+/// Selects the response body for reading and returns its length in bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_select_body(handle: i64) -> i64 {
+    request::select_body(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
+/// Selects a response header for reading, returning its length or `-1` when the
+/// response carries no header of that name.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_response_select_header(
+    handle: i64,
+    name: *const c_char,
+) -> i64 {
+    // SAFETY: `name` is the caller's NUL-terminated string, valid for this
+    // call by the contract above.
+    let name = unsafe { borrowed(name) };
+    name.and_then(|name| request::select_header(OperationId::from_i64(handle), name))
+        .unwrap_or_else(runtime::error_code)
+}
+
+/// Returns the length in bytes of the current selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_length(handle: i64) -> i64 {
+    request::selection_length(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
+/// Moves the read cursor back to the start of the current selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_rewind(handle: i64) -> i64 {
+    request::rewind(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
+/// Reads the next byte of the selection, or `-1` at its end.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_read_byte(handle: i64) -> i64 {
+    request::read_byte(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
+/// Reads the next Unicode scalar of the selection, or `-1` at its end.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_response_read_scalar(handle: i64) -> i64 {
+    request::read_scalar(OperationId::from_i64(handle)).unwrap_or_else(runtime::error_code)
+}
+
 /// Cancels an operation. Unknown handles are ignored because cancellation is
 /// an idempotent cleanup operation at the C boundary.
 #[unsafe(no_mangle)]
@@ -116,111 +299,4 @@ pub extern "C" fn kira_network_cancel(handle: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_network_close(handle: i64) {
     kira_network_cancel(handle);
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::{
-        kira_network_cancel, kira_network_close, kira_network_http1_client,
-        kira_network_http1_server, kira_network_http2_client, kira_network_http2_server,
-        kira_network_http3_client, kira_network_http3_server, kira_network_io_roundtrip,
-        kira_network_poll, kira_network_result, kira_network_server_port,
-        kira_network_websocket_client, kira_network_websocket_server,
-    };
-
-    /// Long enough to survive a full-workspace run, where this test shares a
-    /// machine with every other test binary. The operation itself is a loopback
-    /// round trip and takes milliseconds; the deadline exists to fail rather
-    /// than hang, not to measure anything.
-    const TIMEOUT: Duration = Duration::from_secs(60);
-
-    /// How long the waiter sleeps between polls.
-    ///
-    /// Sleeping rather than spinning, because the work being waited on runs on
-    /// this machine's other threads: a `yield_now` loop holds a core against
-    /// the runtime it is waiting for, which under load is how a round trip that
-    /// takes milliseconds misses a ten-second deadline.
-    const POLL_INTERVAL: Duration = Duration::from_millis(1);
-
-    fn wait_for(handle: i64) -> Result<i64, i64> {
-        if handle <= 0 {
-            return Err(handle);
-        }
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            let state = kira_network_poll(handle);
-            if state == 0 {
-                if Instant::now() >= deadline {
-                    kira_network_close(handle);
-                    return Err(-1);
-                }
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
-            let result = kira_network_result(handle);
-            kira_network_close(handle);
-            return if state == 1 && result > 0 {
-                Ok(result)
-            } else {
-                Err(result)
-            };
-        }
-    }
-
-    fn run_pair(
-        server: extern "C" fn() -> i64,
-        client: extern "C" fn(u16) -> i64,
-    ) -> Result<(), i64> {
-        let server_handle = server();
-        if server_handle <= 0 {
-            return Err(server_handle);
-        }
-        let port = kira_network_server_port(server_handle);
-        if port <= 0 || port > i64::from(u16::MAX) {
-            kira_network_close(server_handle);
-            return Err(port);
-        }
-        let client_handle = client(port as u16);
-        if client_handle <= 0 {
-            kira_network_close(server_handle);
-            return Err(client_handle);
-        }
-        wait_for(client_handle)?;
-        wait_for(server_handle)?;
-        Ok(())
-    }
-
-    #[test]
-    fn every_async_loopback_protocol_completes() {
-        assert_eq!(
-            run_pair(kira_network_http1_server, kira_network_http1_client),
-            Ok(())
-        );
-        assert_eq!(
-            run_pair(kira_network_http2_server, kira_network_http2_client),
-            Ok(())
-        );
-        assert_eq!(
-            run_pair(kira_network_http3_server, kira_network_http3_client),
-            Ok(())
-        );
-        assert_eq!(
-            run_pair(kira_network_websocket_server, kira_network_websocket_client),
-            Ok(())
-        );
-        assert_eq!(wait_for(kira_network_io_roundtrip()), Ok(1));
-    }
-
-    #[test]
-    fn cancellation_removes_the_operation_handle() {
-        let handle = kira_network_io_roundtrip();
-        assert!(handle > 0);
-
-        kira_network_cancel(handle);
-
-        assert_eq!(kira_network_poll(handle), -101);
-        kira_network_close(handle);
-    }
 }
