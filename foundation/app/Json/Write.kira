@@ -103,7 +103,25 @@ function jsonWriteNumber(value: Float) -> String {
     if !jsonIsFinite(value) {
         return "null"
     }
-    return String(value)
+    let text = String(value)
+    // A `Number` that happens to be whole still has to read back as one.
+    //
+    // `String(3.0)` is `3`, and `3` parses as an `Integer` — so a document
+    // written from a `Number` and read again would come back a different
+    // variant, which is exactly the distinction `Integer` and `Number` exist to
+    // keep. A trailing `.0` costs two bytes and preserves it.
+    if jsonLooksWhole(text) {
+        return text + ".0"
+    }
+    return text
+}
+
+// Whether a formatted float carries nothing that marks it as one.
+//
+// A fraction or an exponent is enough for a reader to answer `Number`, and one
+// of the two is present in every spelling except the whole ones.
+function jsonLooksWhole(text: borrow String) -> Bool {
+    return !text.contains(".") && !text.contains("e") && !text.contains("E")
 }
 
 // Whether a `Float` is an ordinary finite number.

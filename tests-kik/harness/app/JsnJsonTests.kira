@@ -190,21 +190,24 @@ function jsnFailureNameOf(text: borrow String) -> String {
 
 construct JsnSplitsIntegersFromNumbers() extends Test {
     test {
-        // Same value, written two ways: the split follows the spelling, and
-        // `jsonInt` answers for both.
+        // Same number, written two ways: the split follows the spelling and
+        // survives being written back, because `Integer` and `Number` are
+        // different values and `writeJson` promises to return the one it was
+        // given. `jsonInt` answers for both, which is the point of the split
+        // being about spelling rather than about what the number is worth.
         let whole = jsnValue("3")
         let fractional = jsnValue("3.0")
         return writeJson(whole) + " " + writeJson(fractional) + " "
             + String(jsonInt(whole, 0 - 1)) + " " + String(jsonInt(fractional, 0 - 1))
     }
-    expect { let e: Result<Any, TestFailure> = .Ok("3 3 3 3") return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("3 3.0 3 3") return e }
 }
 
 construct JsnReadsNegativesAndExponents() extends Test {
     test {
         return jsnRead("[-3,1e3,2.5e-2,-0.5,1E+2]")
     }
-    expect { let e: Result<Any, TestFailure> = .Ok("[-3,1000,0.025,-0.5,100]") return e }
+    expect { let e: Result<Any, TestFailure> = .Ok("[-3,1000.0,0.025,-0.5,100.0]") return e }
 }
 
 construct JsnReadsTheWholeIntegerRange() extends Test {
@@ -221,7 +224,7 @@ construct JsnReadsTheWholeIntegerRange() extends Test {
             + " " + jsnRead("9223372036854775808")
     }
     expect {
-        let e: Result<Any, TestFailure> = .Ok("9223372036854775807 -9223372036854775808 9223372036854776000")
+        let e: Result<Any, TestFailure> = .Ok("9223372036854775807 -9223372036854775808 9223372036854776000.0")
         return e
     }
 }
@@ -269,7 +272,7 @@ construct JsnBoundsAnAbsurdExponent() extends Test {
         return jsnRead("1e1000000") + " " + jsnRead("1e-1000000")
     }
     expect {
-        let e: Result<Any, TestFailure> = .Ok("null 0")
+        let e: Result<Any, TestFailure> = .Ok("null 0.0")
         return e
     }
 }
