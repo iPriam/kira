@@ -10,13 +10,17 @@ import Foundation
 // calling inherited + overridden methods in loops over arrays of instances.
 // Every result is folded into one deterministic Int checksum.
 //
-// PARITY NOTE: this module intentionally never lets an *inherited* base method
-// call `self.<m>()` where a descendant overrides `<m>`. That self-dispatch is
-// virtual on vm/hybrid but static on llvm (a known backend divergence), so it is
-// avoided here. "Calling up" is expressed only with parent-qualified
-// `Parent.method()` inside overrides, which is consistent on every backend.
-// Inherited methods here only read `self` fields or call parent-qualified
-// methods, both of which agree across backends.
+// PARITY NOTE: this module expresses "calling up" only with parent-qualified
+// `Parent.method()` inside overrides, and its inherited methods only read `self`
+// fields or call parent-qualified methods.
+//
+// It was written that way because an inherited base method calling `self.<m>()`
+// where a descendant overrides `<m>` used to be virtual on vm and hybrid and
+// static on llvm. That divergence is gone: monomorphization gives each
+// descendant its own copy of the parent's body with `self` statically the
+// concrete class, so both dispatches are the same dispatch. `StrxClassTests`
+// H9 pins it. This module is left as it is — it is a checksum over a different
+// set of shapes, and rewriting it would change what it measures.
 
 // ---------------------------------------------------------------------------
 // H1: three-level single inheritance, field-default overrides, super-calls.
@@ -148,10 +152,8 @@ function clsH2() -> Int {
     acc = acc + sum                 // 300+302+304+306+308 = 1520
 
     // Direct parent-method values via the combined child, in a loop.
-    var k = 0
-    while k < 4 {
+    for k in 0..4 {
         acc = acc + c.blendFields() * k   // 7*0 + 7*1 + 7*2 + 7*3 = 42
-        k = k + 1
     }
 
     return acc
@@ -219,11 +221,9 @@ function clsH3() -> Int {
     // Cube uses the super-call override on a single instance, in a loop.
     var c = ClsCube()
     c.side = 3
-    var m = 0
-    while m < 4 {
+    for m in 0..4 {
         acc = acc + c.scaledArea(m)   // (3*3*m)*6 = 54*m -> 0+54+108+162 = 324
         acc = acc + c.sides           // inherited override default: 4 each -> 16
-        m = m + 1
     }
 
     return acc
@@ -272,12 +272,10 @@ function clsH4() -> Int {
     let b = ClsBridge()
     let tn = ClsTunnel()
 
-    var km = 0
-    while km < 5 {
+    for km in 0..5 {
         acc = acc + t.charge(km)    // 10 + km          -> 10,11,12,13,14 = 60
         acc = acc + b.charge(km)    // 20 + 2km         -> 20,22,24,26,28 = 120
         acc = acc + tn.charge(km)   // (30 + 2km) + 5   -> 35,37,39,41,43 = 195
-        km = km + 1
     }
     // 60 + 120 + 195 = 375
 

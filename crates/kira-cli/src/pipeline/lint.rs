@@ -13,6 +13,54 @@ use crate::progress::out;
 
 use super::{EXIT_FAILURE, EXIT_OK, compile, compile_target};
 
+/// The policy the command line asks for, over whatever the package configured.
+///
+/// `--lint-level=<level>` moves every code; `--allow`, `--warn` and `--deny`
+/// each take one code and move it alone, so a run can silence a single finding
+/// without turning off the check that produced it. A per-code flag beats the
+/// blanket one, whichever order they were written in.
+fn lint_policy(args: &[String]) -> kira_linter::LintPolicy {
+    use kira_linter::{LintLevel, LintPolicy};
+
+    let mut policy = LintPolicy::new(LintLevel::Warn);
+    let mut moved_default = false;
+    for argument in args {
+        let Some((flag, value)) = argument.split_once('=') else {
+            continue;
+        };
+        match flag {
+            "--lint-level" => {
+                if let Some(level) = LintLevel::parse(value) {
+                    policy = LintPolicy::new(level);
+                    moved_default = true;
+                }
+            }
+            "--allow" | "--warn" | "--deny" => {}
+            _ => continue,
+        }
+    }
+    // A second pass, so a per-code flag written before `--lint-level` is not
+    // erased by the fresh policy that flag builds.
+    for argument in args {
+        let Some((flag, value)) = argument.split_once('=') else {
+            continue;
+        };
+        let level = match flag {
+            "--allow" => LintLevel::Allow,
+            "--warn" => LintLevel::Warn,
+            "--deny" => LintLevel::Deny,
+            _ => continue,
+        };
+        policy.set(value.to_ascii_uppercase(), level);
+    }
+    // Without a flag the package's own severities stand: every code keeps what
+    // the runner emitted it at, which `Warn` as a default would quietly flatten.
+    if !moved_default && policy.is_empty() {
+        return LintPolicy::unchanged();
+    }
+    policy
+}
+
 /// Runs `kira lint <file|dir>`: report what the package's lints found.
 ///
 /// Closer to `check` than to `test`. A lint runs during *expansion* — the
@@ -77,6 +125,15 @@ pub fn lint(args: &[String]) -> i32 {
                 .into_iter()
                 .filter(|diagnostic| !diagnostic.has_code(RECEIPT))
                 .collect();
+            // What the command line asked for, over what the package said.
+            //
+            // A package's `linter.kira` is a standing opinion; a flag is this
+            // run's. CI denying what a package warns is the whole reason the
+            // flag exists, and it works the way `-D warnings` does elsewhere:
+            // it escalates what was reported, and cannot resurrect a lint the
+            // package allowed — an allowed lint never ran, so there is nothing
+            // to raise.
+            let owned = lint_policy(args).apply(&owned);
             crate::diagnostics::emit_every(&owned, &compiled.sources);
             if kira_diagnostics::has_errors(&owned) {
                 return EXIT_FAILURE;
@@ -125,8 +182,8 @@ pub fn lint(args: &[String]) -> i32 {
                 // does not is the same class of lie as claiming a clean run.
                 Some(0) => {
                     out!(
-                        "ok: {path} — no lint is enabled, so nothing was checked. \
-                         Enable one in `linter.kira` beside `package.kira`."
+                        "ok: {path} — every lint is allowed, so nothing was checked. \
+                         Raise one to `.Warn` in `linter.kira` beside `package.kira`."
                     );
                     EXIT_OK
                 }
@@ -140,7 +197,18 @@ pub fn lint(args: &[String]) -> i32 {
                 }
             }
         }
-        Err(code) => code,
+        // A compile that failed, said so, and left. Reported here because the
+        // verb must not exit non-zero having printed nothing: `kira lint` on a
+        // package that does not compile did exactly that — no stdout, no
+        // stderr, status 1 — and a silent failure is indistinguishable from a
+        // crash to whoever ran it.
+        Err(code) => {
+            out!(
+                "kira lint: {path} — the package did not compile, so nothing was linted. \
+                 Run `kira check {path}` to see why."
+            );
+            code
+        }
     }
 }
 

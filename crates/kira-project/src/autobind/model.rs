@@ -139,6 +139,28 @@ pub struct FunctionDecl {
     pub result: KiraType,
 }
 
+/// One enumerator a C header defines, as a value a binding can name.
+///
+/// Emitted as a module-scope `let`, which is the language's own spelling for
+/// one value computed once for the program. It is written with its type named
+/// rather than inferred, so a binding says what width the C enumerator had
+/// instead of leaving it to whatever the literal infers to.
+///
+/// Only *enumerators* reach here. A `#define` is not a declaration — the
+/// preprocessor has already removed it by the time clang has a cursor to walk
+/// — so a header's `#define SCM_RIGHTS 1` cannot be harvested at all, and the
+/// numbers that arrive this way are the ones C wrote as an `enum`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstantDecl {
+    /// The enumerator's name, as C writes it.
+    pub name: String,
+    /// Its value, as clang evaluated it for this target.
+    ///
+    /// Signed because that is what clang answers with, and because a C
+    /// enumerator may legitimately be negative — several of the kernel's are.
+    pub value: i64,
+}
+
 /// One declaration the headers hold that this seam cannot carry.
 ///
 /// Recorded rather than dropped: a generated binding lists what it left out and
@@ -169,6 +191,8 @@ pub struct BindingModule {
     pub pointers: Vec<PointerDecl>,
     /// Bound functions.
     pub functions: Vec<FunctionDecl>,
+    /// Enumerators the headers define.
+    pub constants: Vec<ConstantDecl>,
     /// Declarations the seam cannot carry, with the reason for each.
     pub skipped: Vec<SkippedDecl>,
 }
@@ -188,6 +212,7 @@ impl BindingModule {
         self.callbacks.sort_by(|a, b| a.name.cmp(&b.name));
         self.pointers.sort_by(|a, b| a.name.cmp(&b.name));
         self.functions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        self.constants.sort_by(|a, b| a.name.cmp(&b.name));
         self.skipped.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
@@ -199,5 +224,6 @@ impl BindingModule {
             + self.callbacks.len()
             + self.pointers.len()
             + self.functions.len()
+            + self.constants.len()
     }
 }

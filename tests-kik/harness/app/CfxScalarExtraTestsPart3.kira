@@ -286,12 +286,10 @@ construct CfxSTrapOOBSingleElem() extends Test {
 construct CfxSTrapModZeroLoop() extends Test {
     test {
         var d = 3
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             if i == 3 {
                 d = 0 }
             let _ = 10 % d
-            i = i + 1
         }
         return 0
     }

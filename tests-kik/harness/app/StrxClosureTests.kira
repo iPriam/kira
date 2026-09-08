@@ -465,10 +465,8 @@ construct StrxClCapImmTop() extends Test {
         let top = 100
         let f: (Int) -> Int = { x in return top - x }
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             acc = acc + f(i)
-            i = i + 1
         }
         return acc
     }
@@ -481,10 +479,8 @@ construct StrxClCapImmDiv() extends Test {
         let divisor = 4
         let f: (Int) -> Int = { x in return x / divisor }
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             acc = acc + f(i * 4)
-            i = i + 1
         }
         return acc
     }

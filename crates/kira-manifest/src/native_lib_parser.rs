@@ -90,6 +90,7 @@ fn sectioned(raw: RawSectionedManifest) -> Result<NativeLibrarySpec, NativeLibPa
             headers: autobinding.headers,
             functions: autobinding.functions,
             structs: autobinding.structs,
+            constants: autobinding.constants,
             mode,
             output: autobinding.output,
         });

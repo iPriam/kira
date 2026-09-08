@@ -312,8 +312,7 @@ construct EnxDirSwitchIndex7() extends Test {
 construct EnxDirCountWest() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let d = enxDirFor(i)
             var isWest = 0
             match d {
@@ -323,7 +322,6 @@ construct EnxDirCountWest() extends Test {
                 East  -> { isWest = 0 }
             }
             count = count + isWest
-            i = i + 1
         }
         return count
     }
@@ -336,11 +334,9 @@ construct EnxDirCountWest() extends Test {
 construct EnxDirWeightedFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             let d = enxDirFor(i)
             acc = acc + i * enxDirWeight(d)
-            i = i + 1
         }
         return acc
     }
@@ -351,13 +347,11 @@ construct EnxDirWeightedFold() extends Test {
 construct EnxDirCountNorthSouth() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let d = enxDirFor(i)
             let w = enxDirWeight(d)
             if w <= 2 {
                 count = count + 1 }
-            i = i + 1
         }
         return count
     }
@@ -368,10 +362,8 @@ construct EnxDirCountNorthSouth() extends Test {
 construct EnxDirFold8() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             acc = acc + enxDirWeight(enxDirFor(i))
-            i = i + 1
         }
         return acc
     }
@@ -432,8 +424,7 @@ construct EnxPriorityFold30() extends Test {
 construct EnxPriorityCountHigh() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 9 {
+        for i in 0..9 {
             let p = enxPriorityFor(i)
             var isH = 0
             match p {
@@ -442,7 +433,6 @@ construct EnxPriorityCountHigh() extends Test {
                 Low    -> { isH = 0 }
             }
             count = count + isH
-            i = i + 1
         }
         return count
     }
@@ -455,11 +445,9 @@ construct EnxPriorityCountHigh() extends Test {
 construct EnxPriorityWeightedFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 9 {
+        for i in 0..9 {
             let p = enxPriorityFor(i)
             acc = acc + i * enxPriorityScore(p)
-            i = i + 1
         }
         return acc
     }
@@ -535,13 +523,11 @@ construct EnxSeasonSpecificArray() extends Test {
 construct EnxSeasonCountWarm() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             let s = enxSeasonFor(i)
             let c = enxSeasonCode(s)
             if c <= 20 {
                 count = count + 1 }
-            i = i + 1
         }
         return count
     }
@@ -611,10 +597,8 @@ construct EnxTokenIndexedAccessFold() extends Test {
         ts.append(.Op(4))
         ts.append(.Paren(3))
         var acc = 0
-        var j = 0
-        while j < ts.count {
+        for j in 0..ts.count {
             acc = acc + enxTokenVal(ts[j])
-            j = j + 1
         }
         return acc
     }
@@ -632,11 +616,9 @@ construct EnxTokenIndexedAccessFold() extends Test {
 construct EnxTokenWeightedFold() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             let t = enxTokenFor(i)
             acc = acc + (i + 1) * enxTokenVal(t)
-            i = i + 1
         }
         return acc
     }
@@ -679,8 +661,7 @@ construct EnxTokenInlineMatchOp() extends Test {
 construct EnxTokenSumNumsOnly() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 9 {
+        for i in 0..9 {
             let t = enxTokenFor(i)
             var v = 0
             match t {
@@ -689,7 +670,6 @@ construct EnxTokenSumNumsOnly() extends Test {
                 Op(x)    -> { v = 0 }
             }
             acc = acc + v
-            i = i + 1
         }
         return acc
     }

@@ -206,10 +206,8 @@ construct NuxCastFloatOfIntTrunc() extends Test {
 construct NuxCastLoopSum() extends Test {
     test {
         var sum = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             sum = sum + Int(1.5)
-            i = i + 1
         }
         return sum
     }

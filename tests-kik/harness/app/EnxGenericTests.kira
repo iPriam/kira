@@ -304,10 +304,8 @@ construct EnxGDivLargeOk() extends Test {
 construct EnxGDivLoopFold12() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             acc = acc + enxGResultIntVal(enxGSafeDiv(120, i + 1))
-            i = i + 1
         }
         return acc
     }
@@ -319,8 +317,7 @@ construct EnxGDivLoopFold12() extends Test {
 construct EnxGDivErrorCount() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             let r = enxGSafeDiv(i - 3, 2)
             var isErr = 0
             match r {
@@ -328,7 +325,6 @@ construct EnxGDivErrorCount() extends Test {
                 Error(e) -> { isErr = 1 }
             }
             count = count + isErr
-            i = i + 1
         }
         return count
     }
@@ -420,10 +416,8 @@ construct EnxGRectErrOverflow() extends Test {
 construct EnxGRectFoldLoop() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             acc = acc + enxGRectResultArea(enxGMakeRect(i + 1, i + 2))
-            i = i + 1
         }
         return acc
     }
@@ -537,10 +531,8 @@ construct EnxGToneNonErrorCount() extends Test {
 construct EnxGToneFold12() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 12 {
+        for i in 0..12 {
             acc = acc + enxGToneResultVal(enxGColorResult(i % 5))
-            i = i + 1
         }
         return acc
     }

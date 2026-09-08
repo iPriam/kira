@@ -87,6 +87,67 @@ fn bind(package: &TempPackage, spec: &NativeLibrarySpec) -> String {
 }
 
 #[test]
+fn enumerators_are_bound_as_module_scope_constants() {
+    let package = TempPackage::new("enumerators");
+    package.header(
+        "demo.h",
+        "enum demo_kind { DEMO_FIRST = 0, DEMO_SECOND = 7, DEMO_BACKWARDS = -3 };\n\
+         enum { DEMO_ANONYMOUS = 0x1203 };\n\
+         #define DEMO_DEFINED 9\n",
+    );
+    let text = bind(&package, &library(&["demo.h"]));
+
+    assert!(text.contains("let DEMO_FIRST: Int = 0"), "{text}");
+    assert!(text.contains("let DEMO_SECOND: Int = 7"), "{text}");
+    assert!(
+        text.contains("let DEMO_BACKWARDS: Int = -3"),
+        "a C enumerator may be negative: {text}"
+    );
+    assert!(
+        text.contains("let DEMO_ANONYMOUS: Int = 4611"),
+        "an anonymous enum is how C writes a bare constant, and its value is \
+         decimal once bound: {text}"
+    );
+    assert!(
+        !text.contains("DEMO_DEFINED"),
+        "a `#define` is gone before clang has a cursor for it, so it cannot be \
+         bound and must not be invented: {text}"
+    );
+    assert!(
+        !text.contains("struct demo_kind"),
+        "the enum type itself is not declared, only its values: {text}"
+    );
+}
+
+#[test]
+fn a_named_enumerator_the_headers_do_not_define_is_skipped_with_a_reason() {
+    let package = TempPackage::new("missing-enumerator");
+    package.header(
+        "demo.h",
+        "enum { DEMO_PRESENT = 1 };\n#define DEMO_MACRO 2\n",
+    );
+    let mut spec = library(&["demo.h"]);
+    spec = spec.with_autobind(AutobindSpec {
+        module: Some("demo".to_owned()),
+        headers: vec!["NativeLibs/demo.h".to_owned()],
+        mode: AutobindMode::Selected,
+        constants: vec!["DEMO_PRESENT".to_owned(), "DEMO_MACRO".to_owned()],
+        ..AutobindSpec::default()
+    });
+    let text = bind(&package, &spec);
+
+    assert!(text.contains("let DEMO_PRESENT: Int = 1"), "{text}");
+    assert!(
+        !text.contains("let DEMO_MACRO"),
+        "a `#define` cannot be bound however it is named: {text}"
+    );
+    assert!(
+        text.contains("// DEMO_MACRO: named by the `autobind` declaration and not enumerated"),
+        "asking for a macro says why it did not arrive: {text}"
+    );
+}
+
+#[test]
 fn a_function_and_the_types_its_signature_reaches_are_bound() {
     let package = TempPackage::new("signature");
     package.header(

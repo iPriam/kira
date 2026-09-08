@@ -97,13 +97,11 @@ construct StxCopyLoopIndependence() extends Test {
     // i=0..4: copy p={i,i}, zero copy.x, acc += p.x = i; sum=0+1+2+3+4=10
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let p = StxPoint { x: i, y: i }
             var q = p
             q.x = 0
             acc = acc + p.x
-            i = i + 1
         }
         return acc
     }
@@ -170,10 +168,8 @@ construct StxArrSumX() extends Test {
         pts.append(StxPoint { x: 3, y: 4 })
         pts.append(StxPoint { x: 5, y: 6 })
         var s = 0
-        var i = 0
-        while i < pts.count {
+        for i in 0..pts.count {
             s = s + pts[i].x
-            i = i + 1
         }
         return s
     }
@@ -276,10 +272,8 @@ construct StxArrLoop100() extends Test {
             i = i + 1
         }
         var acc = 0
-        var j = 0
-        while j < pts.count {
+        for j in 0..pts.count {
             acc = acc + pts[j].sum()
-            j = j + 1
         }
         return acc
     }
@@ -327,10 +321,8 @@ construct StxArrAfterDeepWrite() extends Test {
         pts.append(StxPoint { x: 3, y: 0 })
         pts[1].x = 50
         var s = 0
-        var i = 0
-        while i < pts.count {
+        for i in 0..pts.count {
             s = s + pts[i].x
-            i = i + 1
         }
         return s
     }

@@ -48,6 +48,12 @@ Keep scratch files, repros, generated helpers, and one-off tools out of the repo
 
 Keep Python out of tracked files, tooling, tests, and CI. Confine temporary Python to `.codex/tmp/`. Write shipped tooling in Rust or Kira.
 
+Run Rust tests with `cargo nextest run`, never `cargo test`. `.config/nextest.toml` caps the groups sharing a `target/debug` or a `.kira-build`. `cargo test` cannot express a test group and races them.
+
+Filter with `-p <crate>` and a bare substring. Use `-E '<expr>'` only for `binary_id`, `kind`, or `test_group`.
+
+Run `cargo test --doc` when a change touches doctests. Nextest does not run them.
+
 ## Rules
 
 Apply repository rules to every file changed by the task. Fix violations introduced or exposed by the change without asking.

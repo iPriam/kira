@@ -27,6 +27,10 @@ pub(crate) enum DeclarationKind {
     Function,
     /// `distinct Name = Representation`
     Distinct,
+    /// `trait Name { … }`
+    Trait,
+    /// `extend Type { … }` or `extend Type: Trait { … }`
+    Extend,
     /// Anything else at file scope.
     Other,
 }
@@ -42,6 +46,8 @@ impl DeclarationKind {
             DeclarationKind::Form => "form",
             DeclarationKind::Function => "function",
             DeclarationKind::Distinct => "distinct",
+            DeclarationKind::Trait => "trait",
+            DeclarationKind::Extend => "extend",
             DeclarationKind::Other => "declaration",
         }
     }
@@ -61,6 +67,8 @@ impl DeclarationKind {
             DeclarationKind::Form => "Form",
             DeclarationKind::Function => "Function",
             DeclarationKind::Distinct => "Distinct",
+            DeclarationKind::Trait => "Trait",
+            DeclarationKind::Extend => "Extend",
             DeclarationKind::Other => "Declaration",
         }
     }

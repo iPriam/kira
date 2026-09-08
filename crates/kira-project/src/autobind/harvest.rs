@@ -16,6 +16,12 @@
 //! headers define. A type is declared once no matter how many signatures reach
 //! it.
 //!
+//! **Enumerators** come across as values, under the same rule: every one the
+//! listed headers define under `AllPublic`, or the named ones under `Selected`.
+//! The enum *type* is deliberately not declared — see `take_enum`. A `#define`
+//! is not reachable at all: the preprocessor has consumed it before there is a
+//! cursor to walk, which is why a header's constants may arrive only in part.
+//!
 //! # What is skipped
 //!
 //! A declaration the seam cannot carry is recorded with its reason rather than
@@ -30,7 +36,7 @@ use std::path::{Path, PathBuf};
 use kira_clang::{Cursor, CursorKind, TranslationUnit};
 use kira_native_lib_definition::{AutobindMode, AutobindSpec};
 
-use super::model::{BindingModule, FunctionDecl, ParamDecl, SkippedDecl};
+use super::model::{BindingModule, ConstantDecl, FunctionDecl, ParamDecl, SkippedDecl};
 
 /// The walk's state: what was asked for, and what has been built so far.
 pub(super) struct Harvest {
@@ -42,6 +48,8 @@ pub(super) struct Harvest {
     pub(super) functions: HashSet<String>,
     /// The structs a `Selected` declaration names.
     pub(super) structs: HashSet<String>,
+    /// The enumerators a `Selected` declaration names.
+    pub(super) constants: HashSet<String>,
     /// What has been built.
     pub(super) module: BindingModule,
     /// Every type name already declared, so a type reached twice is declared
@@ -69,6 +77,7 @@ pub(super) fn harvest(
         mode: spec.mode,
         functions: spec.functions.iter().cloned().collect(),
         structs: spec.structs.iter().cloned().collect(),
+        constants: spec.constants.iter().cloned().collect(),
         module: BindingModule {
             library: library.to_owned(),
             ..BindingModule::default()
@@ -85,6 +94,7 @@ pub(super) fn harvest(
         match cursor.kind() {
             CursorKind::FUNCTION_DECL => harvest.take_function(&cursor),
             CursorKind::STRUCT_DECL | CursorKind::TYPEDEF_DECL => harvest.take_type(&cursor),
+            CursorKind::ENUM_DECL => harvest.take_enum(&cursor),
             _ => {}
         }
     }
@@ -116,6 +126,48 @@ impl Harvest {
         match self.mode {
             AutobindMode::AllPublic => true,
             AutobindMode::Selected => self.structs.contains(name),
+        }
+    }
+
+    /// Whether this declaration's mode and selection include enumerator `name`.
+    ///
+    /// Selected by the *enumerator*, never by the enum type that holds it. A C
+    /// enum is frequently anonymous — `enum { SCM_RIGHTS = 1 };` is how a
+    /// header writes a constant it does not intend as a type — so there is
+    /// often no type name for a declaration to have named.
+    fn selects_constant(&self, name: &str) -> bool {
+        match self.mode {
+            AutobindMode::AllPublic => true,
+            AutobindMode::Selected => self.constants.contains(name),
+        }
+    }
+
+    /// Takes the enumerators of one C enum, each one that is selected.
+    ///
+    /// The enum type itself is not declared. Kira's `enum` is a tagged union
+    /// with payloads and exhaustive matching, and C's is a set of integers in a
+    /// shared namespace that callers freely combine with `|` — binding one as
+    /// the other would promise a totality C never had. The values come across;
+    /// the type does not.
+    fn take_enum(&mut self, cursor: &Cursor<'_>) {
+        for member in cursor.children() {
+            if member.kind() != CursorKind::ENUM_CONSTANT_DECL {
+                continue;
+            }
+            let name = member.name();
+            if name.is_empty() || !self.selects_constant(&name) {
+                continue;
+            }
+            // A header included twice, or an enumerator redeclared, would
+            // otherwise be emitted twice and stop the generated file compiling.
+            if self.declared.contains(&name) {
+                continue;
+            }
+            self.declared.insert(name.clone());
+            self.module.constants.push(ConstantDecl {
+                name,
+                value: member.enum_constant_value(),
+            });
         }
     }
 
@@ -259,6 +311,26 @@ impl Harvest {
             self.skip(
                 &name,
                 "named by the `autobind` declaration and not defined by its headers".to_owned(),
+            );
+        }
+        let missing: Vec<String> = self
+            .constants
+            .iter()
+            .filter(|name| {
+                !self
+                    .module
+                    .constants
+                    .iter()
+                    .any(|bound| &&bound.name == name)
+            })
+            .cloned()
+            .collect();
+        for name in missing {
+            self.skip(
+                &name,
+                "named by the `autobind` declaration and not enumerated by its headers \
+                 (a `#define` is not an enumerator and cannot be bound)"
+                    .to_owned(),
             );
         }
     }

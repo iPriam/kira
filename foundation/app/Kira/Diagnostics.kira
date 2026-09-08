@@ -471,6 +471,7 @@ enum KiraError {
     KLINT001
     KLINT002
     KLINT003
+    KLINT004
 
     // An internal compiler error.
     KIC001

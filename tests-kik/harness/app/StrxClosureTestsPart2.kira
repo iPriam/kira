@@ -33,10 +33,8 @@ construct StrxClMutCount() extends Test {
             count = count + 1
             return count
         }
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let _ = tick(0)
-            i = i + 1
         }
         return count
     }
@@ -72,10 +70,8 @@ construct StrxClMutToggle() extends Test {
             }
             return flag
         }
-        var i = 0
-        while i < 6 {
+        for i in 0..6 {
             let _ = toggle(0)
-            i = i + 1
         }
         return flag
     }
@@ -150,10 +146,8 @@ construct StrxClMutMax() extends Test {
             return mx
         }
         let vals = [3, 7, 2, 9, 1, 5]
-        var i = 0
-        while i < vals.count {
+        for i in 0..vals.count {
             let _ = track(vals[i])
-            i = i + 1
         }
         return mx
     }
@@ -168,10 +162,8 @@ construct StrxClMutCountDown() extends Test {
             remaining = remaining - 1
             return remaining
         }
-        var i = 0
-        while i < 7 {
+        for i in 0..7 {
             let _ = use(0)
-            i = i + 1
         }
         return remaining
     }
@@ -187,10 +179,8 @@ construct StrxClMutRunning() extends Test {
             return running
         }
         let vals = [2, 4, 6, 8]
-        var i = 0
-        while i < vals.count {
+        for i in 0..vals.count {
             let _ = update(vals[i])
-            i = i + 1
         }
         return running
     }
@@ -223,10 +213,8 @@ construct StrxClMutLoopModify() extends Test {
             accum = accum + x
             return x
         }
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             let _ = add(i * 3)
-            i = i + 1
         }
         return accum
     }
@@ -253,13 +241,11 @@ construct StrxClCompose() extends Test {
 construct StrxClComposeLoop() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let f: (Int) -> Int = { x in return x + i }
             let g: (Int) -> Int = { x in return x * 2 }
             let mid = strxCApply(move f, i)
             acc = acc + strxCApply(move g, mid)
-            i = i + 1
         }
         return acc
     }
@@ -321,10 +307,8 @@ construct StrxClChainResult() extends Test {
         var step = 1
         let f: (Int) -> Int = { x in return x + step }
         var out = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             out = f(out)
-            i = i + 1
         }
         return out
     }

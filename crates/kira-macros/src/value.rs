@@ -120,6 +120,14 @@ pub(crate) struct DeclarationValue {
     pub(crate) line: u32,
     /// How many lines its file holds, or `0` when it was re-scanned.
     pub(crate) file_lines: u32,
+    /// The annotations written above it, each as its own source text.
+    ///
+    /// The list rather than the declaration's whole text, because a lint asking
+    /// "was this one allowed here" is asking about the annotations and not
+    /// about anything else the declaration happens to contain. Searching
+    /// `syntax` would find `@Allow(KLINT002)` written inside a string in the
+    /// body just as readily.
+    pub(crate) annotations: Vec<String>,
 }
 
 /// A `Statement` as the reflection API exposes it.
@@ -193,6 +201,14 @@ impl DeclarationValue {
             kind: declaration.kind.variant(),
             family: declaration.family.clone(),
             path: declaration.path.clone(),
+            annotations: declaration
+                .annotations
+                .iter()
+                .map(|annotation| match annotation.arguments.is_empty() {
+                    true => format!("@{}", annotation.name),
+                    false => format!("@{}({})", annotation.name, annotation.arguments.join(", ")),
+                })
+                .collect(),
             line: declaration.line,
             file_lines: declaration.file_lines,
         }
@@ -384,6 +400,7 @@ mod tests {
             kind: "struct",
             family: String::new(),
             path: std::sync::Arc::from(""),
+            annotations: Vec::new(),
             line: 0,
             file_lines: 0,
         }));

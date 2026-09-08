@@ -109,10 +109,8 @@ construct GbxAMarkerBoundAdmitsAScalar() extends Test {
         match many {
             One(_) -> { total = total + 100 }
             Many(xs) -> {
-                var i = 0
-                while i < xs.count {
+                for i in 0..xs.count {
                     total = total + xs[i]
-                    i = i + 1
                 }
             }
         }
@@ -227,10 +225,8 @@ construct GbxAnArrayOfBoundedValuesChurnsClean() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < xs.count {
+        for j in 0..xs.count {
             total = total + gbxUnbox(xs[j])
-            j = j + 1
         }
         return total
     }
