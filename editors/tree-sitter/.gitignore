@@ -8,3 +8,10 @@ src/node-types.json
 *.swo
 *~
 .DS_Store
+
+# The tree-sitter CLI itself. `tree-sitter generate` is run from a locally
+# fetched binary, and a 22 MB ELF for whichever machine last ran it is not the
+# grammar — `src/parser.c` is. One was committed in the 1.9.1 line from a
+# Linux/aarch64 runner and reached every checkout on every platform.
+/tree-sitter
+/tree-sitter.exe
