@@ -176,9 +176,17 @@ class JsonReader {
             self.fail(.UnexpectedEnd, self.size)
             return false
         }
-        if self.data.substring(self.at, stop) != word {
-            self.fail(.UnexpectedCharacter, self.at)
-            return false
+        // Byte by byte rather than one substring comparison, so that the
+        // offset reported is the one that broke the keyword. Comparing the
+        // whole word can only say that it did not match, and answering `at`
+        // for every failure points at the `t` of `trxe` rather than the `x`.
+        var index = 0
+        while index < word.count {
+            if self.data.charAt(self.at + index) != word.charAt(index) {
+                self.fail(.UnexpectedCharacter, self.at + index)
+                return false
+            }
+            index = index + 1
         }
         self.at = stop
         return true

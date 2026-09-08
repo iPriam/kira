@@ -73,25 +73,26 @@ checks rather than five.
 
 ## Run on the host
 
-Build the static library from the workspace root, then run the example from
-this directory:
+Everything below runs from the workspace root, including the example itself —
+one working directory throughout, because the Foundation path and the path to
+the program are both written against it and mixing the two is how a command
+that looks right fails.
+
+The JSON task needs Foundation, so every run names the checkout's copy rather
+than an installed one:
 
 ```sh
 cargo build -p kira-network
-kira run --backend vm examples/networking/main.kira
-kira run --backend llvm examples/networking/main.kira
-kira run --backend hybrid examples/networking/main.kira
+KIRA_FOUNDATION_HOME=$PWD/foundation kira run --backend vm examples/networking/main.kira
+KIRA_FOUNDATION_HOME=$PWD/foundation kira run --backend llvm examples/networking/main.kira
+KIRA_FOUNDATION_HOME=$PWD/foundation kira run --backend hybrid examples/networking/main.kira
 ```
 
 All three runs print `12`: two successful operation results for each of the
 four client/server pairs, one successful raw I/O operation, one successful
-cancellation probe, the HTTPS request, and the JSON one. The JSON task needs
-Foundation, so run it against the checkout's copy:
+cancellation probe, the HTTPS request, and the JSON one.
 
-```sh
-KIRA_FOUNDATION_HOME=$PWD/../../foundation kira run --backend vm main.kira
-``` The Rust
-crate also has a direct end-to-end test and a runnable companion:
+The Rust crate also has a direct end-to-end test and a runnable companion:
 
 ```sh
 cargo test -p kira-network --lib

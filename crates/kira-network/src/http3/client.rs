@@ -74,6 +74,15 @@ pub struct Http3Response {
     body: ClientStream,
     bytes_read: usize,
     max_body: usize,
+    /// When the request this answers stops being allowed to run.
+    ///
+    /// Absolute rather than a duration, because it is the *request's* deadline
+    /// and the headers have already spent part of it. Reading the body is the
+    /// rest of the same operation, so it gets what remains rather than a fresh
+    /// copy of the limit.
+    deadline: Option<tokio::time::Instant>,
+    /// The caller's cancellation, observed by every body read.
+    token: CancellationToken,
 }
 
 impl std::fmt::Debug for Http3Response {
@@ -89,9 +98,17 @@ impl std::fmt::Debug for Http3Response {
 }
 
 impl Http3Response {
-    fn new(response: http::Response<()>, body: ClientStream, max_body: usize) -> Self {
+    fn new(
+        response: http::Response<()>,
+        body: ClientStream,
+        max_body: usize,
+        deadline: Option<tokio::time::Instant>,
+        token: CancellationToken,
+    ) -> Self {
         let (parts, _) = response.into_parts();
         Self {
+            deadline,
+            token,
             status: parts.status,
             headers: parts.headers,
             body,
@@ -112,12 +129,26 @@ impl Http3Response {
 
     /// Reads the next response data frame.
     pub async fn next_chunk(&mut self) -> Result<Option<Bytes>, NetworkError> {
-        let Some(mut chunk) = self
-            .body
-            .recv_data()
-            .await
-            .map_err(|_| NetworkError::Protocol)?
-        else {
+        // The wait a stalled peer would otherwise own. `send_request` ends when
+        // the response headers arrive, so without these a server could answer
+        // and then simply stop sending body frames, leaving the caller pending
+        // for as long as it kept the QUIC connection open.
+        let received = {
+            let receiving = self.body.recv_data();
+            match self.deadline {
+                Some(deadline) => tokio::select! {
+                    _ = self.token.cancelled() => return Err(NetworkError::Canceled),
+                    result = tokio::time::timeout_at(deadline, receiving) => {
+                        result.map_err(|_| NetworkError::Timeout)?
+                    }
+                },
+                None => tokio::select! {
+                    _ = self.token.cancelled() => return Err(NetworkError::Canceled),
+                    result = receiving => result,
+                },
+            }
+        };
+        let Some(mut chunk) = received.map_err(|_| NetworkError::Protocol)? else {
             return Ok(None);
         };
         let chunk = chunk.copy_to_bytes(chunk.remaining());
@@ -210,23 +241,33 @@ impl Http3Client {
         request: HttpRequest,
         token: &CancellationToken,
     ) -> Result<Http3Response, NetworkError> {
-        let future = self.send_request(request);
-        if let Some(timeout) = self.config.operation_timeout {
-            tokio::select! {
+        // Taken once, here, so the headers and the body share it. Measured from
+        // before the send rather than from when the response arrived.
+        let deadline = self
+            .config
+            .operation_timeout
+            .map(|timeout| tokio::time::Instant::now() + timeout);
+        let future = self.send_request(request, deadline, token.clone());
+        match deadline {
+            Some(deadline) => tokio::select! {
                 _ = token.cancelled() => Err(NetworkError::Canceled),
-                result = tokio::time::timeout(timeout, future) => {
+                result = tokio::time::timeout_at(deadline, future) => {
                     result.map_err(|_| NetworkError::Timeout)?
                 }
-            }
-        } else {
-            tokio::select! {
+            },
+            None => tokio::select! {
                 _ = token.cancelled() => Err(NetworkError::Canceled),
                 result = future => result,
-            }
+            },
         }
     }
 
-    async fn send_request(&self, request: HttpRequest) -> Result<Http3Response, NetworkError> {
+    async fn send_request(
+        &self,
+        request: HttpRequest,
+        deadline: Option<tokio::time::Instant>,
+        token: CancellationToken,
+    ) -> Result<Http3Response, NetworkError> {
         let (method, uri, headers, body) = request.into_parts();
         let mut message = http::Request::builder()
             .method(method)
@@ -274,6 +315,8 @@ impl Http3Client {
             response,
             stream,
             self.config.max_response_body,
+            deadline,
+            token,
         ))
     }
 }
