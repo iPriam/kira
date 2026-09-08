@@ -3,7 +3,7 @@
 //
 // One `if` per code rather than a `match`: `match` selects on an enum, and the
 // question here is the other way round. Splitting the chain by code prefix was
-// measured and made no difference, so this costs what its 443 entries cost and
+// measured and made no difference, so this costs what its 444 entries cost and
 // no more.
 
 // The code `text` names, or `.Unrecognized` when `KiraError` does not list it.
@@ -450,6 +450,7 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KLINT001" { return .KLINT001 }
     if text == "KLINT002" { return .KLINT002 }
     if text == "KLINT003" { return .KLINT003 }
+    if text == "KLINT004" { return .KLINT004 }
     if text == "KIC001" { return .KIC001 }
     return .Unrecognized
 }
