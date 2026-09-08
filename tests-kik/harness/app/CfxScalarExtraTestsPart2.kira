@@ -13,17 +13,13 @@ import Foundation
 construct CfxSBoolAndTable() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 if av && bv {
                     trues = trues + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // only T,T => 1
         return trues
@@ -34,17 +30,13 @@ construct CfxSBoolAndTable() extends Test {
 construct CfxSBoolOrTable() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 if av || bv {
                     trues = trues + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // F,T; T,F; T,T => 3
         return trues
@@ -55,17 +47,13 @@ construct CfxSBoolOrTable() extends Test {
 construct CfxSBoolXorTable() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 if (av || bv) && !(av && bv) {
                     trues = trues + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // XOR: F,T and T,F => 2
         return trues
@@ -76,17 +64,13 @@ construct CfxSBoolXorTable() extends Test {
 construct CfxSBoolNandTable() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 if !(av && bv) {
                     trues = trues + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // NAND: F,F; F,T; T,F => 3
         return trues
@@ -97,17 +81,13 @@ construct CfxSBoolNandTable() extends Test {
 construct CfxSBoolNorTable() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 if !(av || bv) {
                     trues = trues + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // NOR: only F,F => 1
         return trues
@@ -120,19 +100,15 @@ construct CfxSBoolThreeVar() extends Test {
         var trues = 0
         var a = 0
         while a < 2 {
-            var b = 0
-            while b < 2 {
-                var c = 0
-                while c < 2 {
+            for b in 0..2 {
+                for c in 0..2 {
                     let av = a == 1
                     let bv = b == 1
                     let cv = c == 1
                     if (av && bv) || (bv && cv) || (av && cv) {
                         trues = trues + 1
                     }
-                    c = c + 1
                 }
-                b = b + 1
             }
             a = a + 1
         }
@@ -158,19 +134,15 @@ construct CfxSBoolShortCircuit() extends Test {
 construct CfxSBoolDeMorgan1() extends Test {
     test {
         var ok = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 let lhs = !(av && bv)
                 let rhs = (!av) || (!bv)
                 if lhs == rhs {
                     ok = ok + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         // all 4 combos should match
         return ok
@@ -181,19 +153,15 @@ construct CfxSBoolDeMorgan1() extends Test {
 construct CfxSBoolDeMorgan2() extends Test {
     test {
         var ok = 0
-        var a = 0
-        while a < 2 {
-            var b = 0
-            while b < 2 {
+        for a in 0..2 {
+            for b in 0..2 {
                 let av = a == 1
                 let bv = b == 1
                 let lhs = !(av || bv)
                 let rhs = (!av) && (!bv)
                 if lhs == rhs {
                     ok = ok + 1 }
-                b = b + 1
             }
-            a = a + 1
         }
         return ok
     }
@@ -341,10 +309,8 @@ construct CfxSBitwiseMirrorDiv() extends Test {
 construct CfxSPow2Mod() extends Test {
     test {
         var acc = 0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             acc = acc + cfxsPow(2, i) % 7
-            i = i + 1
         }
         // 1%7=1, 2%7=2, 4%7=4, 8%7=1, 16%7=2, 32%7=4, 64%7=1, 128%7=2
         // sum = 1+2+4+1+2+4+1+2 = 17
@@ -374,10 +340,8 @@ construct CfxSFloatExactSum() extends Test {
 construct CfxSFloatExactProduct() extends Test {
     test {
         var f = 1.0
-        var i = 0
-        while i < 8 {
+        for i in 0..8 {
             f = f * 0.5
-            i = i + 1
         }
         // 0.5^8 = 1/256 = 0.00390625
         return f == 0.00390625 ? 1 : 0

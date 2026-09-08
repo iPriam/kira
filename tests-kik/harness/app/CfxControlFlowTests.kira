@@ -434,16 +434,12 @@ construct CfxWhileNestedSum() extends Test {
 construct CfxWhileNestedSkip() extends Test {
     test {
         var count = 0
-        var i = 0
-        while i < 8 {
-            var j = 0
-            while j < 8 {
+        for i in 0..8 {
+            for j in 0..8 {
                 if i != j {
                     count = count + 1
                 }
-                j = j + 1
             }
-            i = i + 1
         }
         // 8*8 - 8 = 56
         return count
@@ -454,14 +450,10 @@ construct CfxWhileNestedSkip() extends Test {
 construct CfxWhileNestedMatrix() extends Test {
     test {
         var acc = 0
-        var r = 0
-        while r < 4 {
-            var c = 0
-            while c < 4 {
+        for r in 0..4 {
+            for c in 0..4 {
                 acc = acc + r * 4 + c
-                c = c + 1
             }
-            r = r + 1
         }
         // sum 0..15 = 120
         return acc
@@ -474,14 +466,10 @@ construct CfxWhileTripleNested() extends Test {
         var acc = 0
         var a = 0
         while a < 3 {
-            var b = 0
-            while b < 3 {
-                var c = 0
-                while c < 3 {
+            for b in 0..3 {
+                for c in 0..3 {
                     acc = acc + a + b + c
-                    c = c + 1
                 }
-                b = b + 1
             }
             a = a + 1
         }

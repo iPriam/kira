@@ -152,10 +152,8 @@ function clsH2() -> Int {
     acc = acc + sum                 // 300+302+304+306+308 = 1520
 
     // Direct parent-method values via the combined child, in a loop.
-    var k = 0
-    while k < 4 {
+    for k in 0..4 {
         acc = acc + c.blendFields() * k   // 7*0 + 7*1 + 7*2 + 7*3 = 42
-        k = k + 1
     }
 
     return acc
@@ -223,11 +221,9 @@ function clsH3() -> Int {
     // Cube uses the super-call override on a single instance, in a loop.
     var c = ClsCube()
     c.side = 3
-    var m = 0
-    while m < 4 {
+    for m in 0..4 {
         acc = acc + c.scaledArea(m)   // (3*3*m)*6 = 54*m -> 0+54+108+162 = 324
         acc = acc + c.sides           // inherited override default: 4 each -> 16
-        m = m + 1
     }
 
     return acc
@@ -276,12 +272,10 @@ function clsH4() -> Int {
     let b = ClsBridge()
     let tn = ClsTunnel()
 
-    var km = 0
-    while km < 5 {
+    for km in 0..5 {
         acc = acc + t.charge(km)    // 10 + km          -> 10,11,12,13,14 = 60
         acc = acc + b.charge(km)    // 20 + 2km         -> 20,22,24,26,28 = 120
         acc = acc + tn.charge(km)   // (30 + 2km) + 5   -> 35,37,39,41,43 = 195
-        km = km + 1
     }
     // 60 + 120 + 195 = 375
 

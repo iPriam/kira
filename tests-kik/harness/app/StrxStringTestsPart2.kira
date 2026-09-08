@@ -32,10 +32,8 @@ construct StrxBoxArrSum() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < boxes.count {
+        for j in 0..boxes.count {
             total = total + boxes[j].nameLen()
-            j = j + 1
         }
         return total
     }
@@ -239,10 +237,8 @@ construct StrxLblArrBuild() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < lbls.count {
+        for j in 0..lbls.count {
             total = total + strxLblLen(lbls[j])
-            j = j + 1
         }
         return total
     }
@@ -330,10 +326,8 @@ construct StrxArrBuildSum() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < arr.count {
+        for j in 0..arr.count {
             total = total + arr[j].count
-            j = j + 1
         }
         return total
     }
@@ -369,10 +363,8 @@ construct StrxArrBuildMvLen() extends Test {
         }
         // Also sum by index access
         var indexTotal = 0
-        var j = 0
-        while j < arr.count {
+        for j in 0..arr.count {
             indexTotal = indexTotal + arr[j].count
-            j = j + 1
         }
         // Both should be equal; return their sum
         return buildTotal + indexTotal

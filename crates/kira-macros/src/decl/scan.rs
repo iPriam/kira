@@ -12,7 +12,16 @@ use crate::tokens::Lexed;
 
 /// Whether `kind` can only be the first token of a declaration, so that
 /// reaching it while scanning a bodyless one means the latter has ended.
-pub(super) fn starts_declaration(kind: TokenKind) -> bool {
+pub(super) fn starts_declaration(kind: TokenKind, text: &str) -> bool {
+    // `extend` is the one declaration keyword the lexer does not have a token
+    // for — it is an ordinary identifier everywhere else, and the parser reads
+    // it positionally. So it is matched by text, and *only* by text: every
+    // identifier answering `true` here would end a bodyless declaration at the
+    // first name inside it, and `distinct Name = Representation` would stop at
+    // its representation.
+    if kind == TokenKind::Identifier {
+        return text == "extend";
+    }
     matches!(
         kind,
         TokenKind::At

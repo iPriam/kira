@@ -50,10 +50,8 @@ struct StxBag {
 
     function total() -> Int {
         var s = self.tag
-        var i = 0
-        while i < self.items.count {
+        for i in 0..self.items.count {
             s = s + self.items[i]
-            i = i + 1
         }
         return s
     }
@@ -437,12 +435,10 @@ construct StxScaleLoopAcc() extends Test {
     // i=0: 2*1=2; i=1: 2*4=8; i=2: 2*9=18; i=3: 2*16=32; i=4: 2*25=50 → total=110
     test {
         var acc = 0
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             let p = StxPoint { x: i + 1, y: i + 1 }
             let q = p.scale(i + 1)
             acc = acc + q.sum()
-            i = i + 1
         }
         return acc
     }
@@ -490,10 +486,8 @@ construct StxBorrowBumpYSum() extends Test {
     // p={5,3}, 5x bumpY → y=8
     test {
         var p = StxPoint { x: 5, y: 3 }
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             stxBumpY(p)
-            i = i + 1
         }
         return p.y
     }
@@ -514,10 +508,8 @@ construct StxBorrowAddNLoop() extends Test {
     // p={0,0}, 5x addN(3) → x=15
     test {
         var p = StxPoint { x: 0, y: 0 }
-        var i = 0
-        while i < 5 {
+        for i in 0..5 {
             stxAddN(p, 3)
-            i = i + 1
         }
         return p.x
     }

@@ -1,41 +1,33 @@
 // What `kira lint` checks the kik harness for. Foundation's `Lint.kira`
 // declares the vocabulary; `LintRunner.kira` holds what each code looks for.
 //
+// Every lint already has a level, so this file states only what the harness
+// wants *different* from the standard set. A package that agrees with the
+// defaults writes no `linter.kira` at all and still gets linted.
+//
 // The harness is linted like any other package, and for a sharper reason than
 // most: it is the corpus the compiler is judged against, so it is read far more
 // often than it is written. A 1700-line suite is one nobody finds a case in.
 
 import Foundation
 
+// A variant written with the type it already belongs to.
+//
+// Off here, unlike in the library packages: a test corpus deliberately writes
+// the long spelling in places, because the qualified form is itself one of the
+// things the compiler has to keep accepting. This is the default too, and it is
+// written out because "off on purpose" and "off because nobody said" are
+// different facts about a corpus.
+construct QualifiedVariant() extends Lint {
+    let code: String = "KLINT001"
+    let level: LintLevel = .Allow
+}
+
 // 700 lines is the hard ceiling for every `.kira` and `.ksl` file. A suite that
 // outgrows it splits at a section banner, which is where its cases already
 // group.
 construct FileLength() extends Lint {
     let code: String = "KLINT003"
-    let severity: String = "warning"
-    let enabled: Bool = true
+    let level: LintLevel = .Warn
     let limit: Int = 700
-}
-
-// A variant written with the type it already belongs to. Kira resolves a
-// leading dot against the expected type, and `x == .Red` compiles to a tag
-// compare with no throwaway enum.
-//
-// Off here, unlike in the library packages: a test corpus deliberately writes
-// the long spelling in places, because the qualified form is itself one of the
-// things the compiler has to keep accepting.
-construct QualifiedVariant() extends Lint {
-    let code: String = "KLINT001"
-    let severity: String = "warning"
-    let enabled: Bool = false
-}
-
-// A `while` counting an index by hand, where a `for` does it for you. The
-// `while` spelling itself is covered by the control-flow suites' loops over
-// non-linear conditions, so a counted loop written long here is only harder
-// to read.
-construct ManualIndexLoop() extends Lint {
-    let code: String = "KLINT002"
-    let severity: String = "warning"
-    let enabled: Bool = true
 }

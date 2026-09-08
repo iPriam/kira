@@ -488,10 +488,8 @@ struct TrxParcel: Send, Sync {
     let weights: [Int]
     function total(borrow self) -> Int {
         var sum = 0
-        var i = 0
-        while i < weights.count {
+        for i in 0..weights.count {
             sum = sum + weights[i]
-            i = i + 1
         }
         return sum + label.count
     }

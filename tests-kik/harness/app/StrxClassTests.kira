@@ -438,10 +438,8 @@ construct StrxClsMixCLoop() extends Test {
     test {
         let m = StrxCMix()
         var sum = 0
-        var n = 0
-        while n < 5 {
+        for n in 0..5 {
             sum = sum + m.cSum(n)
-            n = n + 1
         }
         return sum
     }
@@ -453,10 +451,8 @@ construct StrxClsMixWLoopMul() extends Test {
     test {
         let m = StrxCMix()
         var acc = 0
-        var k = 0
-        while k < 4 {
+        for k in 0..4 {
             acc = acc + m.wSum() * k
-            k = k + 1
         }
         return acc
     }
@@ -542,10 +538,8 @@ construct StrxClsArrTriLoop() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].area(2)
-            j = j + 1
         }
         return total
     }
@@ -562,10 +556,8 @@ construct StrxClsArrTriSides() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].sides
-            j = j + 1
         }
         return total
     }
@@ -584,10 +576,8 @@ construct StrxClsArrTriAcc() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < tris.count {
+        for j in 0..tris.count {
             total = total + tris[j].area(2) + tris[j].sides + tris[j].baseFee()
-            j = j + 1
         }
         return total
     }
@@ -607,10 +597,8 @@ construct StrxClsArrRectLoop() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < rects.count {
+        for j in 0..rects.count {
             total = total + rects[j].area(1)
-            j = j + 1
         }
         return total
     }
@@ -627,10 +615,8 @@ construct StrxClsArrRectSides() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < rects.count {
+        for j in 0..rects.count {
             total = total + rects[j].sides
-            j = j + 1
         }
         return total
     }
@@ -781,10 +767,8 @@ construct StrxClsSelfDispatchOverAnArray() extends Test {
             i = i + 1
         }
         var total = 0
-        var j = 0
-        while j < items.count {
+        for j in 0..items.count {
             total = total + items[j].viaSelf()
-            j = j + 1
         }
         return total
     }
