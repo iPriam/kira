@@ -214,14 +214,21 @@ pub(crate) fn send(id: i64) -> Result<OperationId, NetworkError> {
     let timeout = spec.timeout;
     let request = spec.into_request()?;
     runtime::register_request(async move {
-        let sending = client.request(request);
-        let response = match timeout {
-            Some(limit) => tokio::time::timeout(limit, sending)
-                .await
-                .map_err(|_| NetworkError::Timeout)??,
-            None => sending.await?,
+        // Both halves under one deadline, because `set_timeout_ms` documents a
+        // whole-request one. A server that sends headers and then stalls ends
+        // `client.request` promptly and leaves the body unread, so a deadline
+        // that covered only the send would let that peer hold a Kira caller
+        // open for as long as it kept the connection alive.
+        let whole = async move {
+            let response = client.request(request).await?;
+            ResponseData::collect(response).await
         };
-        ResponseData::collect(response).await
+        match timeout {
+            Some(limit) => tokio::time::timeout(limit, whole)
+                .await
+                .map_err(|_| NetworkError::Timeout)?,
+            None => whole.await,
+        }
     })
 }
 
@@ -238,6 +245,19 @@ type ClientKey = (HttpVersion, Vec<Vec<u8>>);
 
 static CLIENTS: OnceLock<Mutex<Vec<(ClientKey, HttpClient)>>> = OnceLock::new();
 
+/// How many pooled clients carrying caller-supplied trust anchors are kept.
+///
+/// The default-trust clients are few — one per protocol version — but a
+/// caller-supplied anchor set is unbounded in a way they are not: every
+/// loopback HTTPS server started by a test presents a fresh certificate, so a
+/// start/trust/send/close cycle mints a distinct key each time it runs. Kept
+/// unbounded, each retained client holds a connection pool and its anchor
+/// buffers for the life of the process.
+///
+/// Bounded and evicted oldest-first rather than not cached at all, so a program
+/// that pins one corporate root still gets the pooling this cache exists for.
+const MAX_CUSTOM_ROOT_CLIENTS: usize = 8;
+
 fn client_for(version: HttpVersion, roots: &[Vec<u8>]) -> Result<HttpClient, NetworkError> {
     let clients = CLIENTS.get_or_init(|| Mutex::new(Vec::new()));
     let mut clients = clients.lock().map_err(|_| NetworkError::RuntimeInit)?;
@@ -246,6 +266,19 @@ fn client_for(version: HttpVersion, roots: &[Vec<u8>]) -> Result<HttpClient, Net
         .find(|((cached, cached_roots), _)| *cached == version && cached_roots == roots)
     {
         return Ok(client.clone());
+    }
+    if !roots.is_empty() {
+        let custom = clients
+            .iter()
+            .filter(|((_, cached_roots), _)| !cached_roots.is_empty())
+            .count();
+        if custom >= MAX_CUSTOM_ROOT_CLIENTS
+            && let Some(oldest) = clients
+                .iter()
+                .position(|((_, cached_roots), _)| !cached_roots.is_empty())
+        {
+            clients.remove(oldest);
+        }
     }
     let client = HttpClient::new(HttpClientConfig {
         version,

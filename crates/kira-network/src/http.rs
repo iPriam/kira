@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bytes::{Buf, Bytes};
 use http::{HeaderValue, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Empty, Full};
+use http_body_util::{BodyExt, Empty, Full, Limited};
 use hyper::body::Incoming;
 use hyper::client::conn::{http1, http2};
 use hyper::server::conn::{http1 as server_http1, http2 as server_http2};
@@ -170,6 +170,14 @@ pub(crate) async fn serve_https(
 ///
 /// `/json` answers the same transcript as a JSON object, for a caller that
 /// parses what it receives rather than searching it.
+/// The largest request body this loopback server will read.
+///
+/// `collect` on an `Incoming` reads whatever the peer sends, and the peer here
+/// is whatever connected to a port on the loopback interface. Without a bound,
+/// a client that keeps writing takes the process down with it — a test server
+/// is still a server, and this one runs inside the test process.
+const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
+
 async fn echo(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
@@ -179,7 +187,22 @@ async fn echo(request: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_owned();
-    let body = request.into_body().collect().await?.to_bytes();
+    let body = match Limited::new(request.into_body(), MAX_REQUEST_BODY)
+        .collect()
+        .await
+    {
+        Ok(collected) => collected.to_bytes(),
+        // `Limited` reports the overrun through a boxed error rather than a
+        // `hyper::Error`, so it cannot be returned from this signature: answer
+        // the status that says what happened instead.
+        Err(_) => {
+            let mut response = Response::new(Full::new(Bytes::from_static(
+                b"request body exceeds the loopback server's limit",
+            )));
+            *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+            return Ok(response);
+        }
+    };
     let body = String::from_utf8_lossy(&body).into_owned();
     // A chat completion shaped like the one an LLM service answers with, so a
     // client can be driven end to end without one. The content is the request

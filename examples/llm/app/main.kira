@@ -74,7 +74,6 @@ async function runPipeline() -> Int {
         maxTokens = 2000,
         temperature = 0.2,
         timeoutMs = 60000,
-        attempts = 3,
         trustPort = trustPort
     }
 
