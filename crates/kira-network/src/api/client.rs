@@ -181,6 +181,15 @@ impl HttpResponse {
 pub struct HttpClient {
     inner: PooledClient<HttpsConnector<HttpConnector>, Full<Bytes>>,
     config: HttpClientConfig,
+    /// This client's TLS configuration, built once and shared by every
+    /// connection it opens.
+    ///
+    /// Rebuilding it per connection copied the whole Mozilla anchor set each
+    /// time and, because a `ClientConfig` owns the session-resumption store,
+    /// gave every connection a private one — so resumption never applied and
+    /// each connection paid a full handshake. Both roots and ALPN are fixed for
+    /// the life of a client, so there is nothing per-connection to vary.
+    tls: Arc<rustls::ClientConfig>,
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -242,9 +251,16 @@ impl HttpClient {
         if config.version == HttpVersion::Http2 {
             builder.http2_only(true);
         }
+        let alpn: &[&[u8]] = match config.version {
+            HttpVersion::Http1 => &[tls::ALPN_HTTP1],
+            HttpVersion::Http2 => &[tls::ALPN_HTTP2],
+            HttpVersion::Http3 => return Err(NetworkError::Unsupported),
+        };
+        let tls = Arc::new(tls::client_config(&config.root_certificates, alpn)?);
         Ok(Self {
             inner: builder.build(connector),
             config,
+            tls,
         })
     }
 
@@ -266,13 +282,9 @@ impl HttpClient {
                 .map_err(|_| NetworkError::Connect)?;
             return Ok(tls::ClientStream::Plain(stream));
         }
-        let alpn: &[&[u8]] = match self.config.version {
-            HttpVersion::Http1 => &[tls::ALPN_HTTP1],
-            HttpVersion::Http2 => &[tls::ALPN_HTTP2],
-            HttpVersion::Http3 => return Err(NetworkError::Unsupported),
-        };
-        let config = tls::client_config(&self.config.root_certificates, alpn)?;
-        let stream = tls::ClientStream::Tls(Box::new(tls::connect(host, port, config).await?));
+        let stream = tls::ClientStream::Tls(Box::new(
+            tls::connect(host, port, Arc::clone(&self.tls)).await?,
+        ));
         let negotiated = stream.negotiated_protocol();
         let agreed = match self.config.version {
             HttpVersion::Http2 => negotiated == tls::ALPN_HTTP2,

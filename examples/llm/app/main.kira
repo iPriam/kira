@@ -74,7 +74,6 @@ async function runPipeline() -> Int {
         maxTokens = 2000,
         temperature = 0.2,
         timeoutMs = 60000,
-        attempts = 3,
         trustPort = trustPort
     }
 
@@ -102,12 +101,21 @@ async function runPipeline() -> Int {
                     // and that the history went with it.
                     let carried = reply.content.contains(question)
                     let remembered = reply.content.contains("assistant")
+                    let historyHeld = remembered || index == 0
                     printLine(
                         "turn " + String(index + 1) + ": carried=" + String(carried)
-                            + " history=" + String(remembered || index == 0)
+                            + " history=" + String(historyHeld)
                             + " tokens=" + String(reply.promptTokens) + "+"
                             + String(reply.completionTokens)
                     )
+                    // Counted, not only printed. These are the assertions the
+                    // loopback run exists to make — that the question crossed
+                    // and that the history went with it — and a check that
+                    // only reaches stdout lets a run where neither happened
+                    // exit zero and be read as a working backend.
+                    if !carried || !historyHeld {
+                        failures = failures + 1
+                    }
                 }
             }
             Error(failure) -> {
@@ -121,6 +129,15 @@ async function runPipeline() -> Int {
     // Two turns asked, two answered, and the history holds the system message,
     // both questions and both answers.
     printLine("history " + String(conversation.messages.count))
+    // Asserted only against the loopback service, whose answers are known. A
+    // live run's turn may legitimately fail for reasons that are not this
+    // program's — and a count checked after those would report the wrong thing.
+    if !live && failures == 0 && conversation.messages.count != 5 {
+        printLine(
+            "history is " + String(conversation.messages.count) + ", expected 5"
+        )
+        failures = failures + 1
+    }
     if server > 0 {
         networkClose(server)
     }

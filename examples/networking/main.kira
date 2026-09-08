@@ -54,6 +54,8 @@ function requestBodyText(request: Int, text: CString) -> Int
 function requestVersion(request: Int, version: I32) -> Int
 @FFI.Extern { library: kira_network, symbol: kira_network_request_trust_loopback, abi: c }
 function requestTrustLoopback(request: Int, port: U16) -> Int
+@FFI.Extern { library: kira_network, symbol: kira_network_request_timeout_ms, abi: c }
+function requestTimeoutMs(request: Int, milliseconds: Int) -> Int
 @FFI.Extern { library: kira_network, symbol: kira_network_request_send, abi: c }
 function requestSend(request: Int) -> Int
 @FFI.Extern { library: kira_network, symbol: kira_network_request_discard, abi: c }
@@ -82,8 +84,24 @@ function waitOperation(handle: Int) -> Int {
     return value
 }
 
+// How long any request in this example may take before it is abandoned.
+//
+// Generous, because it is not a performance bound: it is the difference between
+// a peer that stops answering and a program that never finishes. Every request
+// here talks to a loopback server started three lines earlier, so reaching this
+// at all means something is wrong rather than slow.
+function requestDeadlineMs() -> Int {
+    return 30000
+}
+
 // Waits without releasing the handle, for a request whose response is read from
 // that same handle after it completes.
+//
+// The deadline is the library's, set on the request before it is sent, so a
+// peer that sends headers and then stops still completes this operation with a
+// timeout rather than leaving it pending. Without one this loop yields forever:
+// `networkPoll` answers 0 for as long as nothing has arrived, and nothing ever
+// arriving is exactly the case a timeout exists for.
 function waitResponse(handle: Int) -> Int {
     if handle <= 0 {
         return handle
@@ -254,6 +272,7 @@ async function runHttpsRequest() -> Int {
         networkClose(server)
         return configured
     }
+    requestTimeoutMs(request, requestDeadlineMs())
     let operation = requestSend(request)
     if operation <= 0 {
         networkClose(server)
@@ -311,6 +330,7 @@ async function runJsonRequest() -> Int {
         networkClose(server)
         return configured
     }
+    requestTimeoutMs(request, requestDeadlineMs())
     let operation = requestSend(request)
     if operation <= 0 {
         networkClose(server)

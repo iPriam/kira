@@ -247,21 +247,6 @@ pub(crate) struct VmScratch {
     constants: Vec<Value>,
 }
 
-/// The tables whose handles belong to one execution rather than to one slice.
-///
-/// A `@Task` handle and a channel end are indexes into these tables, so an
-/// execution the scheduler suspended has to get the same tables back when it
-/// resumes: rebuilt tables would leave every handle the program still holds
-/// naming a row that no longer exists. A [`crate::fiber::Fiber`] therefore owns
-/// them between slices and lends them to the VM for the length of each one.
-#[derive(Default)]
-pub(crate) struct VmExecutors {
-    /// The deferred tasks the execution spawned.
-    pub(crate) tasks: TaskExecutor,
-    /// The channels the execution created.
-    pub(crate) channels: ChannelExecutor,
-}
-
 impl Vm<'_> {
     /// Runs to completion, reclaiming everything still live if it traps.
     ///
