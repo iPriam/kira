@@ -112,7 +112,7 @@ pub(crate) fn command_inputs(
 ) -> Result<(CompileOptions, Compiled), i32> {
     let mut options = parse_options(verb, args)?;
     options.path = resolve_path(&options.path)?;
-    let compiled = verified(&options.path, &options_target(&options))?;
+    let compiled = verified_in(&options.path, &options_target(&options), options.sysroot.as_deref())?;
     apply_manifest_defaults(verb, &mut options, &compiled)?;
     Ok((options, compiled))
 }
@@ -339,15 +339,17 @@ fn manifest_device(target: &str) -> Option<Device> {
 /// Diagnostics are rendered here, so callers only decide what to do with a
 /// program that is known good. The IR may be a library's — it carries no
 /// entrypoint then, and the caller decides whether that is usable.
-fn verified_as(
+fn verified_as_in(
     verb: &str,
     path: &str,
     kind: kira_semantics::BuildKind,
     target: &kira_native_lib_definition::TargetTriple,
+    sysroot: Option<&std::path::Path>,
 ) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
-    let compiled = kira_build::compile_for(std::path::Path::new(&resolved), Some(kind), target)
-        .map_err(|error| {
+    let compiled =
+        kira_build::compile_for_in(std::path::Path::new(&resolved), Some(kind), target, sysroot)
+            .map_err(|error| {
             err!("kira {verb}: {error}");
             EXIT_FAILURE
         })?;
@@ -362,7 +364,17 @@ fn verified(
     path: &str,
     target: &kira_native_lib_definition::TargetTriple,
 ) -> Result<Compiled, i32> {
-    let compiled = compile(path, target)?;
+    verified_in(path, target, None)
+}
+
+/// Compiles and renders diagnostics, naming the sysroot a cross build's
+/// bindings are generated against.
+fn verified_in(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+    sysroot: Option<&std::path::Path>,
+) -> Result<Compiled, i32> {
+    let compiled = compile_in(path, target, sysroot)?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
     if compiled.has_errors() {
         return Err(EXIT_FAILURE);
@@ -429,8 +441,16 @@ pub(crate) fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i
 /// (a missing or unreadable file, an unusable manifest); compile errors are
 /// carried as diagnostics, not as an error here.
 fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Result<Compiled, i32> {
+    compile_in(path, target, None)
+}
+
+fn compile_in(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+    sysroot: Option<&std::path::Path>,
+) -> Result<Compiled, i32> {
     let mut frontend = kira_build::FrontendSession::new();
-    compile_with_frontend(path, target, &mut frontend)
+    compile_with_frontend_in(path, target, &mut frontend, sysroot)
 }
 
 /// Compiles `path` for `device` and hands its program back for a caller that
@@ -451,9 +471,18 @@ fn compile_with_frontend(
     target: &kira_native_lib_definition::TargetTriple,
     frontend: &mut kira_build::FrontendSession,
 ) -> Result<Compiled, i32> {
+    compile_with_frontend_in(path, target, frontend, None)
+}
+
+fn compile_with_frontend_in(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+    frontend: &mut kira_build::FrontendSession,
+    sysroot: Option<&std::path::Path>,
+) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
     frontend
-        .compile_for(std::path::Path::new(&resolved), None, target)
+        .compile_for_in(std::path::Path::new(&resolved), None, target, sysroot)
         .map_err(|error| {
             err!("kira: {error}");
             // A path the user typed that is not there is a usage error; everything

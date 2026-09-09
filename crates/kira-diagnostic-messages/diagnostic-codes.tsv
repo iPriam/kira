@@ -399,6 +399,7 @@ KSEM368	`RawPtr` has no member `…`: it spells `RawPtr.null`, and `rawPointerWo
 KSEM369	an `@FFI.Address` function answers `RawPtr`, the address of the data symbol rather than what is stored at it
 KSEM370	two declarations bind one library symbol with different signatures, and the linker gives both the same address
 KSEM371	`retains` names a parameter that holds no C storage to keep: a retained parameter is a pointer, a `CString`, or an `@FFI.Struct { layout: c }`
+KSEM372	`…` was declared at several shapes that all accept these arguments, and they differ only in what they answer with (…); annotate what the call is expected to produce
 KSEM900	a keyword the parser recognizes but this compiler does not support yet
 KIR005	`…` derives `Copy`, but …, so `…` moves rather than copies. Remove the derive and let it move, borrow it, or give it an explicit duplication
 KBE001	a backend was asked for a feature it does not support

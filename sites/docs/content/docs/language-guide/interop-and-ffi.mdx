@@ -24,6 +24,27 @@ Two declarations may name the same C symbol, which is what a generated binding b
 
 ## Taking a Symbol's Address
 
+One Kira name may be declared several times for one symbol, and that is how a symbol with no single C type is bound. `objc_msgSend` is the case: it is not variadic on arm64, so every selector it dispatches must be called through the prototype that selector actually has. The declarations must agree on the library, the symbol and the ABI, and each must differ from the others in its signature.
+
+```kira
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr) -> RawPtr
+
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr): Void
+
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr, index: U64) -> RawPtr
+```
+
+A call picks one shape by asking three questions in order, and each is only asked because the one before it left more than one answer:
+
+1. **How many arguments were written.** This settles most calls.
+2. **What those arguments are.** Two shapes of one selector rarely take the same types.
+3. **What the caller expects back.** Shapes that take the same arguments and differ only in what they answer with are separated by nothing else. A call on a line by itself expects nothing, so it means the shape that answers `Void`; an `if` condition expects `Bool`; a binding with a type annotation expects that type.
+
+A call that leaves more than one shape standing after all three is refused rather than guessed at, and the refusal lists what the surviving shapes answer with. Annotate what the call produces to settle it.
+
 `@FFI.Address` names a data symbol rather than a function. It takes no parameters and answers `RawPtr`: the address of the object, not what is stored at it. Reading the object is `@FFI.Pointer`'s job, through the pointer this hands back.
 
 ```kira

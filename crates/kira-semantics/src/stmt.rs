@@ -25,7 +25,7 @@
 use kira_semantics_model::hir::{HirExprId, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{HirExpr, OwnershipMode, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId};
+use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Stmt, StmtId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
@@ -289,7 +289,17 @@ impl Analyzer<'_> {
                 out.push(hir);
             }
             Stmt::Expr { expr, .. } => {
-                let hir = self.analyze_expr(ctx, expr);
+                // A call on a line by itself discards what it answers with, and
+                // saying so is what lets a foreign name carrying several shapes
+                // resolve here: `[view endEncoding]` means the shape that
+                // answers nothing, and there is no other way to tell it from
+                // the five that answer something. Only a call, because only a
+                // call has shapes to choose between.
+                let hir = if matches!(self.tree.expr(expr), Expr::Call { .. }) {
+                    self.analyze_expr_expecting(ctx, expr, Some(Type::Void))
+                } else {
+                    self.analyze_expr(ctx, expr)
+                };
                 let hir = self.program.stmts.alloc(HirStmt::Expr { expr: hir });
                 out.push(hir);
             }
@@ -511,7 +521,11 @@ impl Analyzer<'_> {
 
     pub(crate) fn analyze_condition(&mut self, ctx: &mut FnCtx, expr: ExprId) -> HirExprId {
         let cond_span = self.tree.expr(expr).span();
-        let hir = self.analyze_expr(ctx, expr);
+        // A condition is a `Bool` or it is a mistake, so the expectation is not
+        // a guess and is worth passing: it is what tells a foreign name carrying
+        // several shapes which one `if [window isKeyWindow]` means. The check
+        // below still runs, because an expectation is not a coercion.
+        let hir = self.analyze_expr_expecting(ctx, expr, Some(Type::Bool));
         let ty = self.program.expr(hir).type_of();
         if ty != Type::Bool && ty != Type::Error {
             self.emit(

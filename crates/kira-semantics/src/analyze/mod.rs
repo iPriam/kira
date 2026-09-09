@@ -192,7 +192,15 @@ pub(crate) struct Analyzer<'a> {
     /// signature and annotation checks approved. A foreign name may not collide
     /// with a user function's, which is what keeps a call resolving to exactly
     /// one [`kira_semantics_model::hir::Callee`].
-    pub(crate) foreign_index: HashMap<String, kira_semantics_model::hir::ForeignId>,
+    ///
+    /// One name maps to *several* declarations when a symbol has no single C
+    /// type. `objc_msgSend` is the case that forces it: on arm64 it is not
+    /// variadic, so every selector it dispatches must be called through the
+    /// prototype that selector actually has, and a graphics backend needs
+    /// dozens of them. The declarations in such a set agree on the library, the
+    /// symbol and the ABI, and differ only in signature; the call site picks
+    /// one. Every other name has a set of one.
+    pub(crate) foreign_index: HashMap<String, Vec<kira_semantics_model::hir::ForeignId>>,
     /// Whether the type being resolved sits in an `@FFI.Extern` signature.
     ///
     /// `CString` is legal only as a foreign parameter, so its seam-only refusal

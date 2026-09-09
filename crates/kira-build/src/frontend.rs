@@ -114,7 +114,24 @@ impl FrontendSession {
         kind: Option<BuildKind>,
         target: &kira_native_lib_definition::TargetTriple,
     ) -> Result<Compiled, FrontendError> {
-        compile_for_with_session(&mut self.db, &mut self.source, path, kind, target)
+        self.compile_for_in(path, kind, target, None)
+    }
+
+    /// Compiles `path` for `target`, naming the sysroot a cross build's
+    /// bindings are generated against.
+    ///
+    /// The sysroot reaches the frontend for the same reason the target does:
+    /// autobind runs here, and a header it parses reaches `<math.h>` and every
+    /// other C library header only under the target's sysroot. The host build
+    /// and an Apple target need none, so the plain `compile_for` passes `None`.
+    pub fn compile_for_in(
+        &mut self,
+        path: &Path,
+        kind: Option<BuildKind>,
+        target: &kira_native_lib_definition::TargetTriple,
+        sysroot: Option<&Path>,
+    ) -> Result<Compiled, FrontendError> {
+        compile_for_with_session(&mut self.db, &mut self.source, path, kind, target, sysroot)
     }
 }
 
@@ -186,8 +203,19 @@ pub fn compile_for(
     kind: Option<BuildKind>,
     target: &kira_native_lib_definition::TargetTriple,
 ) -> Result<Compiled, FrontendError> {
+    compile_for_in(path, kind, target, None)
+}
+
+/// Compiles `path` for `target` against `sysroot`, the one-shot form of
+/// [`FrontendSession::compile_for_in`].
+pub fn compile_for_in(
+    path: &Path,
+    kind: Option<BuildKind>,
+    target: &kira_native_lib_definition::TargetTriple,
+    sysroot: Option<&Path>,
+) -> Result<Compiled, FrontendError> {
     let mut session = FrontendSession::new();
-    session.compile_for(path, kind, target)
+    session.compile_for_in(path, kind, target, sysroot)
 }
 
 /// Compiles into an existing Salsa session, updating its one source input.
@@ -197,6 +225,7 @@ fn compile_for_with_session(
     path: &Path,
     kind: Option<BuildKind>,
     target: &kira_native_lib_definition::TargetTriple,
+    sysroot: Option<&Path>,
 ) -> Result<Compiled, FrontendError> {
     let display = path.display().to_string();
     let text = std::fs::read_to_string(path).map_err(|source| FrontendError::Read {
@@ -210,7 +239,7 @@ fn compile_for_with_session(
     // a file the build was supposed to write. Failures come back as
     // diagnostics — a program that cannot bind one library still has every
     // other diagnostic worth reporting.
-    let mut diagnostics = crate::autobind::run(path, target);
+    let mut diagnostics = crate::autobind::run(path, target, sysroot);
 
     // Discovery, dependency resolution, module loading, and package-member
     // aggregation are one step shared with the language server: an editor and

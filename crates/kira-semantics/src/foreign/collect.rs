@@ -62,12 +62,51 @@ impl<'a> Analyzer<'a> {
                 );
                 continue;
             }
-            if self.foreign_index.contains_key(&name) {
-                self.emit(
-                    function.name_span,
-                    "KSEM185",
-                    format!("`{annotation}` function `{name}` is already declared"),
-                );
+            // A repeat of a name is a second shape of one symbol, or a mistake.
+            //
+            // It is the first when the two declarations agree about *what* they
+            // bind — the same library, the same symbol, the same ABI — and
+            // differ only in the signature they call it through. That is
+            // `objc_msgSend`: not variadic on arm64, so every selector must be
+            // called through the prototype it actually has, and one Kira name
+            // carrying all of them is better than dozens of near-identical
+            // ones. It is the second whenever the two name different things.
+            if let Some(existing) = self.foreign_index.get(&name)
+                && let Some(&first) = existing.first()
+            {
+                let previous = &self.program.foreign[first.0 as usize];
+                if previous.library != hir_foreign.library
+                    || previous.symbol != hir_foreign.symbol
+                    || previous.abi != hir_foreign.abi
+                {
+                    self.emit(
+                        function.name_span,
+                        "KSEM185",
+                        format!(
+                            "`{annotation}` function `{name}` is already declared, binding                              `{}` in `{}`: one name may carry several shapes of one symbol,                              not two symbols",
+                            previous.symbol, previous.library
+                        ),
+                    );
+                    continue;
+                }
+                if existing.iter().any(|&other| {
+                    self.program.foreign[other.0 as usize].signature == hir_foreign.signature
+                }) {
+                    self.emit(
+                        function.name_span,
+                        "KSEM185",
+                        format!(
+                            "`{annotation}` function `{name}` is already declared with this                              signature: a second shape of one symbol has to differ from the                              shapes already written"
+                        ),
+                    );
+                    continue;
+                }
+                let id = ForeignId(self.program.foreign.len() as u32);
+                self.foreign_index
+                    .entry(name)
+                    .or_default()
+                    .push(id);
+                self.program.foreign.push(hir_foreign);
                 continue;
             }
             // Last, so the row `bound` records is one that is about to exist:
@@ -76,7 +115,7 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             let id = ForeignId(self.program.foreign.len() as u32);
-            self.foreign_index.insert(name, id);
+            self.foreign_index.insert(name, vec![id]);
             self.program.foreign.push(hir_foreign);
         }
     }
