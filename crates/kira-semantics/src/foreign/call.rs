@@ -19,9 +19,201 @@ struct ForeignArgShape<'a> {
 }
 
 impl<'a> Analyzer<'a> {
-    /// Whether `name` is a recorded foreign callable, for call resolution.
-    pub(crate) fn foreign_named(&self, name: &str) -> Option<ForeignId> {
-        self.foreign_index.get(name).copied()
+    /// Every shape a foreign name was declared at, for call resolution.
+    ///
+    /// One for almost every name. Several when a symbol has no single C type
+    /// and the declarations say so — see `foreign_index`.
+    pub(crate) fn foreign_named(&self, name: &str) -> Option<Vec<ForeignId>> {
+        self.foreign_index.get(name).cloned()
+    }
+
+    /// Picks the shape a call means, out of the shapes a name carries.
+    ///
+    /// Three questions in order, and each is only asked because the one before
+    /// it left more than one answer. How many arguments were written settles
+    /// most of it. What those arguments *are* settles the rest of it, because
+    /// two shapes of one selector rarely take the same types. What is left after
+    /// that differs only in what it answers with — six of `objc_msgSend`'s
+    /// shapes take a receiver and a selector and hand back a pointer, a word, a
+    /// boolean, a rectangle or nothing — and nothing at the call site can tell
+    /// those apart except what the caller does with the result. So the last
+    /// question is the expected type, and a call with no expectation and an
+    /// ambiguous name is refused rather than guessed at.
+    fn select_foreign_shape(
+        &mut self,
+        candidates: &[ForeignId],
+        arg_hirs: &[HirExprId],
+        expected: Option<Type>,
+        name: &str,
+        span: Span,
+    ) -> Option<ForeignId> {
+        let by_arity: Vec<ForeignId> = candidates
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.program.foreign[id.0 as usize]
+                    .signature
+                    .parameters()
+                    .len()
+                    == arg_hirs.len()
+            })
+            .collect();
+        if by_arity.is_empty() {
+            let mut arities: Vec<usize> = candidates
+                .iter()
+                .map(|id| {
+                    self.program.foreign[id.0 as usize]
+                        .signature
+                        .parameters()
+                        .len()
+                })
+                .collect();
+            arities.sort_unstable();
+            arities.dedup();
+            let written = arities
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(" or ");
+            self.emit(
+                span,
+                "KSEM062",
+                format!(
+                    "`{name}` takes {written} argument(s), found {}",
+                    arg_hirs.len()
+                ),
+            );
+            return None;
+        }
+        if by_arity.len() == 1 {
+            return Some(by_arity[0]);
+        }
+
+        let actuals: Vec<Type> = arg_hirs
+            .iter()
+            .map(|&arg| self.program.expr(arg).type_of())
+            .collect();
+        let by_arguments: Vec<ForeignId> = by_arity
+            .iter()
+            .copied()
+            .filter(|id| {
+                let foreign = &self.program.foreign[id.0 as usize];
+                foreign
+                    .signature
+                    .parameters()
+                    .iter()
+                    .enumerate()
+                    .all(|(index, param)| {
+                        let actual = actuals[index];
+                        if actual == Type::Error {
+                            return true;
+                        }
+                        if let Some(declared) = foreign.param_distincts.get(index).copied().flatten()
+                        {
+                            return actual.assignable_to(declared);
+                        }
+                        if let Some(wrapper) = foreign.param_wrappers.get(index).copied().flatten() {
+                            return actual == Type::Struct(wrapper);
+                        }
+                        if foreign.param_pointees.get(index).copied().flatten().is_some() {
+                            return true;
+                        }
+                        foreign_arg_matches(actual, *param)
+                    })
+            })
+            .collect();
+        // Nothing accepted the arguments, so the first shape of the right arity
+        // is reported against: it produces the ordinary per-argument diagnostic,
+        // which names the position and the type, where an "ambiguous" message
+        // here would name neither.
+        let narrowed = if by_arguments.is_empty() {
+            return Some(by_arity[0]);
+        } else {
+            by_arguments
+        };
+        if narrowed.len() == 1 {
+            return Some(narrowed[0]);
+        }
+
+        if let Some(want) = expected {
+            let by_result: Vec<ForeignId> = narrowed
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let ty = self.foreign_call_type(*id);
+                    ty.assignable_to(want)
+                })
+                .collect();
+            if by_result.len() == 1 {
+                return Some(by_result[0]);
+            }
+        }
+
+        let shapes = narrowed
+            .clone()
+            .into_iter()
+            .map(|id| {
+                let ty = self.foreign_call_type(id);
+                self.type_name(ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.emit(
+            span,
+            "KSEM372",
+            format!(
+                "`{name}` was declared at several shapes that all accept these arguments and \
+                 differ only in what they answer with ({shapes}); say which by annotating \
+                 what the call is expected to produce"
+            ),
+        );
+        None
+    }
+
+    /// The Kira type every shape of a name expects at one argument position,
+    /// when they all expect the same one.
+    ///
+    /// `None` the moment two shapes disagree, or a shape is too short to have
+    /// that position at all: an expectation that only some shapes hold would
+    /// decide the call before the arguments have been read.
+    fn agreed_foreign_param(&mut self, candidates: &[ForeignId], index: usize) -> Option<Type> {
+        let mut agreed: Option<Type> = None;
+        for &id in candidates {
+            let foreign = &self.program.foreign[id.0 as usize];
+            let param = *foreign.signature.parameters().get(index)?;
+            let wrapper = foreign.param_wrappers.get(index).copied().flatten();
+            let distinct = foreign.param_distincts.get(index).copied().flatten();
+            let ty = match (distinct, wrapper) {
+                (Some(declared), _) => declared,
+                (None, Some(struct_id)) => Type::Struct(struct_id),
+                (None, None) => kira_type_for_spec(param),
+            };
+            match agreed {
+                None => agreed = Some(ty),
+                Some(seen) if seen == ty => {}
+                Some(_) => return None,
+            }
+        }
+        agreed
+    }
+
+    /// The Kira type a call to one foreign shape produces.
+    fn foreign_call_type(&mut self, id: ForeignId) -> Type {
+        let foreign = &self.program.foreign[id.0 as usize];
+        let result = foreign.signature.result();
+        let wrapper = foreign.result_wrapper;
+        let distinct = foreign.result_distinct;
+        let pointee = foreign.result_pointee;
+        if result.aggregate().is_some()
+            && let Some(struct_id) = wrapper
+        {
+            return Type::Struct(struct_id);
+        }
+        match (distinct, pointee) {
+            (Some(declared), _) => declared,
+            (None, Some(target)) => self.program.types.foreign_ptr_to(target),
+            (None, None) => kira_type_for_spec(result),
+        }
     }
 
     /// Type-checks a call to a foreign function.
@@ -35,8 +227,73 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn analyze_foreign_call(
         &mut self,
         ctx: &mut FnCtx,
+        candidates: &[ForeignId],
+        args: &[kira_syntax_model::ast::ExprId],
+        span: Span,
+        expected: Option<Type>,
+    ) -> HirExprId {
+        // A name carrying one shape is the ordinary case and takes the path it
+        // always took: the parameter's own expectation reaches each argument,
+        // which is what lets a bare function name land on a `@FFI.Callback`
+        // position. A name carrying several cannot do that — which shape's
+        // expectation would it be — so its arguments are analyzed on their own
+        // terms first and the shape is chosen from what they turned out to be.
+        if candidates.len() > 1 {
+            // A position every shape agrees about still has an expectation, and
+            // it is the one that matters most here: every shape of a selector
+            // takes the receiver and the selector in the same two places, so a
+            // call nested in one of them —
+            // `metalMsgSend(metalMsgSend(cls, alloc), init)` — is told it must
+            // produce a pointer, which is what settles which shape *it* is.
+            let agreed: Vec<Option<Type>> = (0..args.len())
+                .map(|index| self.agreed_foreign_param(candidates, index))
+                .collect();
+            let arg_hirs: Vec<HirExprId> = args
+                .iter()
+                .enumerate()
+                .map(|(index, &arg)| {
+                    self.analyze_expr_expecting(ctx, arg, agreed[index])
+                })
+                .collect();
+            let name = self.program.foreign[candidates[0].0 as usize]
+                .kira_name
+                .clone();
+            let Some(chosen) =
+                self.select_foreign_shape(candidates, &arg_hirs, expected, &name, span)
+            else {
+                return self.program.exprs.alloc(HirExpr::Error);
+            };
+            return self.finish_foreign_call(ctx, chosen, args, arg_hirs, span);
+        }
+        let id = candidates[0];
+        let param_wrappers = self.program.foreign[id.0 as usize].param_wrappers.clone();
+        // Each argument is analyzed against the Kira type its position expects,
+        // so a bare function name lands where a `@FFI.Callback` parameter can
+        // recognize it. Every other position ignores the expectation, exactly as
+        // it does at an ordinary call.
+        let arg_hirs: Vec<HirExprId> = args
+            .iter()
+            .enumerate()
+            .map(|(index, &arg)| {
+                let expected = param_wrappers
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(Type::Struct);
+                self.analyze_expr_expecting(ctx, arg, expected)
+            })
+            .collect();
+        self.finish_foreign_call(ctx, id, args, arg_hirs, span)
+    }
+
+    /// Everything a foreign call does once its arguments are values and the
+    /// shape it means is settled.
+    fn finish_foreign_call(
+        &mut self,
+        ctx: &mut FnCtx,
         id: ForeignId,
         args: &[kira_syntax_model::ast::ExprId],
+        arg_hirs: Vec<HirExprId>,
         span: Span,
     ) -> HirExprId {
         // Snapshot the signature so the argument loop's `&mut self` does not
@@ -75,31 +332,20 @@ impl<'a> Analyzer<'a> {
                     .is_retained(index)
             })
             .collect();
-        // Each argument is analyzed against the Kira type its position expects,
-        // so a bare function name lands where a `@FFI.Callback` parameter can
-        // recognize it. Every other position ignores the expectation, exactly as
-        // it does at an ordinary call.
-        let arg_hirs: Vec<HirExprId> = args
-            .iter()
-            .enumerate()
-            .map(|(index, &arg)| {
-                let expected = param_wrappers
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .map(Type::Struct);
-                let value = self.analyze_expr_expecting(ctx, arg, expected);
-                // A `retains:` parameter consumes: the callee keeps pointers
-                // into the argument's C storage past the call, so the caller
-                // must give the value up — `move` written at the call site is
-                // what makes the transfer visible, and the use-after-move
-                // checker is what makes it safe.
-                if retained.get(index).copied().unwrap_or(false) {
-                    self.require_retained_move(ctx, arg, value, &name);
-                }
-                value
-            })
-            .collect();
+        // A `retains:` parameter consumes: the callee keeps pointers into the
+        // argument's C storage past the call, so the caller must give the value
+        // up — `move` written at the call site is what makes the transfer
+        // visible, and the use-after-move checker is what makes it safe. It is
+        // checked here rather than while the arguments are analyzed because
+        // which parameters retain is a fact about the shape, and the shape is
+        // not known until they have been.
+        for (index, &arg) in args.iter().enumerate() {
+            if retained.get(index).copied().unwrap_or(false)
+                && let Some(&value) = arg_hirs.get(index)
+            {
+                self.require_retained_move(ctx, arg, value, &name);
+            }
+        }
         let seam_args = if arg_hirs.len() != params.len() {
             self.emit(
                 span,

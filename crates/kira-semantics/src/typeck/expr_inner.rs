@@ -428,11 +428,14 @@ impl Analyzer<'_> {
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
                     self.analyze_print(&arg_hirs, callee_span)
-                } else if let Some(id) = self.foreign_named(&name) {
+                } else if let Some(shapes) = self.foreign_named(&name) {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no
-                    // ceremony — resolved to `Callee::Foreign`.
-                    self.analyze_foreign_call(ctx, id, &values, callee_span)
+                    // ceremony — resolved to `Callee::Foreign`. The expectation
+                    // rides along because a name may carry several shapes of one
+                    // symbol, and what the caller does with the result is the
+                    // only thing that separates the ones differing in it.
+                    self.analyze_foreign_call(ctx, &shapes, &values, callee_span, expected)
                 } else {
                     let trailing = match function_content {
                         Some(content) if !children.is_empty() => {

@@ -58,7 +58,11 @@ pub enum NativeDeclarationError {
 /// declared bindings is an error, and adopting a binding the package already
 /// ships is a note. A program whose packages declare no `autobind` does no work
 /// and returns nothing — in particular it never loads a C parser.
-pub fn run(source: &Path, target: &TargetTriple) -> Vec<Diagnostic> {
+pub fn run(
+    source: &Path,
+    target: &TargetTriple,
+    sysroot: Option<&std::path::Path>,
+) -> Vec<Diagnostic> {
     let packages = match declaring_packages(source) {
         Ok(packages) => packages,
         // Reaching the manifests is program assembly's job to report, with the
@@ -85,6 +89,7 @@ pub fn run(source: &Path, target: &TargetTriple) -> Vec<Diagnostic> {
                 source_root: package.root.join("app"),
                 base_dir,
                 target: target.clone(),
+                sysroot: sysroot.map(std::path::Path::to_path_buf),
             };
             match kira_project::autobind::plan(&spec, &context) {
                 Ok(Some(plan)) => planned.push((spec, plan)),
