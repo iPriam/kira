@@ -520,6 +520,18 @@ impl Analyzer<'_> {
                 span,
             } => {
                 let name = self.interner.resolve(field).to_owned();
+                // A namespace access `A.B.C.member` names a module constant
+                // whose name is the whole dotted path — a namespace flattens to
+                // constants spelled that way. Recognized before the base is
+                // analyzed as a value, because a namespace root is not one; a
+                // dot cannot appear in an identifier, so a path that matches a
+                // constant was one, and an ordinary `point.x` reconstructs a
+                // name no constant carries and falls through untouched.
+                if let Some(path) = self.name_path_of(id)
+                    && let Some(read) = self.constant_read(&path, span)
+                {
+                    return read;
+                }
                 // `RawPtr.null` names a constant of a builtin type. The base is
                 // that type's name rather than a value, so it is recognized
                 // before anything analyzes it as one.

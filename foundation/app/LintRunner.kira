@@ -190,7 +190,6 @@ comptime macro LintRunner {
 
         let qualifiedOn: Bool = qualifiedLevel != .Allow
         let indexLoopOn: Bool = indexLoopLevel != .Allow
-        let fileLengthOn: Bool = fileLengthLevel != .Allow
         // A group turns its lints on where nothing named them. An entry that
         // named one still wins, in either direction: asking for pedantry does
         // not override a package that allowed this one by hand.
@@ -200,6 +199,13 @@ comptime macro LintRunner {
         if askRestriction && fileLengthNamed == false {
             fileLengthLevel = .Warn
         }
+        // Read after the groups have spoken, not before. This used to sit
+        // beside the other two, which is upstream of the `askRestriction` block
+        // below it — so `groups: [.Restriction]` set a level nothing went on to
+        // read, and asking for the policy group turned nothing on. Naming
+        // KLINT003 in an entry still worked, which is what made it look like the
+        // group was the thing that did not exist.
+        let fileLengthOn: Bool = fileLengthLevel != .Allow
         let constantFunctionOn: Bool = constantFunctionLevel != .Allow
 
         // KLINT000 — the receipt. Always emitted, before any lint runs.

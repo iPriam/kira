@@ -42,7 +42,15 @@ impl Parser<'_> {
     pub(crate) fn parse_constant(&mut self) -> Option<ConstantDecl> {
         let start = self.current().span;
         self.expect(TokenKind::Let);
-        if !self.at(TokenKind::Identifier) {
+        // Everything between `let` and `=` is the name, so there is nothing for a
+        // numeric token to collide with: `let 5.5 = …` names a constant `5.5`,
+        // interned by its written text. This is what lets a version be a
+        // namespace leaf — `AI.Models.OpenAI.GPT` holding `let 5.5` is reached as
+        // `AI.Models.OpenAI.GPT.5.5`, the bare float rebuilding the same name.
+        if !self.at(TokenKind::Identifier)
+            && !self.at(TokenKind::IntLiteral)
+            && !self.at(TokenKind::FloatLiteral)
+        {
             self.error(self.current().span, "KPAR080", "expected a constant name");
             return None;
         }

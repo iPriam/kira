@@ -117,7 +117,7 @@ pub fn load_legacy_manifest(text: &str) -> Result<ProjectManifest, LegacyManifes
         .or_else(|| string(&document, "buildTarget"))
         .unwrap_or("host")
         .to_owned();
-    if !matches!(manifest.build_target.as_str(), "host" | "wasm32" | "wasm64") {
+    if !supported_target(&manifest.build_target) {
         return Err(invalid(
             "build_target",
             format!("unsupported target `{}`", manifest.build_target),
@@ -130,6 +130,18 @@ pub fn load_legacy_manifest(text: &str) -> Result<ProjectManifest, LegacyManifes
             .map(ToOwned::to_owned);
     }
     Ok(manifest)
+}
+
+/// Whether `target` names a machine this toolchain can build for.
+///
+/// The three named targets, and any `arch-os-abi` triple beside them — the same
+/// set `package.kira`'s `buildTarget` reads, because the two formats describe
+/// the same manifest and a package that converts between them must not lose its
+/// target on the way.
+
+fn supported_target(target: &str) -> bool {
+    matches!(target, "host" | "wasm32" | "wasm64")
+        || kira_native_lib_definition::TargetTriple::parse(target).is_ok()
 }
 
 /// Renders the model fields represented by the legacy TOML schema.
@@ -153,7 +165,7 @@ pub fn render_legacy_manifest(manifest: &ProjectManifest) -> Result<String, Lega
             format!("unsupported backend `{}`", manifest.execution_mode),
         ));
     }
-    if !matches!(manifest.build_target.as_str(), "host" | "wasm32" | "wasm64") {
+    if !supported_target(&manifest.build_target) {
         return Err(invalid(
             "build_target",
             format!("unsupported target `{}`", manifest.build_target),

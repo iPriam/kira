@@ -84,7 +84,7 @@ fn needs_fast_codegen(program: &IrProgram, plan: &Plan<'_>) -> bool {
     if !matches!(plan.target, CodegenTarget::Native(NativeTarget::Host)) {
         return false;
     }
-    if !cfg!(target_os = "windows") || plan.kind != ModuleKind::Executable {
+    if plan.kind != ModuleKind::Executable {
         return false;
     }
     let native_reachable = program

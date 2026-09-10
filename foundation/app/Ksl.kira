@@ -36,6 +36,12 @@ struct KslArtifact {
     var vertexHlsl: String = ""
     var fragmentHlsl: String = ""
     var computeHlsl: String = ""
+    // SPIR-V is emitted as eight hexadecimal characters per 32-bit word. The
+    // Vulkan backend decodes these strings into the word array
+    // `vkCreateShaderModule` consumes.
+    var vertexSpirv: String = ""
+    var fragmentSpirv: String = ""
+    var computeSpirv: String = ""
     var vertexGlsl: String = ""
     var fragmentGlsl: String = ""
     var computeGlsl: String = ""
@@ -89,6 +95,7 @@ comptime macro ksl {
         let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
         let glsl = Ksl.compile(input, ShaderBackend.Glsl)
         let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -105,6 +112,9 @@ comptime macro ksl {
                 vertexHlsl: #{hlsl.vertexSource},
                 fragmentHlsl: #{hlsl.fragmentSource},
                 computeHlsl: #{hlsl.computeSource},
+                vertexSpirv: #{spirv.vertexSource},
+                fragmentSpirv: #{spirv.fragmentSource},
+                computeSpirv: #{spirv.computeSource},
                 resourceReflection: #{msl.resourceReflection}
             )
         }

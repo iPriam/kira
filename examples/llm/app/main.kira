@@ -15,7 +15,6 @@
 
 import Foundation
 import chat
-import http
 
 // How many turns to take, and what to ask on each. The second question means
 // nothing on its own, which is what makes it a test of the history.

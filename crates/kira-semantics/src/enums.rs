@@ -462,7 +462,7 @@ impl<'a> Analyzer<'a> {
 
     /// Reconstructs the dotted spelling of a pure name path (`A`, `A.B`), or
     /// `None` when the expression is anything else.
-    fn name_path_of(&self, base: ExprId) -> Option<String> {
+    pub(crate) fn name_path_of(&self, base: ExprId) -> Option<String> {
         match self.tree.expr(base) {
             Expr::Name { symbol, .. } => Some(self.interner.resolve(*symbol).to_owned()),
             Expr::Field { base, field, .. } => {

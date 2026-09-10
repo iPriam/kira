@@ -113,6 +113,7 @@ module.exports = grammar({
     _item: ($) =>
       choice(
         $.import_declaration,
+        $.namespace_declaration,
         $.function_definition,
         $.constant_declaration,
         $.struct_declaration,
@@ -151,6 +152,32 @@ module.exports = grammar({
       ),
 
     module_path: ($) => seq($.identifier, repeat(seq('.', $.identifier))),
+
+    // `namespace A.B.C { let X = … }` — a nested named scope whose members are
+    // reached by their dotted path. A segment is an identifier or a numeric
+    // token (`GPT.5.6`), and a member is a `let` constant or a nested namespace.
+    namespace_declaration: ($) =>
+      seq(
+        'namespace',
+        field('path', $.namespace_path),
+        field('body', $.namespace_body),
+      ),
+
+    namespace_path: ($) =>
+      seq(
+        $._namespace_segment,
+        repeat(seq('.', $._namespace_segment)),
+      ),
+
+    _namespace_segment: ($) =>
+      choice($.identifier, $.integer_literal, $.float_literal),
+
+    namespace_body: ($) =>
+      seq(
+        '{',
+        repeat(choice($.constant_declaration, $.namespace_declaration)),
+        '}',
+      ),
 
     // ----- annotations ---------------------------------------------------
 
@@ -1033,13 +1060,19 @@ module.exports = grammar({
     // one too: `type` starts a declaration and is a keyword there, and after a
     // `.` there is no declaration to start, so it names the runtime type
     // descriptor and nothing else.
+    // A field name is usually an identifier, but a namespace access carries
+    // version-like numeric segments — `AI.Providers.OpenAI.GPT.5.6.Sol`, where
+    // `5.6` is one float token the parser reads as a path segment.
     field_expression: ($) =>
       prec(
         PREC.postfix,
         seq(
           field('receiver', $._expression),
           '.',
-          field('field', choice($.identifier, 'type')),
+          field(
+            'field',
+            choice($.identifier, 'type', $.integer_literal, $.float_literal),
+          ),
         ),
       ),
 

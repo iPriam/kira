@@ -305,7 +305,19 @@ impl Parser<'_> {
         // keyword because a declaration starts with one. After a `.` there is
         // no declaration to start, so the keyword is a member name here and
         // nowhere else — the same reading every language with `.type` gives it.
-        if !self.at(TokenKind::Identifier) && !self.at(TokenKind::Type) {
+        //
+        // A numeric segment is a member name too: a namespace path carries
+        // version-like segments (`GPT.5.6.Sol`), where the lexer reads `5.6` as
+        // one float token. It is interned by its written text — `"5.6"` — so the
+        // dotted spelling reconstructs exactly, and semantics resolves the whole
+        // path against the namespace constants. A numeric member on an ordinary
+        // value has no field to name and is reported there, as any other absent
+        // field is.
+        if !self.at(TokenKind::Identifier)
+            && !self.at(TokenKind::Type)
+            && !self.at(TokenKind::IntLiteral)
+            && !self.at(TokenKind::FloatLiteral)
+        {
             let span = self.current().span;
             self.error(span, "KPAR022", "expected a field name after `.`");
             return Err(self.error_expr(span));
