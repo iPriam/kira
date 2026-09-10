@@ -100,6 +100,9 @@ int64_t kira_network_response_rewind(int64_t handle);
 int64_t kira_network_response_read_byte(int64_t handle);
 int64_t kira_network_response_read_scalar(int64_t handle);
 
+/* The wall-clock time now, in milliseconds since the Unix epoch. */
+int64_t kira_network_unix_millis(void);
+
 /* Idempotently cancels and removes an operation. */
 void kira_network_cancel(int64_t handle);
 

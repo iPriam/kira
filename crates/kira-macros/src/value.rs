@@ -153,6 +153,15 @@ pub(crate) struct StatementValue {
 }
 
 impl StatementValue {
+    /// The owned bytes a clone of this statement copies: its own text and
+    /// heads, plus every statement inside it.
+    fn cells(&self) -> u64 {
+        self.body.iter().fold(
+            (self.syntax.len() + self.head.len()) as u64,
+            |sum, inner| sum.saturating_add(inner.cells()),
+        )
+    }
+
     /// Builds the reflection view of a read statement.
     pub(crate) fn of(statement: &crate::body::Statement) -> Self {
         Self {
@@ -186,6 +195,26 @@ pub(crate) struct FieldValue {
 }
 
 impl DeclarationValue {
+    /// The owned bytes a clone of this declaration copies: its text, its
+    /// member bodies, its fields, and its annotations.
+    fn cells(&self) -> u64 {
+        let members = self.members.iter().fold(0u64, |sum, (name, body)| {
+            sum.saturating_add(name.len() as u64)
+                .saturating_add(body.len() as u64)
+        });
+        let fields = self
+            .fields
+            .iter()
+            .fold(0u64, |sum, field| sum.saturating_add(field.cells()));
+        let annotations = self.annotations.iter().fold(0u64, |sum, annotation| {
+            sum.saturating_add(annotation.len() as u64)
+        });
+        (self.name.len() + self.syntax.len() + self.family.len()) as u64
+            + members
+            + fields
+            + annotations
+    }
+
     /// Builds the reflection view of a scanned declaration.
     pub(crate) fn of(declaration: &decl::Declaration) -> Self {
         Self {
@@ -216,6 +245,15 @@ impl DeclarationValue {
 }
 
 impl FieldValue {
+    /// The owned bytes a clone of this field copies.
+    fn cells(&self) -> u64 {
+        let annotations = self.annotations.iter().fold(0u64, |sum, annotation| {
+            sum.saturating_add(annotation.len() as u64)
+        });
+        (self.name.len() + self.type_text.len() + self.initializer.len() + self.syntax.len()) as u64
+            + annotations
+    }
+
     /// Whether an annotation named `name` was written on the field.
     pub(crate) fn has_annotation(&self, name: &str) -> bool {
         self.annotations.iter().any(|written| written == name)
@@ -239,6 +277,37 @@ impl FieldValue {
 }
 
 impl Value {
+    /// The value's size in cells, for the evaluation budget.
+    ///
+    /// Approximate and saturated: scalars cost one, text costs its bytes, and
+    /// an array costs its length plus its elements — so cloning a large value
+    /// spends proportionally to the clone. Shared text (`StatementValue`'s
+    /// whole declaration) costs nothing, because cloning the value does not
+    /// copy it.
+    pub(crate) fn cells(&self) -> u64 {
+        match self {
+            Value::Void | Value::Int(_) | Value::Bool(_) => 1,
+            Value::Str(text) | Value::Identifier(text) | Value::TypeRef(text) => text.len() as u64,
+            Value::Syntax(syntax) => syntax.text.len() as u64,
+            Value::Array(items) => items.iter().fold(items.len() as u64, |sum, item| {
+                sum.saturating_add(item.cells())
+            }),
+            Value::EnumCase(case) => 1 + case.payload.as_ref().map_or(0, Value::cells),
+            Value::Declaration(declaration) => declaration.cells(),
+            Value::Field(field) => field.cells(),
+            Value::Statement(statement) => statement.cells(),
+            Value::Record(record) => {
+                record
+                    .members
+                    .iter()
+                    .fold(record.members.len() as u64, |sum, (name, value)| {
+                        sum.saturating_add(name.len() as u64)
+                            .saturating_add(value.cells())
+                    })
+            }
+        }
+    }
+
     /// Syntax that was built rather than read, so it points nowhere.
     pub(crate) fn built(text: impl Into<String>) -> Self {
         Value::Syntax(SyntaxValue {
