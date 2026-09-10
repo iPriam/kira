@@ -58,13 +58,12 @@ const WIDTH: usize = 72;
 /// and a handful of history rows. This is what keeps the elapsed timer live
 /// while a single phase (macro expansion, analysis) holds the build for
 /// seconds without reporting anything in between. Fast enough that the
-/// shimmer glides one cell per tick instead of stepping.
-const TICK: Duration = Duration::from_millis(80);
+/// shimmer glides instead of stepping.
+const TICK: Duration = Duration::from_millis(50);
 
-/// How many cells wide the bright band sweeping the title is. Wide enough to
-/// read as a sheen passing over the words rather than a cursor hopping
-/// between them.
-const SHIMMER_WIDTH: usize = 14;
+/// How many cells wide the bright band sweeping the title is: a short comet
+/// rather than a wash over the whole line.
+const SHIMMER_WIDTH: usize = 6;
 
 /// A drawn status surface.
 pub struct Surface {
@@ -152,12 +151,17 @@ impl Surface {
             buffer.push_str("\x1b[1A\x1b[2K");
         }
         let elapsed = state.started.elapsed().as_secs_f32();
-        let title = clamp(&format!("{} ({elapsed:.1}s)", state.title));
+        // The timer stays plain: the shimmer sweeps the words only, so the
+        // numbers never flicker between shades and stay readable at a glance.
+        let timer = format!(" ({elapsed:.1}s)");
+        let room = WIDTH.saturating_sub(timer.chars().count());
+        let name: String = state.title.chars().take(room).collect();
         if state.styled {
-            buffer.push_str(&shimmer(&title, state.frame));
+            buffer.push_str(&shimmer(&name, state.frame));
         } else {
-            buffer.push_str(&title);
+            buffer.push_str(&name);
         }
+        buffer.push_str(&timer);
         buffer.push('\n');
         for line in state.history.iter() {
             buffer.push_str(&clamp(&format!("  {line}")));
