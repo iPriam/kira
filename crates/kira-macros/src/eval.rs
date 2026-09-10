@@ -11,7 +11,9 @@
 //!
 //! [`KMAC020`]: crate::diagnostics::UNSUPPORTED_IN_EXPAND
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::registry::ComptimeFunction;
 
@@ -263,7 +265,23 @@ pub(crate) fn run_value(
     comptime: Comptime<'_>,
     lint: bool,
 ) -> Result<(Value, Vec<Report>), EvalError> {
-    run_nested(body, arguments, comptime, lint, 0)
+    run_value_shared(body, arguments, comptime, lint, Fuel::default())
+}
+
+/// Runs `body` against a step budget another evaluation already started.
+///
+/// What a nested evaluation needs — a `comptime function` a body called, or a
+/// declaration member a lint read — so a runaway callee spends the caller's
+/// fuel rather than minting fresh fuel per call and outrunning the limit by
+/// nesting.
+pub(crate) fn run_value_shared(
+    body: &Body,
+    arguments: Vec<(String, Value)>,
+    comptime: Comptime<'_>,
+    lint: bool,
+    fuel: Fuel,
+) -> Result<(Value, Vec<Report>), EvalError> {
+    run_nested(body, arguments, comptime, lint, 0, fuel)
 }
 
 /// The comptime functions in scope during an evaluation, by name.
@@ -293,12 +311,30 @@ pub(crate) struct Comptime<'a> {
 /// How deep one comptime call may nest inside another.
 const CALL_DEPTH_LIMIT: u32 = 32;
 
+/// How many statements one comptime evaluation may run, nested calls included.
+///
+/// A `while` already caps its own rounds and calls cap their depth, but neither
+/// bounds the whole run: a collector is one evaluation over every declaration
+/// in the program, so a loop that never exits — or one slow enough to look
+/// that way over a big program — would otherwise hang the compiler with no
+/// diagnostic. Whatever the shape, evaluation stops here under `KMAC010`.
+const STEP_LIMIT: u64 = 10_000_000;
+
+/// Steps spent by one comptime evaluation, shared with every nested call.
+///
+/// Reference-counted so a callee spends its caller's fuel: minting a fresh
+/// budget per nested call would let a recursive macro outrun the limit by
+/// nesting rather than by looping.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Fuel(Rc<Cell<u64>>);
+
 fn run_nested(
     body: &Body,
     arguments: Vec<(String, Value)>,
     comptime: Comptime<'_>,
     lint: bool,
     depth: u32,
+    fuel: Fuel,
 ) -> Result<(Value, Vec<Report>), EvalError> {
     let mut evaluator = Evaluator {
         body,
@@ -311,6 +347,7 @@ fn run_nested(
         enums: comptime.enums.clone(),
         testing: comptime.testing,
         lint,
+        fuel,
     };
     let value = match evaluator.block(&body.block)? {
         Flow::Return(value) => value,
@@ -365,6 +402,8 @@ struct Evaluator<'a> {
     lint: bool,
     /// Whether the compiler is generating the `kira test` entrypoint.
     testing: bool,
+    /// Steps this evaluation has left to spend, shared with nested calls.
+    fuel: Fuel,
 }
 
 impl Evaluator<'_> {
@@ -403,6 +442,25 @@ impl Evaluator<'_> {
         )))
     }
 
+    /// Spends one evaluation step, refusing when the budget is gone.
+    ///
+    /// Charged once per statement a body executes, loop iterations included,
+    /// so this is what stops a loop that never exits: whatever it does per
+    /// round, the rounds themselves are counted.
+    fn charge(&mut self) -> Result<(), EvalError> {
+        let spent = self.fuel.0.get().saturating_add(1);
+        self.fuel.0.set(spent);
+        if spent > STEP_LIMIT {
+            return Err(EvalError::coded(
+                diagnostics::DEPTH_LIMIT,
+                format!(
+                    "comptime evaluation ran more than {STEP_LIMIT} steps without returning; a loop that never exits stops the build here rather than hanging the compiler"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Runs a block in its own scope.
     fn block(&mut self, block: &Block) -> Result<Flow, EvalError> {
         self.scopes.push(HashMap::new());
@@ -418,6 +476,7 @@ impl Evaluator<'_> {
     }
 
     fn statement(&mut self, id: StmtId) -> Result<Flow, EvalError> {
+        self.charge()?;
         match self.stmt(id).clone() {
             Stmt::Let { name, init, .. } => {
                 let value = self.value(init)?;
@@ -811,7 +870,7 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        match run_nested(&body, bound, comptime, self.lint, self.depth + 1) {
+        match run_nested(&body, bound, comptime, self.lint, self.depth + 1, self.fuel.clone()) {
             Ok((value, reported)) => {
                 self.reported.extend(reported);
                 Some(Ok(value))
@@ -869,6 +928,34 @@ mod tests {
         .expect("a result");
         assert!(outcome.syntax.contains('a'), "{}", outcome.syntax);
         assert!(outcome.syntax.contains('b'), "{}", outcome.syntax);
+    }
+
+    /// A loop that never exits stops the build instead of hanging the
+    /// compiler. The fuel starts one step from empty so the test trips the
+    /// budget rather than running it out for real.
+    #[test]
+    fn a_loop_that_never_exits_is_stopped() {
+        let body = compile("while true {\nvar x: Int = 1\n}\n").expect("a parseable expand body");
+        let functions = ComptimeFunctions::new();
+        let enums = HashMap::new();
+        let mut evaluator = Evaluator {
+            body: &body,
+            functions: &functions,
+            depth: 0,
+            scopes: vec![HashMap::new()],
+            reported: Vec::new(),
+            shaders: None,
+            platform: "unknown".to_owned(),
+            enums: enums.clone(),
+            testing: false,
+            lint: false,
+            fuel: Fuel(Rc::new(Cell::new(STEP_LIMIT - 1))),
+        };
+        let error = match evaluator.block(&body.block) {
+            Err(error) => error,
+            Ok(_) => panic!("a stop rather than a hang"),
+        };
+        assert_eq!(error.code, "KMAC010");
     }
 
     #[test]

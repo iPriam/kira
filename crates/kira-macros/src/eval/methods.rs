@@ -341,7 +341,8 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        let (value, reported) = super::run_value(&compiled, Vec::new(), comptime, self.lint)?;
+        let (value, reported) =
+            super::run_value_shared(&compiled, Vec::new(), comptime, self.lint, self.fuel.clone())?;
         self.reported.extend(reported);
         Ok(value)
     }

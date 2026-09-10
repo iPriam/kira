@@ -57,11 +57,14 @@ const WIDTH: usize = 72;
 /// A redraw is only ever cheaper than the phase it interrupts: one title row
 /// and a handful of history rows. This is what keeps the elapsed timer live
 /// while a single phase (macro expansion, analysis) holds the build for
-/// seconds without reporting anything in between.
-const TICK: Duration = Duration::from_millis(120);
+/// seconds without reporting anything in between. Fast enough that the
+/// shimmer glides one cell per tick instead of stepping.
+const TICK: Duration = Duration::from_millis(80);
 
-/// How many cells wide the bright band sweeping the title is.
-const SHIMMER_WIDTH: usize = 8;
+/// How many cells wide the bright band sweeping the title is. Wide enough to
+/// read as a sheen passing over the words rather than a cursor hopping
+/// between them.
+const SHIMMER_WIDTH: usize = 14;
 
 /// A drawn status surface.
 pub struct Surface {
@@ -202,41 +205,40 @@ fn spawn_ticker(surface: &Arc<Surface>) {
 
 /// Sweeps a whitish band across `line`, whose head sits at `frame`.
 ///
-/// The band travels left to right and wraps: cells at the head print bold
-/// white, the ones behind it step down through white to dim, everything else
-/// prints as-is. One bright cell would read as a bouncing cursor; a band with
-/// a fading tail reads as a sheen passing over. `line` must already be
-/// [`clamp`]ed — escapes are zero-width, so styling first and clamping second
-/// would over-count and wrap.
+/// The head travels left to right and wraps back to the start, so the band is
+/// always somewhere on the line — there is no dark pause between passes. Each
+/// cell behind the head steps one shade down the 256-colour grey ramp
+/// (white at the head, fading cell by cell into the plain text), which is
+/// what makes the falloff a gradient rather than a hard edge. `line` must
+/// already be [`clamp`]ed — escapes are zero-width, so styling first and
+/// clamping second would over-count and wrap.
 fn shimmer(line: &str, frame: u64) -> String {
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
         return String::new();
     }
-    let cycle = chars.len() + SHIMMER_WIDTH * 2;
-    let head = (frame as usize) % cycle;
+    let head = (frame as usize) % chars.len();
     let mut out = String::new();
     for (index, cell) in chars.iter().enumerate() {
         let behind = head.saturating_sub(index);
-        let style = if index > head || behind >= SHIMMER_WIDTH {
-            None
-        } else if behind == 0 {
-            Some("1;37")
-        } else if behind <= 2 {
-            Some("37")
-        } else {
-            Some("2")
-        };
-        match style {
-            Some(code) => {
-                out.push_str("\x1b[");
-                out.push_str(code);
-                out.push('m');
-                out.push(*cell);
-                out.push_str("\x1b[0m");
+        let Some(code) = (index <= head && behind < SHIMMER_WIDTH).then(|| {
+            // One grey step per cell back from the head: 255 at the front,
+            // fading down the ramp behind it.
+            let shade = 255u8.saturating_sub(behind as u8);
+            if behind == 0 {
+                format!("1;38;5;{shade}")
+            } else {
+                format!("38;5;{shade}")
             }
-            None => out.push(*cell),
-        }
+        }) else {
+            out.push(*cell);
+            continue;
+        };
+        out.push_str("\x1b[");
+        out.push_str(&code);
+        out.push('m');
+        out.push(*cell);
+        out.push_str("\x1b[0m");
     }
     out
 }
