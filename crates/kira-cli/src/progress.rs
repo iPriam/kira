@@ -209,8 +209,9 @@ fn spawn_ticker(surface: &Arc<Surface>) {
 
 /// Sweeps a whitish band across `line`, whose head sits at `frame`.
 ///
-/// The head travels left to right and wraps back to the start, so the band is
-/// always somewhere on the line — there is no dark pause between passes. Each
+/// The head travels left to right and on past the end, so the tail fades out
+/// off the edge instead of being cut there; then it wraps with a single dark
+/// frame between passes rather than a long pause. Each
 /// cell behind the head steps one shade down the 256-colour grey ramp
 /// (white at the head, fading cell by cell into the plain text), which is
 /// what makes the falloff a gradient rather than a hard edge. `line` must
@@ -221,7 +222,7 @@ fn shimmer(line: &str, frame: u64) -> String {
     if chars.is_empty() {
         return String::new();
     }
-    let head = (frame as usize) % chars.len();
+    let head = (frame as usize) % (chars.len() + SHIMMER_WIDTH);
     let mut out = String::new();
     for (index, cell) in chars.iter().enumerate() {
         let behind = head.saturating_sub(index);
@@ -366,8 +367,9 @@ mod tests {
         let line = "Linting Kira project (1.2s)";
         let first = shimmer(line, 0);
         assert_eq!(visible(&first), line);
-        // The band travels: two distant frames style different cells.
-        let later = shimmer(line, (line.chars().count() + SHIMMER_WIDTH) as u64);
+        // The band travels: a frame with the head off the end (tail fading
+        // out) styles different cells than the opening frame.
+        let later = shimmer(line, line.chars().count() as u64);
         assert_eq!(visible(&later), line);
         assert_ne!(first, later);
     }
