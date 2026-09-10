@@ -58,8 +58,16 @@ pub(crate) fn precompile(
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     let mut sources: ShaderSources = Vec::new();
-    for (source_id, path) in kira_macros::shader_paths(files) {
-        kira_diagnostics::progress!("compiling shader {path}");
+    let paths = kira_macros::shader_paths(files);
+    // One stable phase for the timing report, then one live line for the
+    // display: a counter refreshing in place rather than a line per shader
+    // scrolling the recent history away.
+    if !paths.is_empty() {
+        kira_diagnostics::progress!("compiling shaders");
+    }
+    let total = paths.len();
+    for (index, (source_id, path)) in paths.into_iter().enumerate() {
+        kira_diagnostics::progress_live!("compiling shaders ({}/{total}) {path}", index + 1);
         let owner = roots
             .iter()
             .find(|(known, _)| *known == source_id)

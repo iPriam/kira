@@ -272,6 +272,21 @@ impl ProgressSink for Surface {
         }
         Surface::draw(&mut state);
     }
+
+    fn update(&self, phase: &str) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        // A counter refreshes the current line rather than adding one, so a
+        // hundred-item run reads as one live line instead of a hundred dead
+        // ones scrolling the recent history away.
+        state.suspended = false;
+        match state.history.last_mut() {
+            Some(current) => *current = phase.to_owned(),
+            None => state.history.push(phase.to_owned()),
+        }
+        Surface::draw(&mut state);
+    }
 }
 
 /// Erases every drawn row.
@@ -342,6 +357,29 @@ mod tests {
             assert!(Surface::install("Building").is_none());
             assert!(!kira_diagnostics::progress::listening());
         }
+    }
+
+    #[test]
+    fn a_live_update_refreshes_the_current_line_instead_of_adding_one() {
+        let surface = Surface {
+            state: Mutex::new(State {
+                title: "Testing".to_owned(),
+                started: Instant::now(),
+                history: vec!["compiling shaders".to_owned()],
+                drawn: 0,
+                frame: 0,
+                suspended: false,
+                done: false,
+                styled: false,
+            }),
+        };
+        surface.update("compiling shaders (1/2) Glass.ksl");
+        surface.update("compiling shaders (2/2) Water.ksl");
+        let state = surface.state.lock().expect("the surface");
+        assert_eq!(
+            state.history,
+            vec!["compiling shaders (2/2) Water.ksl".to_owned()]
+        );
     }
 
     /// Strips the `ESC[…m` sequences [`shimmer`] emits, leaving visible text.

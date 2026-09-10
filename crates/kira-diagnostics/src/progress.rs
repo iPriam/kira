@@ -24,6 +24,16 @@ pub trait ProgressSink: Send + Sync {
     /// Reports that `phase` has started.
     fn phase(&self, phase: &str);
 
+    /// Refreshes the current line in place instead of adding one.
+    ///
+    /// For counters (`compiling shaders (3/12) …`): one line that keeps up
+    /// rather than one line per item flooding the visible history. The
+    /// default is a plain phase, so a sink that draws no in-place surface
+    /// keeps working unchanged.
+    fn update(&self, phase: &str) {
+        self.phase(phase);
+    }
+
     /// Takes the display down so something else can write.
     ///
     /// A surface that redraws in place and a diagnostic printed underneath it
@@ -88,6 +98,22 @@ pub fn report(phase: &str) {
     }
 }
 
+/// Reports a live counter that refreshes the current display line.
+///
+/// Unlike [`report`], this never touches the [`timeline`](crate::timeline):
+/// a counter's text names its item (`(3/12) Glass.ksl`), and timing that
+/// would scatter one row per item across the report instead of one row for
+/// the work. The caller opens the work with [`report`] first, so the timing
+/// still attributes the whole run to that one phase.
+pub fn report_live(phase: &str) {
+    let Ok(slot) = SINK.read() else {
+        return;
+    };
+    if let Some(sink) = slot.as_ref() {
+        sink.update(phase);
+    }
+}
+
 /// Reports a phase built from a format string, evaluating it only when someone
 /// is listening.
 ///
@@ -98,6 +124,17 @@ macro_rules! progress {
     ($($arg:tt)*) => {
         if $crate::progress::watched() {
             $crate::progress::report(&format!($($arg)*));
+        }
+    };
+}
+
+/// Reports a live counter built from a format string, refreshing the current
+/// display line instead of adding one. Gated like [`progress!`](crate::progress).
+#[macro_export]
+macro_rules! progress_live {
+    ($($arg:tt)*) => {
+        if $crate::progress::watched() {
+            $crate::progress::report_live(&format!($($arg)*));
         }
     };
 }
@@ -145,17 +182,26 @@ mod tests {
 
     /// A sink that remembers what it was told.
     #[derive(Default)]
-    struct Recorder(Mutex<Vec<String>>);
+    struct Recorder {
+        phases: Mutex<Vec<String>>,
+        updates: Mutex<Vec<String>>,
+    }
 
     impl ProgressSink for Recorder {
         fn phase(&self, phase: &str) {
-            if let Ok(mut seen) = self.0.lock() {
+            if let Ok(mut seen) = self.phases.lock() {
+                seen.push(phase.to_owned());
+            }
+        }
+
+        fn update(&self, phase: &str) {
+            if let Ok(mut seen) = self.updates.lock() {
                 seen.push(phase.to_owned());
             }
         }
 
         fn suspend(&self) {
-            if let Ok(mut seen) = self.0.lock() {
+            if let Ok(mut seen) = self.phases.lock() {
                 seen.push("<suspended>".to_owned());
             }
         }
@@ -176,7 +222,7 @@ mod tests {
         install(recorder.clone());
         let _guard = suspended();
         uninstall();
-        let seen = recorder.0.lock().expect("the recorder");
+        let seen = recorder.phases.lock().expect("the recorder");
         assert!(seen.contains(&"<suspended>".to_owned()), "{seen:?}");
     }
 
@@ -195,8 +241,31 @@ mod tests {
         report("parsing");
         report("linking");
         uninstall();
-        let seen = recorder.0.lock().expect("the recorder");
+        let seen = recorder.phases.lock().expect("the recorder");
         assert!(seen.contains(&"parsing".to_owned()), "{seen:?}");
         assert!(seen.contains(&"linking".to_owned()), "{seen:?}");
+    }
+
+    #[test]
+    fn a_live_counter_reaches_update_and_not_phase() {
+        let _exclusive = exclusive();
+        let recorder = Arc::new(Recorder::default());
+        install(recorder.clone());
+        report_live("compiling shaders (1/2) Glass.ksl");
+        uninstall();
+        let phases = recorder.phases.lock().expect("the recorder");
+        let updates = recorder.updates.lock().expect("the recorder");
+        assert!(phases.is_empty(), "{phases:?}");
+        assert!(
+            updates.contains(&"compiling shaders (1/2) Glass.ksl".to_owned()),
+            "{updates:?}"
+        );
+    }
+
+    #[test]
+    fn a_live_counter_with_no_sink_installed_does_nothing() {
+        let _exclusive = exclusive();
+        uninstall();
+        report_live("a counter nobody hears");
     }
 }
