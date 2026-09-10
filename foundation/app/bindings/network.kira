@@ -88,6 +88,9 @@ function kira_network_result(handle: Int) -> Int
 @FFI.Extern { library: kira_network, symbol: kira_network_server_port, abi: c }
 function kira_network_server_port(handle: Int) -> Int
 
+@FFI.Extern { library: kira_network, symbol: kira_network_unix_millis, abi: c }
+function kira_network_unix_millis() -> Int
+
 @FFI.Extern { library: kira_network, symbol: kira_network_websocket_client, abi: c }
 function kira_network_websocket_client(port: U16) -> Int
 

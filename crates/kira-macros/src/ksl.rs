@@ -45,7 +45,7 @@
 
 use crate::diagnostics;
 use crate::eval::EvalError;
-use crate::value::{RecordValue, Value};
+use crate::value::{RecordValue, SyntaxValue, Value};
 
 /// The name a macro body writes to reach this namespace.
 pub(crate) const NAMESPACE: &str = "Ksl";
@@ -81,6 +81,15 @@ pub struct CompiledShader {
     pub compute_entry: String,
     /// Every resource the host binds against, in the pipeline's encoding.
     pub resource_reflection: String,
+    /// The vertex stage's SPIR-V as its native 32-bit word stream, for a
+    /// target that emits binary. Splices into an artifact as a `[U32]` literal
+    /// — the form `vkCreateShaderModule` consumes directly — rather than as the
+    /// hexadecimal string `vertex_source` carries for the on-disk `.spv`.
+    pub vertex_spirv: Vec<u32>,
+    /// The fragment stage's SPIR-V word stream.
+    pub fragment_spirv: Vec<u32>,
+    /// The compute stage's SPIR-V word stream.
+    pub compute_spirv: Vec<u32>,
 }
 
 /// Why a shader could not be compiled.
@@ -266,11 +275,14 @@ fn literal_path(value: &Value) -> Result<String, EvalError> {
 
 /// The compile-time record a [`CompiledShader`] is read through.
 ///
-/// Every member is a `String`, so each one splices into a `quote` as a Kira
-/// string literal with its newlines and quotes already escaped — which is what
-/// makes inlining a whole shader source into generated Kira work at all.
+/// The source members are each a `String`, so each splices into a `quote` as a
+/// Kira string literal with its newlines and quotes already escaped — which is
+/// what makes inlining a whole shader source into generated Kira work at all.
+/// The SPIR-V members are `[U32]` array literals rather than strings: SPIR-V is
+/// a binary word stream, and carrying it as words lets the artifact hand it to
+/// `vkCreateShaderModule` with no runtime hexadecimal decode.
 fn record(compiled: &CompiledShader) -> Value {
-    let members = vec![
+    let text_members = [
         ("shaderName", &compiled.shader_name),
         ("combinedSource", &compiled.combined_source),
         ("vertexSource", &compiled.vertex_source),
@@ -281,13 +293,45 @@ fn record(compiled: &CompiledShader) -> Value {
         ("computeEntry", &compiled.compute_entry),
         ("resourceReflection", &compiled.resource_reflection),
     ];
+    let spirv_members = [
+        ("vertexSpirv", &compiled.vertex_spirv),
+        ("fragmentSpirv", &compiled.fragment_spirv),
+        ("computeSpirv", &compiled.compute_spirv),
+    ];
+    let mut members: Vec<(String, Value)> = text_members
+        .into_iter()
+        .map(|(name, text)| (name.to_owned(), Value::Str(text.clone())))
+        .collect();
+    members.extend(
+        spirv_members
+            .into_iter()
+            .map(|(name, words)| (name.to_owned(), spirv_literal(words))),
+    );
     Value::Record(Box::new(RecordValue {
         name: RECORD_NAME,
-        members: members
-            .into_iter()
-            .map(|(name, text)| (name.to_owned(), Value::Str(text.clone())))
-            .collect(),
+        members,
     }))
+}
+
+/// A SPIR-V word stream as the `[U32]` array literal a macro body splices.
+///
+/// Rendered as syntax rather than a string so `#{spirv.vertexSpirv}` lands as
+/// an array the compiler reparses into a `[U32]` constant, not as text a
+/// renderer would have to decode. Each word is a bare decimal: a `[U32]` field
+/// is the splice's context, so the element literals take that type. An empty
+/// stream — a stage the shader does not have — is `[]`, the same default the
+/// artifact field already declares.
+fn spirv_literal(words: &[u32]) -> Value {
+    let mut text = String::with_capacity(words.len() * 8 + 2);
+    text.push('[');
+    for (index, word) in words.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&word.to_string());
+    }
+    text.push(']');
+    Value::Syntax(SyntaxValue { text, span: None })
 }
 
 #[cfg(test)]
@@ -416,5 +460,32 @@ mod tests {
         let error =
             compile(None, &[Value::Str("Shaders/X.ksl".to_owned())]).expect_err("one argument");
         assert_eq!(error.code, diagnostics::SHADER_ARGUMENT_COUNT);
+    }
+
+    fn spliced(value: &Value, name: &str) -> String {
+        let Value::Record(record) = value else {
+            panic!("not a record: {value:?}");
+        };
+        let (_, found) = record
+            .members
+            .iter()
+            .find(|(member, _)| member == name)
+            .expect("member");
+        found.splice().expect("a spliceable member")
+    }
+
+    #[test]
+    fn spirv_words_read_back_as_a_u32_array_literal() {
+        let value = record(&CompiledShader {
+            vertex_spirv: vec![0x0723_0203, 0x0001_0000],
+            ..CompiledShader::default()
+        });
+        // The word stream splices as a `[U32]` literal a `[U32]` field reparses,
+        // not as text a renderer would have to decode.
+        assert_eq!(spliced(&value, "vertexSpirv"), "[119734787, 65536]");
+        // A stage the shader does not have is the empty array, the artifact
+        // field's own default.
+        assert_eq!(spliced(&value, "fragmentSpirv"), "[]");
+        assert_eq!(spliced(&value, "computeSpirv"), "[]");
     }
 }

@@ -320,13 +320,31 @@ const CALL_DEPTH_LIMIT: u32 = 32;
 /// diagnostic. Whatever the shape, evaluation stops here under `KMAC010`.
 const STEP_LIMIT: u64 = 10_000_000;
 
-/// Steps spent by one comptime evaluation, shared with every nested call.
+/// How many value cells one comptime evaluation may build or clone, nested
+/// calls included.
+///
+/// Steps bound the rounds; this bounds what each round may cost. A loop cloning
+/// an ever-larger array spends a step per round but cells per byte cloned, so a
+/// grind that stays under the step limit still stops here under `KMAC010`.
+const CELL_LIMIT: u64 = 1_000_000_000;
+
+/// Steps spent and cells built by one comptime evaluation, shared with every
+/// nested call.
 ///
 /// Reference-counted so a callee spends its caller's fuel: minting a fresh
 /// budget per nested call would let a recursive macro outrun the limit by
 /// nesting rather than by looping.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Fuel(Rc<Cell<u64>>);
+pub(crate) struct Fuel(Rc<FuelCounts>);
+
+/// The counters one evaluation and its nested calls share.
+#[derive(Debug, Default)]
+struct FuelCounts {
+    /// Statements executed, loop iterations included.
+    steps: Cell<u64>,
+    /// Value cells built or cloned.
+    cells: Cell<u64>,
+}
 
 fn run_nested(
     body: &Body,
@@ -448,13 +466,32 @@ impl Evaluator<'_> {
     /// so this is what stops a loop that never exits: whatever it does per
     /// round, the rounds themselves are counted.
     fn charge(&mut self) -> Result<(), EvalError> {
-        let spent = self.fuel.0.get().saturating_add(1);
-        self.fuel.0.set(spent);
+        let spent = self.fuel.0.steps.get().saturating_add(1);
+        self.fuel.0.steps.set(spent);
         if spent > STEP_LIMIT {
             return Err(EvalError::coded(
                 diagnostics::DEPTH_LIMIT,
                 format!(
                     "comptime evaluation ran more than {STEP_LIMIT} steps without returning; a loop that never exits stops the build here rather than hanging the compiler"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Spends `cells` of the build budget, refusing when it is gone.
+    ///
+    /// Charged for the size of what an expression built or cloned, so a loop
+    /// cloning an ever-larger value spends proportionally to the clone rather
+    /// than as one step per round.
+    fn charge_cells(&mut self, cells: u64) -> Result<(), EvalError> {
+        let spent = self.fuel.0.cells.get().saturating_add(cells);
+        self.fuel.0.cells.set(spent);
+        if spent > CELL_LIMIT {
+            return Err(EvalError::coded(
+                diagnostics::DEPTH_LIMIT,
+                format!(
+                    "comptime evaluation built more than {CELL_LIMIT} cells of values without returning; a loop cloning ever-larger values stops the build here rather than hanging the compiler"
                 ),
             ));
         }
@@ -870,7 +907,14 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        match run_nested(&body, bound, comptime, self.lint, self.depth + 1, self.fuel.clone()) {
+        match run_nested(
+            &body,
+            bound,
+            comptime,
+            self.lint,
+            self.depth + 1,
+            self.fuel.clone(),
+        ) {
             Ok((value, reported)) => {
                 self.reported.extend(reported);
                 Some(Ok(value))
@@ -936,11 +980,40 @@ mod tests {
     #[test]
     fn a_loop_that_never_exits_is_stopped() {
         let body = compile("while true {\nvar x: Int = 1\n}\n").expect("a parseable expand body");
-        let functions = ComptimeFunctions::new();
-        let enums = HashMap::new();
-        let mut evaluator = Evaluator {
-            body: &body,
-            functions: &functions,
+        let mut evaluator = evaluator_with_fuel(&body, STEP_LIMIT - 1, 0);
+        let error = match evaluator.block(&body.block) {
+            Err(error) => error,
+            Ok(_) => panic!("a stop rather than a hang"),
+        };
+        assert_eq!(error.code, "KMAC010");
+    }
+
+    /// A loop cloning an ever-larger value stops the build instead of hanging
+    /// the compiler. The fuel starts one cell from empty so the test trips the
+    /// budget rather than building it out for real.
+    #[test]
+    fn a_loop_cloning_ever_larger_values_is_stopped() {
+        let body =
+            compile("var words: [String] = [\"ab\"]\nwhile true {\nwords.append(\"cd\")\n}\n")
+                .expect("a parseable expand body");
+        let mut evaluator = evaluator_with_fuel(&body, 0, CELL_LIMIT - 1);
+        let error = match evaluator.block(&body.block) {
+            Err(error) => error,
+            Ok(_) => panic!("a stop rather than a hang"),
+        };
+        assert_eq!(error.code, "KMAC010");
+    }
+
+    /// An evaluator with preset fuel, so a budget test trips the limit it is
+    /// proving rather than running the budget out for real.
+    fn evaluator_with_fuel<'a>(body: &'a Body, steps: u64, cells: u64) -> Evaluator<'a> {
+        // Leaked rather than scoped: the borrows outlive the call, and the
+        // test ends with them.
+        let functions: &'a ComptimeFunctions = Box::leak(Box::new(ComptimeFunctions::new()));
+        let enums: &'a HashMap<String, Vec<String>> = Box::leak(Box::new(HashMap::new()));
+        Evaluator {
+            body,
+            functions,
             depth: 0,
             scopes: vec![HashMap::new()],
             reported: Vec::new(),
@@ -949,13 +1022,11 @@ mod tests {
             enums: enums.clone(),
             testing: false,
             lint: false,
-            fuel: Fuel(Rc::new(Cell::new(STEP_LIMIT - 1))),
-        };
-        let error = match evaluator.block(&body.block) {
-            Err(error) => error,
-            Ok(_) => panic!("a stop rather than a hang"),
-        };
-        assert_eq!(error.code, "KMAC010");
+            fuel: Fuel(Rc::new(FuelCounts {
+                steps: Cell::new(steps),
+                cells: Cell::new(cells),
+            })),
+        }
     }
 
     #[test]

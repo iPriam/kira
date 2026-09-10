@@ -119,6 +119,21 @@ pub extern "C" fn kira_network_https_server() -> i64 {
     runtime::start_https_server().map_or_else(runtime::error_code, OperationId::as_i64)
 }
 
+/// The wall-clock time now, in milliseconds since the Unix epoch.
+///
+/// A clock, not a networking operation, but it rides here because this is the
+/// native library Foundation already links for its runtime services and a
+/// program that needs the time should not have to name a second one. Answers a
+/// negative code only if the clock is set before the epoch, which a real machine
+/// is not.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_unix_millis() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => runtime::error_code(runtime::NetworkError::Io),
+    }
+}
+
 /// Binds a QUIC WebTransport server, writes its certificate to `cert_path`, and
 /// returns its handle. Clients that trust that certificate can then connect.
 ///

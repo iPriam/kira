@@ -42,6 +42,20 @@ impl Evaluator<'_> {
 
     /// Evaluates the expression at `id`.
     pub(super) fn value(&mut self, id: ExprId) -> Result<Value, EvalError> {
+        let result = self.value_inner(id)?;
+        // The size of what the expression built or cloned, so a loop cloning
+        // a large value spends proportionally to the clone rather than as one
+        // step per round.
+        let cells = result.cells();
+        self.charge_cells(cells)?;
+        Ok(result)
+    }
+
+    /// Evaluates the expression at `id`, uncharged.
+    ///
+    /// [`Evaluator::value`] charges the result; recursing into it keeps every
+    /// level of a nested expression charged.
+    fn value_inner(&mut self, id: ExprId) -> Result<Value, EvalError> {
         match self.expr(id).clone() {
             Expr::Int { value, .. } => Ok(Value::Int(value)),
             Expr::Bool { value, .. } => Ok(Value::Bool(value)),
@@ -260,6 +274,10 @@ impl Evaluator<'_> {
                 };
                 let mut items = items.clone();
                 items.push(item.clone());
+                // The clone above copies the whole array, so building an array
+                // one append at a time spends its length per push rather than
+                // one step per push.
+                self.charge_cells(items.len() as u64)?;
                 self.assign(&name, Value::Array(items))?;
                 return Ok(Value::Void);
             }
@@ -341,8 +359,13 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        let (value, reported) =
-            super::run_value_shared(&compiled, Vec::new(), comptime, self.lint, self.fuel.clone())?;
+        let (value, reported) = super::run_value_shared(
+            &compiled,
+            Vec::new(),
+            comptime,
+            self.lint,
+            self.fuel.clone(),
+        )?;
         self.reported.extend(reported);
         Ok(value)
     }
