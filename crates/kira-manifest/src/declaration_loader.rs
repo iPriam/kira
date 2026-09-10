@@ -432,11 +432,30 @@ fn defaults_value(value: &str) -> Result<(Option<String>, Option<String>), Decla
                 if build_target.is_some() {
                     return Err(malformed("defaults"));
                 }
+                // Three named cases, and any `arch-os-abi` triple beside
+                // them. The cases are the machines Kira decides for itself —
+                // whatever host this is, and the two wasm widths — and a triple
+                // is a package saying which machine it is for outright.
+                //
+                // A package whose target is not the host is otherwise reachable
+                // only through `--target`, which every verb that builds accepts
+                // and `lint` and `check` do not: they compile at the manifest's
+                // target, so a package written for another machine could not be
+                // read at all on this one. The manifest is also the honest place
+                // for it — a userland for aarch64 Linux is not a build option,
+                // it is what the package is.
+                //
+                // `qualified_case` takes the text after the last dot, and a
+                // triple has none, so `BuildTarget.aarch64-linux-gnu` arrives
+                // here whole.
                 build_target = Some(match qualified_case(value) {
                     "Host" => "host".to_owned(),
                     "Wasm32" => "wasm32".to_owned(),
                     "Wasm64" => "wasm64".to_owned(),
-                    _ => return Err(malformed("defaults")),
+                    triple => match kira_native_lib_definition::TargetTriple::parse(triple) {
+                        Ok(parsed) => parsed.to_string(),
+                        Err(_) => return Err(malformed("defaults")),
+                    },
                 });
             }
             _ => {}

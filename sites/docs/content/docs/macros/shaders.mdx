@@ -11,11 +11,14 @@ comptime macro ksl {
     expand(input: Syntax) -> Syntax {
         let msl = Ksl.compile(input, ShaderBackend.Msl)
         let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 combinedMsl: #{msl.combinedSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
+                vertexSpirv: #{spirv.vertexSource},
+                fragmentSpirv: #{spirv.fragmentSource},
                 vertexEntry: #{msl.vertexEntry},
                 resourceReflection: #{msl.resourceReflection},
             )
@@ -36,7 +39,7 @@ The case carries no version. `Glsl` is the backend; which GLSL version it emits 
 
 ## What Comes Back
 
-The value `Ksl.compile` returns is a record whose every member is a `String`: `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`, `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and `resourceReflection`.
+The value `Ksl.compile` returns is a record whose every member is a `String`: `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`, `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and `resourceReflection`. An engine artifact can expose the SPIR-V stage strings as `vertexSpirv`, `fragmentSpirv`, and `computeSpirv`; each is hexadecimal with eight characters per 32-bit word.
 
 Every member is always present. A stage a shader does not have, and a source form a target does not use, read as the empty string rather than as an absent member, so a macro body asks whether one is empty instead of branching on a shape that varies per target. Being strings is also what makes inlining work at all: each one splices into a `quote` as a Kira string literal with its newlines and quotes already escaped.
 

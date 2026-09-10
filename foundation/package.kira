@@ -2,4 +2,5 @@ Package Foundation {
     let version = "0.1.0"
     let kind = .Library
     let moduleRoot = "Foundation"
+    let allowThinFfiShim = true
 }

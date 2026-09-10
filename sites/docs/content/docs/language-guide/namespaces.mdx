@@ -1,0 +1,39 @@
+---
+title: Namespaces
+description: A nested named scope whose members are reached by their dotted path, version-like numeric segments, and why a namespace is a name rather than a value.
+---
+
+A `namespace` groups declarations under a dotted name. It is a *name*, not a runtime value: there is nothing to construct and nothing to pass, only a longer spelling for the things inside it.
+
+```kira
+namespace AI.Providers.OpenAI.GPT.5.6 {
+    let Sol = gpt56Sol()
+    let Luna = gpt56Luna()
+}
+
+let model = AI.Providers.OpenAI.GPT.5.6.Sol
+```
+
+## Members
+
+A member is a `let` — a constant, which is what a namespace holds. There is no `var`: a namespace is a fixed table of names, decided once. A nested `namespace` extends the path, so the tree reads as one qualified name at the leaf.
+
+```kira
+namespace Outer.Inner {
+    let First = 3
+
+    namespace Deep {
+        let Second = 4
+    }
+}
+
+let total = Outer.Inner.First * 10 + Outer.Inner.Deep.Second
+```
+
+## Numeric Segments
+
+A segment is an identifier or a numeric token. A version-like `5.6` is one float the lexer reads, and it is a path segment in a namespace exactly as it is a literal in a value — `GPT.5.6.Sol` walks `GPT`, then `5.6`, then `Sol`. No quoting is needed; the spelling in the declaration and the spelling at the use site are the same.
+
+## Why a Name, Not a Value
+
+A namespace flattens to ordinary module constants whose names are their dotted paths: `AI.Providers.OpenAI.GPT.5.6.Sol` is the constant's name, in full. An access spelled the same way resolves to it. Because a dot cannot appear in an identifier, a qualified name can never collide with a declared one — the same rule a module-qualified type reference relies on — so the grouping costs nothing at run time and adds no lookup a plain constant would not have.

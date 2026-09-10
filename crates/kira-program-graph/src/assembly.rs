@@ -139,6 +139,56 @@ fn add_package_linter(package: &Manifest, modules: &mut Vec<ModuleSource>) {
     });
 }
 
+/// The groups `kira lint` was asked for on the command line, if any.
+///
+/// A comma-separated list of `LintGroup` case names — `Pedantic`, `Restriction`
+/// — or `all` for every group there is. Read here rather than passed down
+/// because the lints run during *expansion*: what selects them is a declaration
+/// the runner reads, and the command line is upstream of every argument the
+/// frontend takes.
+pub const LINT_GROUPS: &str = "KIRA_LINT_GROUPS";
+
+/// Adds the command line's group request as one more `LintDefaults` entry.
+///
+/// A group decides whether a lint is asked at all, and only a `linter.kira`
+/// could say so — which made the pedantic and policy lints unreachable for a
+/// package that has no such file, including every package that just wants to
+/// see what a stricter run would say. This is that request, spelled the way the
+/// runner already reads requests.
+///
+/// It only ever adds. The runner turns a group on when any `LintDefaults` names
+/// it and has no spelling for turning one off, so a flag cannot quiet a package
+/// that asked for pedantry — the same direction `--deny` moves, and for the
+/// same reason: a run may be stricter than the package, never looser.
+fn add_command_line_groups(package: &Manifest, modules: &mut Vec<ModuleSource>) {
+    let Some(asked) = std::env::var_os(LINT_GROUPS) else {
+        return;
+    };
+    let Some(root) = Path::new(&package.path).parent() else {
+        return;
+    };
+    let asked = asked.to_string_lossy().to_ascii_lowercase();
+    let every = asked.contains("all");
+    let mut groups: Vec<&str> = Vec::new();
+    if every || asked.contains("pedantic") {
+        groups.push(".Pedantic");
+    }
+    if every || asked.contains("restriction") {
+        groups.push(".Restriction");
+    }
+    if groups.is_empty() {
+        return;
+    }
+    modules.push(ModuleSource {
+        module: "linterCommandLine".to_owned(),
+        path: root.join("linter.command-line.kira").display().to_string(),
+        text: format!(
+            "import Foundation\n\nconstruct CommandLineGroups() extends LintDefaults {{\n    let groups: [LintGroup] = [{}]\n}}\n",
+            groups.join(", ")
+        ),
+    });
+}
+
 /// [`load_program`], against an explicit set of bundled packages.
 ///
 /// Split out for the same reason [`crate::load_modules_with`] is: a test hands
@@ -187,6 +237,7 @@ pub fn load_program_with(
     // the whole package, next to what it depends on and what it is called.
     if let Some(found) = package.as_ref() {
         add_package_linter(found, &mut modules);
+        add_command_line_groups(found, &mut modules);
     }
 
     // The entry file is a module of the program too, so it counts against the

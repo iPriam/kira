@@ -176,7 +176,7 @@ pub enum BinstallError {
 /// beside the compiler — a toolchain without it builds a bundle and then has
 /// nowhere to run it. The hybrid launcher is its twin: a hybrid build stages it
 /// beside the compiler as the program's standalone executable.
-const BUILD_PACKAGES: [&str; 7] = [
+const BUILD_PACKAGES: [&str; 8] = [
     "kira-cli",
     "kira-lsp",
     "kira-desktop-runner",
@@ -184,7 +184,22 @@ const BUILD_PACKAGES: [&str; 7] = [
     "kira-native-bridge",
     "kira-compiler-bridge",
     "kira-libffi",
+    // Foundation owns the network transport; its archive ships inside
+    // Foundation's own tree, built here and staged there below.
+    "kira-network",
 ];
+
+/// The host's target triple in the `arch-os-abi` spelling Foundation's
+/// `NativeLibs` directories use. The network archive is staged under it.
+fn host_foundation_triple() -> String {
+    let (os, abi) = match std::env::consts::OS {
+        "macos" => ("macos", "none"),
+        "linux" => ("linux", "gnu"),
+        "windows" => ("windows", "msvc"),
+        other => (other, "none"),
+    };
+    format!("{}-{os}-{abi}", std::env::consts::ARCH)
+}
 
 /// Builds the enclosing checkout and installs it as the selected dev toolchain.
 ///
@@ -306,6 +321,7 @@ pub fn binstall(
     // itself: the engine is linked in rather than shipped beside the artifact,
     // so there is no separate binary for a toolchain to stage.
     let libffi_archive = built_dir.join(static_archive_name("kira_libffi"));
+    let network_archive = built_dir.join(static_archive_name("kira_network"));
     let wasm_archive = target_dir
         .join("wasm32-unknown-emscripten")
         .join(profile.target_subdirectory())
@@ -330,6 +346,7 @@ pub fn binstall(
         &host_archive,
         &compiler_archive,
         &libffi_archive,
+        &network_archive,
         &wasm_archive,
     ] {
         if !artifact.is_file() {
@@ -430,6 +447,19 @@ pub fn binstall(
         })?;
     }
     copy_tree(&checkout.join("foundation"), &payload.join("foundation"))?;
+    // Foundation's network archive is a build artifact, not committed, so it is
+    // placed into the staged Foundation where `NativeLibs/kira_network.toml`
+    // names it — under the host's triple directory. A checkout that never built
+    // it still produces a Foundation that resolves the transport.
+    let network_dir = payload
+        .join("foundation")
+        .join("NativeLibs")
+        .join("lib")
+        .join(host_foundation_triple());
+    create_dir(&network_dir)?;
+    let staged_network = network_dir.join(static_archive_name("kira_network"));
+    std::fs::copy(&network_archive, &staged_network)
+        .map_err(|error| InstallError::io("copy the network archive to", &staged_network, error))?;
     validate(&payload)?;
 
     let destination = toolchain_root(toolchains_root, Channel::Dev, &version);

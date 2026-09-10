@@ -157,7 +157,7 @@ jobs:
           rustup target add wasm32-unknown-emscripten
           cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-launcher \
             -p kira-desktop-runner -p kira-hybrid-launcher -p kira-native-bridge \
-            -p kira-compiler-bridge
+            -p kira-compiler-bridge -p kira-network
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
           # Apple export links a per-slice runner-support archive; release
           # toolchains carry them beside the compiler in the per-triple
@@ -230,6 +230,21 @@ jobs:
               mkdir -p "$stage/bin/$triple"
               cp "target/$triple/release/libkira_app_runner.a" "$stage/bin/$triple/"
             done
+          fi
+          # Foundation owns the network transport, so its archive rides in
+          # Foundation's own tree where `NativeLibs/kira_network.toml` names it
+          # and the compiler resolves it in every layout Foundation is found in.
+          # It is a build artifact, not committed, so it is placed here before
+          # Foundation is copied. The host key is the archive's triple directory,
+          # but for macOS the kira triple carries the `-none` abi the key omits.
+          net_triple="${{ matrix.host_key }}"
+          if [ "$net_triple" = "aarch64-macos" ]; then net_triple="aarch64-macos-none"; fi
+          net_dir="foundation/NativeLibs/lib/$net_triple"
+          mkdir -p "$net_dir"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/kira_network.lib "$net_dir/"
+          else
+            cp target/release/libkira_network.a "$net_dir/"
           fi
           cp -R foundation "$stage/foundation"
           mkdir -p dist

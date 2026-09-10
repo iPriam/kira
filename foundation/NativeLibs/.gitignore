@@ -1,0 +1,2 @@
+# Bundled native archives are build artifacts, provisioned by binstall/release, not committed.
+lib/

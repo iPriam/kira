@@ -42,6 +42,7 @@ impl TempPackage {
             source_root: self.0.join("app"),
             base_dir: self.0.clone(),
             target: host_target(),
+            sysroot: None,
         }
     }
 }

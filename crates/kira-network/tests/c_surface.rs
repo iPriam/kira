@@ -20,7 +20,10 @@ use kira_network::{
     kira_network_response_read_scalar, kira_network_response_rewind,
     kira_network_response_select_body, kira_network_response_select_header,
     kira_network_response_status, kira_network_result, kira_network_server_port,
-    kira_network_websocket_client, kira_network_websocket_server,
+    kira_network_websocket_client, kira_network_websocket_server, kira_network_wt_accept,
+    kira_network_wt_close, kira_network_wt_connect, kira_network_wt_read_scalar,
+    kira_network_wt_receive, kira_network_wt_send, kira_network_wt_server,
+    kira_network_wt_server_port,
 };
 
 /// Long enough to survive a full-workspace run, where this test shares a
@@ -339,4 +342,82 @@ fn cancellation_removes_the_operation_handle() {
 
     assert_eq!(kira_network_poll(handle), -101);
     kira_network_close(handle);
+}
+
+/// A unique certificate path under the temp directory, so parallel test
+/// binaries never publish over each other.
+fn wt_cert_path() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after the epoch")
+        .as_nanos();
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("kira-wt-{stamp}-{unique}.der"))
+}
+
+/// Polls `poll` until it returns a positive value or the deadline passes.
+fn wait_positive(mut poll: impl FnMut() -> i64) -> i64 {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let value = poll();
+        assert!(value >= 0, "polling failed with {value}");
+        if value > 0 {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for a channel");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Reads the selected frame out scalar by scalar into a `String`.
+fn wt_read_message(channel: i64) -> String {
+    let mut text = String::new();
+    loop {
+        let scalar = kira_network_wt_read_scalar(channel);
+        if scalar == END_OF_SELECTION {
+            return text;
+        }
+        assert!(scalar >= 0, "reading a scalar failed with {scalar}");
+        text.push(char::from_u32(scalar as u32).expect("a valid scalar"));
+    }
+}
+
+/// Waits for a message to arrive on `channel` and returns it as text.
+fn wt_receive_message(channel: i64) -> String {
+    wait_positive(|| kira_network_wt_receive(channel));
+    wt_read_message(channel)
+}
+
+#[test]
+fn webtransport_channel_carries_messages_both_ways() {
+    let cert_path = wt_cert_path();
+    let cert = cstring(cert_path.to_str().expect("a utf-8 path"));
+
+    // SAFETY: the certificate path outlives the call.
+    let server = unsafe { kira_network_wt_server(cert.as_ptr()) };
+    assert!(server > 0, "starting the server failed with {server}");
+    let port = kira_network_wt_server_port(server);
+    assert!(port > 0, "the server bound no port ({port})");
+
+    // SAFETY: the certificate path outlives the call.
+    let client = unsafe { kira_network_wt_connect(port as u16, cert.as_ptr()) };
+    assert!(client > 0, "connecting failed with {client}");
+
+    // The client speaks first; the server's accept resolves once it does.
+    // SAFETY: the message string outlives each call.
+    assert_eq!(unsafe { kira_network_wt_send(client, cstring("ping").as_ptr()) }, 0);
+    let accepted = wait_positive(|| kira_network_wt_accept(server));
+    assert_eq!(wt_receive_message(accepted), "ping");
+
+    // And the server answers back over the same channel.
+    // SAFETY: the message string outlives the call.
+    assert_eq!(unsafe { kira_network_wt_send(accepted, cstring("pong").as_ptr()) }, 0);
+    assert_eq!(wt_receive_message(client), "pong");
+
+    kira_network_wt_close(client);
+    kira_network_wt_close(accepted);
+    kira_network_wt_close(server);
+    let _ = std::fs::remove_file(&cert_path);
 }

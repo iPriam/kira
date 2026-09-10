@@ -1,0 +1,43 @@
+# Foundation's network transport: the `kira_network` C ABI, bound for it.
+#
+# The `@FFI.Extern` declarations are generated from the header by autobind — not
+# hand-written — and land in `foundation/app/bindings/network.kira`, which ships
+# as Foundation's own source (adopted without regeneration; KPK041). The archive
+# rides in Foundation's own tree under `lib/<triple>/`, staged there by
+# `knvm binstall` and the release archive builder, so it resolves in every
+# layout Foundation is found in.
+#
+# `optional`: a program that imports Foundation but never calls a network
+# function references none of these symbols, so the archive is not selected onto
+# its link line. Only a program that actually reaches the transport pulls it in.
+
+[library]
+name = "kira_network"
+link_mode = "static"
+availability = "optional"
+
+[headers]
+entrypoint = "include/kira_network.h"
+include_dirs = ["include"]
+
+[autobinding]
+module = "network"
+headers = ["include/kira_network.h"]
+
+[bindings]
+mode = "all_public"
+
+[target.aarch64-macos-none]
+static_lib = "lib/aarch64-macos-none/libkira_network.a"
+
+[target.x86_64-macos-none]
+static_lib = "lib/x86_64-macos-none/libkira_network.a"
+
+[target.aarch64-linux-gnu]
+static_lib = "lib/aarch64-linux-gnu/libkira_network.a"
+
+[target.x86_64-linux-gnu]
+static_lib = "lib/x86_64-linux-gnu/libkira_network.a"
+
+[target.x86_64-windows-msvc]
+static_lib = "lib/x86_64-windows-msvc/kira_network.lib"

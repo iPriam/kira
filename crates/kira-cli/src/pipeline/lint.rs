@@ -61,6 +61,38 @@ fn lint_policy(args: &[String]) -> kira_linter::LintPolicy {
     policy
 }
 
+/// The lint groups this run asks for, over the ones the package configured.
+///
+/// A level says what a finding costs; a group says whether the lint is asked at
+/// all. `--lint-level=deny` could only ever escalate what already ran, so the
+/// two pedantic-and-policy lints were reachable from a `linter.kira` and from
+/// nowhere else — including from a package that has no such file and only wants
+/// to see what a stricter run would say.
+///
+/// `--pedantic` and `--restriction` name one group each; `--strict` asks for
+/// every group there is, which is the survey nobody should leave switched on.
+/// `--groups=<names>` takes them as a list, for a caller that would rather
+/// write it out.
+fn lint_groups(args: &[String]) -> Option<String> {
+    let mut asked: Vec<&str> = Vec::new();
+    for argument in args {
+        match argument.as_str() {
+            "--strict" => asked.push("all"),
+            "--pedantic" => asked.push("pedantic"),
+            "--restriction" => asked.push("restriction"),
+            other => {
+                if let Some(value) = other.strip_prefix("--groups=") {
+                    asked.push(value);
+                }
+            }
+        }
+    }
+    if asked.is_empty() {
+        return None;
+    }
+    Some(asked.join(","))
+}
+
 /// Runs `kira lint <file|dir>`: report what the package's lints found.
 ///
 /// Closer to `check` than to `test`. A lint runs during *expansion* — the
@@ -89,6 +121,19 @@ pub fn lint(args: &[String]) -> i32 {
     // SAFETY: single-threaded, before any thread that could read the
     // environment is started — the compile below is the first thing that does.
     unsafe { std::env::set_var(kira_build::frontend::LINT_MODE, "1") };
+    // The groups, by the same route and for the same reason: what selects a
+    // lint is a declaration the runner reads while the program is expanded, and
+    // this run's request has to be there before that happens.
+    //
+    // SAFETY: as above — single-threaded, before the compile below.
+    match lint_groups(args) {
+        Some(groups) => unsafe {
+            std::env::set_var(kira_program_graph::assembly::LINT_GROUPS, groups);
+        },
+        None => unsafe {
+            std::env::remove_var(kira_program_graph::assembly::LINT_GROUPS);
+        },
+    }
     match compile(path, &compile_target(path, None)) {
         Ok(compiled) => {
             // Only what lives under the path being linted. A collector is
