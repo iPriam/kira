@@ -1,0 +1,91 @@
+// Foundation's system surface: run a command, read what it printed.
+//
+// A program that only computes needs none of this; one that drives other
+// programs — a build, a test, a formatter — needs to start them and read their
+// output, and that is the whole of what is here. It rides the same `kira_network`
+// archive Foundation already links, and a command is read back through the same
+// operation surface a request is: start it, poll it, read its exit code and its
+// output.
+//
+// Foreground and background are the same command. `runCommand` waits for it and
+// hands back the result; `startCommand` returns a handle at once and the caller
+// reads it whenever it likes. One runs a formatter and reads the diff; the other
+// starts a long build and gets on with something else.
+
+// What a finished command left behind.
+struct CommandResult {
+    // The process's exit code, or a negative network error code when it could
+    // not be started or read.
+    let exit: Int
+    // Everything it printed, stdout then stderr.
+    let output: String
+}
+
+// Runs a command to completion in the current directory, yielding while it runs.
+function runCommand(command: borrow String) -> CommandResult {
+    return runCommandIn(command, "")
+}
+
+// Runs a command to completion in `directory`, yielding while it runs.
+function runCommandIn(command: borrow String, directory: borrow String) -> CommandResult {
+    let handle = kira_network_command_start(command, directory)
+    if handle <= 0 {
+        return CommandResult { exit: handle, output: "" }
+    }
+    var state = kira_network_poll(handle)
+    while state == 0 {
+        taskYield()
+        state = kira_network_poll(handle)
+    }
+    let exit = kira_network_result(handle)
+    kira_network_response_select_body(handle)
+    let output = commandReadText(handle)
+    kira_network_close(handle)
+    return CommandResult { exit: exit, output: output }
+}
+
+// Starts a command in the current directory and returns its handle at once, or a
+// negative error code. The caller reads it later with the functions below.
+function startCommand(command: borrow String) -> Int {
+    return kira_network_command_start(command, "")
+}
+
+// Starts a command in `directory` and returns its handle at once.
+function startCommandIn(command: borrow String, directory: borrow String) -> Int {
+    return kira_network_command_start(command, directory)
+}
+
+// Whether a started command has finished — succeeded or failed. A caller polls
+// this between its own work rather than blocking on the command.
+function commandFinished(handle: Int) -> Bool {
+    return kira_network_poll(handle) != 0
+}
+
+// A finished command's exit code, or a negative error code.
+function commandExit(handle: Int) -> Int {
+    return kira_network_result(handle)
+}
+
+// A finished command's captured output, stdout then stderr.
+function commandOutput(handle: Int) -> String {
+    kira_network_response_select_body(handle)
+    return commandReadText(handle)
+}
+
+// Releases a command handle.
+function closeCommand(handle: Int) {
+    kira_network_close(handle)
+    return
+}
+
+// The selected output as text. The C surface returns scalars, so the text is
+// rebuilt here the way a response body is in `Net.kira`.
+function commandReadText(handle: Int) -> String {
+    var text = ""
+    var scalar = kira_network_response_read_scalar(handle)
+    while scalar >= 0 {
+        text = text + scalarText(scalar)
+        scalar = kira_network_response_read_scalar(handle)
+    }
+    return text
+}

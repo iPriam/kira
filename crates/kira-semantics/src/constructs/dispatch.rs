@@ -465,13 +465,27 @@ impl Analyzer<'_> {
                                 // constrains the parameters only.
                                 method.constrained_result(),
                                 *variant,
+                                // A `@Required` method is an obligation each
+                                // variant must present; a plain method with a
+                                // body is a default the family provides, so a
+                                // variant that writes none inherits it.
+                                method.required,
                             )
                         })
                     })
             })
             .collect();
-        for (enum_id, family, method, span, source, expected_params, expected_result, variant) in
-            rows
+        for (
+            enum_id,
+            family,
+            method,
+            span,
+            source,
+            expected_params,
+            expected_result,
+            variant,
+            required,
+        ) in rows
         {
             // A variant this family only reached through `extends` was checked
             // against the family it was written for, and `check_family_overrides`
@@ -493,13 +507,18 @@ impl Analyzer<'_> {
             let owner = self.member_owner_name(Type::Struct(variant_struct_id));
             let qualified = format!("{owner}.{method}");
             let Some((id, actual_params, actual_result)) = self.lookup_function(&qualified) else {
-                self.emit(
-                    span,
-                    "KSEM234",
-                    format!(
-                        "`{owner}` does not implement `{method}` required by construct family `{family}`"
-                    ),
-                );
+                // A default the family provides needs no own implementation: a
+                // variant that writes none inherits the family's body, so only a
+                // `@Required` obligation left unimplemented is a failure.
+                if required {
+                    self.emit(
+                        span,
+                        "KSEM234",
+                        format!(
+                            "`{owner}` does not implement `{method}` required by construct family `{family}`"
+                        ),
+                    );
+                }
                 continue;
             };
             if actual_params.get(1..) != Some(expected_params.as_slice())

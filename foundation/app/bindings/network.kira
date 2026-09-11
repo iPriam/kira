@@ -7,6 +7,9 @@ function kira_network_cancel(handle: Int) -> Void
 @FFI.Extern { library: kira_network, symbol: kira_network_close, abi: c }
 function kira_network_close(handle: Int) -> Void
 
+@FFI.Extern { library: kira_network, symbol: kira_network_command_start, abi: c }
+function kira_network_command_start(command: CString, cwd: CString) -> Int
+
 @FFI.Extern { library: kira_network, symbol: kira_network_http1_client, abi: c }
 function kira_network_http1_client(port: U16) -> Int
 
@@ -106,6 +109,9 @@ function kira_network_wt_close(handle: Int) -> Void
 @FFI.Extern { library: kira_network, symbol: kira_network_wt_connect, abi: c }
 function kira_network_wt_connect(port: U16, cert_path: CString) -> Int
 
+@FFI.Extern { library: kira_network, symbol: kira_network_wt_read_byte, abi: c }
+function kira_network_wt_read_byte(handle: Int) -> Int
+
 @FFI.Extern { library: kira_network, symbol: kira_network_wt_read_scalar, abi: c }
 function kira_network_wt_read_scalar(handle: Int) -> Int
 
@@ -114,6 +120,12 @@ function kira_network_wt_receive(handle: Int) -> Int
 
 @FFI.Extern { library: kira_network, symbol: kira_network_wt_send, abi: c }
 function kira_network_wt_send(handle: Int, text: CString) -> Int
+
+@FFI.Extern { library: kira_network, symbol: kira_network_wt_send_byte, abi: c }
+function kira_network_wt_send_byte(handle: Int, byte: I32) -> Int
+
+@FFI.Extern { library: kira_network, symbol: kira_network_wt_send_flush, abi: c }
+function kira_network_wt_send_flush(handle: Int) -> Int
 
 @FFI.Extern { library: kira_network, symbol: kira_network_wt_server, abi: c }
 function kira_network_wt_server(cert_path: CString) -> Int
