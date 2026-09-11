@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use quinn::{ClientConfig, Connection, Endpoint, EndpointConfig, ServerConfig};
 use tokio::sync::mpsc;
@@ -45,24 +46,27 @@ const ALPN: &[u8] = b"kira-wt";
 /// allowed to name an allocation.
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 
-/// One selected inbound frame, decoded to text and read out scalar by scalar.
+/// One selected inbound frame, held as its raw bytes and read out from a cursor.
 ///
-/// Frames on this transport are UTF-8 messages, so a channel holds the current
-/// one as a `String` and a byte cursor into it — the same shape the HTTP
-/// response reader uses, so a Kira caller assembles a message the one way it
-/// already knows.
+/// A text caller decodes Unicode scalars from these bytes; a binary caller takes
+/// them one at a time — so the same frame serves a message read either way, and
+/// a binary message is never corrupted by a text decode it did not ask for.
 #[derive(Default)]
 struct Selection {
-    text: String,
+    bytes: Vec<u8>,
     cursor: usize,
 }
 
-/// A live bidirectional channel: one QUIC stream, a queue each way, and the
-/// frame currently selected for reading.
+/// A live bidirectional channel: one QUIC stream, a queue each way, the frame
+/// currently selected for reading, and the frame being staged to send.
 struct Channel {
     outbound: mpsc::UnboundedSender<Vec<u8>>,
     inbound: Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
     selection: Mutex<Selection>,
+    /// Bytes staged for the next frame, appended one at a time and sent whole by
+    /// `send_flush` — the byte-oriented path a binary message (Kten) takes,
+    /// where a text frame's NUL-terminated string cannot carry arbitrary bytes.
+    outgoing: Mutex<Vec<u8>>,
     closed: Arc<AtomicBool>,
     reader: Mutex<Option<AbortHandle>>,
     writer: Mutex<Option<AbortHandle>>,
@@ -109,6 +113,27 @@ fn loopback(port: u16) -> SocketAddr {
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
+// --- Transport ---------------------------------------------------------------
+
+/// Keeps a channel alive across a long, quiet turn.
+///
+/// A harness answering one turn can be inside a model call for far longer than
+/// QUIC's default idle timeout, and nothing flows on the connection while it is.
+/// Left alone the connection would drop mid-answer, so the keep-alive sends a
+/// ping well inside that window — driven by the runtime, not the caller, so it
+/// fires even while the caller is blocked — and the idle timeout is widened to a
+/// span no real turn outlives.
+fn transport_config() -> Arc<quinn::TransportConfig> {
+    let mut config = quinn::TransportConfig::default();
+    config.keep_alive_interval(Some(Duration::from_secs(5)));
+    config.max_idle_timeout(Some(
+        Duration::from_secs(300)
+            .try_into()
+            .expect("five minutes is a valid idle timeout"),
+    ));
+    Arc::new(config)
+}
+
 // --- TLS ---------------------------------------------------------------------
 
 /// The server's QUIC configuration, from a freshly generated localhost
@@ -130,9 +155,10 @@ fn server_config() -> Result<(ServerConfig, Vec<u8>), NetworkError> {
     )
     .map_err(|_| NetworkError::Protocol)?;
     tls.alpn_protocols = vec![ALPN.to_vec()];
-    let config = ServerConfig::with_crypto(Arc::new(
+    let mut config = ServerConfig::with_crypto(Arc::new(
         QuicServerConfig::try_from(tls).map_err(|_| NetworkError::Protocol)?,
     ));
+    config.transport_config(transport_config());
     Ok((config, certificate_der))
 }
 
@@ -153,9 +179,11 @@ fn client_config(certificate_der: Vec<u8>) -> Result<ClientConfig, NetworkError>
     .with_root_certificates(roots)
     .with_no_client_auth();
     tls.alpn_protocols = vec![ALPN.to_vec()];
-    Ok(ClientConfig::new(Arc::new(
+    let mut config = ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(tls).map_err(|_| NetworkError::Protocol)?,
-    )))
+    ));
+    config.transport_config(transport_config());
+    Ok(config)
 }
 
 // --- Framing -----------------------------------------------------------------
@@ -240,6 +268,7 @@ fn register_channel(
         outbound: outbound_tx,
         inbound: Mutex::new(inbound_rx),
         selection: Mutex::new(Selection::default()),
+        outgoing: Mutex::new(Vec::new()),
         closed,
         reader: Mutex::new(Some(reader)),
         writer: Mutex::new(Some(writer)),
@@ -352,6 +381,7 @@ pub fn connect(port: u16, cert_path: &str) -> Result<i64, NetworkError> {
         outbound: outbound_tx,
         inbound: Mutex::new(inbound_rx),
         selection: Mutex::new(Selection::default()),
+        outgoing: Mutex::new(Vec::new()),
         closed: Arc::clone(&closed),
         reader: Mutex::new(None),
         writer: Mutex::new(None),
@@ -426,13 +456,16 @@ pub fn receive(id: i64) -> Result<i64, NetworkError> {
     let mut inbound = channel.inbound.lock().map_err(|_| NetworkError::RuntimeInit)?;
     match inbound.try_recv() {
         Ok(bytes) => {
-            let text = String::from_utf8_lossy(&bytes).into_owned();
-            let length = text.len() as i64;
+            // The frame is kept as its raw bytes, not a lossy UTF-8 string: a
+            // binary message (Kten) would be corrupted by a text decode. A text
+            // reader decodes scalars from these bytes; a binary reader takes
+            // them one at a time.
+            let length = bytes.len() as i64;
             let mut selection = channel
                 .selection
                 .lock()
                 .map_err(|_| NetworkError::RuntimeInit)?;
-            *selection = Selection { text, cursor: 0 };
+            *selection = Selection { bytes, cursor: 0 };
             Ok(length)
         }
         Err(mpsc::error::TryRecvError::Empty) => {
@@ -454,14 +487,53 @@ pub fn read_scalar(id: i64) -> Result<i64, NetworkError> {
         .lock()
         .map_err(|_| NetworkError::RuntimeInit)?;
     let cursor = selection.cursor;
-    if cursor >= selection.text.len() {
+    if cursor >= selection.bytes.len() {
         return Ok(crate::request::END_OF_SELECTION);
     }
-    let Some(scalar) = selection.text[cursor..].chars().next() else {
-        return Ok(crate::request::END_OF_SELECTION);
+    let (scalar, advance) = {
+        let rest = &selection.bytes[cursor..];
+        match std::str::from_utf8(rest).ok().and_then(|text| text.chars().next()) {
+            Some(character) => (i64::from(u32::from(character)), character.len_utf8()),
+            None => return Ok(crate::request::END_OF_SELECTION),
+        }
     };
-    selection.cursor = cursor + scalar.len_utf8();
-    Ok(i64::from(u32::from(scalar)))
+    selection.cursor = cursor + advance;
+    Ok(scalar)
+}
+
+/// Reads the next raw byte of the selected frame, or `-1` at its end — the
+/// binary counterpart to `read_scalar`, for a message read as bytes (Kten).
+pub fn read_byte(id: i64) -> Result<i64, NetworkError> {
+    let channel = channel(id)?;
+    let mut selection = channel
+        .selection
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    let cursor = selection.cursor;
+    if cursor >= selection.bytes.len() {
+        return Ok(crate::request::END_OF_SELECTION);
+    }
+    let byte = selection.bytes[cursor];
+    selection.cursor = cursor + 1;
+    Ok(i64::from(byte))
+}
+
+/// Appends one byte to the frame being staged for sending.
+pub fn send_byte(id: i64, byte: i32) -> Result<(), NetworkError> {
+    let channel = channel(id)?;
+    let mut outgoing = channel.outgoing.lock().map_err(|_| NetworkError::RuntimeInit)?;
+    outgoing.push((byte & 255) as u8);
+    Ok(())
+}
+
+/// Sends the staged bytes as one frame and clears the stage.
+pub fn send_flush(id: i64) -> Result<(), NetworkError> {
+    let channel = channel(id)?;
+    let frame = {
+        let mut outgoing = channel.outgoing.lock().map_err(|_| NetworkError::RuntimeInit)?;
+        std::mem::take(&mut *outgoing)
+    };
+    channel.outbound.send(frame).map_err(|_| NetworkError::Canceled)
 }
 
 /// Closes a server or a channel and forgets its handle. Unknown handles are

@@ -8,6 +8,7 @@
 //! is driven by Tokio on its runtime thread.
 
 mod api;
+mod command;
 mod http;
 mod http3;
 mod io;
@@ -119,6 +120,29 @@ pub extern "C" fn kira_network_https_server() -> i64 {
     runtime::start_https_server().map_or_else(runtime::error_code, OperationId::as_i64)
 }
 
+/// Starts a shell command and returns its operation handle, or a negative error
+/// code. Poll it like a request; its status is the exit code and its body is the
+/// captured output. `cwd` empty runs in the current directory.
+///
+/// # Safety
+///
+/// Both arguments must be NUL-terminated strings valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_command_start(
+    command: *const c_char,
+    cwd: *const c_char,
+) -> i64 {
+    // SAFETY: both arguments are the caller's NUL-terminated strings, valid for
+    // this call by the contract above.
+    let arguments = unsafe { (borrowed(command), borrowed(cwd)) };
+    match arguments {
+        (Ok(command), Ok(cwd)) => {
+            command::start(command, cwd).map_or_else(runtime::error_code, OperationId::as_i64)
+        }
+        (Err(error), _) | (_, Err(error)) => error.code(),
+    }
+}
+
 /// The wall-clock time now, in milliseconds since the Unix epoch.
 ///
 /// A clock, not a networking operation, but it rides here because this is the
@@ -130,7 +154,7 @@ pub extern "C" fn kira_network_https_server() -> i64 {
 pub extern "C" fn kira_network_unix_millis() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
-        Err(_) => runtime::error_code(runtime::NetworkError::Io),
+        Err(_) => runtime::error_code(NetworkError::Io),
     }
 }
 
@@ -205,6 +229,25 @@ pub extern "C" fn kira_network_wt_receive(handle: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_network_wt_read_scalar(handle: i64) -> i64 {
     webtransport::read_scalar(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Reads the next raw byte of the selected frame, or `-1` at its end, for a
+/// message read as bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_read_byte(handle: i64) -> i64 {
+    webtransport::read_byte(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Appends one byte to the frame being staged to send.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_send_byte(handle: i64, byte: i32) -> i64 {
+    completed(webtransport::send_byte(handle, byte))
+}
+
+/// Sends the staged bytes as one frame and clears the stage.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_send_flush(handle: i64) -> i64 {
+    completed(webtransport::send_flush(handle))
 }
 
 /// Closes a WebTransport server or channel handle. Unknown handles are ignored.

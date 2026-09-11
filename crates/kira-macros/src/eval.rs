@@ -320,12 +320,15 @@ const CALL_DEPTH_LIMIT: u32 = 32;
 /// diagnostic. Whatever the shape, evaluation stops here under `KMAC010`.
 const STEP_LIMIT: u64 = 10_000_000;
 
-/// How many value cells one comptime evaluation may build or clone, nested
-/// calls included.
+/// How many value cells one comptime evaluation may build, nested calls
+/// included.
 ///
-/// Steps bound the rounds; this bounds what each round may cost. A loop cloning
-/// an ever-larger array spends a step per round but cells per byte cloned, so a
-/// grind that stays under the step limit still stops here under `KMAC010`.
+/// Steps bound the rounds; this bounds what each round may build. Reads spend
+/// nothing — answering from what is there is linear in the program — but every
+/// fresh value does: concatenation, splits, replacements, renders, joins, body
+/// parses, and pushed items. A loop whose values grow without bound spends
+/// geometrically and stops here under `KMAC010`, while a linear pass over a big
+/// program spends its size a small number of times over.
 const CELL_LIMIT: u64 = 1_000_000_000;
 
 /// Steps spent and cells built by one comptime evaluation, shared with every
@@ -342,7 +345,7 @@ pub(crate) struct Fuel(Rc<FuelCounts>);
 struct FuelCounts {
     /// Statements executed, loop iterations included.
     steps: Cell<u64>,
-    /// Value cells built or cloned.
+    /// Value cells built by this evaluation and its nested calls.
     cells: Cell<u64>,
 }
 
@@ -481,9 +484,9 @@ impl Evaluator<'_> {
 
     /// Spends `cells` of the build budget, refusing when it is gone.
     ///
-    /// Charged for the size of what an expression built or cloned, so a loop
-    /// cloning an ever-larger value spends proportionally to the clone rather
-    /// than as one step per round.
+    /// Charged for fresh values — concatenation, splits, renders, parses, and
+    /// pushes — never for reads, so a linear pass spends its size and a loop
+    /// whose values grow without bound spends geometrically.
     fn charge_cells(&mut self, cells: u64) -> Result<(), EvalError> {
         let spent = self.fuel.0.cells.get().saturating_add(cells);
         self.fuel.0.cells.set(spent);
@@ -491,7 +494,7 @@ impl Evaluator<'_> {
             return Err(EvalError::coded(
                 diagnostics::DEPTH_LIMIT,
                 format!(
-                    "comptime evaluation built more than {CELL_LIMIT} cells of values without returning; a loop cloning ever-larger values stops the build here rather than hanging the compiler"
+                    "comptime evaluation built more than {CELL_LIMIT} cells of values without returning; a loop whose values grow without bound stops the build here rather than hanging the compiler"
                 ),
             ));
         }

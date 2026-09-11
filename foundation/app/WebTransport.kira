@@ -103,6 +103,48 @@ function wtReceive(channel: borrow WtChannel) -> WtInbound {
     return WtInbound.Closed
 }
 
+// What reading a channel as bytes found.
+enum WtInboundBytes {
+    // A whole frame arrived, as its raw bytes.
+    Frame([U8])
+    // Nothing has arrived since the last read.
+    Idle
+    // The channel has closed.
+    Closed
+}
+
+// Sends one whole message as raw bytes — the path a binary message (Kten) takes,
+// where text's NUL-terminated string cannot carry arbitrary bytes. Answers false
+// when the channel has closed.
+function wtSendBytes(channel: borrow WtChannel, bytes: borrow [U8]) -> Bool {
+    var index = 0
+    while index < bytes.count {
+        if kira_network_wt_send_byte(channel.handle, I32(Int(bytes[index]))) != 0 {
+            return false
+        }
+        index = index + 1
+    }
+    return kira_network_wt_send_flush(channel.handle) == 0
+}
+
+// Reads the next frame on a channel as raw bytes.
+function wtReceiveBytes(channel: borrow WtChannel) -> WtInboundBytes {
+    let length = kira_network_wt_receive(channel.handle)
+    if length > 0 {
+        var out: [U8] = []
+        var byte = kira_network_wt_read_byte(channel.handle)
+        while byte >= 0 {
+            out.append(U8(byte & 255))
+            byte = kira_network_wt_read_byte(channel.handle)
+        }
+        return WtInboundBytes.Frame(move out)
+    }
+    if length == 0 {
+        return WtInboundBytes.Idle
+    }
+    return WtInboundBytes.Closed
+}
+
 // Closes a server or a channel. Both hold a `handle`, and the C surface forgets
 // whichever it is, so one call serves both.
 function wtCloseServer(server: borrow WtServer) {

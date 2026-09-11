@@ -100,6 +100,10 @@ int64_t kira_network_response_rewind(int64_t handle);
 int64_t kira_network_response_read_byte(int64_t handle);
 int64_t kira_network_response_read_scalar(int64_t handle);
 
+/* Starts a shell command; poll like a request, status is the exit code, body is
+ * the captured output. cwd empty runs in the current directory. */
+int64_t kira_network_command_start(const char *command, const char *cwd);
+
 /* The wall-clock time now, in milliseconds since the Unix epoch. */
 int64_t kira_network_unix_millis(void);
 
@@ -125,6 +129,9 @@ int64_t kira_network_wt_connect(uint16_t port, const char *cert_path);
 int64_t kira_network_wt_send(int64_t handle, const char *text);
 int64_t kira_network_wt_receive(int64_t handle);
 int64_t kira_network_wt_read_scalar(int64_t handle);
+int64_t kira_network_wt_read_byte(int64_t handle);
+int64_t kira_network_wt_send_byte(int64_t handle, int32_t byte);
+int64_t kira_network_wt_send_flush(int64_t handle);
 void kira_network_wt_close(int64_t handle);
 
 #ifdef __cplusplus

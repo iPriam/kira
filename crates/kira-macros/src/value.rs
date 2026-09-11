@@ -277,13 +277,13 @@ impl FieldValue {
 }
 
 impl Value {
-    /// The value's size in cells, for the evaluation budget.
+    /// The value's size in cells: what building it may spend from the
+    /// evaluation budget.
     ///
     /// Approximate and saturated: scalars cost one, text costs its bytes, and
-    /// an array costs its length plus its elements — so cloning a large value
-    /// spends proportionally to the clone. Shared text (`StatementValue`'s
-    /// whole declaration) costs nothing, because cloning the value does not
-    /// copy it.
+    /// an array costs its length plus its elements. Shared text
+    /// (`StatementValue`'s whole declaration) costs nothing, because building
+    /// the value does not copy it.
     pub(crate) fn cells(&self) -> u64 {
         match self {
             Value::Void | Value::Int(_) | Value::Bool(_) => 1,
