@@ -56,16 +56,14 @@ fn a_zero_parameter_function_type_parses() {
 }
 
 #[test]
-fn a_function_type_without_an_arrow_is_reported() {
+fn a_single_parenthesized_type_is_grouping() {
     let result = parse_text("function f(g: (Int)) { return }");
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.has_code("KPAR038")),
-        "{:?}",
-        result.diagnostics
-    );
+    let function = match &result.tree.items()[0] {
+        Item::Function(function) => function,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(type_spelling(&result, function.params[0].ty), "Int");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
 #[test]

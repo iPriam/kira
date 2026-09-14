@@ -59,6 +59,8 @@ pub enum TokenKind {
     True,
     /// `false`
     False,
+    /// `infinity`
+    Infinity,
     /// `import`
     Import,
     /// `namespace`
@@ -129,6 +131,26 @@ pub enum TokenKind {
     Arrow,
     /// `=`
     Equals,
+    /// `+=`
+    PlusEq,
+    /// `-=`
+    MinusEq,
+    /// `*=`
+    StarEq,
+    /// `/=`
+    SlashEq,
+    /// `%=`
+    PercentEq,
+    /// `&=`
+    AmpEq,
+    /// `|=`
+    PipeEq,
+    /// `^=`
+    CaretEq,
+    /// `<<=`
+    LtLtEq,
+    /// `>>=`
+    GtGtEq,
     /// `+`
     Plus,
     /// `-`
@@ -190,6 +212,7 @@ impl TokenKind {
             "while" => TokenKind::While,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "infinity" => TokenKind::Infinity,
             "import" => TokenKind::Import,
             "namespace" => TokenKind::Namespace,
             "as" => TokenKind::As,
@@ -233,6 +256,7 @@ impl TokenKind {
             TokenKind::While => "`while`",
             TokenKind::True => "`true`",
             TokenKind::False => "`false`",
+            TokenKind::Infinity => "`infinity`",
             TokenKind::Import => "`import`",
             TokenKind::Namespace => "`namespace`",
             TokenKind::As => "`as`",
@@ -267,6 +291,16 @@ impl TokenKind {
             TokenKind::Question => "`?`",
             TokenKind::Arrow => "`->`",
             TokenKind::Equals => "`=`",
+            TokenKind::PlusEq => "`+=`",
+            TokenKind::MinusEq => "`-=`",
+            TokenKind::StarEq => "`*=`",
+            TokenKind::SlashEq => "`/=`",
+            TokenKind::PercentEq => "`%=`",
+            TokenKind::AmpEq => "`&=`",
+            TokenKind::PipeEq => "`|=`",
+            TokenKind::CaretEq => "`^=`",
+            TokenKind::LtLtEq => "`<<=`",
+            TokenKind::GtGtEq => "`>>=`",
             TokenKind::Plus => "`+`",
             TokenKind::Minus => "`-`",
             TokenKind::Star => "`*`",

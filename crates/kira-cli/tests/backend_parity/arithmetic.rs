@@ -120,6 +120,29 @@ function main() {
     assert_eq!(output, "3.5\n2\n3\n0.75\ntrue\ntrue\n-1.5\n");
 }
 
+/// Infinity is a language value, not a giant finite sentinel. The unary-minus
+/// case proves the ordinary numeric prefix path composes with the literal, and
+/// comparison proves every backend preserves the IEEE value rather than
+/// normalizing or saturating it during lowering.
+#[test]
+fn infinity_is_the_same_ieee_value_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let positive = infinity
+    let negative = -infinity
+    print(positive > 1.0)
+    print(negative < -1.0)
+    print(positive == positive)
+    print(negative == negative)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\ntrue\n");
+}
+
 /// A hexadecimal literal is the same value on every backend, including the
 /// full-width bit pattern.
 ///

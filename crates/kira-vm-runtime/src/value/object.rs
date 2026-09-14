@@ -204,6 +204,12 @@ impl Heap {
     /// a schedule this side can guess would hand C dangling storage. Teardown
     /// is the one moment provably after every foreign call has returned.
     pub fn retain_for_foreign(&mut self, value: Value) {
+        if matches!(value, Value::NativeState(_)) {
+            // The successful foreign call took this affine owner. Its token is
+            // now C's to return or release later, so the VM must neither drop it
+            // nor keep a second hidden owner in its retained C-storage registry.
+            return;
+        }
         self.retained.push(value);
     }
 
@@ -354,7 +360,7 @@ impl Heap {
     /// Drops a value, freeing whatever heap storage it owns.
     pub fn drop_value(&mut self, value: Value) {
         match value {
-            Value::NativeState(token) => self.native_state_releases.push(token),
+            Value::NativeState(token) => self.native_state_events.release(token),
             Value::Str(id) => self.free(id),
             Value::Struct(id) => self.free_struct(id),
             Value::Array(id) => self.free_array(id),
@@ -387,7 +393,7 @@ impl Heap {
         match value {
             // A copy of a handle is one more owner of the same state.
             Value::NativeState(token) => {
-                self.native_state_retains.push(token);
+                self.native_state_events.retain(token);
                 value
             }
             Value::Str(id) => {

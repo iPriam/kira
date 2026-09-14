@@ -26,13 +26,14 @@ function invokeLikeCallback(user_data: RawPtr, value: Int) -> Int {
 @Runtime
 function main() {
     var state = nativeState(CounterState { count: 0, total: 0 })
-    var token = nativeUserData(state)
+    let owner = nativeUserData(state)
+    let token = nativeUserDataBorrow(owner)
     print(invokeLikeCallback(token, 5))
     print(invokeLikeCallback(token, 7))
-    var recovered = nativeRecover<CounterState>(token)
+    var recovered = nativeRecover<CounterState>(owner)
     print(recovered.count)
     print(recovered.total)
-    nativeUserDataRelease(token)
+    nativeUserDataRelease(owner)
 }
 "#,
     );
@@ -67,11 +68,9 @@ struct State {
     var ctx: RawPtr
     var count: Int
 }
-function makePtr() -> RawPtr {
-    return nativeUserData(nativeState(0))
-}
 @Main function main() {
-    var probe = makePtr()
+    let probeOwner = nativeState(0)
+    let probe = nativeUserDataBorrow(probeOwner)
     var state = nativeState(State { ctx: probe, count: 0 })
     let token = nativeUserData(state)
     var view = nativeRecover<State>(token)
@@ -79,7 +78,6 @@ function makePtr() -> RawPtr {
     var again = nativeRecover<State>(token)
     print(again.count)
     nativeUserDataRelease(token)
-    nativeUserDataRelease(probe)
 }
 "#,
     );
@@ -351,18 +349,17 @@ function inspect(raw: RawPtr, expected: RawPtr) -> Bool {
 @Runtime
 function main() {
     var pointerSource = nativeState(0)
-    let pointer = nativeUserData(pointerSource)
+    let pointer = nativeUserDataBorrow(pointerSource)
     var pointerState = nativeState(State { payload: .Pointer(pointer) })
     let pointerToken = nativeUserData(pointerState)
-    print(inspect(pointerToken, pointer))
+    print(inspect(nativeUserDataBorrow(pointerToken), pointer))
     nativeUserDataRelease(pointerToken)
-    nativeUserDataRelease(pointer)
 
     var total = 0
     let bump: () -> Void = { in total = total + 1 }
     var handlerState = nativeState(State { payload: .Handler(bump) })
     let handlerToken = nativeUserData(handlerState)
-    print(inspect(handlerToken, RawPtr(0)))
+    print(inspect(nativeUserDataBorrow(handlerToken), RawPtr(0)))
     nativeUserDataRelease(handlerToken)
     print(total)
     return
@@ -372,10 +369,8 @@ function main() {
     assert_eq!(output, "true\ntrue\n1\n");
 }
 
-/// Every owner of a state is counted the same way on every backend: the
-/// handle, each exported token, and each explicit retain. A handle gives its
-/// reference up with its scope, a token with `nativeUserDataRelease`, and the
-/// state survives exactly as long as one owner remains.
+/// Every state owner is a typed affine value on every backend. Explicit clones
+/// create another tracked owner; releasing or moving one cannot affect another.
 #[test]
 fn native_state_owners_are_counted_on_every_backend() {
     let output = assert_parity_with_heap_balance(
@@ -385,13 +380,7 @@ struct Counter {
     var label: String = "state"
 }
 
-function exportToken() -> RawPtr {
-    let state = nativeState(Counter {})
-    // The handle dies here; the token keeps the state alive on its own.
-    return nativeUserData(state)
-}
-
-function bump(token: RawPtr) {
+function bump(token: borrow NativeState<Counter>) {
     var view = nativeRecover<Counter>(token)
     view.hits = view.hits + 1
     return
@@ -399,16 +388,17 @@ function bump(token: RawPtr) {
 
 @Main
 function main() {
-    let token = exportToken()
-    bump(token)
-    nativeUserDataRetain(token)
-    nativeUserDataRelease(token)
-    bump(token)
-    let again = nativeRecover<Counter>(token)
+    let root = nativeState(Counter {})
+    let owner = nativeUserData(root)
+    bump(owner)
+    let clone = nativeUserData(owner)
+    nativeUserDataRelease(clone)
+    bump(owner)
+    let again = nativeRecover<Counter>(owner)
     print(again.hits)
-    nativeUserDataRelease(token)
+    nativeUserDataRelease(owner)
 
-    // A second export of one handle is a second owner.
+    // Two explicit clones are two independently tracked owners.
     let handle = nativeState(Counter { hits: 7 })
     let first = nativeUserData(handle)
     let second = nativeUserData(handle)
@@ -417,7 +407,7 @@ function main() {
     print(still.hits)
     nativeUserDataRelease(second)
 
-    // The deprecated spelling is one release through the handle.
+    // The deprecated spelling still consumes exactly one typed owner.
     let old = nativeState(Counter { hits: 1 })
     let kept = nativeUserData(old)
     nativeStateFree(old)
@@ -442,9 +432,8 @@ struct Counter { var hits: Int = 0 }
 @Main
 function main() {
     let state = nativeState(Counter { hits: 4 })
-    let token = nativeUserData(state)
+    let token = nativeUserDataBorrow(state)
     print(nativeRecover<Counter>(token).hits)
-    nativeUserDataRelease(token)
     nativeStateFree(state)
     let gone = nativeRecover<Counter>(token)
     print(gone.hits)

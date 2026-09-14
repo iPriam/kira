@@ -5,7 +5,7 @@
 //! position can hold one. What differs between positions is only how an
 //! unresolvable **name** is reported, which is what [`NameContext`] carries.
 
-use kira_semantics_model::Type;
+use kira_semantics_model::{FieldDef, StructDef, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Item, TypeRef, TypeRefId};
 
@@ -61,6 +61,45 @@ impl AggregateKind {
 }
 
 impl Analyzer<'_> {
+    /// Returns the canonical compiler-minted struct type for a tuple shape.
+    /// Backends see only an ordinary struct; numeric field names make `.0`,
+    /// `.1`, and so on use the existing field-access machinery.
+    pub(crate) fn tuple_type(&mut self, elements: &[Type]) -> Type {
+        if elements.contains(&Type::Error) {
+            return Type::Error;
+        }
+        let key = format!(
+            "$Tuple{}<{}>",
+            elements.len(),
+            elements
+                .iter()
+                .map(|ty| format!("{ty:?}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        if let Some(id) = self.program.types.structs().lookup(&key) {
+            return Type::Struct(id);
+        }
+        let fields = elements
+            .iter()
+            .enumerate()
+            .map(|(index, &ty)| FieldDef {
+                name: index.to_string(),
+                ty,
+                mutable: false,
+            })
+            .collect();
+        let Some(id) = self.program.types.structs_mut().declare(StructDef {
+            name: key,
+            fields,
+            c_layout: false,
+            drop_glue: None,
+        }) else {
+            return Type::Error;
+        };
+        Type::Struct(id)
+    }
+
     /// Resolves a written type in an ordinary position.
     pub(crate) fn resolve_type_ref(&mut self, id: TypeRefId) -> Type {
         self.resolve_type_in(id, &NameContext::Ordinary)
@@ -123,6 +162,28 @@ impl Analyzer<'_> {
                 args,
                 span,
             } => {
+                // `NativeState<Any>` is compiler-owned affine storage, not a
+                // user generic declaration. Making its contained type
+                // writable lets structs retain ownership without erasing the
+                // handle into a copyable `RawPtr`.
+                if self.interner.resolve(name) == "NativeState" {
+                    if args.len() != 1 {
+                        self.emit(
+                            span,
+                            "KSEM216",
+                            format!(
+                                "`NativeState` takes exactly one type argument, found {}",
+                                args.len()
+                            ),
+                        );
+                        return Type::Error;
+                    }
+                    let target = self.resolve_type_in(args[0], context);
+                    if target == Type::Error {
+                        return Type::Error;
+                    }
+                    return self.program.types.native_state_of(target);
+                }
                 // The written name resolves to the generic declaration whether
                 // or not the instantiation itself goes through, so the link is
                 // recorded first: a jump from `Result<Int, E>` lands on
@@ -130,6 +191,13 @@ impl Analyzer<'_> {
                 let written = self.interner.resolve(name).to_owned();
                 self.link_type_name(&written, name_span);
                 self.resolve_generic_instantiation(name, name_span, &args, span, context)
+            }
+            TypeRef::Tuple { elements, .. } => {
+                let resolved: Vec<Type> = elements
+                    .iter()
+                    .map(|&element| self.resolve_type_in(element, context))
+                    .collect();
+                self.tuple_type(&resolved)
             }
             TypeRef::Array { element, .. } => {
                 let element_ty = self.resolve_type_in(element, context);

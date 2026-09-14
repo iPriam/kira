@@ -156,9 +156,11 @@ fn construction_takes_one_value_of_the_representation() {
     );
 }
 
-/// Two ids compare, and comparing one to anything else does not.
+/// A distinct type carries the whole operator surface of its representation:
+/// two ids add, order, and compare, and the result of a value operator is the
+/// distinct type again.
 #[test]
-fn equality_is_the_operator_surface_a_distinct_type_has() {
+fn a_distinct_type_carries_its_representations_operator_surface() {
     assert!(
         diagnostics(
             "distinct TabId = U32
@@ -167,25 +169,57 @@ fn equality_is_the_operator_surface_a_distinct_type_has() {
                  let b = TabId(U32(2))
                  if a == b { print(1) }
                  if a != b { print(2) }
+                 if a < b { print(3) }
+                 if a >= b { print(4) }
+                 let sum: TabId = a + b
+                 print(Int(sum.raw))
                  return
              }"
         )
         .is_empty()
     );
-    // Arithmetic is refused: an id is named, not counted.
+}
+
+/// A bare literal adapts into a distinct type, so a position reads as itself.
+#[test]
+fn a_bare_literal_pairs_with_a_distinct_type() {
+    assert!(
+        diagnostics(
+            "distinct StreamId = Int
+             @Main function main() {
+                 var s = StreamId(1)
+                 s = s - 1
+                 if s <= 0 { print(1) }
+                 if s == 0 { print(2) }
+                 let xs: [Int] = [10, 20]
+                 print(xs[s])
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+/// The nominal boundary still holds: two different distinct types share no
+/// operator, and a distinct type does not mix with a *written* representation
+/// value — only with a bare literal.
+#[test]
+fn a_distinct_type_refuses_a_foreign_or_written_operand() {
+    // Two different distinct types.
     assert_eq!(
         codes(
             "distinct TabId = U32
+             distinct BookmarkId = U32
              @Main function main() {
                  let a = TabId(U32(1))
-                 let b = TabId(U32(2))
+                 let b = BookmarkId(U32(2))
                  print(Int((a + b).raw))
                  return
              }"
         ),
         vec!["KSEM071"]
     );
-    // And so is comparing one to its representation.
+    // A distinct type against a written representation value.
     assert_eq!(
         codes(
             "distinct TabId = U32

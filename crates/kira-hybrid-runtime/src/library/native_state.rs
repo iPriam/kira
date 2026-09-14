@@ -18,6 +18,23 @@ impl NativeLibrary {
         Ok(NativeStateToken::from_word(token))
     }
 
+    /// Boxes callback state whose root runs user `Drop` in the loaded native half.
+    pub fn native_state_create_dropping(
+        &self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+        glue: u32,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        // SAFETY: every node is allocated and consumed by this same loaded library.
+        let node = unsafe { self.encode_state_value(&value)? };
+        let mut token = 0;
+        // SAFETY: `node` is live, `glue` names generated Kira drop glue, and
+        // `token` is one writable word.
+        let status = unsafe { (self.state_new_dropping)(ty.as_word(), node, glue, &mut token) };
+        self.check_state_status(status, token)?;
+        Ok(NativeStateToken::from_word(token))
+    }
+
     /// Recovers an owned callback-state copy from the loaded native half.
     pub fn native_state_recover(
         &self,
@@ -32,18 +49,22 @@ impl NativeLibrary {
         unsafe { self.decode_state_value(node) }
     }
 
-    /// Replaces callback state in the loaded native half.
+    /// Replaces callback state in the loaded native half and returns the displaced root.
     pub fn native_state_replace(
         &self,
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         // SAFETY: every node is allocated and consumed by this same loaded library.
         let node = unsafe { self.encode_state_value(&value)? };
-        // SAFETY: `node` is live and consumed by the runtime call.
-        let status = unsafe { (self.state_replace)(token.as_word(), ty.as_word(), node) };
-        self.check_state_status(status, token.as_word())
+        let mut old = std::ptr::null_mut();
+        // SAFETY: `node` is live and consumed by the runtime call; `old` is one
+        // writable pointer slot initialized on success.
+        let status = unsafe { (self.state_replace)(token.as_word(), ty.as_word(), node, &mut old) };
+        self.check_state_status(status, token.as_word())?;
+        // SAFETY: a successful replacement initializes one live displaced node.
+        unsafe { self.decode_state_value(old) }
     }
 
     /// Adds one owner to callback state in the loaded native half.
@@ -53,11 +74,52 @@ impl NativeLibrary {
         self.check_state_status(status, token.as_word())
     }
 
+    /// Builds one portable affine owner for a token already owned by the caller.
+    pub fn native_state_owner(&self, token: NativeStateToken) -> NativeStateOwner {
+        let retain = self.state_retain;
+        let release = self.state_release;
+        let retain_library = Arc::clone(&self._library);
+        let release_library = Arc::clone(&self._library);
+        NativeStateOwner::new(
+            token,
+            move |token| {
+                let _library = &retain_library;
+                // SAFETY: the function pointer belongs to `_library`, kept loaded here.
+                if unsafe { retain(token.as_word()) } != NativeStateStatus::OK.0 {
+                    std::process::abort();
+                }
+            },
+            move |token| {
+                let _library = &release_library;
+                // SAFETY: the function pointer belongs to `_library`, kept loaded here.
+                if unsafe { release(token.as_word()) } != NativeStateStatus::OK.0 {
+                    std::process::abort();
+                }
+            },
+        )
+    }
+
     /// Removes one owner from callback state in the loaded native half.
     pub fn native_state_release(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
         // SAFETY: this function pointer accepts any token word and validates it.
         let status = unsafe { (self.state_release)(token.as_word()) };
         self.check_state_status(status, token.as_word())
+    }
+
+    /// Removes one owner and returns a final tree whose destruction needs Kira.
+    pub fn native_state_release_dropping(
+        &self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        let mut node = std::ptr::null_mut();
+        // SAFETY: the output slot is writable and the runtime validates token.
+        let status = unsafe { (self.state_release_dropping)(token.as_word(), &mut node) };
+        self.check_state_status(status, token.as_word())?;
+        if node.is_null() {
+            return Ok(None);
+        }
+        // SAFETY: success with a non-null node returns one live owned node.
+        unsafe { self.decode_state_value(node).map(Some) }
     }
 
     /// Builds the library's node tree from a stored value, reading it.
@@ -80,6 +142,12 @@ impl NativeLibrary {
             }
             // SAFETY: the constructor accepts its opaque word by value.
             NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(*value) },
+            NativeStateValue::NativeState(owner) => {
+                let token = owner.duplicate_token();
+                // SAFETY: `duplicate_token` produced one owned state reference;
+                // the node constructor consumes exactly that reference.
+                unsafe { (self.state_value_native_state)(token.as_word()) }
+            }
             // SAFETY: the constructor accepts its scalar by value.
             NativeStateValue::Float(value) => unsafe { (self.state_value_float)(*value) },
             // SAFETY: the constructor accepts its scalar by value.
@@ -89,6 +157,13 @@ impl NativeLibrary {
                 // SAFETY: the constructor consumes this live string handle.
                 unsafe { (self.state_value_string)(string) }
             }
+            // A `Number` crosses as a node carrying its two-word inline value.
+            NativeStateValue::Number(decimal) => {
+                let bits = ((u128::from(decimal.scale()) << 64)
+                    | (decimal.mantissa() as u64 as u128)) as i128;
+                // SAFETY: builds a node in the loaded library from a plain value.
+                unsafe { (self.state_value_number)(bits) }
+            }
             NativeStateValue::CBlock(bytes) => {
                 // SAFETY: the helper copies this ownership tree into nodes from
                 // the loaded library.
@@ -97,6 +172,11 @@ impl NativeLibrary {
             // SAFETY: the aggregate owns every child this builds.
             NativeStateValue::Struct(values) => unsafe {
                 self.encode_aggregate(NativeStateValueTag::STRUCT, 0, values)?
+            },
+            // SAFETY: the aggregate owns every child this builds and carries the
+            // user Drop body id in the aggregate metadata word.
+            NativeStateValue::DropStruct { glue, fields } => unsafe {
+                self.encode_aggregate(NativeStateValueTag::DROP_STRUCT, *glue, fields)?
             },
             // SAFETY: the aggregate owns every child this builds.
             NativeStateValue::Array(values) => unsafe {
@@ -207,6 +287,14 @@ impl NativeLibrary {
                 // SAFETY: tag validation established the node shape.
                 NativeStateValue::Int(unsafe { (self.state_value_read_int)(node) })
             }
+            NativeStateValueTag::NUMBER => {
+                // SAFETY: a live `Number` node from the loaded library.
+                let bits = unsafe { (self.state_value_read_number)(node) } as u128;
+                NativeStateValue::Number(kira_runtime_abi::Decimal::from_parts(
+                    bits as u64 as i64,
+                    (bits >> 64) as u32,
+                ))
+            }
             NativeStateValueTag::ANY => {
                 // SAFETY: tag validation established the node shape.
                 let type_id = unsafe { (self.state_value_read_any_type)(node) };
@@ -229,6 +317,38 @@ impl NativeLibrary {
             NativeStateValueTag::RAW_PTR => {
                 // SAFETY: tag validation established the node shape.
                 NativeStateValue::RawPtr(unsafe { (self.state_value_read_raw_ptr)(node) })
+            }
+            NativeStateValueTag::NATIVE_STATE => {
+                // SAFETY: tag validation established the node shape. The reader
+                // retains one owner for the portable value returned below.
+                let token = NativeStateToken::from_word(unsafe {
+                    (self.state_value_read_native_state)(node)
+                });
+                let retain = self.state_retain;
+                let release = self.state_release;
+                let retain_library = Arc::clone(&self._library);
+                let release_library = Arc::clone(&self._library);
+                NativeStateValue::NativeState(NativeStateOwner::new(
+                    token,
+                    move |token| {
+                        let _library = &retain_library;
+                        // SAFETY: the function pointer belongs to `_library`,
+                        // which this closure keeps loaded for the call.
+                        let status = unsafe { retain(token.as_word()) };
+                        if status != NativeStateStatus::OK.0 {
+                            std::process::abort();
+                        }
+                    },
+                    move |token| {
+                        let _library = &release_library;
+                        // SAFETY: the function pointer belongs to `_library`,
+                        // which this closure keeps loaded for the call.
+                        let status = unsafe { release(token.as_word()) };
+                        if status != NativeStateStatus::OK.0 {
+                            std::process::abort();
+                        }
+                    },
+                ))
             }
             NativeStateValueTag::CELL => {
                 // SAFETY: tag validation established the node shape.
@@ -315,7 +435,9 @@ impl NativeLibrary {
                 }
                 NativeStateValue::CBlock(block)
             }
-            NativeStateValueTag::STRUCT | NativeStateValueTag::ARRAY => {
+            NativeStateValueTag::STRUCT
+            | NativeStateValueTag::DROP_STRUCT
+            | NativeStateValueTag::ARRAY => {
                 // SAFETY: aggregate accessors accept this live node.
                 let len = unsafe { (self.state_value_len)(node) };
                 let mut values = Vec::with_capacity(len);
@@ -339,6 +461,10 @@ impl NativeLibrary {
                 }
                 if tag == NativeStateValueTag::STRUCT {
                     NativeStateValue::struct_of(values)
+                } else if tag == NativeStateValueTag::DROP_STRUCT {
+                    // SAFETY: tag validation established the node shape.
+                    let glue = unsafe { (self.state_value_read_drop_glue)(node) };
+                    NativeStateValue::dropping_struct_of(values, glue)
                 } else {
                     NativeStateValue::array_of(values)
                 }

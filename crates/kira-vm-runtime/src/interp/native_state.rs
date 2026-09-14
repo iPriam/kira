@@ -36,9 +36,11 @@ impl Vm<'_> {
         mismatch: VmError,
     ) -> Result<Value, VmError> {
         let child = match (self.heap.snapshot_node(id), step) {
-            (Some(NativeStateValue::Struct(fields)), NativeStatePathStep::Field(index)) => {
-                fields.get(index as usize).cloned()
-            }
+            (Some(NativeStateValue::Struct(fields)), NativeStatePathStep::Field(index))
+            | (
+                Some(NativeStateValue::DropStruct { fields, .. }),
+                NativeStatePathStep::Field(index),
+            ) => fields.get(index as usize).cloned(),
             (Some(NativeStateValue::Array(elements)), NativeStatePathStep::Index(index)) => {
                 usize::try_from(index)
                     .ok()
@@ -98,6 +100,14 @@ impl Vm<'_> {
     pub(super) fn native_state_new(&mut self, type_word: u64) -> Result<(), VmError> {
         let value = self.pop()?;
         let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
+        // A boxed value that runs a user `Drop` body records the body with the
+        // store, so the release that destroys the state hands it back to be run
+        // — the value-tree store cannot enter a Kira body itself. The glue is
+        // read from the heap before the value is consumed into the tree.
+        let glue = match value {
+            Value::Struct(id) => self.heap.drop_glue_of(id),
+            _ => None,
+        };
         let stored = self.heap.into_native_state(value).map_err(|kind| {
             VmError::NativeStateValueMismatch {
                 operation: NativeStateOperation::Store,
@@ -106,9 +116,27 @@ impl Vm<'_> {
         })?;
         let token = self
             .host
-            .native_state_create(type_id, stored)
+            .native_state_create_dropping(type_id, stored, glue)
             .map_err(VmError::NativeState)?;
         self.stack.push(Value::NativeState(token));
+        Ok(())
+    }
+
+    /// Releases one owner of `token`, and when that destroys a state carrying a
+    /// user `Drop` body, rebuilds the value and parks it so the interpreter
+    /// runs the body before the storage goes — the value-tree mirror of the
+    /// native box free leaf.
+    fn release_native_state_token(&mut self, token: NativeStateToken) -> Result<(), VmError> {
+        let destroyed = self
+            .host
+            .native_state_release_dropping(token)
+            .map_err(VmError::NativeState)?;
+        if let Some(tree) = destroyed {
+            // The portable tree carries Drop glue at every struct that owns a
+            // body, including nested structs. Rebuild and release it through
+            // ordinary VM destruction so bodies run in the normal order.
+            self.heap.drop_native_state_value(tree);
+        }
         Ok(())
     }
 
@@ -121,19 +149,26 @@ impl Vm<'_> {
                 kind: "a value that is not callback state",
             });
         };
-        // The token owns one reference, and the value just popped is it: a
-        // handle reaches this stack either as a temporary, which owns the
-        // reference it was created with, or as a load, which the heap copied
-        // and counted on the way out of its slot. Either way exactly one
-        // reference arrives here and the token takes it over.
-        //
-        // `shared` therefore changes nothing on this engine, and is not
-        // ignored so much as already answered. It is what native code reads:
-        // there a load is a raw word that took no reference, so the shared
-        // case has to take one. The instruction says where the handle came
-        // from, and each engine answers in its own terms.
-        let _ = shared;
-        self.stack.push(Value::RawPtr(token.as_word()));
+        if shared {
+            // A borrowed export is a raw word only. `LoadLocal` created the
+            // temporary stack owner above and recorded its retain, so dropping
+            // that stack value balances the copy while the original local keeps
+            // owning its reference. The raw word itself owns nothing.
+            self.heap.drop_value(Value::NativeState(token));
+            self.stack.push(Value::RawPtr(token.as_word()));
+        } else {
+            // The token owns one reference, and the value just popped is it: a
+            // handle reaches this stack either as a temporary, which owns the
+            // reference it was created with, or as a load, which the heap copied
+            // and counted on the way out of its slot. Either way exactly one
+            // reference arrives here and the token takes it over.
+            //
+            // The exported userdata is itself an affine owner: it keeps the
+            // reference that arrived, is released when its binding goes out of
+            // scope, and is counted when copied — so it can no longer be erased
+            // into an untracked `RawPtr` word that nothing releases.
+            self.stack.push(Value::NativeState(token));
+        }
         Ok(())
     }
 
@@ -157,9 +192,7 @@ impl Vm<'_> {
                 .map_err(VmError::NativeState)?;
         }
         for token in releases {
-            self.host
-                .native_state_release(token)
-                .map_err(VmError::NativeState)?;
+            self.release_native_state_token(token)?;
         }
         Ok(())
     }
@@ -184,14 +217,21 @@ impl Vm<'_> {
 
     pub(super) fn native_recover(&mut self, type_word: u64) -> Result<(), VmError> {
         let raw = self.pop()?;
-        let Value::RawPtr(word) = raw else {
-            self.heap.drop_value(raw);
-            return Err(VmError::NativeStateValueMismatch {
-                operation: NativeStateOperation::Recover,
-                kind: "a value that is not a callback-state token",
-            });
+        // A recovery *borrows*: the argument is either a raw token (no reference
+        // to give back) or an owned handle read onto the stack, which the load
+        // retained. A borrow keeps the caller's owner intact, so the retained
+        // reference the load took is released here — the view owns nothing.
+        let (token, release) = match raw {
+            Value::RawPtr(word) => (NativeStateToken::from_word(word), false),
+            Value::NativeState(token) => (token, true),
+            other => {
+                self.heap.drop_value(other);
+                return Err(VmError::NativeStateValueMismatch {
+                    operation: NativeStateOperation::Recover,
+                    kind: "a value that is not a callback-state token",
+                });
+            }
         };
-        let token = NativeStateToken::from_word(word);
         let type_id = kira_runtime_abi::NativeStateTypeId::new(type_word);
         // Check the token and type, and read nothing: what goes on the stack is
         // a handle. This used to recover the state — a deep copy of everything
@@ -200,6 +240,11 @@ impl Vm<'_> {
         self.host
             .native_state_check(token, type_id)
             .map_err(VmError::NativeState)?;
+        if release {
+            self.host
+                .native_state_release(token)
+                .map_err(VmError::NativeState)?;
+        }
         self.stack.push(Value::NativeView { token, type_id });
         Ok(())
     }
@@ -256,9 +301,7 @@ impl Vm<'_> {
 
     pub(super) fn native_state_release(&mut self) -> Result<(), VmError> {
         let token = self.pop_state_token(NativeStateOperation::Release)?;
-        self.host
-            .native_state_release(token)
-            .map_err(VmError::NativeState)?;
+        self.release_native_state_token(token)?;
         self.stack.push(Value::Void);
         Ok(())
     }

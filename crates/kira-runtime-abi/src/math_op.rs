@@ -88,6 +88,8 @@ pub enum MathOp {
     /// The remainder of the first operand divided by the second, truncated
     /// toward zero — C's `fmod`, and what `%` means on floats.
     Fmod = 26,
+    /// The real cube root, preserving the sign for negative inputs.
+    Cbrt = 27,
 }
 
 impl MathOp {
@@ -128,6 +130,7 @@ impl MathOp {
             Self::Hypot => "hypot",
             Self::CopySign => "copysign",
             Self::Fmod => "fmod",
+            Self::Cbrt => "cbrt",
         }
     }
 
@@ -189,6 +192,7 @@ impl MathOp {
             24 => Some(Self::Hypot),
             25 => Some(Self::CopySign),
             26 => Some(Self::Fmod),
+            27 => Some(Self::Cbrt),
             _ => None,
         }
     }
@@ -236,12 +240,13 @@ impl MathOp {
             Self::Hypot => a.hypot(operands[1]),
             Self::CopySign => a.copysign(operands[1]),
             Self::Fmod => a % operands[1],
+            Self::Cbrt => a.cbrt(),
         }
     }
 }
 
 /// Every operation, for name lookup and for a test that covers them all.
-pub const ALL: [MathOp; 27] = [
+pub const ALL: [MathOp; 28] = [
     MathOp::Sqrt,
     MathOp::Sin,
     MathOp::Cos,
@@ -269,6 +274,7 @@ pub const ALL: [MathOp; 27] = [
     MathOp::Hypot,
     MathOp::CopySign,
     MathOp::Fmod,
+    MathOp::Cbrt,
 ];
 
 #[cfg(test)]
@@ -306,6 +312,8 @@ mod tests {
     fn a_square_root_is_exact_rather_than_approximated() {
         assert!((MathOp::Sqrt.apply(&[2.0]) - std::f64::consts::SQRT_2).abs() < f64::EPSILON);
         assert_eq!(MathOp::Sqrt.apply(&[144.0]), 12.0);
+        assert_eq!(MathOp::Cbrt.apply(&[27.0]), 3.0);
+        assert_eq!(MathOp::Cbrt.apply(&[-8.0]), -2.0);
     }
 
     #[test]

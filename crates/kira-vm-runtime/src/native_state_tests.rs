@@ -205,7 +205,11 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
             I::ArrayGet,
             I::Return,
         ],
-        releases: kira_bytecode::FrameRelease::EveryLocal,
+        // Slot 0 is a borrowed `NativeState` owner the caller keeps; only a
+        // `let` binding is a release candidate, so the plan names the non-param
+        // slots and leaves the borrow to the caller — exactly as `scope_releases`
+        // does for a `borrow NativeState<T>` parameter.
+        releases: kira_bytecode::FrameRelease::Planned(vec![1, 2]),
     };
     let free_state = FuncProto {
         name: "freeState".to_owned(),
@@ -233,24 +237,24 @@ fn a_native_state_array_read_survives_the_next_vm_entry() {
     };
     let mut host = NativeStateHost::new(CapturingHost::new());
     let mut instance = crate::Instance::load(module).expect("the transition module validates");
-    let NativeResult::RawPtr(token) = instance
+    let NativeResult::NativeState(token) = instance
         .call(&mut host, 0, &[])
         .expect("the first entry creates callback state")
     else {
-        panic!("the state token must cross as a raw pointer");
+        panic!("the state token must cross as an affine native-state owner");
     };
 
     for _ in 0..2 {
         assert_eq!(
             instance
-                .call(&mut host, 1, &[NativeArg::RawPtr(token)])
+                .call(&mut host, 1, &[NativeArg::NativeState(token)])
                 .expect("the state array remains readable"),
             NativeResult::Int(11)
         );
     }
 
     instance
-        .call(&mut host, 2, &[NativeArg::RawPtr(token)])
+        .call(&mut host, 2, &[NativeArg::NativeState(token)])
         .expect("the state token is released");
     assert_eq!(instance.stats().current, 0);
 }
@@ -288,7 +292,9 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
             I::ArrayGetLocal(2),
             I::Return,
         ],
-        releases: kira_bytecode::FrameRelease::EveryLocal,
+        // A borrowed `NativeState` owner sits in the param slot; the caller keeps
+        // it, so the plan releases only the non-param slots.
+        releases: kira_bytecode::FrameRelease::Planned(vec![1, 2]),
     };
     let read_state_stack = FuncProto {
         name: "readStateStack".to_owned(),
@@ -307,7 +313,9 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
             I::ArrayGet,
             I::Return,
         ],
-        releases: kira_bytecode::FrameRelease::EveryLocal,
+        // A borrowed `NativeState` owner sits in the param slot; the caller keeps
+        // it, so the plan releases only the non-param slots.
+        releases: kira_bytecode::FrameRelease::Planned(vec![1, 2]),
     };
     let transition_module = Module {
         exports: Default::default(),
@@ -322,18 +330,18 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
     };
     let mut host = NativeStateHost::new(CapturingHost::new());
     let mut instance = crate::Instance::load(transition_module).expect("the trap module validates");
-    let NativeResult::RawPtr(token) = instance
+    let NativeResult::NativeState(token) = instance
         .call(&mut host, 0, &[])
         .expect("the first entry creates callback state")
     else {
-        panic!("the state token must cross as a raw pointer");
+        panic!("the state token must cross as an affine native-state owner");
     };
     assert!(matches!(
-        instance.call(&mut host, 1, &[NativeArg::RawPtr(token)]),
+        instance.call(&mut host, 1, &[NativeArg::NativeState(token)]),
         Err(VmError::NotAnArray)
     ));
     assert!(matches!(
-        instance.call(&mut host, 2, &[NativeArg::RawPtr(token)]),
+        instance.call(&mut host, 2, &[NativeArg::NativeState(token)]),
         Err(VmError::NotAnArray)
     ));
 
@@ -389,402 +397,5 @@ fn array_index_preserves_snapshot_type_and_bounds_traps() {
     ));
 }
 
-#[test]
-fn a_mutable_native_call_writes_a_recovered_view_back_to_state() {
-    let module = hybrid_module(
-        vec![
-            I::ConstInt(7),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(0),
-            I::LoadLocal(0),
-            I::NativeUserData { shared: false },
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::StoreLocal(1),
-            I::LoadLocal(1),
-            I::CallNativeWriteback {
-                func: 1,
-                targets: vec![WritebackTarget {
-                    param: 0,
-                    slot: 1,
-                    path: PlacePath::new(Vec::new()),
-                }],
-            },
-            I::Pop,
-            I::LoadLocal(1),
-            I::GetField(0),
-            I::Print,
-            I::Pop,
-            I::TakeLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            I::ReturnVoid,
-        ],
-        2,
-    );
-    let mut host = NativeStateHost::new(NativeViewHost {
-        mutate: true,
-        ..NativeViewHost::default()
-    });
-    let outcome = execute(&module, &mut host).expect("a native call can write a view");
-    assert_eq!(host.inner().calls, 1);
-    assert_eq!(host.inner().lines, ["8"]);
-    assert_eq!(outcome.heap.current, 0);
-}
-
-#[test]
-fn boxes_recovers_mutates_observes_and_frees_state() {
-    let field_zero = FieldPath::new(vec![0]);
-    let module = module(
-        vec![
-            I::ConstInt(0),
-            I::ConstInt(0),
-            I::NewStruct(2),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(0),
-            I::LoadLocal(0),
-            I::NativeUserData { shared: false },
-            I::StoreLocal(1),
-            I::LoadLocal(1),
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::StoreLocal(2),
-            I::LoadLocal(2),
-            I::GetField(0),
-            I::ConstInt(1),
-            I::AddInt,
-            I::StoreField {
-                slot: 2,
-                path: field_zero,
-            },
-            I::LoadLocal(2),
-            I::GetField(0),
-            I::Print,
-            I::Pop,
-            I::TakeLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            I::ReturnVoid,
-        ],
-        3,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    let outcome = execute(&module, &mut host).expect("state flow executes");
-    assert_eq!(host.inner().lines(), ["1"]);
-    assert_eq!(outcome.heap.current, 0);
-}
-
-#[test]
-fn wrong_recovery_type_and_double_free_are_typed_traps() {
-    let wrong = module(
-        vec![
-            I::ConstInt(0),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::NativeUserData { shared: false },
-            I::NativeRecover(STATE_TYPE.as_word() + 1),
-            I::ReturnVoid,
-        ],
-        0,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    assert!(matches!(
-        execute(&wrong, &mut host),
-        Err(VmError::NativeState(NativeStateError::WrongType { .. }))
-    ));
-
-    let double_free = module(
-        vec![
-            I::ConstInt(0),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::NativeUserData { shared: false },
-            I::StoreLocal(0),
-            I::LoadLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateRelease,
-            I::ReturnVoid,
-        ],
-        1,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    assert!(matches!(
-        execute(&double_free, &mut host),
-        Err(VmError::NativeState(NativeStateError::UnknownToken(_)))
-    ));
-}
-
-/// Every owner of a state is counted: the handle, each exported token, and
-/// each explicit retain. The release that removes the last owner destroys the
-/// state, and a token that names a destroyed state traps.
-#[test]
-fn owners_are_counted_and_the_last_release_destroys_the_state() {
-    let module = module(
-        vec![
-            I::ConstInt(5),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            // The temporary handle's reference becomes the token's.
-            I::NativeUserData { shared: false },
-            I::StoreLocal(0),
-            I::LoadLocal(0),
-            I::NativeStateRetain,
-            I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            // One owner left: the state is still here.
-            I::LoadLocal(0),
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::GetField(0),
-            I::Print,
-            I::Pop,
-            I::LoadLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            I::LoadLocal(0),
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::ReturnVoid,
-        ],
-        1,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    assert!(matches!(
-        execute(&module, &mut host),
-        Err(VmError::NativeState(NativeStateError::UnknownToken(_)))
-    ));
-    assert_eq!(host.inner().lines(), ["5"]);
-    assert_eq!(host.store().live(), 0);
-}
-
-/// A handle a frame still holds when it returns gives up its reference with
-/// the frame, and a token exported from it keeps the state alive on its own.
-#[test]
-fn a_handle_dropped_with_its_frame_releases_one_owner() {
-    let module = module(
-        vec![
-            I::ConstInt(3),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(0),
-            // A shared export: the handle stays owned by local 0 and the token
-            // takes an owner of its own.
-            I::LoadLocal(0),
-            I::NativeUserData { shared: true },
-            I::Return,
-        ],
-        1,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    let outcome = execute(&module, &mut host).expect("the token is returned");
-    let crate::Value::RawPtr(word) = outcome.result else {
-        panic!("the token must return as a raw pointer");
-    };
-    let token = kira_runtime_abi::NativeStateToken::from_word(word);
-    assert_eq!(host.store().owners(token), Ok(1));
-    assert_eq!(host.store().live(), 1);
-    host.native_state_release(token)
-        .expect("the token's owner releases");
-    assert_eq!(host.store().live(), 0);
-}
-
-/// A local that already holds a recovered view may be REBOUND to another view.
-///
-/// Storing into such a local ordinarily writes through it into the callback
-/// state, which is what makes `state.field = x` work — but a view has no boxed
-/// form, so treating a rebind as a write-back trapped every program that
-/// recovered twice into one slot. Rendering the UI editor on the VM did exactly
-/// that and never reached its first frame.
-#[test]
-fn rebinding_a_recovered_local_to_another_view_is_not_a_write_back() {
-    let module = module(
-        vec![
-            // Two independent states, boxed and kept in locals 0 and 1.
-            I::ConstInt(7),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(0),
-            I::ConstInt(9),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(1),
-            // Recover the first into local 2 ...
-            I::LoadLocal(0),
-            I::NativeUserData { shared: false },
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::StoreLocal(2),
-            // ... then rebind that same local to a view of the second.
-            I::LoadLocal(1),
-            I::NativeUserData { shared: false },
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::StoreLocal(2),
-            // The local now names the second state, and the first is untouched.
-            I::LoadLocal(2),
-            I::GetField(0),
-            I::Print,
-            I::Pop,
-            I::LoadLocal(0),
-            I::NativeUserData { shared: false },
-            I::NativeRecover(STATE_TYPE.as_word()),
-            I::GetField(0),
-            I::Print,
-            I::Pop,
-            I::TakeLocal(0),
-            I::NativeStateRelease,
-            I::Pop,
-            I::TakeLocal(1),
-            I::NativeStateRelease,
-            I::Pop,
-            I::ReturnVoid,
-        ],
-        3,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::new());
-    let outcome = execute(&module, &mut host).expect("rebinding a view executes");
-    assert_eq!(host.inner().lines(), ["9", "7"]);
-    assert_eq!(outcome.heap.current, 0);
-}
-
-/// A capture cell inside callback state is one box, and the share the state
-/// holds comes back when the state is freed.
-///
-/// The balance at the end is the whole point: the tree's share is released by
-/// code that has no heap to release against, so it is recorded and drained
-/// ([`crate::value::Heap::drain_released_cells`]). A drain that never ran would
-/// leave the box live and this count above zero; a release that ran twice would
-/// have freed it under the local still holding it.
-#[test]
-fn a_capture_cell_in_state_is_shared_and_its_share_comes_back() {
-    let module = module(
-        vec![
-            // local 0: a cell holding 7, as a `var` capture becomes.
-            I::ConstInt(7),
-            I::NewCell,
-            I::StoreLocal(0),
-            // local 1: state boxing a struct that holds the same cell.
-            I::LoadLocal(0),
-            I::NewStruct(1),
-            I::NativeState(STATE_TYPE.as_word()),
-            I::StoreLocal(1),
-            // The cell is still the frame's to write through.
-            I::ConstInt(9),
-            I::CellSet(0),
-            I::CellGet(0),
-            I::Print,
-            I::Pop,
-            I::TakeLocal(1),
-            I::NativeStateRelease,
-            I::Pop,
-            // …and still readable after the state that shared it is gone.
-            I::CellGet(0),
-            I::Print,
-            I::Pop,
-            I::ReturnVoid,
-        ],
-        2,
-    );
-    let mut host = NativeStateHost::new(CapturingHost::default());
-    let outcome = execute(&module, &mut host).expect("state may hold a capture cell");
-    assert_eq!(host.inner().lines(), ["9", "9"]);
-    assert_eq!(outcome.heap.current, 0, "no heap was leaked");
-}
-
-#[derive(Default)]
-struct ActiveReentryHost {
-    calls: usize,
-}
-
-impl HostCapabilities for ActiveReentryHost {
-    fn write_line(&mut self, _text: &str) {}
-
-    fn call_native(
-        &mut self,
-        function_id: u32,
-        args: &[NativeArg<'_>],
-    ) -> Result<NativeReturn, NativeCallError> {
-        self.calls += 1;
-        if function_id != 2 {
-            return Err(NativeCallError::UnboundFunction(function_id));
-        }
-        crate::interp::call_active(1, args, &[0])
-            .ok_or(NativeCallError::NoNativeHalf)?
-            .map_err(|_| NativeCallError::MalformedResult(function_id))
-    }
-}
-
-#[test]
-fn a_reentered_vm_returns_an_array_writeback_to_the_suspended_frame() {
-    let entry = FuncProto {
-        name: "entry".to_owned(),
-        param_count: 0,
-        local_count: 1,
-        execution: Execution::Runtime,
-        code: vec![
-            I::ConstInt(10),
-            I::ConstInt(20),
-            I::NewArray(2),
-            I::StoreLocal(0),
-            I::LoadLocal(0),
-            I::CallNativeWriteback {
-                func: 2,
-                targets: vec![WritebackTarget {
-                    param: 0,
-                    slot: 0,
-                    path: PlacePath::new(Vec::new()),
-                }],
-            },
-            I::Pop,
-            I::LoadLocal(0),
-            I::ConstInt(0),
-            I::ArrayGet,
-            I::Return,
-        ],
-        releases: kira_bytecode::FrameRelease::EveryLocal,
-    };
-    let callback = FuncProto {
-        name: "callback".to_owned(),
-        param_count: 1,
-        local_count: 1,
-        execution: Execution::Runtime,
-        code: vec![
-            I::LoadLocal(0),
-            I::ConstInt(0),
-            I::ArrayGet,
-            I::Pop,
-            I::ReturnVoid,
-        ],
-        releases: kira_bytecode::FrameRelease::EveryLocal,
-    };
-    let native = FuncProto {
-        name: "native".to_owned(),
-        param_count: 1,
-        local_count: 1,
-        execution: Execution::Native,
-        code: Vec::new(),
-        releases: kira_bytecode::FrameRelease::EveryLocal,
-    };
-    let module = Module {
-        exports: Default::default(),
-        foreign_imports: Vec::new(),
-        foreign_aggregates: Default::default(),
-        foreign_callbacks: Vec::new(),
-        constants: Vec::new(),
-        types: Vec::new(),
-        functions: vec![entry, callback, native],
-        main: None,
-        strings: Vec::new(),
-    };
-    let mut instance = crate::Instance::load(module).expect("the reentry module validates");
-    let mut host = ActiveReentryHost::default();
-    for _ in 0..2 {
-        assert_eq!(
-            instance
-                .call(&mut host, 0, &[])
-                .expect("the suspended VM accepts the callback writeback"),
-            NativeResult::Int(10)
-        );
-    }
-    assert_eq!(host.calls, 2);
-    assert_eq!(instance.stats().current, 0);
-}
+#[path = "native_state_tests/ownership.rs"]
+mod ownership;

@@ -5,6 +5,8 @@ description: Every `kira` verb, its arguments, and what it does.
 
 Every verb that takes `[file|dir]` defaults to the package directory you are standing in. Everything after `--` goes to the program.
 
+`kira <verb> --help` (or `-h`) prints that verb's usage line and, for a verb with flags worth spelling out, a block naming each. `kira`, `kira help`, and `kira --help` all print the verb listing.
+
 ## `run`
 
 ```bash
@@ -121,10 +123,26 @@ Inspects and binds native libraries, regenerating autobindings explicitly rather
 ## `lint`
 
 ```bash
-kira lint [file|dir]
+kira lint [file|dir] [--fix]
+          [--strict|--pedantic|--restriction] [--groups=<names>]
+          [--lint-level=<level>] [--allow=<CODE>] [--warn=<CODE>] [--deny=<CODE>]
 ```
 
 Reports what the package's own `linter.kira` asks about.
+
+A **group** decides whether a lint runs at all, over what the package configured. With no group flag only the lints the package enabled run; a group asks for more, so a stricter run is visible without editing the file — even in a package that has no `linter.kira`.
+
+- `--strict` — every group there is, the full survey.
+- `--pedantic` — the pedantic group.
+- `--restriction` — the restriction group.
+- `--groups=<names>` — a comma-separated list of the above.
+
+A **level** decides what a finding costs, over what the package or a group set. It escalates what already ran and cannot resurrect a lint that never did.
+
+- `--lint-level=<level>` — move every lint at once. Spellings: `allow`/`off`, `warn`/`warning`, `deny`/`error`.
+- `--allow=<CODE>`, `--warn=<CODE>`, `--deny=<CODE>` — move one lint by code (e.g. `KLINT001`). A per-code flag beats the blanket one, whichever order they are written in.
+
+`--fix` writes back every machine-applicable suggestion.
 
 ## `doc`
 

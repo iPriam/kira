@@ -356,6 +356,15 @@ impl FunctionLowering<'_, '_> {
         ty: Type,
         retained: bool,
     ) -> Result<(), LlvmError> {
+        // A retained NativeState crosses as its opaque token word and transfers
+        // the one affine reference represented by this argument to C. The
+        // successful call therefore consumes the Kira owner: dropping it here
+        // would release the very reference the callee was promised it keeps.
+        // A failed call reaches this helper with `retained = false` and releases
+        // the owner normally.
+        if retained && matches!(ty, Type::NativeState(_)) {
+            return Ok(());
+        }
         if retained && self.codegen.contains_c_storage(ty) {
             return self.keep_c_storage(value, ty);
         }

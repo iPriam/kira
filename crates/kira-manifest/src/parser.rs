@@ -138,7 +138,6 @@ pub fn load_legacy_manifest(text: &str) -> Result<ProjectManifest, LegacyManifes
 /// set `package.kira`'s `buildTarget` reads, because the two formats describe
 /// the same manifest and a package that converts between them must not lose its
 /// target on the way.
-
 fn supported_target(target: &str) -> bool {
     matches!(target, "host" | "wasm32" | "wasm64")
         || kira_native_lib_definition::TargetTriple::parse(target).is_ok()

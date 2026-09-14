@@ -64,6 +64,14 @@ let low: U8 = wrappingAdd(byte, 1)                    // wraps at 8 bits: U8(255
 
 `Byte` is not a builtin. Foundation spells it as an alias, `type Byte = U8`, which is why it behaves exactly as `U8` does. There is no `I128`, no `U128`, and no `Char`.
 
+## Numeric Helpers
+
+Foundation provides `clamp` for `Int` and `Float`. It returns the lower bound below the interval, the upper bound above it, and the input otherwise. The bounds are not reordered.
+
+`lerp(from, to, amount)` linearly interpolates `Float`, `Point`, `Size`, `Vec2`, `Vec3`, `Vec4`, and `Color`. `amount` is not clamped, so values outside `0.0..1.0` extrapolate. `@Derive(Lerp)` adds the same overload for a struct by interpolating each field through the ordinary `lerp` overload set.
+
+`cbrt(value)` is the floating-point cube-root primitive. It preserves the sign of negative inputs, so `cbrt(-8.0)` is `-2.0`.
+
 ## The Conditional Operator
 
 `c ? a : b` is the language's only expression that is control flow: exactly one branch is evaluated. No backend lowers it to a `select`, because a select evaluates both.
@@ -106,3 +114,15 @@ Two rungs surprise people, because Go and Swift moved them.
 ## Assignment
 
 Assignment is a statement, not an expression. The left side names a place: a local, a field path, or an index. Writing through a path requires `var` at every step, not just the last, because `b.origin.x = 1` rewrites the contents of `origin`.
+
+**Compound assignment.** `target op= value` stores `target op value` back into the place, for every arithmetic, bitwise, and shift operator: `+= -= *= /= %= &= |= ^= <<= >>=`. The place is named once, so its index expressions are evaluated once, and the update checks under the operator's own rules — `i += "s"` is `KSEM071`, exactly as `i + "s"` is. There is no `++` or `--`; write `i += 1`.
+
+```kira
+var i = 0
+i += 5      // 5
+i *= 4      // 20
+var mask = 6
+mask <<= 2  // 24
+var xs: [Int] = [1, 2, 3]
+xs[1] += 10 // xs is now [1, 12, 3]
+```

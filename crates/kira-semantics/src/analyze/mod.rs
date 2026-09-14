@@ -528,7 +528,7 @@ impl Analyzer<'_> {
     /// Resolution that does not depend on which package the file itself belongs
     /// to: the declarations no package owns, then what this file's imports
     /// provide.
-    fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
+    pub(crate) fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
         let structs = self.program.types.structs();
         // The declarations no package owns — a bundled library like
         // `Foundation`, another module of the program, or a struct the compiler
@@ -589,7 +589,7 @@ impl Analyzer<'_> {
     /// belongs to: rows no package owns (a bundled library's declarations and
     /// the instantiations a generic template minted), then what this file's
     /// imports provide.
-    fn enum_beyond_own_package(&self, name: &str) -> Option<EnumId> {
+    pub(crate) fn enum_beyond_own_package(&self, name: &str) -> Option<EnumId> {
         let enums = self.program.types.enums();
         if self.imports.package_of(self.source).is_some()
             && let Some(id) = enums.lookup(name)

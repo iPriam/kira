@@ -58,16 +58,19 @@ impl FunctionLowering<'_, '_> {
         // SAFETY: the builder is positioned in this live function and every
         // element is initialized before the runtime is called.
         let (argv, out) = unsafe {
-            let count = LLVMConstInt(types.i64, args.len() as u64, 0);
-            let argv = LLVMBuildArrayAlloca(
-                builder,
-                types.bridge_value,
-                count,
-                c"main.thread.args".as_ptr(),
-            );
+            let argv = if args.is_empty() {
+                LLVMConstNull(types.ptr)
+            } else {
+                let (argv, _) = self.codegen.dynamic_array_alloca(
+                    types.bridge_value,
+                    args.len() as u64,
+                    c"main.thread.args",
+                );
+                argv
+            };
             for (slot, (&argument, borrowed)) in args.iter().zip(&param_modes).enumerate() {
                 let value = if *borrowed {
-                    self.lower_borrowed_expr(argument)?
+                    self.lower_owned_borrowed_expr(argument)?
                 } else {
                     self.lower_expr(argument)?
                 };
@@ -83,7 +86,9 @@ impl FunctionLowering<'_, '_> {
                 self.codegen
                     .write_bridge_value(element, value, self.type_of(argument))?;
             }
-            let out = LLVMBuildAlloca(builder, types.bridge_value, c"main.thread.out".as_ptr());
+            let (out, _) = self
+                .codegen
+                .dynamic_alloca(types.bridge_value, c"main.thread.out");
             (argv, out)
         };
         let operation_value = self.codegen.const_int(i64::from(operation.as_byte()));
@@ -196,6 +201,16 @@ impl FunctionLowering<'_, '_> {
                     }
                     // `print` consumes its string, so the helper frees it.
                     Type::String => self.codegen.runtime.print_str,
+                    // A `Number` prints as its decimal text: render it — which
+                    // consumes the number — then print that string, which the
+                    // string printer frees.
+                    Type::Number => {
+                        let to_string = self.codegen.runtime.number_ops[usize::from(
+                            kira_runtime_abi::NumberOp::ToString.as_byte(),
+                        )];
+                        value = self.call(to_string, &mut [value], c"number.str");
+                        self.codegen.runtime.print_str
+                    }
                     // Analysis rejects printing a struct — what it renders is
                     // not pinned by the language — so this is unreachable from
                     // a program that type-checked.
@@ -252,13 +267,10 @@ impl FunctionLowering<'_, '_> {
                         // half's storage means nothing. So the value crosses as
                         // a copy and comes back as one.
                         None => {
-                            // Arguments evaluate left to right, as the VM pushes
-                            // them; a written-through position is lowered like
-                            // any other, because what crosses is its value.
-                            let mut values = Vec::with_capacity(args.len());
-                            for &argument in args {
-                                values.push(self.lower_expr(argument)?);
-                            }
+                            // The VM receives owned bridge values. A borrowed
+                            // place therefore crosses as an independently retained
+                            // copy while an owned argument transfers directly.
+                            let values = self.lower_runtime_arguments(index, args)?;
                             self.lower_runtime_call_writing_back(index, args, &values, writebacks)
                         }
                     };
@@ -269,11 +281,7 @@ impl FunctionLowering<'_, '_> {
                     // The callee runs on the VM: marshal and go through the
                     // bridge, which the host answers.
                     None => {
-                        // Arguments evaluate left to right, as the VM pushes them.
-                        let mut values = Vec::with_capacity(args.len());
-                        for &argument in args {
-                            values.push(self.lower_expr(argument)?);
-                        }
+                        let values = self.lower_runtime_arguments(index, args)?;
                         self.lower_runtime_call(index, args, &values)
                     }
                 }
@@ -492,6 +500,41 @@ impl FunctionLowering<'_, '_> {
         }
         self.drop_lent_temporaries(temporaries)?;
         Ok(result)
+    }
+
+    /// Lowers arguments for a call into the VM half.
+    ///
+    /// The bridge owns every value it receives. An owning parameter transfers
+    /// the expression's owner directly; a borrowed parameter needs an owned
+    /// bridge copy because the VM cannot borrow native storage.
+    fn lower_runtime_arguments(
+        &mut self,
+        index: u32,
+        args: &[IrExprId],
+    ) -> Result<Vec<LLVMValueRef>, LlvmError> {
+        let modes: Vec<bool> = {
+            let callee = self
+                .codegen
+                .program
+                .functions
+                .get(index as usize)
+                .ok_or(LlvmError::internal("a runtime call to an unknown function"))?;
+            (0..args.len())
+                .map(|position| {
+                    let slot = position as u32;
+                    callee.param_by_pointer(slot) || callee.param_by_reference(slot)
+                })
+                .collect()
+        };
+        let mut values = Vec::with_capacity(args.len());
+        for (&argument, borrowed) in args.iter().zip(modes) {
+            values.push(if borrowed {
+                self.lower_owned_borrowed_expr(argument)?
+            } else {
+                self.lower_expr(argument)?
+            });
+        }
+        Ok(values)
     }
 
     /// Calls a function that lives in the VM half, from native code.

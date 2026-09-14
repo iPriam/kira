@@ -320,6 +320,9 @@ fn string_operation(op: StringOp, text: &str, arguments: &[String]) -> Value {
             };
             Value::Array(pieces)
         }
+        (StringOp::Bytes, []) => {
+            Value::Array(text.bytes().map(|byte| Value::Int(i64::from(byte))).collect())
+        }
         // The arity was checked by the caller, so this is unreachable in
         // practice; answering `Void` beats a panic in a compiler.
         _ => Value::Void,

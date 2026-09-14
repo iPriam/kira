@@ -121,8 +121,8 @@ impl Codegen<'_> {
     /// dispatcher arm.  These temporaries are only needed on the selected arm,
     /// so make the element count genuinely dynamic; LLVM then adjusts the
     /// stack at the point of execution instead of reserving every arm's
-    /// payload in every call frame.  The count is one or two elements and the
-    /// second element is intentionally unused.
+    /// payload in every call frame. The count is the requested minimum or one
+    /// element more, with the final element intentionally unused.
     ///
     /// Returns the slot together with the stack pointer saved just before it,
     /// which [`Self::release_dynamic_alloca`] gives back. A dynamic alloca
@@ -133,6 +133,16 @@ impl Codegen<'_> {
     pub(in crate::codegen) fn dynamic_alloca(
         &self,
         llvm_type: LLVMTypeRef,
+        name: &std::ffi::CStr,
+    ) -> (LLVMValueRef, LLVMValueRef) {
+        self.dynamic_array_alloca(llvm_type, 1, name)
+    }
+
+    /// Allocates at least `minimum_count` temporary values at the current point.
+    pub(in crate::codegen) fn dynamic_array_alloca(
+        &self,
+        llvm_type: LLVMTypeRef,
+        minimum_count: u64,
         name: &std::ffi::CStr,
     ) -> (LLVMValueRef, LLVMValueRef) {
         // SAFETY: the stack-save intrinsic, integer conversions, and alloca
@@ -156,7 +166,7 @@ impl Codegen<'_> {
             let count = LLVMBuildAdd(
                 self.builder,
                 low_bit,
-                LLVMConstInt(self.types.i64, 1, 0),
+                LLVMConstInt(self.types.i64, minimum_count, 0),
                 c"temporary.count".as_ptr(),
             );
             let slot = LLVMBuildArrayAlloca(self.builder, llvm_type, count, name.as_ptr());

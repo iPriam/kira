@@ -15,7 +15,7 @@ use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_runtime_abi::Execution;
 
-use super::{DebugOptions, hybrid_host_arguments, vm_lldb};
+use super::{DebugOptions, hybrid_debug, vm_lldb};
 use crate::hybrid;
 use crate::native;
 use crate::pipeline::{EXIT_FAILURE, EXIT_OK};
@@ -121,8 +121,8 @@ fn hybrid_target(
     let bundle = hybrid::build_debug(ir, source, options.compile.emit_llvm_ir, foreign_link, info)
         .map_err(|error| error.to_string())?;
     let host = host_executable()?;
-    let arguments = hybrid_host_arguments(&bundle.manifest, source, options);
-    let manifest = super::read_hybrid_manifest(&bundle.manifest)?;
+    let arguments = hybrid_debug::hybrid_host_arguments(&bundle.manifest, source, options);
+    let manifest = hybrid_debug::read_hybrid_manifest(&bundle.manifest)?;
     let mut target = PreparedTarget::new(info, host).with_arguments(arguments);
     // A hybrid build splits its functions between the two engines, and only the
     // manifest knows which went where. A bytecode function that kept a native
@@ -157,6 +157,7 @@ fn llvm(
         options.compile.release,
         foreign_link,
         info,
+        options.compile.sanitize,
     )
     .map_err(|error| error.to_string())?;
     let executable = artifacts

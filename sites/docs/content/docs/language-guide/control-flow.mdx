@@ -1,6 +1,6 @@
 ---
 title: Control Flow
-description: if, while, for over ranges and arrays, break and continue, match over enum variants, and attempt/try/handle over Result-shaped values.
+description: if, while, for over ranges and arrays, break and continue, match over enum variants and scalar values with literals, ranges, alternation, and else, and attempt/try/handle over Result-shaped values.
 ---
 
 ## Branching
@@ -47,7 +47,7 @@ There is no `switch`, no `case`, and no `default`.
 
 ## Match
 
-A `match` dispatches on an **enum's variant**. Arms are written with an arrow and take either a single statement or a block. Variants are **unqualified**, because the subject's type already says which enum they belong to.
+A `match` dispatches on an **enum's variant** or on a scalar **`Int`, `Bool`, or `String`** value. Arms are written with an arrow and take either a single statement or a block. Enum variants are **unqualified**, because the subject's type already says which enum they belong to.
 
 ```kira
 function rank(s: borrow Shade) -> Int {
@@ -69,9 +69,45 @@ match note {
 }
 ```
 
-A `match` is **checked**: every variant must be covered (`KSEM129`), and a variant matched twice is reported (`KSEM127`). That is what dispatching on a variant buys over comparing with `==`: a chain of comparisons has no variant set to be exhaustive over. A subject that is not an enum is refused (`KSEM125`). There is no wildcard arm and no `else` arm.
+**Scalar subjects, literals, and ranges.** A `match` on an `Int`, `Bool`, or `String` selects on literal values. An integer arm may also be a half-open range, `start..end`, the same meaning `for` gives it.
+
+```kira
+function grade(score: Int) -> Int {
+    match score {
+        0 -> return 0
+        1, 2, 3 -> return 1      // an alternation: several patterns, one body
+        4..10 -> return 2        // a half-open range: 4 through 9
+        else -> return 3         // the catch-all
+    }
+}
+```
+
+**Alternation.** An arm head is one or more patterns separated by `,`; the body runs when the subject matches any of them. An arm that matches several patterns binds no payload (`KSEM384`), because different variants carry different payloads.
+
+**The `else` arm** is the catch-all, matching any value not matched above. It must be the last arm — an arm after it can never run (`KSEM381`).
+
+A `match` is **checked**. An enum match must cover every variant (`KSEM129`) unless an `else` catches the rest; a `Bool` match is covered by `true` and `false` or by `else`; an `Int` or `String` match cannot be listed exhaustively, so it must end with `else` (`KSEM380`). A value matched twice is reported (`KSEM382`), as is a variant matched twice (`KSEM127`), a pattern of the wrong type for the subject (`KSEM383`), and a subject that is neither an enum nor a scalar (`KSEM125`).
+
+A `match` used as a value may contain another unbraced `match` as an arm value. Nested matches compose normally.
+
+```kira
+function streamValue(stream: Int, direct: Bool) -> Int {
+    return match stream <= 0 {
+        true -> 0
+        false -> match stream {
+            1 -> match direct {
+                true -> 10
+                false -> 11
+            }
+            else -> 20
+        }
+    }
+}
+```
 
 Because coverage is checked, an exhaustive `match` whose arms all return is itself a **definite return**, which is why `rank` above needs no trailing `return`. A `break` inside an arm belongs to the enclosing loop: a `match` is not a loop, so a `break` in one that no loop encloses is reported.
+
+An `else` arm is also available in `handle`, catching every failure a `try` did not name explicitly.
 
 ## Attempt, Try, and Handle
 

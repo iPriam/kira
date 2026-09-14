@@ -21,7 +21,14 @@ impl Analyzer<'_> {
         trailing: &[HirExprId],
     ) -> CallTarget {
         let candidates = self.visible_overloads(name);
-        if candidates.is_empty() && self.is_generic_function(name) {
+        if self.is_generic_function(name)
+            && (candidates.is_empty()
+                || candidates.iter().all(|candidate| {
+                    self.generic_callables
+                        .iter()
+                        .any(|(specialized, _)| specialized == candidate)
+                }))
+        {
             return match self
                 .instantiate_generic_function(ctx, name, type_args, leading, args, trailing)
             {

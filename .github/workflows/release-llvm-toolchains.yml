@@ -213,7 +213,7 @@ jobs:
             -ArchiveFormat "${{ matrix.archive }}"
           "ARCHIVE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8NoBOM -Append
 
-      # The digest `knvm install-llvm` verifies the bundle against. Published
+      # The digest `knvm llvm install` verifies the bundle against. Published
       # beside the archive under the same `<asset>.sha256` name knvm's
       # toolchain archives use, so one rule covers every artifact this project
       # ships.

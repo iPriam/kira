@@ -89,12 +89,20 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         }
         IrExpr::Select {
             cond,
+            then_setup,
             then,
+            otherwise_setup,
             otherwise,
             ..
         } => {
             walk_expr(program, *cond, found);
+            for statement in then_setup {
+                walk_stmt(program, statement, found);
+            }
             walk_expr(program, *then, found);
+            for statement in otherwise_setup {
+                walk_stmt(program, statement, found);
+            }
             walk_expr(program, *otherwise, found);
         }
         IrExpr::StructNew { fields, .. } => {
@@ -168,6 +176,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, argument, found);
             }
         }
+        IrExpr::NumberOperation { operands, .. } => {
+            for &operand in operands {
+                walk_expr(program, operand, found);
+            }
+        }
         IrExpr::StringSubstring { text, start, end } => {
             walk_expr(program, *text, found);
             walk_expr(program, *start, found);
@@ -203,11 +216,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             descriptor: value, ..
         } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
-        IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
+        IrExpr::NativeUserData { state, .. } => walk_expr(program, *state, found),
         IrExpr::NativeRecover { raw, .. } | IrExpr::NativeStateTake { raw, .. } => {
             walk_expr(program, *raw, found)
         }
-        IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
+        IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token, .. } => {
             walk_expr(program, *token, found)
         }
         // Leaves: nothing inside can be a call.

@@ -316,8 +316,8 @@ pub enum LlvmDiscoveryError {
     // and is the only one of the two that exists before the bundle does.
     #[error(
         "no LLVM {version} install found; checked:\n{}\n\
-         install the pinned bundle with `knvm install-llvm`, or from a checkout \
-         with `cargo run -p kira-knvm -- install-llvm`; or set KIRA_LLVM_HOME to \
+         install the pinned bundle with `knvm llvm install`, or from a checkout \
+         with `cargo run -p kira-knvm -- llvm install`; or set KIRA_LLVM_HOME to \
          an LLVM {version} install root",
         .checked.iter().map(|path| format!("  {}", path.display())).collect::<Vec<_>>().join("\n")
     )]
@@ -462,7 +462,7 @@ mod tests {
         assert!(text.contains("KIRA_LLVM_HOME"), "{text}");
         // The remedy has to be buildable on a machine with no LLVM, which
         // `kira` is not: it links the backend that this discovery resolves.
-        assert!(text.contains("knvm install-llvm"), "{text}");
+        assert!(text.contains("knvm llvm install"), "{text}");
         assert!(
             !text.contains("kira fetch-llvm"),
             "the remedy must not be a `kira` that cannot be built yet: {text}"

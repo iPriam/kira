@@ -292,6 +292,7 @@ impl Analyzer<'_> {
             | Type::ForeignPtr(_)
             | Type::CString
             | Type::CBlock
+            | Type::Number
             | Type::RuntimeType
             | Type::NativeState(_)
             | Type::Task(_)

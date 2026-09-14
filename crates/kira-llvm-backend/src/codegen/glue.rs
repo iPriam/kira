@@ -125,6 +125,24 @@ impl Codegen<'_> {
         self.release_at(source, ty)
     }
 
+    /// Reclaims a materialized recovered-state snapshot without treating its
+    /// root as a newly owned `Drop` value.
+    pub(super) fn drop_recovered_root_snapshot(
+        &mut self,
+        value: LLVMValueRef,
+        ty: Type,
+    ) -> Result<(), LlvmError> {
+        if !self.owns_heap(ty) {
+            return Ok(());
+        }
+        let llvm_type = self.llvm_type(ty)?;
+        let source = self.scratch(ty, llvm_type);
+        // SAFETY: `source` addresses a slot of `llvm_type` and `value` has that
+        // type; the builder is on a live block.
+        unsafe { LLVMBuildStore(self.builder, value, source) };
+        self.release_recovered_root_snapshot(source, ty)
+    }
+
     /// Whether the values at `left` and `right` are structurally equal, as an
     /// `i1`.
     ///

@@ -199,6 +199,7 @@ pub fn plan(
             .iter()
             .map(|header| cache::describe_input(header))
             .collect(),
+        adopted: false,
     };
     let status = match cache::freshness(&stamp_file, &output, &stamp) {
         cache::Freshness::Current => AutobindStatus::Current,
@@ -216,9 +217,12 @@ pub fn plan(
     }))
 }
 
-/// Records an existing binding as current without touching it.
+/// Records an existing binding as one the generator adopted, without touching
+/// it. The stamp carries that provenance, so the next build adopts it again
+/// rather than falling silent — the note repeats — and never regenerates over
+/// the package's own source.
 pub fn adopt(plan: &AutobindPlan) -> Result<(), AutobindError> {
-    cache::write(&plan.stamp_file, &plan.stamp).map_err(|error| AutobindError::Io {
+    cache::write(&plan.stamp_file, &plan.stamp.adopted()).map_err(|error| AutobindError::Io {
         library: plan.library.clone(),
         path: plan.stamp_file.display().to_string(),
         message: error.to_string(),

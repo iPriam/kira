@@ -127,9 +127,11 @@ pub fn lint(args: &[String]) -> i32 {
     //
     // SAFETY: as above — single-threaded, before the compile below.
     match lint_groups(args) {
+        // SAFETY: as above — single-threaded, before the compile below.
         Some(groups) => unsafe {
             std::env::set_var(kira_program_graph::assembly::LINT_GROUPS, groups);
         },
+        // SAFETY: as above — single-threaded, before the compile below.
         None => unsafe {
             std::env::remove_var(kira_program_graph::assembly::LINT_GROUPS);
         },

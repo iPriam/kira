@@ -70,4 +70,4 @@ Kira never classifies the by-value parameter, exactly as it never classifies a b
 
 ## Opaque State
 
-For an API that carries a `void*` userdata token, `nativeState`, `nativeUserData`, and `nativeRecover` move Kira-owned state across it without exposing a layout, and `nativeUserDataRetain` and `nativeUserDataRelease` count its owners. See [Interop and FFI](/docs/language-guide/interop-and-ffi#opaque-callback-state).
+For an API that carries a `void*` userdata token, `nativeState` creates the tracked `NativeState<T>` owner, `nativeUserDataBorrow` exposes its opaque non-owning `RawPtr`, and `nativeRecover` borrows the typed state again. Kira source cannot retain or release ownership through that raw word. If C keeps state after return, transfer a `NativeState<T>` owner through an extern parameter declared with `retains:` and `move`; C balances that owner through the callback-state runtime ABI. `nativeUserData(owner)` explicitly creates another compiler-tracked owner. See [Interop and FFI](/docs/language-guide/interop-and-ffi#opaque-callback-state).

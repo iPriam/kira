@@ -145,12 +145,12 @@ pub fn build_native_library(
     program: &IrProgram,
     options: &NativeLibraryOptions,
 ) -> Result<NativeLibraryArtifacts, NativeLibraryError> {
-    // The export table comes from the bytecode compiler even though no bytecode
-    // is shipped here: it is the one place that decides what a library's export
-    // surface *is*, and two answers to that would be one too many. Compiling to
-    // get it costs a fraction of the native build beside it.
-    let module = kira_bytecode::compile(program)?;
-    let surface = export_surface(&options.name, &module.exports);
+    // The export table is shared with bytecode, but a native library does not
+    // compile VM bodies merely to obtain it. Backend-specific native ownership
+    // features may deliberately be unavailable to the VM; export metadata is a
+    // frontend fact and must not make a native build depend on VM lowering.
+    let exports = kira_bytecode::build_export_table(program)?;
+    let surface = export_surface(&options.name, &exports);
 
     let lib_directory = options.build_directory.join("lib");
     // LLVM writes the object with the C API, which does not create directories
@@ -204,7 +204,7 @@ pub fn build_native_library(
     let generated = crate::wrapper::generate_native(&crate::wrapper::NativeWrapperSpec {
         library: &options.name,
         version: &options.version,
-        exports: &module.exports,
+        exports: &exports,
         symbols: &surface,
         toolchain_root: &options.toolchain_root,
         archive_directory: &archive_directory,
@@ -234,7 +234,7 @@ pub fn build_native_library(
     Ok(NativeLibraryArtifacts {
         archive,
         wrapper_crate,
-        exports: module.exports.functions.len(),
+        exports: exports.functions.len(),
     })
 }
 

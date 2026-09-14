@@ -210,7 +210,7 @@ fn declare_code_generators(home: &Path, llvm_config: &Path) {
                 "cargo:warning=the managed LLVM at {} was built without the \
                  {generator} code generator, so this compiler will refuse {}; the \
                  bundle predates the targets `llvm-metadata.toml` pins, and \
-                 `knvm install-llvm --force` replaces it once they are published",
+                 `knvm llvm install --force` replaces it once they are published",
                 home.display(),
                 refusal(generator),
             );

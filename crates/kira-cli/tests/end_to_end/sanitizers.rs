@@ -6,6 +6,17 @@ use crate::write_isolated_source;
 
 const PROGRAM: &str = "@Main function main() { print(1) return }";
 
+const MAIN_THREAD_PROGRAM: &str = "\
+struct Answer {\n\
+    function read() -> Int { return 42 }\n\
+}\n\
+@MainThread function onMain(a: Int, b: Int, c: Int) -> Int { return a + b + c }\n\
+@Main function main() {\n\
+    let started = MainThread.invoke { onMain(1, 2, 3) }\n\
+    print(started + Answer {}.read())\n\
+    return\n\
+}\n";
+
 #[test]
 fn address_sanitizer_never_falls_back_to_a_host_compiler_runtime() {
     let source = write_isolated_source(PROGRAM);
@@ -103,6 +114,53 @@ fn the_installed_bundle_sanitizes_what_it_builds() {
         contains(&bytes, b"__asan_init"),
         "`--sanitize address` produced a binary with no sanitizer runtime in it"
     );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn a_sanitized_debug_target_keeps_instrumentation_and_dwarf() {
+    let source = write_isolated_source(MAIN_THREAD_PROGRAM);
+    let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .args([
+            "debug",
+            "--backend",
+            "llvm",
+            "--sanitize",
+            "address",
+            "--prepare",
+        ])
+        .arg(&source)
+        .output()
+        .expect("prepare sanitized debug target");
+    assert!(
+        output.status.success(),
+        "sanitized debug build failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"name\":\"main\""), "{stdout}");
+    assert!(stdout.contains("\"line\":5"), "{stdout}");
+
+    let directory = source.parent().expect("isolated source directory");
+    let executable = directory
+        .join(".kira-build")
+        .join(kira_toolchain::executable_name("main"));
+    let bytes = std::fs::read(&executable).expect("read sanitized debug target");
+    assert!(
+        contains(&bytes, b"__asan_init"),
+        "`kira debug --sanitize address` discarded ASan instrumentation"
+    );
+    let run = Command::new(&executable)
+        .env("ASAN_OPTIONS", "detect_leaks=1:halt_on_error=1")
+        .output()
+        .expect("run sanitized debug target");
+    assert!(
+        run.status.success(),
+        "sanitized debug target failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "48\n");
 
     let _ = std::fs::remove_dir_all(directory);
 }

@@ -62,6 +62,12 @@ pub(crate) struct DropExtraction {
     span: Span,
     /// The type the read produced.
     ty: Type,
+    /// Whether this read carries an affine owner such as `NativeState`.
+    ///
+    /// Kept beside the historical user-`Drop` extraction tracking because both
+    /// obey the same rule: a member may be observed through a borrow, but an
+    /// ordinary read may not manufacture a second independently-owned value.
+    affine: bool,
 }
 
 impl Analyzer<'_> {
@@ -270,7 +276,8 @@ impl Analyzer<'_> {
     /// non-consuming position claims.
     pub(crate) fn note_drop_extraction(&mut self, expr: HirExprId, span: Span) {
         let ty = self.program.expr(expr).type_of();
-        if !self.program.types.runs_user_drop(ty) {
+        let affine = self.program.types.contains_affine_owner(ty);
+        if !affine && !self.program.types.runs_user_drop(ty) {
             return;
         }
         // A struct read out of a temporary is refused here rather than
@@ -282,16 +289,28 @@ impl Analyzer<'_> {
         // while the original still holds it.
         if matches!(ty, Type::Struct(_)) && !self.reads_a_place(expr) {
             let name = self.type_name(ty);
-            self.emit(
-                span,
-                "KSEM302",
-                format!(
-                    "this takes a `{name}` out of a temporary, and `{name}` runs a user `Drop` \
-                     body: the value it was read from is released at the end of this statement, \
-                     so the read is a second value with the same body to run. Bind the owner \
-                     first, then read through the binding."
-                ),
-            );
+            if affine {
+                self.emit(
+                    span,
+                    "KSEM376",
+                    format!(
+                        "this takes affine value `{name}` out of a temporary. `{name}` contains \
+                         native state with exactly one owner, so the temporary cannot be copied \
+                         out of its container. Bind the owner first and borrow the member instead."
+                    ),
+                );
+            } else {
+                self.emit(
+                    span,
+                    "KSEM302",
+                    format!(
+                        "this takes a `{name}` out of a temporary, and `{name}` runs a user `Drop` \
+                         body: the value it was read from is released at the end of this statement, \
+                         so the read is a second value with the same body to run. Bind the owner \
+                         first, then read through the binding."
+                    ),
+                );
+            }
             return;
         }
         self.drop_extractions.push(DropExtraction {
@@ -299,6 +318,7 @@ impl Analyzer<'_> {
             source: self.source,
             span,
             ty,
+            affine,
         });
     }
 
@@ -352,7 +372,11 @@ impl Analyzer<'_> {
         let here = self.source;
         for entry in std::mem::take(&mut self.drop_extractions) {
             self.source = entry.source;
-            self.refuse_drop_extraction(entry.ty, entry.span);
+            if entry.affine {
+                self.refuse_affine_extraction(entry.ty, entry.span);
+            } else {
+                self.refuse_drop_extraction(entry.ty, entry.span);
+            }
         }
         self.source = here;
     }
@@ -373,6 +397,24 @@ impl Analyzer<'_> {
                  `Drop` body: the value taken here is a second one with the same body to run, \
                  for storage that only goes away once. Read a member of it, pass it to something \
                  that borrows it, or move the whole owner."
+            ),
+        );
+    }
+
+    /// Refuses an owning read of a member that contains an affine owner.
+    ///
+    /// A borrow is fine and is removed from the deferred list by the enclosing
+    /// borrow position. What reaches here is an ordinary extraction, which would
+    /// manufacture another owner of the same NativeState-containing value.
+    pub(crate) fn refuse_affine_extraction(&mut self, ty: Type, span: Span) {
+        let name = self.type_name(ty);
+        self.emit(
+            span,
+            "KSEM376",
+            format!(
+                "this reads affine value `{name}` out of its owner. `{name}` contains native \
+                 state with exactly one owner, so an ordinary member read cannot copy it. \
+                 Borrow the member in place or move the whole owner instead."
             ),
         );
     }

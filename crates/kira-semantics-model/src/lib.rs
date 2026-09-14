@@ -28,8 +28,7 @@ pub use ty::distincts;
 pub use ty::{
     ArrayId, ArrayTable, CellId, CellTable, DescriptorFamily, DescriptorKind, DistinctDef,
     DistinctId, DistinctTable, EnumDef, EnumId, EnumTable, ErasedTypeId, FieldDef, FloatSpelling,
-    ForeignPtrId, ForeignPtrTable, Instantiation, IntSpelling, MainThreadTaskResult, NativeStateId,
-    NativeStateTable, NominalIdentity, NominalKind, PackageIdentity, StructDef, StructId,
-    StructOrigin, StructTable, TaskResult, Type, TypeDescriptor, TypeDescriptorTable, TypeField,
-    TypeTable, VariantDef,
+    ForeignPtrId, ForeignPtrTable, Instantiation, IntSpelling, NativeStateId, NativeStateTable,
+    NominalIdentity, NominalKind, PackageIdentity, StructDef, StructId, StructOrigin, StructTable,
+    TaskResult, Type, TypeDescriptor, TypeDescriptorTable, TypeField, TypeTable, VariantDef,
 };

@@ -1,0 +1,178 @@
+================================================================================
+Tuple values keep grouping distinct
+================================================================================
+
+function f() {
+    let grouped = (1)
+    let pair = (1, "two")
+    let quad = (1, 2, 3, 4)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (variable_declaration
+        (identifier)
+        (parenthesized_expression
+          (integer_literal)))
+      (variable_declaration
+        (identifier)
+        (tuple_expression
+          (integer_literal)
+          (string_literal)))
+      (variable_declaration
+        (identifier)
+        (tuple_expression
+          (integer_literal)
+          (integer_literal)
+          (integer_literal)
+          (integer_literal))))))
+
+================================================================================
+Tuple types stay distinct from function types
+================================================================================
+
+function pair() -> (Int, String) {
+    return (1, "x")
+}
+
+function apply(f: (Int, String) -> Bool) -> Bool {
+    return f(1, "x")
+}
+
+function grouped(value: (Int)) -> Int {
+    return value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (return_type
+      (tuple_type
+        (type_identifier)
+        (type_identifier)))
+    (block
+      (return_statement
+        (tuple_expression
+          (integer_literal)
+          (string_literal)))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (function_type
+          (type_identifier)
+          (type_identifier)
+          (type_identifier))))
+    (return_type
+      (type_identifier))
+    (block
+      (return_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (integer_literal)
+            (string_literal))))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (parenthesized_type
+          (type_identifier))))
+    (return_type
+      (type_identifier))
+    (block
+      (return_statement
+        (identifier)))))
+
+================================================================================
+Match expressions produce values
+================================================================================
+
+function describe(value: Int) -> String {
+    return match value {
+        0 -> "zero"
+        1..4 -> {
+            let prefix = "small"
+            prefix + "!"
+        }
+        else -> "other"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (return_type
+      (type_identifier))
+    (block
+      (return_statement
+        (match_expression
+          (identifier)
+          (match_value_arm
+            (integer_literal)
+            (string_literal))
+          (match_value_arm
+            (range_pattern
+              (integer_literal)
+              (integer_literal))
+            (block
+              (variable_declaration
+                (identifier)
+                (string_literal))
+              (expression_statement
+                (binary_expression
+                  (identifier)
+                  (string_literal)))))
+          (match_value_arm
+            (wildcard_pattern)
+            (string_literal)))))))
+
+================================================================================
+Extern library groups bodyless functions
+================================================================================
+
+extern library ffimath {
+    function add(a: I32, b: I32) -> I32
+    function negate(value: I32) -> I32
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_library_declaration
+    (identifier)
+    (extern_function_declaration
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (type_identifier))
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier)))
+    (extern_function_declaration
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (return_type
+        (type_identifier)))))

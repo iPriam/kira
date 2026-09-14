@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "geometry-and-values",
+    "bytes",
     "filesystem",
     "images",
     "json",

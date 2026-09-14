@@ -14,6 +14,13 @@ pub const EXIT_UNAVAILABLE: i32 = 2;
 /// `args` are the remaining CLI arguments after the verb; each handler takes
 /// over their parsing as it is implemented.
 pub fn dispatch(command: Command, args: &[String]) -> i32 {
+    // `--help`/`-h` on any verb prints that verb's own screen and succeeds,
+    // ahead of the handler that would otherwise reject the flag or mistake it
+    // for a path. The top-level `kira help` verb keeps its own richer listing.
+    if command != Command::Help && wants_help(args) {
+        print_command_help(command);
+        return 0;
+    }
     match command {
         Command::Run => pipeline::run(args),
         Command::Debug => pipeline::debug(args),
@@ -81,6 +88,39 @@ fn implemented(command: Command) -> bool {
     )
 }
 
+/// Whether the invocation asks for the verb's help rather than to run it.
+///
+/// Scanned only up to a `--`: everything after belongs to the program, so a
+/// `-h` a Kira program defines for itself is never read as a request to print
+/// CLI help.
+pub fn wants_help(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--help" || arg == "-h")
+}
+
+/// Print one verb's usage line, description, and — when it has flags worth
+/// spelling out — the block naming each.
+fn print_command_help(command: Command) {
+    let paint = kira_toolchain::Paint::auto_stderr();
+    eprintln!(
+        "{} — {}",
+        paint.bold(&format!("kira {}", command.label())),
+        command.description(),
+    );
+    eprintln!();
+    eprintln!(
+        "    {}{}",
+        paint.cyan(&format!("kira {}", command.label())),
+        command.arguments(),
+    );
+    let details = command.help_text();
+    if !details.is_empty() {
+        eprintln!();
+        eprintln!("{details}");
+    }
+}
+
 /// Print top-level usage.
 pub fn print_usage() {
     print_usage_with(false);
@@ -120,5 +160,33 @@ fn print_usage_with(_all: bool) {
             paint.cyan("kira --version"),
             paint.dim("print the version")
         );
+    }
+    eprintln!();
+    eprintln!(
+        "  {} {}",
+        paint.dim("run"),
+        paint.dim("`kira <verb> --help` for a verb's flags"),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn help_flags_are_recognized_before_the_forwarding_separator() {
+        assert!(wants_help(&args(&["--help"])));
+        assert!(wants_help(&args(&["-h"])));
+        assert!(wants_help(&args(&["main.kira", "--help"])));
+        // Nothing asked for it.
+        assert!(!wants_help(&args(&[])));
+        assert!(!wants_help(&args(&["build"])));
+        // Past `--` it is the program's flag, not the CLI's.
+        assert!(!wants_help(&args(&["--", "-h"])));
+        assert!(!wants_help(&args(&["main.kira", "--", "--help"])));
     }
 }

@@ -12,7 +12,7 @@ use super::*;
 use crate::traits::markers::Marker;
 use kira_runtime_abi::MainThreadOp;
 use kira_semantics_model::hir::Callee;
-use kira_semantics_model::{MainThreadTaskResult, Type};
+use kira_semantics_model::{TaskResult, Type};
 use kira_syntax_model::ast::{Expr, ExprId};
 
 impl Analyzer<'_> {
@@ -263,7 +263,7 @@ impl Analyzer<'_> {
     pub(in crate::typeck) fn analyze_main_thread_task_property(
         &mut self,
         handle: HirExprId,
-        result: MainThreadTaskResult,
+        result: TaskResult,
         name: &str,
         span: Span,
     ) -> HirExprId {
@@ -308,6 +308,6 @@ impl Analyzer<'_> {
 }
 
 /// Maps a source result type to the type of a main-thread task handle.
-fn main_thread_task_result(ty: Type) -> Option<MainThreadTaskResult> {
-    MainThreadTaskResult::from_type(ty)
+fn main_thread_task_result(ty: Type) -> Option<TaskResult> {
+    TaskResult::from_type(ty)
 }

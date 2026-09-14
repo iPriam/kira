@@ -479,7 +479,7 @@ impl Evaluator<'_> {
 }
 
 /// Applies a binary operator to two compile-time values.
-fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
+pub(crate) fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
     use BinaryOp::{Add, And, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Rem, Sub};
     match (op, &left, &right) {
         (Add, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_add(*b))),

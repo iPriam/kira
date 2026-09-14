@@ -35,11 +35,11 @@ A handle has exactly three operations, and anything else on one is `KSEM158`.
 
 ## What a Task Body May Be
 
-A call to an `async function` taking `Int` or `Float` parameters and returning `Int`, `Float`, or nothing, chosen among overloads exactly as an ordinary call is, or a bare numeric literal (`Task { 41 }`). Anything else is `KSEM159`. That restriction is what lets a spawn evaluate its arguments now and its body later with no closure in between.
+A call to a named `async function`, chosen among overloads exactly as an ordinary call is, or a bare numeric literal (`Task { 41 }`). Anything else — an expression, a block, a closure — is `KSEM159`. That restriction is what lets a spawn evaluate its arguments now and its body later with no closure in between. What the call takes and returns is unrestricted by this rule: any `Send` value crosses.
 
 ## The `Send` Rule
 
-A spawn is the one boundary a value crosses without its spawner, so what the deferred call takes and returns must be [`Send`](/docs/language-guide/traits#what-carries-send-and-sync) (`KSEM312`). The slot rule above is narrower today, and every type it admits is `Send`.
+A spawn is the one boundary a value crosses without its spawner, so what the deferred call takes and returns must be [`Send`](/docs/language-guide/traits#what-carries-send-and-sync) (`KSEM312`). That is the whole type gate: the arguments and result may be any `Send` value — a `String`, an array, a struct, an enum, `Any`, a `distinct` type — exactly the set a channel carries. Each crosses the executor slot as the one machine word a channel payload does: a scalar *is* that word, a `Float` its bits, and a value that owns storage a token naming it. A value that is not `Send` is `KSEM312`.
 
 ## The Scheduler
 

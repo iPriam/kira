@@ -407,13 +407,15 @@ fn webtransport_channel_carries_messages_both_ways() {
 
     // The client speaks first; the server's accept resolves once it does.
     // SAFETY: the message string outlives each call.
-    assert_eq!(unsafe { kira_network_wt_send(client, cstring("ping").as_ptr()) }, 0);
+    let sent = unsafe { kira_network_wt_send(client, cstring("ping").as_ptr()) };
+    assert_eq!(sent, 0);
     let accepted = wait_positive(|| kira_network_wt_accept(server));
     assert_eq!(wt_receive_message(accepted), "ping");
 
     // And the server answers back over the same channel.
     // SAFETY: the message string outlives the call.
-    assert_eq!(unsafe { kira_network_wt_send(accepted, cstring("pong").as_ptr()) }, 0);
+    let sent = unsafe { kira_network_wt_send(accepted, cstring("pong").as_ptr()) };
+    assert_eq!(sent, 0);
     assert_eq!(wt_receive_message(client), "pong");
 
     kira_network_wt_close(client);

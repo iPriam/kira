@@ -73,14 +73,20 @@ These come up most often while learning the language. Each is explained where th
 | `KSEM350` | An integer literal that does not fit the width it is written into. |
 | `KSEM358` / `KSEM359` | `is` or `as` on a value that is not an `Any`; a type no `Any` can hold on the right of `is` or `as`. |
 | `KSEM356` | A `copy` of a value that is not Copyable: native state, a cell, a task handle, an `Any`, or a type reaching a user `Drop`. |
-| `KSEM360` | Warning: `nativeStateFree` is deprecated; it releases one reference of the state. |
-| `KSEM361` | `nativeUserDataRetain` or `nativeUserDataRelease` given something other than a `RawPtr` token. |
+| `KSEM360` | Warning: `nativeStateFree` is deprecated; it consumes and releases one tracked state owner. |
+| `KSEM361` | A callback-state ownership operation received a value that is not a tracked `NativeState<T>` owner. |
 | `KSEM362` | `.type` asked of an expression that names no value, such as a `Void` call. |
 | `KSEM363` | A member read off a `Type` that a runtime descriptor does not expose. |
 | `KSEM364` | `Channel<T>()` written with arguments, or without exactly one type argument. |
 | `KSEM365` | A channel payload with no machine word to queue, such as a `String`. |
 | `KSEM366` | A channel operation given the wrong number of arguments. |
 | `KSEM367` | An operation a channel end does not have, including `.raw`. |
+| `KSEM373` | `nativeUserDataBorrow` asked to borrow an owner temporary rather than storage rooted in a local. |
+| `KSEM375` | `nativeRecover` asked to borrow an owned `NativeState` temporary. |
+| `KSEM376` | An ordinary read tried to copy an affine value containing native state out of its owner. |
+| `KSEM377` | A `NativeState` owner was used as the root value of `nativeState` or as the root recovery type. |
+| `KSEM378` | `nativeUserDataRetain` was used in Kira source; manual retain is forbidden because it would create an owner with no affine value. |
+| `KSEM379` | A raw userdata `RawPtr` was passed to a release intrinsic; raw userdata is always a borrow in Kira. |
 | `KSEM357` | A function whose class-typed parameters would need more specializations than one function may have. |
 | `KSEM352` / `KSEM353` / `KSEM354` | A task target that is not `async`; one that borrows a parameter; a direct call of an `async function`. |
 | `KSEM081` | `print` of a struct, array, or enum. |

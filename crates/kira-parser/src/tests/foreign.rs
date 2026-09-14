@@ -63,6 +63,49 @@ fn a_bodyless_extern_parses_with_its_block() {
 }
 
 #[test]
+fn an_extern_library_block_desugars_each_function_to_c_extern() {
+    let result = parse_text(
+        "extern library ffimath {\n\
+         function add(a: I32, b: I32) -> I32\n\
+         function negate(value: I32) -> I32\n\
+         }",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let functions: Vec<_> = result
+        .tree
+        .items()
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(functions.len(), 2);
+    for (function, expected_symbol) in functions.into_iter().zip(["add", "negate"]) {
+        let mark = function.foreign.as_ref().expect("group member is foreign");
+        assert_eq!(mark.kind, ForeignKind::Extern);
+        let fields: Vec<(String, String)> = mark
+            .fields
+            .iter()
+            .map(|field| {
+                (
+                    result.interner.resolve(field.key).to_owned(),
+                    result.interner.resolve(field.value).to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            vec![
+                ("library".to_owned(), "ffimath".to_owned()),
+                ("symbol".to_owned(), expected_symbol.to_owned()),
+                ("abi".to_owned(), "c".to_owned()),
+            ]
+        );
+    }
+}
+
+#[test]
 fn an_ordinary_function_carries_no_foreign_marker() {
     let result = parse_text("function add(a: Int, b: Int) -> Int { return a + b }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);

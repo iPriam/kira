@@ -356,7 +356,7 @@ struct Inner {
 }
 
 @Derive(Hashable)
-struct Point {
+struct HashPoint {
     var x: Int
     var y: Int
     var name: String
@@ -366,18 +366,18 @@ struct Point {
 
 @Main
 function main() {
-    let a = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
-    let same = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
+    let a = HashPoint { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
+    let same = HashPoint { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
     // Every field is in the fold, so changing any one of them changes it.
-    let other_int = Point { x: 1, y: 3, name: "p", live: true, inner: Inner { tag: 7 } }
-    let other_text = Point { x: 1, y: 2, name: "q", live: true, inner: Inner { tag: 7 } }
-    let other_bool = Point { x: 1, y: 2, name: "p", live: false, inner: Inner { tag: 7 } }
-    let other_nested = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 8 } }
-    print(hash_Point(a) == hash_Point(same))
-    print(hash_Point(a) == hash_Point(other_int))
-    print(hash_Point(a) == hash_Point(other_text))
-    print(hash_Point(a) == hash_Point(other_bool))
-    print(hash_Point(a) == hash_Point(other_nested))
+    let other_int = HashPoint { x: 1, y: 3, name: "p", live: true, inner: Inner { tag: 7 } }
+    let other_text = HashPoint { x: 1, y: 2, name: "q", live: true, inner: Inner { tag: 7 } }
+    let other_bool = HashPoint { x: 1, y: 2, name: "p", live: false, inner: Inner { tag: 7 } }
+    let other_nested = HashPoint { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 8 } }
+    print(hash_HashPoint(a) == hash_HashPoint(same))
+    print(hash_HashPoint(a) == hash_HashPoint(other_int))
+    print(hash_HashPoint(a) == hash_HashPoint(other_text))
+    print(hash_HashPoint(a) == hash_HashPoint(other_bool))
+    print(hash_HashPoint(a) == hash_HashPoint(other_nested))
     return
 }
 "#,

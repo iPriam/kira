@@ -92,6 +92,7 @@ impl TypeTable {
             | Type::Float(_)
             | Type::Bool
             | Type::String
+            | Type::Number
             | Type::Void
             | Type::Error
             | Type::CString

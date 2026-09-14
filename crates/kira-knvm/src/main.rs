@@ -4,7 +4,9 @@
 //! target so it is reachable by tests; this file holds argv, stderr, and exit
 //! codes.
 
-use kira_knvm::{DirectoryReleaseSource, GitHubReleaseSource, KnvmCommand, ReleaseSource};
+use kira_knvm::{
+    DirectoryReleaseSource, GitHubReleaseSource, KnvmCommand, LlvmAction, ReleaseSource,
+};
 
 /// The operation ran.
 const EXIT_OK: i32 = 0;
@@ -163,35 +165,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                 }
             }
         }
-        KnvmCommand::InstallLlvm { force } => {
-            match kira_knvm::install_llvm(&toolchains_root, kira_knvm::DEFAULT_REPOSITORY, force) {
-                Ok(installed) => {
-                    if installed.already_installed {
-                        println!(
-                            "knvm: LLVM {} for {} is already installed at {}",
-                            installed.version,
-                            installed.host_key,
-                            installed.home.display()
-                        );
-                        println!("knvm: run `knvm install-llvm --force` to replace it");
-                    } else {
-                        println!(
-                            "knvm: installed LLVM {} for {} at {}",
-                            installed.version,
-                            installed.host_key,
-                            installed.home.display()
-                        );
-                        report_verification(installed.verified.as_ref(), false);
-                    }
-                    report_code_generator_shortfall(&installed.missing_code_generators);
-                    EXIT_OK
-                }
-                Err(error) => {
-                    eprintln!("knvm: {error}");
-                    EXIT_FAILED
-                }
-            }
-        }
+        KnvmCommand::Llvm(action) => llvm(action, &toolchains_root),
         KnvmCommand::InstallLibffi { force } => {
             match kira_knvm::libffi::install_libffi(&toolchains_root, force) {
                 Ok(installed) => {
@@ -345,6 +319,87 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
             }
         }
     }
+}
+
+/// `knvm llvm <install|uninstall|>`: manage the bundle the backend links.
+fn llvm(action: LlvmAction, toolchains_root: &std::path::Path) -> i32 {
+    match action {
+        LlvmAction::Status => llvm_status(toolchains_root),
+        LlvmAction::Install { force } => {
+            match kira_knvm::install_llvm(toolchains_root, kira_knvm::DEFAULT_REPOSITORY, force) {
+                Ok(installed) => {
+                    if installed.already_installed {
+                        println!(
+                            "knvm: LLVM {} for {} is already installed at {}",
+                            installed.version,
+                            installed.host_key,
+                            installed.home.display()
+                        );
+                        println!("knvm: run `knvm llvm install --force` to replace it");
+                    } else {
+                        println!(
+                            "knvm: installed LLVM {} for {} at {}",
+                            installed.version,
+                            installed.host_key,
+                            installed.home.display()
+                        );
+                        report_verification(installed.verified.as_ref(), false);
+                    }
+                    report_code_generator_shortfall(&installed.missing_code_generators);
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    EXIT_FAILED
+                }
+            }
+        }
+        LlvmAction::Uninstall { version } => {
+            match kira_knvm::uninstall_llvm(toolchains_root, &version) {
+                Ok(removed) => {
+                    println!(
+                        "knvm: removed LLVM {} from {}",
+                        removed.version,
+                        removed.root.display()
+                    );
+                    if removed.was_pinned {
+                        eprintln!(
+                            "knvm: warning: that was the pinned LLVM {}; the backend has none to \
+                         link until you run `knvm llvm install`",
+                            removed.version
+                        );
+                    }
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    EXIT_FAILED
+                }
+            }
+        }
+    }
+}
+
+/// Prints the pinned LLVM version and every installed one, `*` on the pin.
+fn llvm_status(toolchains_root: &std::path::Path) -> i32 {
+    let pinned = match kira_toolchain::pinned() {
+        Ok(pin) => pin.llvm.version.clone(),
+        Err(error) => {
+            eprintln!("knvm: {error}");
+            return EXIT_FAILED;
+        }
+    };
+    println!("knvm: pinned LLVM {pinned}");
+    let installed = kira_knvm::installed_llvm_versions(toolchains_root);
+    if installed.is_empty() {
+        println!("knvm: none installed; run `knvm llvm install`");
+        return EXIT_OK;
+    }
+    for version in installed {
+        let marker = if version == pinned { "*" } else { " " };
+        println!("  {marker} {version}");
+    }
+    EXIT_OK
 }
 
 /// Says which PATH this run configured, in the terms that host uses.

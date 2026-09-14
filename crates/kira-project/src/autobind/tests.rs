@@ -482,7 +482,16 @@ fn a_binding_this_generator_did_not_write_is_adopted_rather_than_overwritten() {
     let after = plan(&spec, &context)
         .expect("a resolvable declaration")
         .expect("a planned library");
-    assert_eq!(after.status, AutobindStatus::Current);
+    // A shipped binding stays adopted rather than becoming silently "current":
+    // the next build adopts it again, so the note that says it was used as the
+    // package wrote it repeats and a reader told it exists can read it.
+    assert_eq!(after.status, AutobindStatus::Adopt);
+    adopt(&after).expect("re-adopting writes only the stamp");
+    assert_eq!(
+        std::fs::read_to_string(&shipped).expect("the shipped binding"),
+        "// shipped by the package\n",
+        "re-adopting must still not rewrite a file the package ships"
+    );
 }
 
 #[test]

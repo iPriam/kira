@@ -202,7 +202,7 @@ impl Scan<'_> {
                 }
             }
             Expr::Field { base, .. } => self.expr(*base),
-            Expr::ArrayLit { elements, .. } => {
+            Expr::Tuple { elements, .. } | Expr::ArrayLit { elements, .. } => {
                 let elements = elements.clone();
                 for &element in &elements {
                     self.expr(element);
@@ -252,6 +252,13 @@ impl Scan<'_> {
             // it mentions is analyzed in the enclosing frame. So the walk goes
             // through it without raising the depth.
             Expr::TaskSpawn { body, .. } => self.expr(*body),
+            Expr::Match { subject, arms, .. } => {
+                let (subject, arms) = (*subject, arms.clone());
+                self.expr(subject);
+                for arm in &arms {
+                    self.block(&arm.body);
+                }
+            }
             Expr::Int { .. }
             | Expr::Float { .. }
             | Expr::Bool { .. }

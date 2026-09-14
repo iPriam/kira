@@ -1,0 +1,53 @@
+---
+title: Numbers and Decimals
+description: The exact base-10 Number type, why 0.1 + 0.2 is 0.3, how it is built and converted, and the range it trades for speed.
+---
+
+`Number` is Kira's exact base-10 decimal. `Int` and `Float` are the machine's own types — a 64-bit integer and a 64-bit binary float — and a binary float cannot hold `0.1`, so `0.1 + 0.2` comes out as `0.30000000000000004`. A `Number` is a decimal mantissa and a scale, so it holds `0.1` exactly and the sum is `0.3`.
+
+```kira
+let total = Number("0.1") + Number("0.2")
+print(String(total))            // 0.3
+print(total == Number("0.3"))   // true
+```
+
+## Building a Number
+
+A `Number` is constructed with `Number(x)`, from any of three sources:
+
+| Written | From | Meaning |
+| --- | --- | --- |
+| `Number(i)` | `Int` | the integer, exactly |
+| `Number(s)` | `String` | the decimal the text spells, exactly — a trap if the text is not a decimal |
+| `Number(f)` | `Float` | the decimal nearest the float, which was already rounded |
+
+`Number("0.1")` is the exact tenth; `Number(0.1)` is the decimal nearest the *float* `0.1`, which is not exactly a tenth, so a literal you want held exactly is written as a string. There is no bare decimal literal that is a `Number` — `0.1` is a `Float` — so the string form is how an exact value enters.
+
+## Operators
+
+Two `Number`s take the arithmetic operators and the comparisons. There is no implicit mixing with `Int` or `Float`: both sides of an operator must already be `Number`, which is what keeps the rounding a `Number` avoids from creeping back in through a stray `Float`.
+
+| Written | Result | |
+| --- | --- | --- |
+| `a + b`, `a - b`, `a * b` | `Number` | exact |
+| `a / b` | `Number` | rounded half-to-even at the working scale; a trap on divide by zero |
+| `a == b`, `a != b` | `Bool` | numeric equality, so `1.0` equals `1.00` |
+| `a < b`, `a <= b`, `a > b`, `a >= b` | `Bool` | the numeric ordering |
+
+Addition, subtraction and multiplication are exact. Division has no exact answer in general — one third is not a finite decimal — so it rounds to a fixed working scale, with a tie going to the even digit so a long series of divisions does not drift. `%` and the bitwise operators have no decimal meaning and are not defined.
+
+## Converting out
+
+`String(n)` renders a `Number` as its shortest exact decimal. `Int(n)` truncates toward zero, and `Float(n)` takes the nearest float.
+
+```kira
+print(String(Number("7") * Number("1.5")))  // 10.5
+print(Int(Number("9.99")))                   // 9
+print(Int(Number("-9.99")))                  // -9
+```
+
+## Range and speed
+
+The mantissa is 64 bits, so a `Number` holds about eighteen significant digits — exact for money and most else. Holding, comparing and summing decimals at a shared scale are single machine instructions; only multiplication and division widen internally, and a result past the 64-bit mantissa **traps** rather than wrapping. A value that needs more than eighteen digits is out of range, which is a stop, not a silent wrong answer.
+
+A `Number` is a value like a `String`: it owns its storage, a copy is independent, and equality is by value. It works identically on the VM, the LLVM backend and the hybrid split.

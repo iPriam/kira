@@ -294,3 +294,8 @@ pub const CONVERT_FLOAT_TO_UINT: u8 = 0x91;
 /// named it. Appended after `CONVERT_FLOAT_TO_UINT`; adding an opcode is not
 /// an ABI change.
 pub const NATIVE_STATE_TAKE: u8 = 0x92;
+
+/// One `Number` operation, its [`NumberOp`](kira_runtime_abi::NumberOp) in the
+/// operand byte that follows — the same shape `STRING_OP` has. Appended after
+/// `NATIVE_STATE_TAKE`; adding an opcode is not an ABI change.
+pub const NUMBER_OP: u8 = 0x93;

@@ -3,7 +3,7 @@
 //
 // One `if` per code rather than a `match`: `match` selects on an enum, and the
 // question here is the other way round. Splitting the chain by code prefix was
-// measured and made no difference, so this costs what its 444 entries cost and
+// measured and made no difference, so this costs what its 463 entries cost and
 // no more.
 
 // The code `text` names, or `.Unrecognized` when `KiraError` does not list it.
@@ -88,6 +88,10 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KPAR085" { return .KPAR085 }
     if text == "KPAR086" { return .KPAR086 }
     if text == "KPAR087" { return .KPAR087 }
+    if text == "KPAR088" { return .KPAR088 }
+    if text == "KPAR089" { return .KPAR089 }
+    if text == "KPAR090" { return .KPAR090 }
+    if text == "KPAR091" { return .KPAR091 }
     if text == "KMAC001" { return .KMAC001 }
     if text == "KMAC002" { return .KMAC002 }
     if text == "KMAC003" { return .KMAC003 }
@@ -343,7 +347,6 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM301" { return .KSEM301 }
     if text == "KSEM302" { return .KSEM302 }
     if text == "KSEM303" { return .KSEM303 }
-    if text == "KSEM304" { return .KSEM304 }
     if text == "KSEM305" { return .KSEM305 }
     if text == "KSEM306" { return .KSEM306 }
     if text == "KSEM307" { return .KSEM307 }
@@ -395,6 +398,22 @@ function kiraErrorFromCode(text: borrow String) -> KiraError {
     if text == "KSEM369" { return .KSEM369 }
     if text == "KSEM370" { return .KSEM370 }
     if text == "KSEM371" { return .KSEM371 }
+    if text == "KSEM372" { return .KSEM372 }
+    if text == "KSEM373" { return .KSEM373 }
+    if text == "KSEM375" { return .KSEM375 }
+    if text == "KSEM376" { return .KSEM376 }
+    if text == "KSEM377" { return .KSEM377 }
+    if text == "KSEM378" { return .KSEM378 }
+    if text == "KSEM379" { return .KSEM379 }
+    if text == "KSEM380" { return .KSEM380 }
+    if text == "KSEM381" { return .KSEM381 }
+    if text == "KSEM382" { return .KSEM382 }
+    if text == "KSEM383" { return .KSEM383 }
+    if text == "KSEM384" { return .KSEM384 }
+    if text == "KSEM386" { return .KSEM386 }
+    if text == "KSEM387" { return .KSEM387 }
+    if text == "KSEM388" { return .KSEM388 }
+    if text == "KSEM389" { return .KSEM389 }
     if text == "KSEM900" { return .KSEM900 }
     if text == "KIR005" { return .KIR005 }
     if text == "KBE001" { return .KBE001 }

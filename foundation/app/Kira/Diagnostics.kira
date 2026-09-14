@@ -89,6 +89,10 @@ enum KiraError {
     KPAR085
     KPAR086
     KPAR087
+    KPAR088
+    KPAR089
+    KPAR090
+    KPAR091
 
     // Macro expansion.
     KMAC001
@@ -348,7 +352,6 @@ enum KiraError {
     KSEM301
     KSEM302
     KSEM303
-    KSEM304
     KSEM305
     KSEM306
     KSEM307
@@ -400,6 +403,22 @@ enum KiraError {
     KSEM369
     KSEM370
     KSEM371
+    KSEM372
+    KSEM373
+    KSEM375
+    KSEM376
+    KSEM377
+    KSEM378
+    KSEM379
+    KSEM380
+    KSEM381
+    KSEM382
+    KSEM383
+    KSEM384
+    KSEM386
+    KSEM387
+    KSEM388
+    KSEM389
     KSEM900
 
     // HIR and IR lowering.

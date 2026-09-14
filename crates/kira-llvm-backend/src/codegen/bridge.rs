@@ -82,15 +82,19 @@ fn bridge_tag_of(
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
+        Type::NativeState(_) => (BridgeValueTag::NATIVE_STATE.0, Some(PayloadForm::AsIs)),
+        // A `Number` is a two-word value, so it crosses as a node holding both
+        // words rather than in the one-word payload — the same way an aggregate
+        // does, and freed by the reader as it decodes.
+        Type::Number => (BridgeValueTag::NODE.0, Some(PayloadForm::Node)),
         Type::CString
         | Type::CBlock
         | Type::RuntimeType
-        | Type::NativeState(_)
         | Type::Task(_)
         | Type::MainThreadTask(_)
         | Type::Cell(_) => {
             return Err(LlvmError::internal(
-                "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
+                "a C string, task handle, or captured `var` crossing the @Native boundary",
             ));
         }
         // An erased value carries its dynamic identity and payload in a node
@@ -178,16 +182,26 @@ impl Codegen<'_> {
                         LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.any".as_ptr());
                     self.decode_native_state_value(node, ty)?
                 }
-                Type::RawPtr | Type::ForeignPtr(_) => payload,
+                Type::RawPtr | Type::ForeignPtr(_) | Type::NativeState(_) => payload,
                 Type::MainThreadTask(_) => payload,
+                // A `Number` arrives as the node holding its two words, decoded
+                // and freed like any other node.
+                Type::Number => {
+                    let node = LLVMBuildIntToPtr(
+                        self.builder,
+                        payload,
+                        types.ptr,
+                        c"arg.number".as_ptr(),
+                    );
+                    self.decode_native_state_value(node, ty)?
+                }
                 Type::CString
                 | Type::CBlock
                 | Type::RuntimeType
-                | Type::NativeState(_)
                 | Type::Task(_)
                 | Type::Cell(_) => {
                     return Err(LlvmError::internal(
-                        "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
+                        "a C string, task handle, or captured `var` crossing the @Native boundary",
                     ));
                 }
                 Type::Void | Type::Error => {

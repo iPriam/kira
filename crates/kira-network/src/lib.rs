@@ -14,8 +14,8 @@ mod http3;
 mod io;
 mod request;
 mod runtime;
-mod webtransport;
 mod websocket;
+mod webtransport;
 
 pub use api::{
     AsyncUdpSocket, BodySender, CancellationToken, DnsResolver, HttpClient, HttpClientConfig,
