@@ -1,4 +1,4 @@
-//! Provisions the managed LLVM bundle for `knvm install-llvm`.
+//! Provisions the managed LLVM bundle for `knvm llvm install`.
 //!
 //! The bundle is stored at `<toolchains-root>/llvm/<version>/<host-key>`, the
 //! path discovered by the LLVM backend. The compiled `llvm-metadata.toml` pin
@@ -14,7 +14,7 @@ use kira_toolchain::{TargetBundle, is_llvm_home};
 
 use crate::digest::{Sha256, checksum_file_name};
 use crate::github;
-use crate::install::{InstallError, Staging};
+use crate::install::{InstallError, Staging, is_single_component};
 use crate::source::{ReleaseSourceError, read_published_checksum};
 use crate::unpack::{self, UnpackError};
 
@@ -200,6 +200,97 @@ pub fn install_llvm(
         already_installed: false,
         verified,
         missing_code_generators,
+    })
+}
+
+/// Why an installed LLVM version could not be removed.
+#[derive(Debug, thiserror::Error)]
+pub enum LlvmUninstallError {
+    /// The version names something that could escape the `llvm/` tree.
+    #[error("`{version}` is not a version name")]
+    InvalidVersion {
+        /// What was given where a version was expected.
+        version: String,
+    },
+    /// No such version is installed.
+    #[error("no LLVM {version} is installed at {}", .expected.display())]
+    NotInstalled {
+        /// The version that was asked to be removed.
+        version: String,
+        /// Where it would have been.
+        expected: PathBuf,
+    },
+    /// The compiled-in pin could not be read, so whether this is the pinned
+    /// version could not be decided.
+    #[error(transparent)]
+    Metadata(#[from] kira_toolchain::MalformedMetadata),
+    /// A filesystem operation failed.
+    #[error(transparent)]
+    Io(#[from] InstallError),
+}
+
+/// What an LLVM uninstall removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlvmUninstalled {
+    /// The version that was removed.
+    pub version: String,
+    /// `<toolchains-root>/llvm/<version>` — the whole version tree, every host
+    /// key under it, because a version is installed and removed as a unit.
+    pub root: PathBuf,
+    /// Whether this was the version the pin names, so the backend has no LLVM
+    /// to link until it is installed again.
+    pub was_pinned: bool,
+}
+
+/// The LLVM versions installed under `<toolchains-root>/llvm/`, sorted.
+///
+/// One entry per version directory, whatever host keys live beneath it. A
+/// missing or unreadable `llvm/` tree is no versions rather than an error: the
+/// caller is asking what is there, and nothing is a legitimate answer.
+#[must_use]
+pub fn installed_llvm_versions(toolchains_root: &Path) -> Vec<String> {
+    let mut versions: Vec<String> = std::fs::read_dir(toolchains_root.join("llvm"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    versions.sort();
+    versions
+}
+
+/// Removes an installed LLVM version's whole tree at `<toolchains-root>/llvm/<version>`.
+///
+/// A version is the unit of installation, so it is the unit of removal: the
+/// directory holds one tree per host key, and provisioning replaces the version
+/// as a whole. The version is validated as a single path component before it is
+/// joined, so a caller cannot reach out of the `llvm/` tree with one.
+pub fn uninstall_llvm(
+    toolchains_root: &Path,
+    version: &str,
+) -> Result<LlvmUninstalled, LlvmUninstallError> {
+    if !is_single_component(version) {
+        return Err(LlvmUninstallError::InvalidVersion {
+            version: version.to_string(),
+        });
+    }
+    let root = toolchains_root.join("llvm").join(version);
+    if !root.is_dir() {
+        return Err(LlvmUninstallError::NotInstalled {
+            version: version.to_string(),
+            expected: root,
+        });
+    }
+    // Read before the tree is gone, so the warning about removing the pinned
+    // bundle is decided against the pin the compiler will read next.
+    let was_pinned = kira_toolchain::pinned()?.llvm.version == version;
+    std::fs::remove_dir_all(&root)
+        .map_err(|error| InstallError::io("remove the LLVM bundle at", &root, error))?;
+    Ok(LlvmUninstalled {
+        version: version.to_string(),
+        root,
+        was_pinned,
     })
 }
 
@@ -427,7 +518,7 @@ mod tests {
     /// The Windows bundle is the only zip the pin names, and no one tool
     /// unpacks it on every Windows shell: a stock PowerShell has no `unzip`,
     /// and an MSYS shell's `tar` refuses a zip. Naming only one of them makes
-    /// `install-llvm` unusable on one of the two.
+    /// `llvm install` unusable on one of the two.
     #[test]
     fn a_zip_names_both_windows_unpackers() {
         let tools = unpackers("zip").expect("the pin may name `zip`");
@@ -506,5 +597,51 @@ mod tests {
             "llvm-v22.1.4-kira.1",
         );
         assert_eq!(lines.len(), 2);
+    }
+
+    fn scratch_root(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("knvm_llvm_{tag}_{}", std::process::id()))
+    }
+
+    /// A version that could climb out of `llvm/` is refused before any path is
+    /// joined, the same guard `install` and `uninstall` already apply.
+    #[test]
+    fn uninstall_refuses_a_traversing_version() {
+        for bad in ["", ".", "..", "../release", "a/b"] {
+            let error = uninstall_llvm(Path::new("/tmp/knvm-root"), bad)
+                .expect_err("a traversing version must never be joined");
+            assert!(
+                matches!(error, LlvmUninstallError::InvalidVersion { .. }),
+                "{bad}"
+            );
+        }
+    }
+
+    /// Removing a version that is not there names where it looked instead of
+    /// reporting success over an empty tree.
+    #[test]
+    fn uninstall_reports_a_version_that_is_not_installed() {
+        let root = scratch_root("absent");
+        let error =
+            uninstall_llvm(&root, "9.9.9").expect_err("nothing is installed under a fresh root");
+        assert!(matches!(error, LlvmUninstallError::NotInstalled { .. }));
+    }
+
+    /// A version installs and removes as a whole tree, and the listing reflects
+    /// what is on disk before and after.
+    #[test]
+    fn uninstall_removes_the_whole_version_tree() {
+        let root = scratch_root("remove");
+        let version_tree = root.join("llvm").join("9.9.9").join("aarch64-macos");
+        std::fs::create_dir_all(&version_tree).expect("stage a fake bundle");
+        assert_eq!(installed_llvm_versions(&root), vec!["9.9.9".to_owned()]);
+
+        let removed = uninstall_llvm(&root, "9.9.9").expect("removes the staged version");
+        assert_eq!(removed.version, "9.9.9");
+        assert!(!removed.was_pinned, "a fake version is not the pin");
+        assert!(!root.join("llvm").join("9.9.9").exists());
+        assert!(installed_llvm_versions(&root).is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

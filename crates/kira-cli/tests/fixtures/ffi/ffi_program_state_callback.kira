@@ -42,7 +42,9 @@ function onFrame(userdata: U64, n: I32) -> I32 {
 
     let taker: UserdataTaker = onFrame
     // 1 * 100 + 7 = 107 on the first crossing, then 2 * 100 + 107 = 307.
-    print(callUserdataTwice(taker, U64(rawPointerWord(handle)), 7))
+    // The affine owner stays in `handle`; the FFI crossing carries only the
+    // non-owning borrow word.
+    print(callUserdataTwice(taker, U64(rawPointerWord(nativeUserDataBorrow(handle))), 7))
 
     // Back in the outer run: both crossings' writes are here.
     var after = nativeRecover<FrameCounter>(handle)

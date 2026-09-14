@@ -85,6 +85,22 @@ impl FunctionLowering<'_, '_> {
         Ok(value)
     }
 
+    /// Produces an owned bridge copy for a borrowed argument.
+    ///
+    /// A native-to-runtime or main-thread crossing cannot lend an address into
+    /// this module. When the expression is an addressable place, retain its
+    /// owned members and load the resulting copy without consuming the place.
+    /// A temporary already owns its value and transfers that ownership directly.
+    pub(in crate::codegen) fn lower_owned_borrowed_expr(
+        &mut self,
+        expr: IrExprId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if let Some((pointer, ty)) = self.borrowed_place_pointer(expr)? {
+            return self.read_owned(pointer, ty);
+        }
+        self.lower_expr(expr)
+    }
+
     /// Marks a local whose type runs a user `Drop` as holding a value again,
     /// undoing the take an ordinary read performed.
     pub(in crate::codegen) fn set_live_flag(&mut self, slot: u32) {
@@ -164,6 +180,9 @@ impl FunctionLowering<'_, '_> {
         index: u32,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
+        if let Some(value) = self.lower_native_state_field_read(base, index, ty)? {
+            return Ok(value);
+        }
         // A base that names storage is read through it. Lowering it as a value
         // first would load the whole struct to reach one field of it, then copy
         // and drop everything else in it — and a generated style struct is
@@ -203,12 +222,43 @@ impl FunctionLowering<'_, '_> {
                 &mut [field],
                 c"field.cblock.word",
             );
-            self.drop_value(base_value, base_ty)?;
+            self.drop_field_base(base, base_value, base_ty)?;
             return Ok(word);
         }
         let copy = self.copy_value(field, ty)?;
-        self.drop_value(base_value, base_ty)?;
+        self.drop_field_base(base, base_value, base_ty)?;
         Ok(copy)
+    }
+
+    /// Cleans up the temporary used to read a field from `base`.
+    ///
+    /// A hybrid recovered callback-state view materializes a snapshot because
+    /// the portable value tree has no native address to walk. That snapshot owns
+    /// cloned field storage, but it is not a second owner of the root `Drop`
+    /// value, so cleanup must skip the root body. Every ordinary expression uses
+    /// the normal value drop.
+    fn drop_field_base(
+        &mut self,
+        base: IrExprId,
+        value: LLVMValueRef,
+        ty: Type,
+    ) -> Result<(), LlvmError> {
+        let recovered_view = !self.state_is_boxed()
+            && match self.codegen.program.expr(base) {
+                IrExpr::NativeRecover { .. } => true,
+                IrExpr::Local(slot) => self
+                    .function
+                    .native_state_locals
+                    .get(*slot as usize)
+                    .copied()
+                    .flatten()
+                    .is_some(),
+                _ => false,
+            };
+        if recovered_view && self.codegen.program.types.user_drop(ty).is_some() {
+            return self.codegen.drop_recovered_root_snapshot(value, ty);
+        }
+        self.drop_value(value, ty)
     }
 
     /// The storage `expr` names, when it names storage this frame can address.
@@ -227,17 +277,27 @@ impl FunctionLowering<'_, '_> {
     ) -> Result<Option<LLVMValueRef>, LlvmError> {
         match *self.codegen.program.expr(expr) {
             IrExpr::Local(slot) => {
-                // A callback-state local holds a token rather than the value,
-                // and a written-through parameter is already a pointer the
-                // caller owns; both are read through their own paths.
-                if self
+                // A recovered callback-state local holds a token rather than the
+                // value. In a whole-program native module that token names a box
+                // in this backend's own layout, so the box payload is real
+                // addressable storage and a field read must walk it directly.
+                // Falling back to materialising the whole value would make a
+                // recovered `Drop` value look like an owned temporary and run its
+                // body when the read cleans the temporary up.
+                //
+                // A hybrid native half keeps callback state as a backend-neutral
+                // value tree instead. It has no stable native payload address,
+                // so it still uses the copy/write-back path.
+                if let Some(type_id) = self
                     .function
                     .native_state_locals
                     .get(slot as usize)
                     .copied()
                     .flatten()
-                    .is_some()
                 {
+                    if self.state_is_boxed() {
+                        return Ok(Some(self.native_state_payload_of_local(slot, type_id)?));
+                    }
                     return Ok(None);
                 }
                 Ok(Some(self.local_pointer(slot)?))

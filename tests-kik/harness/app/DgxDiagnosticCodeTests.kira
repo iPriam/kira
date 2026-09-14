@@ -66,6 +66,19 @@ construct DgxChannelCodesResolve() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
 }
 
+construct DgxNativeStateOwnershipCodesResolve() extends Test {
+    test {
+        var score = 0
+        score = score + dgxResolves("KSEM373", .KSEM373)
+        score = score + dgxResolves("KSEM375", .KSEM375)
+        score = score + dgxResolves("KSEM376", .KSEM376)
+        score = score + dgxResolves("KSEM377", .KSEM377)
+        score = score + dgxResolves("KSEM378", .KSEM378)
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}
+
 // The registry listed 290 codes against 438 emitted before it was generated.
 // These are codes it never listed, and a program reading a diagnostic saw
 // `.Unrecognized` for every one of them.

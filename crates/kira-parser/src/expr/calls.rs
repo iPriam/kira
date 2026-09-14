@@ -247,9 +247,32 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_paren(&mut self) -> ExprId {
+        let start = self.current().span;
         self.bump(); // `(`
-        let inner = self.with_struct_literals(|parser| parser.parse_expr());
+        let first = self.with_struct_literals(|parser| parser.parse_expr());
+        if !self.eat(TokenKind::Comma) {
+            self.expect(TokenKind::RParen);
+            return first;
+        }
+
+        let mut elements = vec![first];
+        while !self.at(TokenKind::RParen) && !self.at_eof() {
+            let element = self.with_struct_literals(|parser| parser.parse_expr());
+            let element_span = self.tree.expr(element).span();
+            elements.push(element);
+            if elements.len() > 4 {
+                self.error(
+                    element_span,
+                    "KPAR091",
+                    "tuple values support two through four elements",
+                );
+            }
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
         self.expect(TokenKind::RParen);
-        inner
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_expr(Expr::Tuple { elements, span })
     }
 }

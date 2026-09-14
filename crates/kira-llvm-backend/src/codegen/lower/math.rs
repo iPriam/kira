@@ -68,16 +68,40 @@ impl FunctionLowering<'_, '_> {
             .element_of(kira_ty)
             .unwrap_or(Type::Float(kira_semantics_model::FloatSpelling::Plain));
         let stride = self.codegen.abi_size(element_ty)?;
-        let array = self.lower_expr(value)?;
+        // This conversion borrows an existing array place. If the source is a
+        // temporary, it owns that temporary only until the C-width block has
+        // been produced and must release it immediately afterwards. Returning
+        // only the CBlock while forgetting the source owner is the ownership
+        // erasure that used to leak one array per FFI conversion.
+        let (array, owned_temporary) = match self.addressable(value)? {
+            Some(pointer) => {
+                // SAFETY: `pointer` addresses one live array handle. A borrow
+                // loads the word without incrementing its share count.
+                let handle = unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.ptr,
+                        pointer,
+                        c"array.elements.borrow".as_ptr(),
+                    )
+                };
+                (handle, false)
+            }
+            None => (self.lower_expr(value)?, true),
+        };
         let types = self.codegen.types;
         let callee = self.codegen.runtime.array_elements;
         // SAFETY: the runtime takes an array handle, the element's seam tag and
-        // the Kira stride, and answers a pointer word; all are live here.
-        Ok(unsafe {
+        // the Kira stride, and answers an independently owned C block.
+        let result = unsafe {
             let tag = LLVMConstInt(types.i32, u64::from(element.tag()), 0);
             self.codegen
                 .call_runtime(callee, &mut [array, tag, stride], c"array.elements")
-        })
+        };
+        if owned_temporary {
+            self.drop_value(array, kira_ty)?;
+        }
+        Ok(result)
     }
 
     /// Lowers `scalarText(codePoint)` to the runtime that encodes it.
@@ -137,6 +161,7 @@ impl crate::codegen::Codegen<'_> {
             MathOp::Atan2 => c"atan2",
             MathOp::Hypot => c"hypot",
             MathOp::Fmod => c"fmod",
+            MathOp::Cbrt => c"cbrt",
         };
         // SAFETY: the module is live, and the type is `double(double...)` with
         // as many parameters as the operation takes operands.

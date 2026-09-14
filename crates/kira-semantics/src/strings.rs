@@ -11,8 +11,8 @@
 //! end of a string fails the same way on every backend instead of producing a
 //! value only one of them agrees with.
 
-use kira_runtime_abi::StringOp;
-use kira_semantics_model::Type;
+use kira_runtime_abi::{NumberOp, StringOp};
+use kira_semantics_model::{IntSpelling, Type};
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
@@ -57,6 +57,16 @@ impl Analyzer<'_> {
         let operand_ty = self.program.expr(operand).type_of();
         if operand_ty == Type::Error {
             return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        // A `Number` renders through its own operation — the shortest exact
+        // decimal — rather than the scalar renderers, since it is a heap value
+        // with no `print` scalar path.
+        if operand_ty == Type::Number {
+            return Some(self.program.exprs.alloc(HirExpr::NumberOperation {
+                op: NumberOp::ToString,
+                operands: vec![operand],
+                ty: Type::String,
+            }));
         }
         // Whatever `print` renders, this renders — that is the contract, and it
         // is why the set is exactly the printable scalars rather than a second
@@ -256,6 +266,8 @@ impl Analyzer<'_> {
             // `array_of` answers `Type::Error` when the id space is exhausted,
             // which flows on as an error node rather than stopping analysis.
             self.program.types.array_of(Type::String)
+        } else if op.answers_byte_array() {
+            self.program.types.array_of(Type::Int(IntSpelling::U8))
         } else {
             Type::String
         };

@@ -151,6 +151,24 @@ impl FunctionLowering<'_, '_> {
         Ok(self.call(callable, &mut operands, c"s.stringOp"))
     }
 
+    /// One `Number` operation, the VM's `NumberOp`.
+    ///
+    /// The operand byte indexes the callable table, so a new operation needs a
+    /// row there and nothing here — the operands are pushed in source order
+    /// whatever the operation is, and each helper frees every handle it took.
+    pub(in crate::codegen) fn lower_number_operation(
+        &mut self,
+        op: kira_runtime_abi::NumberOp,
+        operands: Vec<IrExprId>,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let mut lowered = Vec::with_capacity(operands.len());
+        for operand in operands {
+            lowered.push(self.lower_expr(operand)?);
+        }
+        let callable = self.codegen.runtime.number_ops[usize::from(op.as_byte())];
+        Ok(self.call(callable, &mut lowered, c"n.numberOp"))
+    }
+
     /// A scalar rendered as text (`String(x)`), the VM's `StringOf`.
     ///
     /// The operand's static type picks the helper, so each one formats a value
@@ -193,6 +211,10 @@ impl FunctionLowering<'_, '_> {
             .flatten()
         {
             let root_ty = self.local_type(place.local)?;
+            if !self.state_is_boxed() {
+                self.append_native_state_place(place, type_id, root_ty, value)?;
+                return Ok(self.codegen.const_bool(false));
+            }
             // For a boxed state the array being appended to lives in the
             // state's own storage, so the push reaches it directly.
             let (root, write_back) =

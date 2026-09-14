@@ -311,12 +311,23 @@ impl Vm<'_> {
         })?;
         let path = std::mem::take(&mut self.native_path);
         let outcome = if appending {
-            self.host.native_state_append(token, type_id, &path, stored)
+            self.host
+                .native_state_append(token, type_id, &path, stored)
+                .map(|()| None)
         } else {
-            self.host.native_state_write(token, type_id, &path, stored)
+            self.host
+                .native_state_write(token, type_id, &path, stored)
+                .map(Some)
         };
         self.native_path = path;
-        outcome.map_err(VmError::NativeState)
+        match outcome {
+            Ok(Some(displaced)) => {
+                self.heap.drop_native_state_value(displaced);
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(VmError::NativeState(error)),
+        }
     }
 
     /// Fills `buf` with `path`'s steps, popping one index value per `Index`

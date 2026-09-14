@@ -21,15 +21,17 @@
 //!
 //! # The dispatcher
 //!
-//! A task body is a call to a named function with `Int`/`Float` parameters, so
-//! one generated function — [`TaskFns::STEP`] — can hold a branch per spawned
-//! target and read that target's arguments out of the task's slots. A `Float`
-//! travels through a slot as its IEEE-754 bits, converted at both ends, because
-//! a slot is one machine word and the conversion already exists in the IR.
+//! A task body is a call to a named function, so one generated function —
+//! [`TaskFns::STEP`] — can hold a branch per spawned target and read that
+//! target's arguments out of the task's slots. Each argument and the result
+//! cross a slot as the one machine word its [`Crossing`] gives it: a scalar as
+//! itself, a `Float` as its IEEE-754 bits, and a value that owns storage as a
+//! native-state token, exactly as a channel payload crosses its queue.
 
 use kira_runtime_abi::{Execution, TaskPrim};
+use kira_semantics_model::Type;
+use kira_semantics_model::channel::Crossing;
 use kira_semantics_model::hir::ConvertKind;
-use kira_semantics_model::{FloatSpelling, Type};
 
 use crate::ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrProgram, IrStmt};
 
@@ -150,6 +152,60 @@ impl Build<'_> {
         })
     }
 
+    /// Turns a value into the one `Int`-kind word a task slot holds, by its
+    /// [`Crossing`] — the dispatcher's half of the boxing the spawn site does.
+    fn box_for_slot(&mut self, value: IrExprId, crossing: Crossing, value_ty: Type) -> IrExprId {
+        match crossing {
+            Crossing::Word => value,
+            Crossing::FloatBits => self.expr(IrExpr::Convert {
+                operand: value,
+                kind: ConvertKind::FloatToBits,
+                ty: Type::INT,
+            }),
+            Crossing::Boxed(type_id) => {
+                let drop_glue = self.program.types.user_drop(value_ty);
+                let boxed = self.expr(IrExpr::NativeState {
+                    value,
+                    type_id,
+                    drop_glue,
+                    ty: Type::INT,
+                });
+                let token = self.expr(IrExpr::NativeUserData {
+                    state: boxed,
+                    borrowed: false,
+                    ty: Type::RawPtr,
+                });
+                self.expr(IrExpr::Convert {
+                    operand: token,
+                    kind: ConvertKind::RawPtrToInt,
+                    ty: Type::INT,
+                })
+            }
+        }
+    }
+
+    /// Recovers the value a slot word names, by its [`Crossing`], into `ty` —
+    /// the inverse of [`Self::box_for_slot`], releasing a boxed token as it
+    /// takes the value out of the store.
+    fn recover_from_slot(&mut self, word: IrExprId, crossing: Crossing, ty: Type) -> IrExprId {
+        match crossing {
+            Crossing::Word => word,
+            Crossing::FloatBits => self.expr(IrExpr::Convert {
+                operand: word,
+                kind: ConvertKind::BitsToFloat,
+                ty,
+            }),
+            Crossing::Boxed(type_id) => {
+                let raw = self.expr(IrExpr::Convert {
+                    operand: word,
+                    kind: ConvertKind::IntToRawPtr,
+                    ty: Type::RawPtr,
+                });
+                self.expr(IrExpr::NativeStateTake { raw, type_id, ty })
+            }
+        }
+    }
+
     /// A call to a synthesized or user function.
     fn call(&mut self, function: u32, args: Vec<IrExprId>, result: Type) -> IrExprId {
         self.expr(IrExpr::Call {
@@ -267,34 +323,26 @@ fn build_step(build: &mut Build<'_>, rows: &[TaskTargetInfo]) -> IrFunction {
             let handle = build.local(0);
             let index = build.int(slot as i64);
             let raw = build.op(TaskPrim::SlotGet, &[handle, index]);
-            args.push(match param {
-                // A slot is one machine word, so a `Float` argument travels as
-                // its bit pattern and is rebuilt here.
-                Type::Float(_) => build.expr(IrExpr::Convert {
-                    operand: raw,
-                    kind: ConvertKind::BitsToFloat,
-                    ty: Type::Float(FloatSpelling::Plain),
-                }),
-                _ => raw,
-            });
+            // A slot is one machine word, so each argument is recovered from
+            // the word its `Crossing` gave it: a scalar is the word, a `Float`
+            // its bits, and a value that owns storage the token naming it.
+            let crossing = Crossing::classify(&build.program.types, *param);
+            args.push(build.recover_from_slot(raw, crossing, *param));
         }
         let call = build.call(row.function, args, row.result);
-        let then_body = match row.result {
+        let then_body = if row.result == Type::Void {
             // A `Void` body joins as `0`: the join is a sequencing point, and
             // sequencing still has to hand back a value.
-            Type::Void => vec![IrStmt::Eval { expr: call }, {
+            vec![IrStmt::Eval { expr: call }, {
                 let zero = build.int(0);
                 IrStmt::Return { value: Some(zero) }
-            }],
-            Type::Float(_) => {
-                let bits = build.expr(IrExpr::Convert {
-                    operand: call,
-                    kind: ConvertKind::FloatToBits,
-                    ty: Type::INT,
-                });
-                vec![IrStmt::Return { value: Some(bits) }]
-            }
-            _ => vec![IrStmt::Return { value: Some(call) }],
+            }]
+        } else {
+            // The body's result becomes the one word `Complete` stores, boxed
+            // by its own `Crossing` and recovered at the join.
+            let crossing = Crossing::classify(&build.program.types, row.result);
+            let word = build.box_for_slot(call, crossing, row.result);
+            vec![IrStmt::Return { value: Some(word) }]
         };
         body.push(IrStmt::If {
             cond: matches,

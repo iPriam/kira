@@ -45,10 +45,27 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Binary { op, lhs, rhs, ty } => self.lower_binary(op, lhs, rhs, ty),
             IrExpr::Select {
                 cond,
+                then_setup,
                 then,
+                then_cleanup,
+                otherwise_setup,
                 otherwise,
+                otherwise_cleanup,
                 ty,
-            } => self.lower_select(cond, then, otherwise, ty),
+            } => self.lower_select(
+                cond,
+                crate::codegen::lower::operators::SelectArm {
+                    setup: &then_setup,
+                    value: then,
+                    cleanup: &then_cleanup,
+                },
+                crate::codegen::lower::operators::SelectArm {
+                    setup: &otherwise_setup,
+                    value: otherwise,
+                    cleanup: &otherwise_cleanup,
+                },
+                ty,
+            ),
             IrExpr::Call {
                 callee,
                 args,
@@ -129,6 +146,9 @@ impl FunctionLowering<'_, '_> {
                 ref arguments,
                 ..
             } => self.lower_string_operation(op, text, arguments.clone()),
+            IrExpr::NumberOperation {
+                op, ref operands, ..
+            } => self.lower_number_operation(op, operands.clone()),
             IrExpr::StringOf { value } => self.lower_string_of(value),
             IrExpr::CLayoutAddress { value, aggregate } => {
                 self.lower_clayout_address(value, aggregate)
@@ -145,10 +165,15 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Compiler { op, args, ty } => self.lower_compiler(op, &args, ty),
             IrExpr::Env { op, args, .. } => self.lower_env(op, &args),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
-            IrExpr::NativeState { value, type_id, .. } => {
-                self.lower_native_state_new(value, type_id)
-            }
-            IrExpr::NativeUserData { state } => self.lower_native_user_data(state),
+            IrExpr::NativeState {
+                value,
+                type_id,
+                drop_glue,
+                ..
+            } => self.lower_native_state_new(value, type_id, drop_glue),
+            IrExpr::NativeUserData {
+                state, borrowed, ..
+            } => self.lower_native_user_data(state, borrowed),
             IrExpr::NativeRecover { raw, type_id, ty } => {
                 self.lower_native_recover_value(raw, type_id, ty)
             }
@@ -156,7 +181,9 @@ impl FunctionLowering<'_, '_> {
                 self.lower_native_state_take(raw, type_id, ty)
             }
             IrExpr::NativeStateRetain { token } => self.lower_native_state_retain(token),
-            IrExpr::NativeStateRelease { token } => self.lower_native_state_release(token),
+            IrExpr::NativeStateRelease { token, target } => {
+                self.lower_native_state_release(token, target)
+            }
             IrExpr::Convert { operand, kind, ty } => {
                 let from = self.type_of(operand);
                 let value = self.lower_expr(operand)?;

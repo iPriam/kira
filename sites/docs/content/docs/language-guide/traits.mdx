@@ -238,7 +238,7 @@ An aggregate carries a marker exactly when everything it holds does, following f
 
 `Task { … }` is the one boundary a value crosses without its spawner: what goes in is evaluated at the spawn and read by the task, and what comes back is read by whoever joins. Both directions must be `Send`, and a deferred call that takes or returns something that is not is `KSEM312`.
 
-A task slot is one machine word, so today a narrower rule sits in front of that one: a task body is a call to a named function taking `Int`/`Float` and returning `Int`, `Float`, or nothing (`KSEM159`). Every type that rule admits is `Send`.
+A task slot is one machine word, and the full `Send` set crosses it: a scalar *is* that word, a `Float` its bits, and a value that owns storage — a `String`, array, struct, enum, `Any`, or `distinct` type — a token naming it in the store that outlives the spawn. The only shape rule left is on the body itself: it is a call to a named function or a bare numeric literal, and anything else is `KSEM159`.
 
 ## Receivers
 

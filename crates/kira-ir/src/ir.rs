@@ -207,6 +207,7 @@ impl IrProgram {
             | IrExpr::CellNull { ty }
             | IrExpr::CellGet { ty, .. }
             | IrExpr::StringOperation { ty, .. }
+            | IrExpr::NumberOperation { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
             IrExpr::TypeTest { .. } => Type::Bool,
@@ -219,7 +220,7 @@ impl IrProgram {
             | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::StringSubstring { .. } | IrExpr::StringOf { .. } => Type::String,
             IrExpr::CStringNew { .. } | IrExpr::CLayoutAddress { .. } => Type::CBlock,
-            IrExpr::NativeUserData { .. } => Type::RawPtr,
+            IrExpr::NativeUserData { ty, .. } => *ty,
             IrExpr::IntoAny { .. } => Type::Any,
             IrExpr::TypeConst { .. } | IrExpr::TypeOf { .. } => Type::RuntimeType,
             IrExpr::TypeField { ty, .. } => *ty,

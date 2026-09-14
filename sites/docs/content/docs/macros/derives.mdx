@@ -1,14 +1,15 @@
 ---
 title: Derives
-description: The seven derive macros Foundation ships in Kira, their field classification, the hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
+description: The eight derives Foundation and the compiler ship in Kira, their field classification, interpolation, hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
 ---
 
-Foundation ships six derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`, plus the builtin `@Derive(Copy)` assertion. Together they are the seven derives. All seven are available as `@Derive` targets in any file with its own `import Foundation`.
+Foundation ships seven derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`, plus the builtin `@Derive(Copy)` assertion. Together they are the eight derives. All eight are available as `@Derive` targets in any file with its own `import Foundation`.
 
 | Derive | Generated free function | Contract |
 | --- | --- | --- |
 | `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
 | `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
+| `Lerp` | `function lerp(from: borrow <Type>, to: borrow <Type>, amount: Float) -> <Type>` | fieldwise interpolation through the ordinary `lerp` overload set |
 | `Hashable` | `function hash_<Type>(v: borrow <Type>) -> Int` | deterministic FNV-1a fold of every supported field |
 | `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` and `function deserialize_<Type>(s: borrow String) -> <Type>` | value to compact wire string and back, trapping on malformed input |
 | `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
@@ -23,6 +24,22 @@ The generated name is glued to the derived type's exact name (`eq_Point`,
 `Equatable`, `Clone`, and `Serializable` share one classification. A builtin scalar field (`Int`, the sized numeric widths, `Float`, `F32`, `Bool`, `String`, and the C types) is handled directly. A field whose type is another bare named type is a nested derived type and recurses through that type's own generated function. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic.
 
 An array field holds scalars, nested arrays, or named derived types to any depth. A generic, optional, qualified, or function field type is refused with a `Diagnostics.error` naming the field. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text.
+
+## `Lerp`
+
+`Lerp` applies to structs and generates an overload named `lerp` for the derived type. Every field is interpolated by calling the ordinary `lerp(from.field, to.field, amount)` overload, so a field may be a `Float`, one of Foundation's vector/color/geometry types, or another struct that also derives `Lerp`.
+
+```kira
+@Derive(Lerp)
+struct Point { let x: Float let y: Float }
+
+@Derive(Lerp)
+struct State { let point: Point let alpha: Float }
+
+let middle = lerp(start, end, 0.5)
+```
+
+A field with no matching `lerp` overload fails as an ordinary unresolved overload at that field. The derive does not invent interpolation for discrete values such as `Bool` or `String`.
 
 ## `Hashable`
 

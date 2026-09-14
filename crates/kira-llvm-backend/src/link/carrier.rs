@@ -62,6 +62,14 @@ pub fn link_ffi_carrier(
     }
 
     let mut arguments: Vec<std::ffi::OsString> = vec![shared_library_flag(&target).into()];
+    // A carrier is loaded into the current Kira host, whose executable exports
+    // the runtime ABI. Static FFI archives are therefore allowed to reference
+    // `kira_rt_*` symbols supplied by that host. Mach-O rejects unresolved dylib
+    // references by default, so opt into the loader lookup this carrier model
+    // requires. Linux already permits this for shared objects by default.
+    if cfg!(target_os = "macos") {
+        arguments.push("-Wl,-undefined,dynamic_lookup".into());
+    }
     arguments.extend(
         force_symbols(&target, retained.iter().cloned())
             .into_iter()

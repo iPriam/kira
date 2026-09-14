@@ -199,6 +199,10 @@ It builds three artifacts. Two are data and are embedded in the generated crate 
 
 `packages/linux` reaches the Linux kernel through `@FFI.Syscall`, and a declaration like that is refused at compile time on a target that cannot reach it, so inside Foundation it would refuse every Windows and macOS build of every program.
 
+## No Shadowing Across Imports
+
+A top-level type has one namespace and one declaration per name, and that name is unique across everything a file can see — not only within its own package. A `struct`, `enum`, `class`, `distinct`, `type` alias, or `construct` family whose name is already provided by an imported module — a dependency the file imports, or `Foundation`, which every file imports implicitly — is refused with `KSEM003`. Two nominal types of one name are two types, so keeping both would read as `expects Color, found Color` the moment a value of one met an API speaking the other. The escape is to use the imported type, to write the module-qualified name (`Palette.Color`) where another meaning is needed, or to rename the local declaration — never to shadow. Two unrelated packages may still each declare the name, because neither imports the other; the rule binds only across an actual import edge.
+
 ## The Proof
 
 `crates/kira-export-consumer` is a Rust crate whose `build.rs` compiles the Kira library in `fixture/uifoundation/`, generates the wrapper through the same generator `kira` drives, compiles it under this workspace's lint gate, and calls it.

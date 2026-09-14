@@ -52,6 +52,54 @@ function rfxTransitiveMacro() -> Int {
     return rfxInnerDouble!(21)
 }
 
+struct RfxNativeOwner {
+    let state: NativeState<Int>
+}
+
+// KSEM373 — a borrowed raw userdata word cannot be produced from an owner that
+// dies at the end of the same expression.
+function rfxBorrowTemporaryState() -> Int {
+    let token = nativeUserDataBorrow(nativeState(1))
+    return rawPointerWord(token)
+}
+
+// KSEM221 — release has no type-argument escape hatch. Ownership is carried by
+// the NativeState<T> value itself.
+function rfxTypedReleaseOfTrackedOwner() -> Int {
+    let owner = nativeState(1)
+    nativeUserDataRelease<Int>(owner)
+    return 6
+}
+
+// KSEM375 — a recovered view may not outlive an owned temporary it borrows.
+function rfxRecoverTemporaryOwner() -> Int {
+    var view = nativeRecover<Int>(nativeState(1))
+    return view
+}
+
+// KSEM376 — reading an affine field would manufacture a second owner.
+function rfxCopyAffineField() -> Int {
+    let holder = RfxNativeOwner { state: nativeState(1) }
+    let duplicate = holder.state
+    return 8
+}
+
+// KSEM377 — an owner may be nested in an aggregate, but it is not itself a root
+// callback-state payload.
+function rfxBoxNativeStateAsRoot() -> Int {
+    let inner = nativeState(1)
+    let outer = nativeState(move inner)
+    return 9
+}
+
+// KSEM378 — manual retain is unavailable to Kira code; every owner must be a
+// tracked affine NativeState<T> value. Clone it with nativeUserData instead.
+function rfxRetainTrackedOwner() -> Int {
+    let owner = nativeState(1)
+    nativeUserDataRetain(owner)
+    return 10
+}
+
 @Main
 function main() {
     print(rfxDirectPointerChannel())
@@ -59,5 +107,11 @@ function main() {
     print(rfxEnumPointerChannel())
     print(rfxArrayPointerChannel())
     print(rfxTransitiveMacro())
+    print(rfxBorrowTemporaryState())
+    print(rfxTypedReleaseOfTrackedOwner())
+    print(rfxRecoverTemporaryOwner())
+    print(rfxCopyAffineField())
+    print(rfxBoxNativeStateAsRoot())
+    print(rfxRetainTrackedOwner())
     return
 }

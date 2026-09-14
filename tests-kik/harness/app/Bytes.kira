@@ -1,0 +1,68 @@
+import Foundation
+
+// Byte conversions: `String.bytes()` and the `foundation/app/Bytes.kira` scalar
+// serializers, every one folded into one deterministic Int checksum so a
+// divergence across vm/llvm/hybrid changes the printed value. The round trips
+// exercise both directions; the raw-byte reads pin the byte order.
+
+// A string's bytes, summed, plus its length. Pins `String.bytes()` element by
+// element rather than trusting the count alone.
+function bytesOfStringFold() -> Int {
+    let b = "Kira 1.9".bytes()
+    var acc = b.count
+    var i = 0
+    while i < b.count {
+        acc = acc + Int(b[i]) * (i + 1)
+        i = i + 1
+    }
+    return acc
+}
+
+// Unsigned round trips, both endiannesses, and the raw first byte so the order
+// is asserted rather than cancelled out by a symmetric round trip.
+function bytesUnsignedFold() -> Int {
+    var acc = 0
+    let a = u32BytesLE(U32(0x01020304))
+    acc = acc + Int(a[0]) + Int(u32LEAt(a, 0))
+    let b = u32BytesBE(U32(0x01020304))
+    acc = acc + Int(b[0]) + Int(u32BEAt(b, 0))
+    let c = u16BytesLE(U16(0x0a0b))
+    acc = acc + Int(c[0]) + Int(u16LEAt(c, 0))
+    let d = u64BytesBE(U64(0x1122334455))
+    acc = acc + Int(d[7]) + Int(u64BEAt(d, 0))
+    return acc
+}
+
+// Signed and machine-word round trips, including negatives — the case the
+// checked `U32(-1)` conversion cannot serve, so the encoders mask instead.
+function bytesSignedFold() -> Int {
+    var acc = 0
+    acc = acc + Int(i32LEAt(i32BytesLE(I32(-2)), 0))
+    acc = acc + Int(i32BEAt(i32BytesBE(I32(-2)), 0))
+    acc = acc + intLEAt(intBytesLE(-100000), 0)
+    acc = acc + intBEAt(intBytesBE(-100000), 0)
+    return acc
+}
+
+// Floats through their exact IEEE-754 bits, and Bool. The top byte of 2.5's
+// binary32 is read directly so the bit layout is pinned, not just the value.
+function bytesFloatFold() -> Int {
+    var acc = 0
+    let f = f32BytesLE(F32(2.5))
+    acc = acc + Int(f[3])
+    if f32LEAt(f, 0) == F32(2.5) { acc = acc + 100 }
+    let g = f64BytesBE(3.25)
+    if f64BEAt(g, 0) == 3.25 { acc = acc + 200 }
+    if boolAt(boolBytes(true), 0) { acc = acc + 1 }
+    if !boolAt(boolBytes(false), 0) { acc = acc + 2 }
+    return acc
+}
+
+// The section's fold, one Int the harness prints and the cross-backend diff
+// compares.
+function bytesSection() -> Int {
+    return bytesOfStringFold()
+        + bytesUnsignedFold()
+        + bytesSignedFold()
+        + bytesFloatFold()
+}

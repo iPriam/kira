@@ -174,3 +174,44 @@ construct AsxSpineSectionChecksum() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(304) return e }
 }
+
+// A task takes and returns a String: the argument is boxed at the spawn site
+// and the result recovered at the join, both as the native-state token a
+// channel payload crosses as.
+construct AsxTaskCrossesAString() extends Test {
+    test {
+        let handle = Task { asyncGreet("kira") }
+        return handle.await
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok("hi kira") return e }
+}
+
+// A task takes and returns a struct: the whole aggregate round-trips across
+// spawn -> drive -> join, field for field.
+construct AsxTaskCrossesAStruct() extends Test {
+    test {
+        let handle = Task { asyncShiftPoint(AsyncPoint(x: 3, y: 4), 10) }
+        let shifted = handle.await
+        return shifted.x * 100 + shifted.y
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1314) return e }
+}
+
+// A task takes an array argument and folds it.
+construct AsxTaskTakesAnArray() extends Test {
+    test {
+        let handle = Task { asyncSumValues([4, 5, 6]) }
+        return handle.await
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}
+
+// A task returns an array, recovered whole at the join.
+construct AsxTaskReturnsAnArray() extends Test {
+    test {
+        let handle = Task { asyncCountUp(4) }
+        let built = handle.await
+        return built.count * 1000 + built[0] + built[1] * 10 + built[2] * 100 + built[3] * 1000
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(7210) return e }
+}

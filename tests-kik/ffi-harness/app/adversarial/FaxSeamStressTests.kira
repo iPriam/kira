@@ -97,7 +97,7 @@ construct FaxCallbackStateSurvivesNativeReentry() extends Test {
         let boxed = nativeState(FaxCounter { label: "kept" })
         let handle = nativeUserData(boxed)
         // 1 * 10 + 2
-        total = total + faxDriveTwice(handle)
+        total = total + faxDriveTwice(nativeUserDataBorrow(handle))
         var after = nativeRecover<FaxCounter>(handle)
         // Both crossings' writes are here, and the string the outer run boxed
         // is still the one it boxed.
@@ -241,7 +241,7 @@ construct FaxStateWrittenAtEveryLevelOfASandwich() extends Test {
         let boxed = nativeState(FaxCounter { label: "deep" })
         let handle = nativeUserData(boxed)
         // depth 3 then 2 then 1: 3 + 2 + 1 = 6
-        let deepest = faxInner(handle, 3)
+        let deepest = faxInner(nativeUserDataBorrow(handle), 3)
         var after = nativeRecover<FaxCounter>(handle)
         let seen = after.hits
         nativeUserDataRelease(handle)

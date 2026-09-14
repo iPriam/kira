@@ -2,7 +2,7 @@
 //! and the two checks `match` has —
 //! exhaustive coverage and duplicate arms.
 
-use super::codes;
+use super::{codes, diagnostics};
 
 /// The corpus shape: arrow arms, every one returning, and no trailing
 /// `return`. It type-checks only because an exhaustive match whose arms all
@@ -83,7 +83,7 @@ fn a_coverage_report_names_every_missing_variant() {
     let text = "enum Shade { Light Mid Dark }\n\
                 @Main function main() { let s: Shade = .Mid\n\
                 match s { Light -> { print(1) } } return }";
-    let message = super::diagnostics(text)
+    let message = diagnostics(text)
         .into_iter()
         .find(|diagnostic| diagnostic.has_code("KSEM129"))
         .expect("a coverage diagnostic")
@@ -121,10 +121,86 @@ fn an_unknown_variant_is_reported_once() {
 }
 
 #[test]
-fn a_non_enum_subject_is_refused() {
+fn a_subject_that_is_neither_enum_nor_scalar_is_refused() {
     assert_eq!(
-        codes("@Main function main() { let n = 1 match n { Light -> { print(1) } } return }"),
+        codes(
+            "struct P { var x: Int }\n\
+             @Main function main() { let p = P { x: 1 } match p { Light -> { print(1) } } return }"
+        ),
         vec!["KSEM125"]
+    );
+}
+
+/// An `Int`, `Bool`, or `String` subject matches on literals, ranges, and an
+/// `else`. A scalar match with no `else` is refused unless a `Bool` covers both
+/// sides.
+#[test]
+fn a_scalar_match_covers_literals_ranges_and_else() {
+    assert!(
+        diagnostics(
+            "@Main function main() { let n = 5\n\
+             match n { 0 -> { print(1) } 1, 2, 3 -> { print(2) } 4..10 -> { print(3) } else -> { print(4) } }\n\
+             return }"
+        )
+        .is_empty()
+    );
+    assert!(
+        diagnostics(
+            "@Main function main() { let b = true\n\
+             match b { true -> { print(1) } false -> { print(2) } } return }"
+        )
+        .is_empty()
+    );
+    // No `else` on an `Int` is not exhaustive.
+    assert_eq!(
+        codes("@Main function main() { let n = 1 match n { 1 -> { print(1) } } return }"),
+        vec!["KSEM380"]
+    );
+    // A value listed twice.
+    assert_eq!(
+        codes(
+            "@Main function main() { let n = 1\n\
+             match n { 1 -> { print(1) } 1 -> { print(2) } else -> { print(3) } } return }"
+        ),
+        vec!["KSEM382"]
+    );
+    // A pattern of the wrong type against the subject.
+    assert_eq!(
+        codes(
+            "@Main function main() { let n = 1\n\
+             match n { \"x\" -> { print(1) } else -> { print(2) } } return }"
+        ),
+        vec!["KSEM383"]
+    );
+    // An arm after `else` can never run.
+    assert_eq!(
+        codes(
+            "@Main function main() { let n = 1\n\
+             match n { else -> { print(1) } 2 -> { print(2) } } return }"
+        ),
+        vec!["KSEM381"]
+    );
+}
+
+/// An enum arm alternates variants with commas, and `else` covers the rest.
+#[test]
+fn an_enum_match_alternates_and_takes_an_else() {
+    assert!(
+        diagnostics(
+            "enum Hue { Red Green Blue Cyan }\n\
+             @Main function main() { let h: Hue = .Red\n\
+             match h { Red, Green -> { print(1) } else -> { print(2) } } return }"
+        )
+        .is_empty()
+    );
+    // A binding is not allowed on an alternation.
+    assert_eq!(
+        codes(
+            "enum Tok { A(Int) B(Int) }\n\
+             @Main function main() { let t: Tok = .A(1)\n\
+             match t { A(x), B(x) -> { print(x) } } return }"
+        ),
+        vec!["KSEM384"]
     );
 }
 
@@ -135,8 +211,9 @@ fn a_non_enum_subject_is_refused() {
 fn a_bad_subject_does_not_cascade_through_its_bindings() {
     assert_eq!(
         codes(
-            "@Main function main() { let n = 1\n\
-             match n { Tag(t) -> { print(t) } } return }"
+            "struct P { var x: Int }\n\
+             @Main function main() { let p = P { x: 1 }\n\
+             match p { Tag(t) -> { print(t) } } return }"
         ),
         vec!["KSEM125"],
         "the binding is declared even when the subject failed, so `t` resolves"

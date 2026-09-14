@@ -72,6 +72,13 @@ fn main() {
         dispatch::print_usage();
         kira_toolchain::process::exit(0);
     };
+    if verb == "--help" || verb == "-h" {
+        // The spelling every tool teaches a caller's fingers, alongside the
+        // `kira help` verb. A bare top-level `--help` is orientation, not a
+        // mistake, so it prints the listing and succeeds.
+        dispatch::print_usage();
+        kira_toolchain::process::exit(0);
+    }
     let Some(parsed) = Command::parse(verb) else {
         eprintln!("kira: unknown command '{verb}'");
         eprintln!();

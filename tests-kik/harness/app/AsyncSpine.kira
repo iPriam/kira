@@ -114,3 +114,42 @@ function asyncSpineSection() -> Int {
     let siblings = asyncCancelDetachSiblings()  // 142
     return direct + joined + siblings           // 304
 }
+
+// A task body may take and return any `Send` value, not only a scalar: what
+// crosses the executor slot is the one machine word a channel payload is — a
+// String, struct, or array travels as a native-state token whose storage lives
+// across spawn -> drive -> join. These pin that the value round-trips whole and
+// identically on vm/llvm/hybrid.
+
+struct AsyncPoint {
+    var x: Int
+    var y: Int
+}
+
+async function asyncGreet(name: String) -> String {
+    return "hi " + name
+}
+
+async function asyncShiftPoint(point: AsyncPoint, by: Int) -> AsyncPoint {
+    return AsyncPoint(x: point.x + by, y: point.y + by)
+}
+
+async function asyncSumValues(values: [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < values.count {
+        total = total + values[i]
+        i = i + 1
+    }
+    return total
+}
+
+async function asyncCountUp(count: Int) -> [Int] {
+    var out: [Int] = []
+    var i = 0
+    while i < count {
+        out.append(i)
+        i = i + 1
+    }
+    return out
+}

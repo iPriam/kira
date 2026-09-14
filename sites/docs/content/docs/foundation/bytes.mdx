@@ -1,0 +1,48 @@
+---
+title: Bytes
+description: Turning integers, floats and Bool to and from [U8] with the byte order named rather than assumed, and why the encoders mask instead of converting.
+---
+
+`Bytes.kira` moves the scalar types to and from `[U8]`, the shape a socket, a file, an FFI struct and a hash all speak. A string reaches `[U8]` through `s.bytes()`; every other scalar reaches it here.
+
+The one thing this module refuses to leave to a call site is the byte order. A length written little-endian and read big-endian is a bug that passes every local test and fails across a wire, so the order is in the name — `LE` or `BE` — and never in a caller's head.
+
+## Writing
+
+| Written | Result |
+| --- | --- |
+| `u8Bytes(x)` | `[U8]` |
+| `u16BytesLE(x)` / `u16BytesBE(x)` | `[U8]` |
+| `u32BytesLE(x)` / `u32BytesBE(x)` | `[U8]` |
+| `u64BytesLE(x)` / `u64BytesBE(x)` | `[U8]` |
+| `i32BytesLE(x)` / `i32BytesBE(x)` | `[U8]` |
+| `intBytesLE(x)` / `intBytesBE(x)` | `[U8]` (the 64-bit word) |
+| `f32BytesLE(x)` / `f32BytesBE(x)` | `[U8]` (4 bytes) |
+| `f64BytesLE(x)` / `f64BytesBE(x)` | `[U8]` (8 bytes) |
+| `boolBytes(x)` | `[U8]` (one byte, `0` or `1`) |
+
+## Reading
+
+Each reader takes the buffer and the index of the first byte, so a program walks a packed structure by advancing the offset rather than reslicing. An index past the end reads zero for the missing bytes, the same way a short read does.
+
+| Written | Result |
+| --- | --- |
+| `byteAt(b, at)` / `u8At(b, at)` | `U8` |
+| `u16LEAt(b, at)` / `u16BEAt(b, at)` | `U16` |
+| `u32LEAt(b, at)` / `u32BEAt(b, at)` | `U32` |
+| `u64LEAt(b, at)` / `u64BEAt(b, at)` | `U64` |
+| `i32LEAt(b, at)` / `i32BEAt(b, at)` | `I32` (sign-extended) |
+| `intLEAt(b, at)` / `intBEAt(b, at)` | `Int` |
+| `f32LEAt(b, at)` / `f32BEAt(b, at)` | `F32` |
+| `f64LEAt(b, at)` / `f64BEAt(b, at)` | `Float` |
+| `boolAt(b, at)` | `Bool` |
+
+## Floats are their exact bits
+
+A float serializes as its IEEE-754 bits, not as a rounded number, so it round-trips exactly, NaN payload and all. `F32` is four bytes and `Float` is eight, by the width they are spelled. Under the hood these go through `floatToBits` and `floatToBits32`, the reinterpretations that exist precisely so serializing a float does not round it.
+
+## Why encoders mask rather than convert
+
+A negative integer's bytes are its two's-complement pattern, which is exactly its unsigned counterpart's. The encoders reach it by masking (`(value >> shift) & 255`) rather than converting to an unsigned type, because `U32(-1)` and `U64(-1)` **trap**: an integer-to-unsigned conversion in Kira is checked and refuses a value that does not fit. Masking never leaves range, so `i32BytesLE(-1)` is four `255` bytes rather than a trap.
+
+Every function here answers identically on the VM, the LLVM backend and the hybrid split.

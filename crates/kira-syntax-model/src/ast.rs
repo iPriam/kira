@@ -29,6 +29,6 @@ pub use item::{
     Function, ImportDecl, Item, OverrideFieldDecl, Param, ParentRef, StructDecl, TypeAliasDecl,
     TypeParamDecl, TypeRef, UnsupportedItem, VariantDecl,
 };
-pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt};
+pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, MatchPattern, Stmt};
 pub use traits::{ReceiverDecl, TraitDecl, TraitMember, TraitRef};
 pub use tree::{ExprId, FileNodes, FilePart, NodeBase, StmtId, SyntaxTree, TypeRefId};

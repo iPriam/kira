@@ -87,7 +87,7 @@ Provisioning it is knvm's job, and knvm links no LLVM, so it builds from a bare
 checkout, before the bundle exists. That is the whole bootstrap:
 
 ```bash
-cargo run -p kira-knvm -- install-llvm   # downloads the pinned bundle
+cargo run -p kira-knvm -- llvm install   # downloads the pinned bundle
 cargo build --workspace                  # now the backend has an LLVM to link
 ```
 

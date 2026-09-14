@@ -108,14 +108,22 @@ impl<'a> Analyzer<'a> {
                         if actual == Type::Error {
                             return true;
                         }
-                        if let Some(declared) = foreign.param_distincts.get(index).copied().flatten()
+                        if let Some(declared) =
+                            foreign.param_distincts.get(index).copied().flatten()
                         {
                             return actual.assignable_to(declared);
                         }
-                        if let Some(wrapper) = foreign.param_wrappers.get(index).copied().flatten() {
+                        if let Some(wrapper) = foreign.param_wrappers.get(index).copied().flatten()
+                        {
                             return actual == Type::Struct(wrapper);
                         }
-                        if foreign.param_pointees.get(index).copied().flatten().is_some() {
+                        if foreign
+                            .param_pointees
+                            .get(index)
+                            .copied()
+                            .flatten()
+                            .is_some()
+                        {
                             return true;
                         }
                         foreign_arg_matches(actual, *param)
@@ -251,9 +259,7 @@ impl<'a> Analyzer<'a> {
             let arg_hirs: Vec<HirExprId> = args
                 .iter()
                 .enumerate()
-                .map(|(index, &arg)| {
-                    self.analyze_expr_expecting(ctx, arg, agreed[index])
-                })
+                .map(|(index, &arg)| self.analyze_expr_expecting(ctx, arg, agreed[index]))
                 .collect();
             let name = self.program.foreign[candidates[0].0 as usize]
                 .kira_name
@@ -510,6 +516,22 @@ impl<'a> Analyzer<'a> {
                         )
                     {
                         seam_args.push(self.program.exprs.alloc(HirExpr::EnumTag { value: arg }));
+                        continue;
+                    }
+                    // A retained raw-pointer position may consume a typed
+                    // callback-state owner directly. The token crosses as the
+                    // pointer word C stores, but ownership stays visible until
+                    // this exact boundary: `retains:` requires `move`, and the
+                    // native backend transfers that one state reference instead
+                    // of dropping it after the call. An ordinary RawPtr
+                    // parameter never accepts a NativeState implicitly — use
+                    // `nativeUserDataBorrow(owner)` for a call-scoped borrow.
+                    if retained.get(index).copied().unwrap_or(false)
+                        && params[index].scalar() == Some(ForeignType::RawPtr)
+                        && self.program.types.native_state_target(actual).is_some()
+                    {
+                        self.excuse_drop_extraction(arg);
+                        seam_args.push(arg);
                         continue;
                     }
                     // A pointer parameter also accepts an array of seam

@@ -8,7 +8,7 @@ description: The version manager, the launcher it feeds, the tree an install pro
 ```bash
 knvm install latest
 knvm install 1.7.3 --channel dev
-knvm install-llvm
+knvm llvm install
 knvm install libffi
 knvm binstall
 knvm binstall --debug
@@ -58,6 +58,6 @@ Every one of those paths comes from `kira-toolchain`. The `kira-knvm` crate defi
 
 ## What knvm Does Not Touch
 
-`llvm/` and `libffi/` live under the same `toolchains/` root but are keyed by their own versions and shared across toolchain versions, so a toolchain install must not mutate either. Only `install-llvm` writes the first and only `install libffi` the second. A toolchain install writes exactly `<channel>/<version>/` and `current.toml` and nothing else.
+`llvm/` and `libffi/` live under the same `toolchains/` root but are keyed by their own versions and shared across toolchain versions, so a toolchain install must not mutate either. Only `llvm install` writes the first and only `install libffi` the second. A toolchain install writes exactly `<channel>/<version>/` and `current.toml` and nothing else.
 
 `KIRA_HOME` relocates the whole `~/.kira` root, following the `KIRA_FOUNDATION_HOME` and `KIRA_LLVM_HOME` precedent. It is what lets an install be driven against a throwaway directory instead of a developer's real home, and it reaches `current.toml` and Foundation discovery without either knowing about it.

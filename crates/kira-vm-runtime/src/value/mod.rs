@@ -126,6 +126,10 @@ pub enum Value {
     Float(f64),
     /// A boolean.
     Bool(bool),
+    /// An exact base-10 decimal, inline: the mantissa and scale fit here, so a
+    /// `Number` needs no heap object the way a string does. It is `Copy` like the
+    /// other scalars, and dropping one frees nothing.
+    Number(kira_runtime_abi::Decimal),
     /// A handle to a heap string.
     Str(StrId),
     /// A handle to a heap struct.
@@ -363,14 +367,10 @@ pub struct Heap {
     /// stays alive until the body has run, which is what makes "before the
     /// members are released" true rather than nearly true.
     pending_drops: Vec<PendingDrop>,
-    /// Native-state handles copied since the interpreter last settled them.
-    ///
-    /// The heap cannot reach the host that counts a state's owners, so a copy
-    /// of a handle records the reference it took here, and [`crate::interp`]
-    /// settles it with the host between instructions.
-    native_state_retains: Vec<NativeStateToken>,
-    /// Native-state handles dropped since the interpreter last settled them.
-    native_state_releases: Vec<NativeStateToken>,
+    /// Refcount changes produced while the heap had no host to apply them to.
+    /// Shared because a nested callback-state owner may die when a transport
+    /// tree unshares or drops outside the heap borrow that created it.
+    native_state_events: Arc<NativeStateEvents>,
 }
 
 /// One struct object waiting for its user `Drop` body.
@@ -428,6 +428,25 @@ impl Heap {
         id
     }
 
+    /// Records the user `Drop` body a struct object rebuilt from callback-state
+    /// storage must run when it is freed.
+    ///
+    /// The value-tree store cannot enter a Kira body, so a destroying release
+    /// rebuilds the value here and attaches its body; freeing it then parks the
+    /// object for the interpreter, exactly as an ordinary `Drop` value does.
+    pub fn attach_drop_glue(&mut self, id: StructId, glue: u32) {
+        self.drop_glue.insert(id.0, glue);
+    }
+
+    /// The user `Drop` body a struct handle runs, or `None` when it runs none.
+    ///
+    /// Read before a value is boxed into callback state, so the store can
+    /// record the body and the destroying release can run it. An `Option`, not
+    /// a zero sentinel: function index zero is an ordinary body.
+    pub fn drop_glue_of(&self, id: StructId) -> Option<u32> {
+        self.glue_of(id.0)
+    }
+
     /// The user `Drop` body the struct object at `slot` runs, if any.
     pub(super) fn glue_of(&self, slot: u32) -> Option<u32> {
         match self.drop_glue.is_empty() {
@@ -447,16 +466,13 @@ impl Heap {
 
     /// Whether a handle copy or drop is waiting to be counted by the host.
     pub fn owes_native_state(&self) -> bool {
-        !self.native_state_retains.is_empty() || !self.native_state_releases.is_empty()
+        self.native_state_events.has_pending()
     }
 
     /// Takes the references handles took and gave up since the last settle:
     /// the retains, then the releases.
     pub fn take_native_state_events(&mut self) -> (Vec<NativeStateToken>, Vec<NativeStateToken>) {
-        (
-            std::mem::take(&mut self.native_state_retains),
-            std::mem::take(&mut self.native_state_releases),
-        )
+        self.native_state_events.take()
     }
 
     /// Takes the object whose user `Drop` body is owed next.
@@ -506,9 +522,11 @@ impl Heap {
     /// snapshot.
     pub fn read_state_node(&mut self, node: NativeStateValue) -> Value {
         match node {
-            NativeStateValue::Struct(_) | NativeStateValue::Array(_) => Value::NativeSnapshot(
-                SnapshotId(self.alloc_object(Object::Snapshot { node, shares: 1 })),
-            ),
+            NativeStateValue::Struct(_)
+            | NativeStateValue::DropStruct { .. }
+            | NativeStateValue::Array(_) => Value::NativeSnapshot(SnapshotId(
+                self.alloc_object(Object::Snapshot { node, shares: 1 }),
+            )),
             // An enum is a snapshot too: reading its tag is the common case and
             // needs no object, and its payload is another node.
             NativeStateValue::Enum { .. } => Value::NativeSnapshot(SnapshotId(
@@ -593,7 +611,10 @@ mod variant;
 mod aggregate;
 mod equality;
 mod native_state;
+mod native_state_events;
 mod seam;
+
+use native_state_events::NativeStateEvents;
 
 pub use aggregate::AggregateMismatch;
 

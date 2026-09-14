@@ -35,6 +35,7 @@ mod module;
 mod native_ffi;
 mod native_state;
 mod native_state_enums;
+mod native_state_path;
 mod native_state_values;
 #[cfg(test)]
 mod native_state_values_tests;

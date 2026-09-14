@@ -27,6 +27,21 @@ fn an_extern_with_a_body_is_a_parse_error() {
     );
 }
 
+#[test]
+fn grouped_extern_library_declarations_share_library_and_resolve_normally() {
+    let text = r#"
+extern library ffimath {
+    function add(a: I32, b: I32) -> I32
+    function negate(value: I32) -> I32
+}
+@Main function main() {
+    print(add(1, negate(2)))
+    return
+}
+"#;
+    assert!(codes(text).is_empty(), "{:?}", codes(text));
+}
+
 // ----- annotation block meaning -------------------------------------------
 
 #[test]
@@ -347,7 +362,7 @@ function addWide(a: Int, b: Int) -> Int
 }
 
 #[test]
-fn retains_names_a_parameter_that_holds_c_storage() {
+fn retains_names_a_parameter_that_c_can_keep_by_ownership() {
     // A number has no block to transfer, so `retains:` on one promises a
     // transfer that cannot happen and makes the call site write `move` for it.
     let scalar = r#"
@@ -362,13 +377,15 @@ function keep(on: Bool): Void
 "#;
     assert_eq!(library_codes(flag), vec!["KSEM371"]);
 
-    // The three positions that do carry storage.
+    // C storage and callback-state ownership are both meaningful retain targets.
     let carriers = r#"
 @FFI.Struct { layout: c }
 struct Desc { var label: CString }
 
 @FFI.Pointer { target: Desc, ownership: borrowed }
 struct DescPtr {}
+
+struct State { var count: Int }
 
 @FFI.Extern { library: fixture, symbol: ffi_keep_text, abi: c, retains: text }
 function keepText(text: CString): Void
@@ -378,6 +395,9 @@ function keepDesc(desc: Desc): Void
 
 @FFI.Extern { library: fixture, symbol: ffi_keep_ptr, abi: c, retains: desc }
 function keepPtr(desc: DescPtr): Void
+
+@FFI.Extern { library: fixture, symbol: ffi_keep_state, abi: c, retains: state }
+function keepState(state: NativeState<State>): Void
 "#;
     assert!(
         library_diagnostics(carriers).is_empty(),

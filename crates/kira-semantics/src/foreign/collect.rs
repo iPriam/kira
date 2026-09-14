@@ -102,10 +102,7 @@ impl<'a> Analyzer<'a> {
                     continue;
                 }
                 let id = ForeignId(self.program.foreign.len() as u32);
-                self.foreign_index
-                    .entry(name)
-                    .or_default()
-                    .push(id);
+                self.foreign_index.entry(name).or_default().push(id);
                 self.program.foreign.push(hir_foreign);
                 continue;
             }
@@ -458,15 +455,12 @@ impl<'a> Analyzer<'a> {
         false
     }
 
-    /// Refuses a `retains:` naming a parameter that holds no C storage.
+    /// Refuses a `retains:` naming a parameter that carries nothing C can keep.
     ///
-    /// `retains:` transfers ownership of the blocks reachable from an argument
-    /// to the engine's retained registry, and makes the call site consume the
-    /// value with `move`. A parameter whose seam position is a number, a `Bool`,
-    /// or `Void` has no such block: nothing is transferred, and the `move` the
-    /// call site is then made to write consumes a value for no reason. The three
-    /// positions that do carry storage are a pointer word, a `CString`, and a
-    /// C-layout aggregate.
+    /// C storage moves to the engine's retained registry. A `NativeState<T>`
+    /// instead transfers its affine token owner directly to C. Numbers, `Bool`,
+    /// and `Void` carry neither kind of ownership, so making their call site
+    /// write `move` would consume a value for nothing.
     fn check_retained_storage(
         &mut self,
         function: &Function,
@@ -490,8 +484,9 @@ impl<'a> Analyzer<'a> {
                     param.name_span,
                     "KSEM371",
                     format!(
-                        "`retains` names `{}`, which holds no C storage to keep: a retained \
-                         parameter is a pointer, a `CString`, or an `@FFI.Struct {{ layout: c }}`",
+                        "`retains` names `{}`, which carries nothing C can keep by ownership: a \
+                         retained parameter is a pointer, a `CString`, a `NativeState<T>`, or an \
+                         `@FFI.Struct {{ layout: c }}`",
                         self.interner.resolve(param.name)
                     ),
                 );

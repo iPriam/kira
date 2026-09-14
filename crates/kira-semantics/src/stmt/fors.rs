@@ -7,7 +7,7 @@
 //! over the increment and spin forever.
 
 use kira_core::Symbol;
-use kira_semantics_model::hir::{HirPlace, HirStmt, HirStmtId};
+use kira_semantics_model::hir::{HirExprId, HirPlace, HirStmt, HirStmtId};
 use kira_semantics_model::{HirBinaryOp, HirExpr, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, Expr, ExprId};
@@ -24,7 +24,163 @@ pub(crate) struct ForCursor {
     pub(crate) span: Span,
 }
 
+#[derive(Clone, Copy)]
+struct IteratorLoop {
+    cursor: ForCursor,
+    expr: HirExprId,
+    ty: Type,
+    element: Type,
+    span: Span,
+}
+
 impl Analyzer<'_> {
+    /// The element of Foundation's lazy `Iterator<Value>` type.
+    fn iterator_element(&self, ty: Type) -> Option<Type> {
+        let Type::Struct(id) = ty else {
+            return None;
+        };
+        let instantiation = self.program.types.structs().instantiation(id)?;
+        (instantiation.template == "Foundation::Iterator" && instantiation.arguments.len() == 1)
+            .then_some(instantiation.arguments[0])
+    }
+
+    /// Desugars a lazy `Iterator<Value>` into a pull loop.
+    ///
+    /// The iterator is evaluated once. Each iteration calls its `next` closure,
+    /// runs the user's body for `.Some(value)`, and breaks on `.None`. Because
+    /// the pull happens before the user body, `continue` naturally advances to
+    /// the next value instead of repeating the current one.
+    fn analyze_for_iterator(
+        &mut self,
+        ctx: &mut FnCtx,
+        iteration: IteratorLoop,
+        out: &mut Vec<HirStmtId>,
+        fill_body: impl FnOnce(&mut Self, &mut FnCtx, &mut Vec<HirStmtId>),
+    ) {
+        let IteratorLoop {
+            cursor,
+            expr,
+            ty,
+            element,
+            span,
+        } = iteration;
+        if self.program.types.runs_user_drop(element) {
+            self.refuse_drop_extraction(element, cursor.span);
+        }
+
+        let Type::Struct(iterator_id) = ty else {
+            return;
+        };
+        let Some(definition) = self.program.types.structs().get(iterator_id) else {
+            return;
+        };
+        let Some(next_index) = definition.field_index("next") else {
+            return;
+        };
+        let Some(next_ty) = definition.field(next_index).map(|field| field.ty) else {
+            return;
+        };
+        let Some(next_repr) = self.as_function_type(next_ty) else {
+            return;
+        };
+
+        let iterator_slot = ctx.declare_hidden(ty, false);
+        out.push(self.program.stmts.alloc(HirStmt::Let {
+            local: iterator_slot,
+            init: expr,
+        }));
+
+        // Build the `next()` call before declaring its storage so its result
+        // type is the source of truth for the Option specialization.
+        let iterator_read = self.program.exprs.alloc(HirExpr::Local {
+            local: iterator_slot,
+            ty,
+        });
+        let next_value = self.program.exprs.alloc(HirExpr::Field {
+            base: iterator_read,
+            index: next_index,
+            ty: next_ty,
+        });
+        let next_call = self.analyze_closure_call(ctx, next_value, next_repr, &[], span);
+        let option_ty = self.program.expr(next_call).type_of();
+        let Type::Enum(option_id) = option_ty else {
+            return;
+        };
+        let Some(option) = self.program.types.enums().get(option_id) else {
+            return;
+        };
+        let Some(some_tag) = option.variant_index("Some") else {
+            return;
+        };
+        let Some(payload_ty) = option.variant(some_tag).and_then(|variant| variant.payload) else {
+            return;
+        };
+        if payload_ty != element && payload_ty != Type::Error && element != Type::Error {
+            return;
+        }
+
+        let next_slot = ctx.declare_hidden(option_ty, false);
+        let bind_next = self.program.stmts.alloc(HirStmt::Let {
+            local: next_slot,
+            init: next_call,
+        });
+        let option_read = self.program.exprs.alloc(HirExpr::Local {
+            local: next_slot,
+            ty: option_ty,
+        });
+        let tag = self
+            .program
+            .exprs
+            .alloc(HirExpr::EnumTag { value: option_read });
+        let wanted = self.program.exprs.alloc(HirExpr::Int(i64::from(some_tag)));
+        let has_value = self.program.exprs.alloc(HirExpr::Binary {
+            op: HirBinaryOp::EqInt,
+            lhs: tag,
+            rhs: wanted,
+            ty: Type::Bool,
+        });
+
+        let loop_moves = crate::ownership::LoopMoves::start(ctx);
+        ctx.push_scope();
+        let user_name = self.interner.resolve(cursor.name).to_owned();
+        let variable = ctx.declare(&user_name, element, false);
+        ctx.note_binding_span(variable, cursor.span);
+        let payload_base = self.program.exprs.alloc(HirExpr::Local {
+            local: next_slot,
+            ty: option_ty,
+        });
+        let payload = self.program.exprs.alloc(HirExpr::EnumPayload {
+            value: payload_base,
+            ty: element,
+        });
+        let bind_value = self.program.stmts.alloc(HirStmt::Let {
+            local: variable,
+            init: payload,
+        });
+        let mut some_body = vec![bind_value];
+        ctx.loop_depth += 1;
+        ctx.push_scope();
+        fill_body(self, ctx, &mut some_body);
+        ctx.pop_scope();
+        ctx.loop_depth -= 1;
+        ctx.pop_scope();
+
+        let stop = self.program.stmts.alloc(HirStmt::Break);
+        let branch = self.program.stmts.alloc(HirStmt::If {
+            cond: has_value,
+            then_body: some_body,
+            else_body: vec![stop],
+        });
+        let loop_body = vec![bind_next, branch];
+        let exits = self.body_always_exits_loop(&loop_body);
+        self.check_loop_back_edge(ctx, loop_moves, exits);
+        let always = self.program.exprs.alloc(HirExpr::Bool(true));
+        out.push(self.program.stmts.alloc(HirStmt::While {
+            cond: always,
+            body: loop_body,
+        }));
+    }
+
     /// Desugars `for <name> in <start>..<end> { … }` into a `while`.
     ///
     /// The rewrite, given `for i in a..b { body }`:
@@ -208,9 +364,40 @@ impl Analyzer<'_> {
             ctx.pop_scope();
             return;
         }
+        let (array, reverse) = match self.tree.expr(array) {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                children,
+                ..
+            } if args.is_empty()
+                && children.is_empty()
+                && self.interner.resolve(*method) == "rev" =>
+            {
+                (*receiver, true)
+            }
+            _ => (array, false),
+        };
         let array_span = self.tree.expr(array).span();
         let array_expr = self.analyze_expr(ctx, array);
         let array_ty = self.program.expr(array_expr).type_of();
+
+        if let Some(element) = self.iterator_element(array_ty) {
+            self.analyze_for_iterator(
+                ctx,
+                IteratorLoop {
+                    cursor: cursor_name,
+                    expr: array_expr,
+                    ty: array_ty,
+                    element,
+                    span,
+                },
+                out,
+                fill_body,
+            );
+            return;
+        }
 
         // What the loop variable holds. An `Error` element keeps the loop
         // building — the body still analyzes, and its own mistakes are still
@@ -224,7 +411,7 @@ impl Analyzer<'_> {
                         "KSEM106",
                         format!(
                             "cannot iterate a value of type `{}`; `for` takes an array \
-                             (`for x in xs`) or a range (`for i in 0..n`)",
+                             (`for x in xs`), an `Iterator<T>`, or a range (`for i in 0..n`)",
                             self.type_name(array_ty)
                         ),
                     );
@@ -266,21 +453,35 @@ impl Analyzer<'_> {
         out.push(bind_limit);
 
         let cursor = ctx.declare_hidden(Type::INT, true);
-        let zero = self.program.exprs.alloc(HirExpr::Int(0));
+        let cursor_init = if reverse {
+            self.read_int_local(limit)
+        } else {
+            self.program.exprs.alloc(HirExpr::Int(0))
+        };
         let bind_cursor = self.program.stmts.alloc(HirStmt::Let {
             local: cursor,
-            init: zero,
+            init: cursor_init,
         });
         out.push(bind_cursor);
 
         let cursor_read = self.read_int_local(cursor);
-        let limit_read = self.read_int_local(limit);
-        let cond = self.program.exprs.alloc(HirExpr::Binary {
-            op: HirBinaryOp::LtInt,
-            lhs: cursor_read,
-            rhs: limit_read,
-            ty: Type::Bool,
-        });
+        let cond = if reverse {
+            let zero = self.program.exprs.alloc(HirExpr::Int(0));
+            self.program.exprs.alloc(HirExpr::Binary {
+                op: HirBinaryOp::GtInt,
+                lhs: cursor_read,
+                rhs: zero,
+                ty: Type::Bool,
+            })
+        } else {
+            let limit_read = self.read_int_local(limit);
+            self.program.exprs.alloc(HirExpr::Binary {
+                op: HirBinaryOp::LtInt,
+                lhs: cursor_read,
+                rhs: limit_read,
+                ty: Type::Bool,
+            })
+        };
 
         // Taken before the loop variable exists, for the reason the range form
         // states: the variable is rebound every iteration, so its move never
@@ -297,7 +498,18 @@ impl Analyzer<'_> {
             local: array_slot,
             ty: array_ty,
         });
-        let index = self.read_int_local(cursor);
+        let index = if reverse {
+            let cursor_read = self.read_int_local(cursor);
+            let one = self.program.exprs.alloc(HirExpr::Int(1));
+            self.program.exprs.alloc(HirExpr::Binary {
+                op: HirBinaryOp::SubInt,
+                lhs: cursor_read,
+                rhs: one,
+                ty: Type::INT,
+            })
+        } else {
+            self.read_int_local(cursor)
+        };
         let read = self.program.exprs.alloc(HirExpr::Index {
             base,
             index,
@@ -311,7 +523,11 @@ impl Analyzer<'_> {
         let step_read = self.read_int_local(cursor);
         let one = self.program.exprs.alloc(HirExpr::Int(1));
         let stepped = self.program.exprs.alloc(HirExpr::Binary {
-            op: HirBinaryOp::AddInt,
+            op: if reverse {
+                HirBinaryOp::SubInt
+            } else {
+                HirBinaryOp::AddInt
+            },
             lhs: step_read,
             rhs: one,
             ty: Type::INT,

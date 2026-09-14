@@ -333,7 +333,10 @@ fn build_close_receiver(program: &mut IrProgram) -> IrFunction {
     let end = build.expr(IrExpr::Local(0));
     let taken = build.op(ChannelPrim::Take, &[end]);
     let taken = build.raw_ptr(taken);
-    let release = build.expr(IrExpr::NativeStateRelease { token: taken });
+    let release = build.expr(IrExpr::NativeStateRelease {
+        token: taken,
+        target: None,
+    });
     let repoll = build.poll(0);
     let closing = build.expr(IrExpr::Local(0));
     let close = build.op(ChannelPrim::CloseReceiver, &[closing]);

@@ -32,7 +32,7 @@ use crate::place::PlacePurpose;
 
 mod attempts;
 pub(crate) mod fors;
-mod matches;
+pub(crate) mod matches;
 
 impl Analyzer<'_> {
     /// Whether a statement list is guaranteed to execute a `return`.
@@ -119,7 +119,12 @@ impl Analyzer<'_> {
     /// block-expression to carry it (see [`FnCtx::hoist_stmt`]). Those run
     /// *before* the statement that produced them, so they are drained onto `out`
     /// ahead of it.
-    fn analyze_stmt(&mut self, ctx: &mut FnCtx, stmt_id: StmtId, out: &mut Vec<HirStmtId>) {
+    pub(crate) fn analyze_stmt(
+        &mut self,
+        ctx: &mut FnCtx,
+        stmt_id: StmtId,
+        out: &mut Vec<HirStmtId>,
+    ) {
         let mut produced = Vec::new();
         self.analyze_stmt_inner(ctx, stmt_id, &mut produced);
         out.extend(ctx.take_pending_stmts());
@@ -223,7 +228,9 @@ impl Analyzer<'_> {
                     .alloc(HirStmt::Let { local, init: value });
                 out.push(hir);
             }
-            Stmt::Assign { target, value, .. } => {
+            Stmt::Assign {
+                target, op, value, ..
+            } => {
                 let target_span = self.tree.expr(target).span();
                 // The place is resolved before the value for the same reason
                 // the annotation is: it is what supplies `xs = []` an element
@@ -231,10 +238,24 @@ impl Analyzer<'_> {
                 // expressions are evaluated before the value, on every backend.
                 let Some((place, place_ty)) = self.resolve_place(ctx, target, PlacePurpose::Assign)
                 else {
-                    self.analyze_expr(ctx, value);
+                    if let Some(op) = op {
+                        self.analyze_binary(ctx, op, target, value, target_span);
+                    } else {
+                        self.analyze_expr(ctx, value);
+                    }
                     return;
                 };
-                let value_expr = self.analyze_expr_expecting(ctx, value, Some(place_ty));
+                // A compound assignment stores `target op value`: the target is
+                // read as the left operand and the result written back to the
+                // same place. Reusing binary analysis gives it every operator
+                // rule — int/float selection, width agreement, operator
+                // overloads — for free, and reports a mismatch against the
+                // operator rather than the assignment.
+                let value_expr = if let Some(op) = op {
+                    self.analyze_binary(ctx, op, target, value, target_span)
+                } else {
+                    self.analyze_expr_expecting(ctx, value, Some(place_ty))
+                };
                 let value_ty = self.program.expr(value_expr).type_of();
                 if !self.admits(value_ty, place_ty) {
                     self.emit(
@@ -455,7 +476,7 @@ impl Analyzer<'_> {
     }
 
     /// Allocates a read of an `Int`-typed local, for a desugaring building one.
-    fn read_int_local(&mut self, local: LocalId) -> HirExprId {
+    pub(crate) fn read_int_local(&mut self, local: LocalId) -> HirExprId {
         self.program.exprs.alloc(HirExpr::Local {
             local,
             ty: Type::INT,

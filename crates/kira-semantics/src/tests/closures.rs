@@ -397,13 +397,28 @@ fn a_binding_named_borrow_still_parses() {
 /// A `RawPtr` capture copies a word and frees nothing, so it needs no `copy`.
 #[test]
 fn a_raw_pointer_may_be_captured() {
+    let text = "@Main function main() { \
+                let handle: RawPtr = RawPtr(0) \
+                let f: () -> RawPtr = { in return handle } \
+                let ignored = f() return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// An owned callback-state handle may not be captured by a closure: a capture
+/// would be a second owner of storage that only releases once.
+#[test]
+fn an_owned_userdata_handle_cannot_be_captured() {
     let text = "struct Host { var seed: Int }\n\
                 @Main function main() { \
                 let boxed = nativeState(Host { seed: 1 }) \
                 let handle = nativeUserData(boxed) \
                 let f: () -> Int = { in var h = nativeRecover<Host>(handle) return h.seed } \
                 print(f()) nativeUserDataRelease(handle) return }";
-    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM117"),
+        "{:?}",
+        diagnostics(text)
+    );
 }
 
 /// A function value of *another* function type nests: one representation struct
@@ -438,7 +453,8 @@ fn callback_state_may_hold_a_function_value() {
                 struct AppState { var count: Int\n var onFrame: (borrow mut Frame) -> Void }\n\
                 @Main function main() { \
                 let boxed = nativeState(AppState { count: 1, onFrame: bump }) \
-                var back = nativeRecover<AppState>(nativeUserData(boxed)) \
+                let owner = nativeUserData(boxed) \
+                var back = nativeRecover<AppState>(owner) \
                 var f = Frame { n: 1 } back.onFrame(f) print(f.n) \
                 return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));

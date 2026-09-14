@@ -251,8 +251,10 @@ impl Instance {
                 Err(VmError::UncrossableExport { function, kind })
             }
             scalar => {
-                let lifted = self.heap.lift(scalar);
-                self.heap.drop_value(scalar);
+                // A callback-state handle crosses out as its opaque token,
+                // moving the reference to the receiving side; every other scalar
+                // renders and drops as before.
+                let lifted = self.heap.lift_transfer(scalar);
                 lifted.ok_or(VmError::UncrossableExport {
                     function,
                     kind: "this result",

@@ -15,6 +15,36 @@ function printLine(text: borrow String) {
     return
 }
 
+// Restricts a value to the closed interval `[lower, upper]`.
+// The bounds are intentionally not reordered: a reversed interval is a caller
+// error in the same sense as passing the wrong coordinate space is.
+function clamp(value: Float, lower: Float, upper: Float) -> Float {
+    if value < lower {
+        return lower
+    }
+    if value > upper {
+        return upper
+    }
+    return value
+}
+
+function clamp(value: Int, lower: Int, upper: Int) -> Int {
+    if value < lower {
+        return lower
+    }
+    if value > upper {
+        return upper
+    }
+    return value
+}
+
+// Linear interpolation. `amount` is deliberately unclamped so extrapolation is
+// available without a second API; callers that want a segment use
+// `clamp(amount, 0.0, 1.0)` explicitly.
+function lerp(from: Float, to: Float, amount: Float) -> Float {
+    return from + (to - from) * amount
+}
+
 // An RGBA colour, each channel nominally in 0.0..=1.0.
 //
 // Foundation's rather than a graphics package's: a colour is a value type with
@@ -27,6 +57,11 @@ function printLine(text: borrow String) {
 // Unclamped on purpose: a channel outside the range is a value a renderer may
 // still want — an HDR highlight, or an intermediate in a blend — and clamping
 // here would silently change a program's arithmetic rather than its output.
+//
+// Copy because it is a small bundle of scalars a program passes by value the way
+// it passes a `Float`: a colour handed to a fill and then read again is one
+// value used twice, not a resource moved once.
+@Derive(Copy)
 struct Color {
     var r: Float = 0.0
     var g: Float = 0.0
@@ -35,18 +70,21 @@ struct Color {
 }
 
 // A point in a 2D coordinate space.
+@Derive(Copy)
 struct Point {
     var x: Float = 0.0
     var y: Float = 0.0
 }
 
 // A 2D extent — a width and a height.
+@Derive(Copy)
 struct Size {
     var width: Float = 0.0
     var height: Float = 0.0
 }
 
 // An axis-aligned rectangle: an origin and an extent.
+@Derive(Copy)
 struct Rect {
     var x: Float = 0.0
     var y: Float = 0.0
@@ -197,6 +235,53 @@ struct Vec4 {
         }
         return divide(value)
     }
+}
+
+function lerp(from: borrow Point, to: borrow Point, amount: Float) -> Point {
+    return Point(
+        lerp(from.x, to.x, amount),
+        lerp(from.y, to.y, amount)
+    )
+}
+
+function lerp(from: borrow Size, to: borrow Size, amount: Float) -> Size {
+    return Size(
+        lerp(from.width, to.width, amount),
+        lerp(from.height, to.height, amount)
+    )
+}
+
+function lerp(from: borrow Vec2, to: borrow Vec2, amount: Float) -> Vec2 {
+    return Vec2(
+        lerp(from.x, to.x, amount),
+        lerp(from.y, to.y, amount)
+    )
+}
+
+function lerp(from: borrow Vec3, to: borrow Vec3, amount: Float) -> Vec3 {
+    return Vec3(
+        lerp(from.x, to.x, amount),
+        lerp(from.y, to.y, amount),
+        lerp(from.z, to.z, amount)
+    )
+}
+
+function lerp(from: borrow Vec4, to: borrow Vec4, amount: Float) -> Vec4 {
+    return Vec4(
+        lerp(from.x, to.x, amount),
+        lerp(from.y, to.y, amount),
+        lerp(from.z, to.z, amount),
+        lerp(from.w, to.w, amount)
+    )
+}
+
+function lerp(from: borrow Color, to: borrow Color, amount: Float) -> Color {
+    return Color(
+        lerp(from.r, to.r, amount),
+        lerp(from.g, to.g, amount),
+        lerp(from.b, to.b, amount),
+        lerp(from.a, to.a, amount)
+    )
 }
 
 // A row-major 4x4 matrix, defaulting to the identity.

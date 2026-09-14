@@ -190,6 +190,13 @@ impl Analyzer<'_> {
         use kira_syntax_model::ast::TypeRef;
         match self.tree.type_ref(id) {
             TypeRef::Named { name, .. } => self.interner.resolve(*name).to_owned(),
+            TypeRef::Tuple { elements, .. } => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|&element| self.written_type_name(element))
+                    .collect();
+                format!("({})", elements.join(","))
+            }
             TypeRef::Array { element, .. } => format!("[{}]", self.written_type_name(*element)),
             TypeRef::Generic { name, args, .. } => {
                 let args: Vec<String> = args

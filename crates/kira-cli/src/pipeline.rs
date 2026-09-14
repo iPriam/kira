@@ -112,7 +112,11 @@ pub(crate) fn command_inputs(
 ) -> Result<(CompileOptions, Compiled), i32> {
     let mut options = parse_options(verb, args)?;
     options.path = resolve_path(&options.path)?;
-    let compiled = verified_in(&options.path, &options_target(&options), options.sysroot.as_deref())?;
+    let compiled = verified_in(
+        &options.path,
+        &options_target(&options),
+        options.sysroot.as_deref(),
+    )?;
     apply_manifest_defaults(verb, &mut options, &compiled)?;
     Ok((options, compiled))
 }
@@ -350,9 +354,9 @@ fn verified_as_in(
     let compiled =
         kira_build::compile_for_in(std::path::Path::new(&resolved), Some(kind), target, sysroot)
             .map_err(|error| {
-            err!("kira {verb}: {error}");
-            EXIT_FAILURE
-        })?;
+                err!("kira {verb}: {error}");
+                EXIT_FAILURE
+            })?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
     if compiled.has_errors() {
         return Err(EXIT_FAILURE);

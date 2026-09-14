@@ -3,8 +3,9 @@
 use std::sync::{Mutex, OnceLock};
 
 use kira_runtime_abi::{
-    CBlockOffset, ForeignPointerWidth, NativeCBlock, NativeCell, NativeStateStatus,
-    NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+    CBlockOffset, ForeignPointerWidth, NativeCBlock, NativeCell, NativeStateOwner,
+    NativeStatePathStep, NativeStateStatus, NativeStateStore, NativeStateToken, NativeStateValue,
+    NativeStateValueTag,
 };
 
 use crate::array::{
@@ -73,6 +74,32 @@ fn status(error: kira_runtime_abi::NativeStateError) -> u32 {
     NativeStateStatus::from(error).0
 }
 
+unsafe fn decode_path(
+    kinds: *const u8,
+    values: *const u64,
+    count: usize,
+) -> Result<Vec<NativeStatePathStep>, NativeStateStatus> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if kinds.is_null() || values.is_null() {
+        return Err(NativeStateStatus::MALFORMED_VALUE);
+    }
+    // SAFETY: the caller promises both arrays are readable for `count` entries.
+    let kinds = unsafe { std::slice::from_raw_parts(kinds, count) };
+    // SAFETY: same contract as `kinds`, with one `u64` per step.
+    let values = unsafe { std::slice::from_raw_parts(values, count) };
+    kinds
+        .iter()
+        .copied()
+        .zip(values.iter().copied())
+        .map(|(kind, value)| {
+            NativeStatePathStep::from_wire(kind, value)
+                .map_err(|_| NativeStateStatus::MALFORMED_VALUE)
+        })
+        .collect()
+}
+
 fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus> {
     if node.is_null() {
         return Err(NativeStateStatus::MALFORMED_VALUE);
@@ -92,6 +119,9 @@ fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus
             };
             Ok(match tag {
                 NativeStateValueTag::STRUCT => NativeStateValue::struct_of(values),
+                NativeStateValueTag::DROP_STRUCT => {
+                    NativeStateValue::dropping_struct_of(values, enum_tag)
+                }
                 NativeStateValueTag::ARRAY => NativeStateValue::array_of(values),
                 NativeStateValueTag::ENUM => {
                     if values.len() > 1 {
@@ -127,6 +157,30 @@ pub extern "C" fn kira_rt_native_value_int(value: i64) -> KNativeStateValue {
     boxed(NativeStateValue::Int(value))
 }
 
+/// Creates a `Number` state-value node from its two-word inline value.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_native_value_number(value: crate::number::KNumber) -> KNativeStateValue {
+    boxed(NativeStateValue::Number(crate::number::unpack(value)))
+}
+
+/// Reads a `Number` node back to its two-word value, zero for another shape.
+///
+/// # Safety
+/// `node` must be null or a live node from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_native_value_read_number(
+    node: KNativeStateValue,
+) -> crate::number::KNumber {
+    if node.is_null() {
+        return crate::number::pack(kira_runtime_abi::Decimal::zero());
+    }
+    // SAFETY: the caller vouches the node is live.
+    match unsafe { &(*node).value } {
+        NodeValue::Ready(NativeStateValue::Number(value)) => crate::number::pack(*value),
+        _ => crate::number::pack(kira_runtime_abi::Decimal::zero()),
+    }
+}
+
 /// Creates an erased-value node from its stable type identity and payload.
 ///
 /// The child is consumed into the node, so the caller must not release it
@@ -153,6 +207,27 @@ pub unsafe extern "C" fn kira_rt_native_value_any(
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_native_value_raw_ptr(value: u64) -> KNativeStateValue {
     boxed(NativeStateValue::RawPtr(value))
+}
+
+/// Creates a nested callback-state node by taking ownership of one state reference.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_native_value_native_state(value: u64) -> KNativeStateValue {
+    let token = NativeStateToken::from_word(value);
+    boxed(NativeStateValue::NativeState(NativeStateOwner::new(
+        token,
+        |token| {
+            let status = kira_rt_native_state_retain(token.as_word());
+            if status != NativeStateStatus::OK.0 {
+                kira_rt_trap_native_state(status);
+            }
+        },
+        |token| {
+            let status = kira_rt_native_state_release(token.as_word());
+            if status != NativeStateStatus::OK.0 {
+                kira_rt_trap_native_state(status);
+            }
+        },
+    )))
 }
 
 /// Creates a floating-point state-value node.
@@ -385,6 +460,22 @@ pub unsafe extern "C" fn kira_rt_native_value_read_raw_ptr(node: KNativeStateVal
     }
 }
 
+/// Retains and reads one nested callback-state owner, returning zero for another shape.
+///
+/// # Safety
+/// `node` must be null or a live node from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_native_value_read_native_state(node: KNativeStateValue) -> u64 {
+    if node.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller vouches the node is live.
+    match unsafe { &(*node).value } {
+        NodeValue::Ready(NativeStateValue::NativeState(owner)) => owner.duplicate_token().as_word(),
+        _ => 0,
+    }
+}
+
 /// Reads a floating-point node, returning zero for another shape.
 ///
 /// # Safety
@@ -446,12 +537,34 @@ pub unsafe extern "C" fn kira_rt_native_value_len(node: KNativeStateValue) -> us
     // SAFETY: the caller vouches the node is live.
     match unsafe { &(*node).value } {
         NodeValue::Ready(NativeStateValue::Struct(values))
+        | NodeValue::Ready(NativeStateValue::DropStruct { fields: values, .. })
         | NodeValue::Ready(NativeStateValue::Array(values)) => values.len(),
         NodeValue::Ready(NativeStateValue::Enum { payload, .. }) => usize::from(payload.is_some()),
         NodeValue::Ready(NativeStateValue::Any { .. }) => 1,
         NodeValue::Aggregate { children, .. } => children.len(),
         NodeValue::Ready(NativeStateValue::CBlock(block)) => block.children().len(),
         NodeValue::CBlock { children, .. } => children.len(),
+        _ => 0,
+    }
+}
+
+/// Reads a dropping struct node's user `Drop` glue id, or zero for another shape.
+///
+/// # Safety
+/// `node` must be null or a live node from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_native_value_read_drop_glue(node: KNativeStateValue) -> u32 {
+    if node.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller vouches the node is live.
+    match unsafe { &(*node).value } {
+        NodeValue::Ready(NativeStateValue::DropStruct { glue, .. }) => *glue,
+        NodeValue::Aggregate {
+            tag: NativeStateValueTag::DROP_STRUCT,
+            enum_tag,
+            ..
+        } => *enum_tag,
         _ => 0,
     }
 }
@@ -488,6 +601,7 @@ pub unsafe extern "C" fn kira_rt_native_value_child(
     // SAFETY: the caller vouches the node is live.
     match unsafe { &(*node).value } {
         NodeValue::Ready(NativeStateValue::Struct(values))
+        | NodeValue::Ready(NativeStateValue::DropStruct { fields: values, .. })
         | NodeValue::Ready(NativeStateValue::Array(values)) => values
             .get(index)
             .map_or(std::ptr::null_mut(), |value| boxed(value.clone())),
@@ -527,156 +641,8 @@ pub unsafe extern "C" fn kira_rt_native_value_free(node: KNativeStateValue) {
     }
 }
 
-/// Boxes a completed value node and writes its stable token to `out`.
-///
-/// # Safety
-/// `value` must be one live node the call consumes, and `out` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_native_state_new(
-    type_id: u64,
-    value: KNativeStateValue,
-    out: *mut u64,
-) -> u32 {
-    if out.is_null() {
-        return NativeStateStatus::MALFORMED_VALUE.0;
-    }
-    let value = match finish(value) {
-        Ok(value) => value,
-        Err(status) => return status.0,
-    };
-    let mut store = match store().lock() {
-        Ok(store) => store,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    match store.create(NativeStateTypeId::new(type_id), value) {
-        Ok(token) => {
-            // SAFETY: the caller supplies one writable word.
-            unsafe { *out = token.as_word() };
-            NativeStateStatus::OK.0
-        }
-        Err(error) => status(error),
-    }
-}
-
-/// Recovers a typed owned copy into `out`.
-///
-/// # Safety
-/// `out` must be writable when non-null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_native_state_recover(
-    token: u64,
-    type_id: u64,
-    out: *mut KNativeStateValue,
-) -> u32 {
-    if out.is_null() {
-        return NativeStateStatus::MALFORMED_VALUE.0;
-    }
-    let store = match store().lock() {
-        Ok(store) => store,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    match store.recover(
-        NativeStateToken::from_word(token),
-        NativeStateTypeId::new(type_id),
-    ) {
-        Ok(value) => {
-            // SAFETY: the caller supplies one writable pointer slot.
-            unsafe { *out = boxed(value) };
-            NativeStateStatus::OK.0
-        }
-        Err(error) => status(error),
-    }
-}
-
-/// Replaces typed state with a completed value node.
-///
-/// # Safety
-/// `value` must be one live node the call consumes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kira_rt_native_state_replace(
-    token: u64,
-    type_id: u64,
-    value: KNativeStateValue,
-) -> u32 {
-    let value = match finish(value) {
-        Ok(value) => value,
-        Err(status) => return status.0,
-    };
-    let mut store = match store().lock() {
-        Ok(store) => store,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    match store.replace(
-        NativeStateToken::from_word(token),
-        NativeStateTypeId::new(type_id),
-        value,
-    ) {
-        Ok(()) => NativeStateStatus::OK.0,
-        Err(error) => status(error),
-    }
-}
-
-/// Adds one owner to a state token.
-///
-/// One path for both kinds of state, told apart by the token itself: a native
-/// engine's state is a box it owns, and the value-tree store never hands out an
-/// odd token. See `crate::state_box`.
-#[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_native_state_retain(token: u64) -> u32 {
-    if crate::state_box::is_box_token(token) {
-        // SAFETY: the token is a box token this runtime handed out.
-        return unsafe { crate::state_box::kira_rt_native_state_box_retain(token) };
-    }
-    let mut store = match store().lock() {
-        Ok(store) => store,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    match store.retain(NativeStateToken::from_word(token)) {
-        Ok(()) => NativeStateStatus::OK.0,
-        Err(error) => status(error),
-    }
-}
-
-/// Removes one owner from a state token; the last release destroys the state.
-#[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_native_state_release(token: u64) -> u32 {
-    if crate::state_box::is_box_token(token) {
-        // SAFETY: the token is a box token this runtime handed out, and every
-        // owner releases it once.
-        return unsafe { crate::state_box::kira_rt_native_state_box_free(token) };
-    }
-    let mut store = match store().lock() {
-        Ok(store) => store,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    match store.release(NativeStateToken::from_word(token)) {
-        Ok(_) => NativeStateStatus::OK.0,
-        Err(error) => status(error),
-    }
-}
-
-/// Releases one owner of a state token: the name native code compiled against
-/// before releases were counted, kept so that code keeps linking.
-#[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_native_state_free(token: u64) -> u32 {
-    kira_rt_native_state_release(token)
-}
-
-/// Terminates native execution with a deterministic callback-state trap.
-#[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_trap_native_state(status: u32) -> ! {
-    let message = match NativeStateStatus(status) {
-        NativeStateStatus::NO_HOST => "no callback-state host",
-        NativeStateStatus::NULL_TOKEN => "null callback-state token",
-        NativeStateStatus::UNKNOWN_TOKEN => "unknown or already-freed callback-state token",
-        NativeStateStatus::WRONG_TYPE => "callback-state type mismatch",
-        NativeStateStatus::TOKEN_EXHAUSTED => "callback-state token space exhausted",
-        NativeStateStatus::MALFORMED_VALUE => "malformed callback-state value",
-        _ => "unknown callback-state failure",
-    };
-    eprintln!("kira: runtime trap: {message}");
-    std::process::exit(1)
-}
+mod state;
+pub use state::*;
 
 fn value_tag(value: &NativeStateValue) -> NativeStateValueTag {
     match value {
@@ -684,13 +650,16 @@ fn value_tag(value: &NativeStateValue) -> NativeStateValueTag {
         NativeStateValue::Float(_) => NativeStateValueTag::FLOAT,
         NativeStateValue::Bool(_) => NativeStateValueTag::BOOL,
         NativeStateValue::String(_) => NativeStateValueTag::STRING,
+        NativeStateValue::Number(_) => NativeStateValueTag::NUMBER,
         NativeStateValue::Struct(_) => NativeStateValueTag::STRUCT,
+        NativeStateValue::DropStruct { .. } => NativeStateValueTag::DROP_STRUCT,
         NativeStateValue::Array(_) => NativeStateValueTag::ARRAY,
         NativeStateValue::Enum { .. } => NativeStateValueTag::ENUM,
         NativeStateValue::RawPtr(_) => NativeStateValueTag::RAW_PTR,
         NativeStateValue::Cell(_) => NativeStateValueTag::CELL,
         NativeStateValue::Any { .. } => NativeStateValueTag::ANY,
         NativeStateValue::CBlock(_) => NativeStateValueTag::C_BLOCK,
+        NativeStateValue::NativeState(_) => NativeStateValueTag::NATIVE_STATE,
     }
 }
 

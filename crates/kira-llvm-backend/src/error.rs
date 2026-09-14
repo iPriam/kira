@@ -49,7 +49,7 @@ pub enum LlvmError {
     #[error(
         "this compiler was built against a managed LLVM without the WebAssembly \
          code generator, so it cannot emit for the Web; install a bundle built \
-         with the targets `llvm-metadata.toml` pins (`knvm install-llvm --force`) \
+         with the targets `llvm-metadata.toml` pins (`knvm llvm install --force`) \
          and rebuild the compiler against it"
     )]
     WasmTargetMissing,
@@ -67,7 +67,7 @@ pub enum LlvmError {
         "this compiler was built against a managed LLVM without the {generator} \
          code generator, so it cannot emit code for `{target}`; install a bundle \
          built with the targets `llvm-metadata.toml` pins \
-         (`knvm install-llvm --force`) and rebuild the compiler against it"
+         (`knvm llvm install --force`) and rebuild the compiler against it"
     )]
     TargetCodeGeneratorMissing {
         /// The target that was asked for, in Kira's `arch-os-abi` spelling.

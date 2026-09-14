@@ -145,7 +145,7 @@ shader Step {
 const DUMP: &str = r#"
 import Foundation
 
-struct KslArtifact {
+struct ValidationKslArtifact {
     var combinedMsl: String = ""
     var vertexWgsl: String = ""
     var fragmentWgsl: String = ""
@@ -169,7 +169,7 @@ comptime macro ksl {
         let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
         let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
-            KslArtifact(
+            ValidationKslArtifact(
                 combinedMsl: #{msl.combinedSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
@@ -187,7 +187,7 @@ comptime macro ksl {
     }
 }
 
-function dump(name: String, art: KslArtifact) {
+function dump(name: String, art: ValidationKslArtifact) {
     let a = writeFile(name + ".metal", art.combinedMsl)
     let b = writeFile(name + ".vert.wgsl", art.vertexWgsl)
     let c = writeFile(name + ".frag.wgsl", art.fragmentWgsl)

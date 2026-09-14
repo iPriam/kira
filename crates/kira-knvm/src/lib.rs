@@ -70,7 +70,7 @@ pub(crate) const APPLE_RUNNER_TARGETS: [&str; 0] = [];
 pub use kira_toolchain::{Channel, CurrentToolchain, Paint};
 
 pub use binstall::{BinstallError, BuildProfile, binstall};
-pub use cli::{DEFAULT_CHANNEL, KnvmCommand, UsageError, VersionSpec, usage};
+pub use cli::{DEFAULT_CHANNEL, KnvmCommand, LlvmAction, UsageError, VersionSpec, usage};
 pub use digest::{Sha256, checksum_file_name, parse_checksum_file};
 pub use github::{
     DEFAULT_REPOSITORY, GitHubReleaseSource, ReleaseAsset, ReleaseEntry, asset_named,
@@ -82,8 +82,9 @@ pub use install::{
     toolchain_root, write_current,
 };
 pub use llvm::{
-    LlvmInstallError, LlvmInstalled, code_generator_shortfall, install_llvm, llvm_home,
-    missing_code_generators_for_build,
+    LlvmInstallError, LlvmInstalled, LlvmUninstallError, LlvmUninstalled, code_generator_shortfall,
+    install_llvm, installed_llvm_versions, llvm_home, missing_code_generators_for_build,
+    uninstall_llvm,
 };
 pub use manage::{InstalledToolchain, ManageError, Selected, Uninstalled, list, select, uninstall};
 pub use path_setup::{PathConfigured, user_path_with};

@@ -1,6 +1,5 @@
 //! Portable callback-state values, tokens, stores, and host errors.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -11,8 +10,10 @@ use crate::{
 };
 
 mod cblock;
+mod owner;
 
 pub use cblock::{CBlockOffset, NativeCBlock, NativeCBlockChild, NativeCBlockError};
+pub use owner::NativeStateOwner;
 
 /// The program-stable identity of a type stored in native callback state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,6 +88,12 @@ impl NativeStateValueTag {
     pub const ANY: Self = Self(10);
     /// A uniquely owned C-storage block node; see [`NativeStateValue::CBlock`].
     pub const C_BLOCK: Self = Self(11);
+    /// One tracked callback-state ownership obligation nested in another value.
+    pub const NATIVE_STATE: Self = Self(12);
+    /// A struct aggregate whose own user `Drop` body must run before its fields release.
+    pub const DROP_STRUCT: Self = Self(13);
+    /// An exact base-10 decimal (`Number`): a two-word inline value.
+    pub const NUMBER: Self = Self(14);
 }
 
 /// The open C status returned by native callback-state runtime helpers.
@@ -109,6 +116,8 @@ impl NativeStateStatus {
     pub const TOKEN_EXHAUSTED: Self = Self(5);
     /// A value node was malformed or had the wrong shape.
     pub const MALFORMED_VALUE: Self = Self(6);
+    /// The last owner requires an executing Kira engine to run destruction.
+    pub const DROP_ENGINE_REQUIRED: Self = Self(7);
 }
 
 impl From<NativeStateError> for NativeStateStatus {
@@ -119,6 +128,7 @@ impl From<NativeStateError> for NativeStateStatus {
             NativeStateError::UnknownToken(_) => Self::UNKNOWN_TOKEN,
             NativeStateError::WrongType { .. } => Self::WRONG_TYPE,
             NativeStateError::TokenExhausted => Self::TOKEN_EXHAUSTED,
+            NativeStateError::DropEngineRequired => Self::DROP_ENGINE_REQUIRED,
             // A path that addresses nothing and a malformed node are the same
             // status on the wire: both say the stored value did not have the
             // shape the caller read it as, which is the whole of what a C caller
@@ -251,8 +261,17 @@ pub enum NativeStateValue {
     Bool(bool),
     /// A Kira string value.
     String(String),
+    /// An exact base-10 decimal (`Number`), an inline two-word value.
+    Number(crate::Decimal),
     /// A Kira struct's fields in declaration order, shared until written to.
     Struct(Arc<Vec<NativeStateValue>>),
+    /// A Kira struct that runs `glue` before releasing its fields.
+    DropStruct {
+        /// The function index of the struct's user `Drop` body.
+        glue: u32,
+        /// Fields in declaration order, shared until written to.
+        fields: Arc<Vec<NativeStateValue>>,
+    },
     /// A Kira array's elements in index order, shared until written to.
     Array(Arc<Vec<NativeStateValue>>),
     /// An opaque raw-pointer word.
@@ -275,6 +294,10 @@ pub enum NativeStateValue {
         /// written to.
         payload: Option<Arc<NativeStateValue>>,
     },
+    /// One affine `NativeState<T>` owner nested in another callback-state value.
+    /// Transport-tree clones share this one obligation; materializing another
+    /// Kira owner uses [`NativeStateOwner::duplicate_owner`].
+    NativeState(NativeStateOwner),
     /// A uniquely owned block of C storage crossing between engines.
     ///
     /// The bytes move with the node; whichever engine absorbs it materializes
@@ -288,6 +311,14 @@ impl NativeStateValue {
     /// A struct node owning `fields`.
     pub fn struct_of(fields: Vec<NativeStateValue>) -> NativeStateValue {
         NativeStateValue::Struct(Arc::new(fields))
+    }
+
+    /// A struct node whose own user `Drop` body is `glue`.
+    pub fn dropping_struct_of(fields: Vec<NativeStateValue>, glue: u32) -> NativeStateValue {
+        NativeStateValue::DropStruct {
+            glue,
+            fields: Arc::new(fields),
+        }
     }
 
     /// An array node owning `elements`.
@@ -319,6 +350,7 @@ impl NativeStateValue {
     pub fn children(&self) -> Option<&[NativeStateValue]> {
         match self {
             NativeStateValue::Struct(values) | NativeStateValue::Array(values) => Some(values),
+            NativeStateValue::DropStruct { fields, .. } => Some(fields),
             NativeStateValue::Enum { payload, .. } => {
                 Some(payload.as_deref().map_or(&[], std::slice::from_ref))
             }
@@ -336,6 +368,7 @@ impl NativeStateValue {
             NativeStateValue::Struct(values) | NativeStateValue::Array(values) => {
                 Some(unwrap_children(values))
             }
+            NativeStateValue::DropStruct { fields, .. } => Some(unwrap_children(fields)),
             NativeStateValue::Enum { payload, .. } => Some(match payload {
                 Some(payload) => {
                     vec![Arc::try_unwrap(payload).unwrap_or_else(|arc| (*arc).clone())]
@@ -346,6 +379,26 @@ impl NativeStateValue {
                 Arc::try_unwrap(payload).unwrap_or_else(|arc| (*arc).clone()),
             ]),
             _ => None,
+        }
+    }
+
+    /// Whether destroying this transport tree may need to enter Kira code.
+    ///
+    /// A `DropStruct` runs a user body directly. A nested `NativeState` may own
+    /// another state whose final release runs user code, so it is conservatively
+    /// returned to the active engine as well. Aggregates inherit the obligation
+    /// from any child they own.
+    pub fn requires_engine_release(&self) -> bool {
+        match self {
+            NativeStateValue::DropStruct { .. } | NativeStateValue::NativeState(_) => true,
+            NativeStateValue::Struct(values) | NativeStateValue::Array(values) => {
+                values.iter().any(NativeStateValue::requires_engine_release)
+            }
+            NativeStateValue::Enum { payload, .. } => payload
+                .as_deref()
+                .is_some_and(NativeStateValue::requires_engine_release),
+            NativeStateValue::Any { payload, .. } => payload.requires_engine_release(),
+            _ => false,
         }
     }
 }
@@ -381,6 +434,9 @@ pub enum NativeStateError {
     /// A backend-neutral value node was malformed.
     #[error("native callback-state value is malformed")]
     MalformedValue,
+    /// Destroying the last owner would need to enter Kira code.
+    #[error("native callback-state destruction requires an executing Kira engine")]
+    DropEngineRequired,
     /// A path addressed something the stored value does not have there.
     ///
     /// The compiler resolves every field and index against a checked type, so
@@ -403,6 +459,32 @@ pub enum NativeStatePathStep {
     Index(u64),
 }
 
+impl NativeStatePathStep {
+    /// Wire tag for a declaration-order struct field.
+    pub const FIELD_WIRE_TAG: u8 = 0;
+    /// Wire tag for an array index.
+    pub const INDEX_WIRE_TAG: u8 = 1;
+
+    /// Encodes one step for the native callback-state path ABI.
+    pub const fn to_wire(self) -> (u8, u64) {
+        match self {
+            Self::Field(index) => (Self::FIELD_WIRE_TAG, index as u64),
+            Self::Index(index) => (Self::INDEX_WIRE_TAG, index),
+        }
+    }
+
+    /// Decodes one step from the native callback-state path ABI.
+    pub fn from_wire(tag: u8, value: u64) -> Result<Self, NativeStateError> {
+        match tag {
+            Self::FIELD_WIRE_TAG => u32::try_from(value)
+                .map(Self::Field)
+                .map_err(|_| NativeStateError::PathMismatch),
+            Self::INDEX_WIRE_TAG => Ok(Self::Index(value)),
+            _ => Err(NativeStateError::PathMismatch),
+        }
+    }
+}
+
 /// Follows `path` into a stored value, borrowing what it addresses.
 pub fn native_state_walk<'a>(
     root: &'a NativeStateValue,
@@ -411,9 +493,12 @@ pub fn native_state_walk<'a>(
     let mut cursor = root;
     for step in path {
         cursor = match (step, cursor) {
-            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields)) => fields
-                .get(*index as usize)
-                .ok_or(NativeStateError::PathMismatch)?,
+            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields))
+            | (NativeStatePathStep::Field(index), NativeStateValue::DropStruct { fields, .. }) => {
+                fields
+                    .get(*index as usize)
+                    .ok_or(NativeStateError::PathMismatch)?
+            }
             (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => elements
                 .get(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
                 .ok_or(NativeStateError::PathMismatch)?,
@@ -442,6 +527,11 @@ pub fn native_state_walk_mut<'a>(
                     .get_mut(*index as usize)
                     .ok_or(NativeStateError::PathMismatch)?
             }
+            (NativeStatePathStep::Field(index), NativeStateValue::DropStruct { fields, .. }) => {
+                Arc::make_mut(fields)
+                    .get_mut(*index as usize)
+                    .ok_or(NativeStateError::PathMismatch)?
+            }
             (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => {
                 Arc::make_mut(elements)
                     .get_mut(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
@@ -453,194 +543,11 @@ pub fn native_state_walk_mut<'a>(
     Ok(cursor)
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct Entry {
-    ty: NativeStateTypeId,
-    value: NativeStateValue,
-    /// Owners of this state: the Kira handle, every exported token, and every
-    /// explicit retain. The value is destroyed by the release that takes this
-    /// to zero, exactly once.
-    refs: u64,
-}
-
-/// A process-lifetime store of opaque, typed callback-state values.
-#[derive(Debug, Default)]
-pub struct NativeStateStore {
-    next: u64,
-    entries: HashMap<NativeStateToken, Entry>,
-}
-
-impl NativeStateStore {
-    /// Creates an empty store.
-    pub fn new() -> Self {
-        Self {
-            next: Self::STRIDE,
-            entries: HashMap::new(),
-        }
-    }
-
-    /// The gap between two tokens this store hands out.
-    ///
-    /// Two, so every token it owns is even. A native engine keeps its state in
-    /// a box and uses the box's own address as the token, with the low bit set
-    /// to say so ([`NativeStateToken::is_boxed`]) — one bit tells the two
-    /// apart, in a token space they share, without a lookup.
-    const STRIDE: u64 = 2;
-
-    /// Boxes an owned value and returns its stable non-zero token.
-    pub fn create(
-        &mut self,
-        ty: NativeStateTypeId,
-        value: NativeStateValue,
-    ) -> Result<NativeStateToken, NativeStateError> {
-        let word = self.next;
-        if word == 0 {
-            return Err(NativeStateError::TokenExhausted);
-        }
-        self.next = self
-            .next
-            .checked_add(Self::STRIDE)
-            .ok_or(NativeStateError::TokenExhausted)?;
-        let token = NativeStateToken(word);
-        self.entries.insert(token, Entry { ty, value, refs: 1 });
-        Ok(token)
-    }
-
-    /// Adds one owner to a live state.
-    pub fn retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        let entry = self.entry_mut(token)?;
-        entry.refs = entry
-            .refs
-            .checked_add(1)
-            .ok_or(NativeStateError::TokenExhausted)?;
-        Ok(())
-    }
-
-    /// Removes one owner from a live state, destroying it when none remain.
-    ///
-    /// Returns whether this release destroyed the state. Tokens are never
-    /// reused, so a release after destruction is reported as an unknown token
-    /// rather than reaching a state that took the same word later.
-    pub fn release(&mut self, token: NativeStateToken) -> Result<bool, NativeStateError> {
-        let entry = self.entry_mut(token)?;
-        if entry.refs > 1 {
-            entry.refs -= 1;
-            return Ok(false);
-        }
-        self.entries.remove(&token);
-        Ok(true)
-    }
-
-    /// How many states are live, whatever their owner counts.
-    pub fn live(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// How many owners a live state has.
-    pub fn owners(&self, token: NativeStateToken) -> Result<u64, NativeStateError> {
-        Ok(self.entry(token)?.refs)
-    }
-
-    /// Returns an owned copy of the live value after validating its type.
-    pub fn recover(
-        &self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-    ) -> Result<NativeStateValue, NativeStateError> {
-        let entry = self.entry(token)?;
-        Self::check_type(entry.ty, requested)?;
-        Ok(entry.value.clone())
-    }
-
-    /// Replaces the live value after validating its type.
-    pub fn replace(
-        &mut self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-        value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
-        let entry = self.entry_mut(token)?;
-        Self::check_type(entry.ty, requested)?;
-        entry.value = value;
-        Ok(())
-    }
-
-    /// Confirms a token names live state of `requested`, copying nothing.
-    pub fn check(
-        &self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-    ) -> Result<(), NativeStateError> {
-        Self::check_type(self.entry(token)?.ty, requested)
-    }
-
-    /// Borrows what `path` addresses inside a live state.
-    ///
-    /// The whole point of addressing by path: reading one field of a state that
-    /// also holds a glyph cache touches the field, not the cache.
-    pub fn read_at(
-        &self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-        path: &[NativeStatePathStep],
-    ) -> Result<&NativeStateValue, NativeStateError> {
-        let entry = self.entry(token)?;
-        Self::check_type(entry.ty, requested)?;
-        native_state_walk(&entry.value, path)
-    }
-
-    /// Borrows what `path` addresses inside a live state, mutably.
-    pub fn write_at(
-        &mut self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-        path: &[NativeStatePathStep],
-    ) -> Result<&mut NativeStateValue, NativeStateError> {
-        let entry = self.entry_mut(token)?;
-        Self::check_type(entry.ty, requested)?;
-        native_state_walk_mut(&mut entry.value, path)
-    }
-
-    fn entry(&self, token: NativeStateToken) -> Result<&Entry, NativeStateError> {
-        Self::check_non_null(token)?;
-        self.entries
-            .get(&token)
-            .ok_or(NativeStateError::UnknownToken(token.as_word()))
-    }
-
-    fn entry_mut(&mut self, token: NativeStateToken) -> Result<&mut Entry, NativeStateError> {
-        Self::check_non_null(token)?;
-        self.entries
-            .get_mut(&token)
-            .ok_or(NativeStateError::UnknownToken(token.as_word()))
-    }
-
-    fn check_non_null(token: NativeStateToken) -> Result<(), NativeStateError> {
-        if token.as_word() == 0 {
-            Err(NativeStateError::NullToken)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_type(
-        actual: NativeStateTypeId,
-        requested: NativeStateTypeId,
-    ) -> Result<(), NativeStateError> {
-        if actual == requested {
-            Ok(())
-        } else {
-            Err(NativeStateError::WrongType {
-                actual: actual.as_word(),
-                requested: requested.as_word(),
-            })
-        }
-    }
-}
-
 mod host;
+mod store;
 
 pub use host::NativeStateHost;
+pub use store::NativeStateStore;
 
 #[cfg(test)]
 mod tests;

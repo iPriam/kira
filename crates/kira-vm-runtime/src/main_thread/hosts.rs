@@ -170,6 +170,15 @@ macro_rules! impl_forwarding_host {
                 lock_host(&self.shared).native_state_create(ty, value)
             }
 
+            fn native_state_create_dropping(
+                &mut self,
+                ty: NativeStateTypeId,
+                value: NativeStateValue,
+                glue: Option<u32>,
+            ) -> Result<NativeStateToken, NativeStateError> {
+                lock_host(&self.shared).native_state_create_dropping(ty, value, glue)
+            }
+
             fn native_state_recover(
                 &mut self,
                 token: NativeStateToken,
@@ -183,7 +192,7 @@ macro_rules! impl_forwarding_host {
                 token: NativeStateToken,
                 ty: NativeStateTypeId,
                 value: NativeStateValue,
-            ) -> Result<(), NativeStateError> {
+            ) -> Result<NativeStateValue, NativeStateError> {
                 lock_host(&self.shared).native_state_replace(token, ty, value)
             }
 
@@ -210,7 +219,7 @@ macro_rules! impl_forwarding_host {
                 ty: NativeStateTypeId,
                 path: &[NativeStatePathStep],
                 value: NativeStateValue,
-            ) -> Result<(), NativeStateError> {
+            ) -> Result<NativeStateValue, NativeStateError> {
                 lock_host(&self.shared).native_state_write(token, ty, path, value)
             }
 
@@ -236,6 +245,13 @@ macro_rules! impl_forwarding_host {
                 token: NativeStateToken,
             ) -> Result<(), NativeStateError> {
                 lock_host(&self.shared).native_state_release(token)
+            }
+
+            fn native_state_release_dropping(
+                &mut self,
+                token: NativeStateToken,
+            ) -> Result<Option<NativeStateValue>, NativeStateError> {
+                lock_host(&self.shared).native_state_release_dropping(token)
             }
 
             fn file_system(

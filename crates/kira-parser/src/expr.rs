@@ -19,7 +19,7 @@
 use kira_lexer::decode_string_literal;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId, UnaryOp};
+use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId, MatchArm, UnaryOp};
 use kira_syntax_model::ownership::OwnershipOp;
 
 use crate::Parser;
@@ -143,6 +143,7 @@ impl Parser<'_> {
                 | TokenKind::StringLiteral
                 | TokenKind::True
                 | TokenKind::False
+                | TokenKind::Infinity
                 | TokenKind::Minus
                 | TokenKind::Bang
                 | TokenKind::Tilde
@@ -423,18 +424,7 @@ impl Parser<'_> {
         match token.kind {
             TokenKind::IntLiteral => self.parse_int(token.span),
             TokenKind::FloatLiteral => self.parse_float(token.span),
-            TokenKind::StringLiteral => {
-                self.bump();
-                // The lexer already reported an unknown escape (`KLEX003`);
-                // no guessed-at text may stand in for the literal.
-                match decode_string_literal(self.text_of(token.span)) {
-                    Ok(value) => self.tree.add_expr(Expr::Str {
-                        value,
-                        span: token.span,
-                    }),
-                    Err(_) => self.tree.add_expr(Expr::Error { span: token.span }),
-                }
-            }
+            TokenKind::StringLiteral => self.parse_string_literal(token.span),
             TokenKind::True => {
                 self.bump();
                 self.tree.add_expr(Expr::Bool {
@@ -449,6 +439,13 @@ impl Parser<'_> {
                     span: token.span,
                 })
             }
+            TokenKind::Infinity => {
+                self.bump();
+                self.tree.add_expr(Expr::Float {
+                    value: f64::INFINITY,
+                    span: token.span,
+                })
+            }
             TokenKind::Identifier => self.parse_name_or_call(token.span),
             // A leading dot is a member of the expected type (`.Green`,
             // `.Ok(12)`) — an enum variant, in the v0 subset. It only starts a
@@ -457,6 +454,7 @@ impl Parser<'_> {
             TokenKind::Dot if self.peek(1).kind == TokenKind::Identifier => {
                 self.parse_dot_member(token.span)
             }
+            TokenKind::Match => self.parse_match_expression(),
             TokenKind::LParen => self.parse_paren(),
             TokenKind::LBracket => self.parse_array_literal(),
             _ => {
@@ -478,7 +476,7 @@ impl Parser<'_> {
     /// way, and a mask does not have to be spelled as a negative decimal. A
     /// decimal literal is a *number* and keeps its own range — `9223372036854775808`
     /// is out of range whichever way it is written.
-    fn parse_int(&mut self, span: Span) -> ExprId {
+    pub(crate) fn parse_int(&mut self, span: Span) -> ExprId {
         self.bump();
         let text = self.text_of(span);
         let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
@@ -499,7 +497,7 @@ impl Parser<'_> {
         self.tree.add_expr(Expr::Int { value, span })
     }
 
-    fn parse_float(&mut self, span: Span) -> ExprId {
+    pub(crate) fn parse_float(&mut self, span: Span) -> ExprId {
         self.bump();
         let text = self.text_of(span);
         let value = match text.parse::<f64>() {
@@ -513,6 +511,44 @@ impl Parser<'_> {
             }
         };
         self.tree.add_expr(Expr::Float { value, span })
+    }
+
+    /// Parses a string literal token into an [`Expr::Str`], cursor on the
+    /// literal. Shared with pattern parsing.
+    pub(crate) fn parse_string_literal(&mut self, span: Span) -> ExprId {
+        self.bump();
+        // The lexer already reported an unknown escape (`KLEX003`); no
+        // guessed-at text may stand in for the literal.
+        match decode_string_literal(self.text_of(span)) {
+            Ok(value) => self.tree.add_expr(Expr::Str { value, span }),
+            Err(_) => self.tree.add_expr(Expr::Error { span }),
+        }
+    }
+
+    /// Parses `match <subject> { … }` as an expression value.
+    /// The body is parsed the same way as a statement-level `match`; analysis
+    /// handles turning the selected arm's value into an expression result.
+    pub(crate) fn parse_match_expression(&mut self) -> ExprId {
+        let start = self.current().span;
+        self.bump(); // `match`
+        let subject = self.without_struct_literals(|parser| parser.parse_expr());
+        self.expect(TokenKind::LBrace);
+        let mut arms: Vec<MatchArm> = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at_eof() {
+            // Reuse the statement-level arm parser; each arm's patterns and body
+            // share the same syntax for both forms.
+            match self.parse_match_expression_arm() {
+                Some(arm) => arms.push(arm),
+                None => self.recover_to_next_arm(),
+            }
+        }
+        self.expect(TokenKind::RBrace);
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_expr(Expr::Match {
+            subject,
+            arms,
+            span,
+        })
     }
 
     /// Parses a leading-dot member (`.Green`, `.Ok(12)`), cursor on the `.`.

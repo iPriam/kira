@@ -1,5 +1,6 @@
 //! Expressions, their field-initializer helper, and the operator enums.
 
+use super::stmt::MatchArm;
 use super::{Block, ExprId, TypeRefId};
 use crate::ownership::OwnershipOp;
 use kira_core::Symbol;
@@ -61,6 +62,15 @@ pub enum Expr {
         /// Right-hand operand.
         rhs: ExprId,
         /// Span covering both operands.
+        span: Span,
+    },
+    /// A tuple value: `(a, b)` through four elements. Semantic analysis lowers
+    /// this to a compiler-minted ordinary struct with numeric fields, so tuple
+    /// values reuse normal aggregate ownership and backend lowering.
+    Tuple {
+        /// Element expressions in positional order.
+        elements: Vec<ExprId>,
+        /// Span covering the parentheses.
         span: Span,
     },
     /// A conditional expression, `cond ? then : otherwise`.
@@ -334,6 +344,19 @@ pub enum Expr {
         /// Span covering `Task { … }`.
         span: Span,
     },
+    /// A `match` expression: selects an expression value from its arms.
+    ///
+    /// Each arm's body must evaluate to the same result type. The expression's
+    /// value is the selected arm's result, unifying across all arms exactly as
+    /// [`Conditional`](Expr::Conditional) does.
+    Match {
+        /// The value being matched.
+        subject: ExprId,
+        /// The arms.
+        arms: Vec<MatchArm>,
+        /// Span covering the whole `match … { … }`.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
@@ -421,6 +444,7 @@ impl Expr {
             | Expr::Name { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
+            | Expr::Tuple { span, .. }
             | Expr::Conditional { span, .. }
             | Expr::Call { span, .. }
             | Expr::StructLit { span, .. }
@@ -438,6 +462,7 @@ impl Expr {
             | Expr::ContentIf { span, .. }
             | Expr::Content { span, .. }
             | Expr::TaskSpawn { span, .. }
+            | Expr::Match { span, .. }
             | Expr::Error { span } => *span,
         }
     }

@@ -61,9 +61,10 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         value: kira_ir::IrExprId,
         type_id: NativeStateTypeId,
+        drop_glue: Option<u32>,
     ) -> Result<LLVMValueRef, LlvmError> {
         if !self.state_is_boxed() {
-            return self.lower_native_state_new_tree(value, type_id);
+            return self.lower_native_state_new_tree(value, type_id, drop_glue);
         }
         let ty = self.type_of(value);
         let value = self.lower_expr(value)?;
@@ -115,12 +116,48 @@ impl FunctionLowering<'_, '_> {
         raw: kira_ir::IrExprId,
         type_id: NativeStateTypeId,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let token = self.lower_expr(raw)?;
+        // Recovery borrows the handle: an owned NativeState must be loaded
+        // straight through the place that owns it. Lowering a field such as
+        // `wrapper.storage` as an ordinary value would call `read_owned`, retain
+        // the state, and then lose the temporary owner's release obligation.
+        // Semantics guarantees an owned-state operand is an addressable place.
+        let raw_ty = self.type_of(raw);
+        let owner_target = self.codegen.program.types.native_state_target(raw_ty);
+        let mut temporary_owner = None;
+        let token = if let Some(target) = owner_target {
+            if let Some(pointer) = self.addressable(raw)? {
+                // SAFETY: NativeState is one i64 token word and `pointer`
+                // addresses the checked owner place.
+                unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.i64,
+                        pointer,
+                        c"native.state.borrow".as_ptr(),
+                    )
+                }
+            } else {
+                // A hybrid recovered view has no native address: reading an
+                // affine field out of its materialized snapshot creates one
+                // temporary tracked owner. Borrow through that owner and balance
+                // the clone immediately after validation. The state itself still
+                // owns the field, so the token remains valid for the recovered
+                // view without turning the borrow into an untracked reference.
+                let token = self.lower_expr(raw)?;
+                temporary_owner = Some(target);
+                token
+            }
+        } else {
+            self.lower_expr(raw)?
+        };
         if self.state_is_boxed() {
             self.native_state_payload(token, type_id)?;
         } else {
             let node = self.recover_native_node(token, type_id)?;
             self.call(self.codegen.runtime.native_value_free, &mut [node], c"");
+        }
+        if let Some(target) = temporary_owner {
+            self.codegen.release_drop_state(token, target)?;
         }
         Ok(token)
     }
@@ -130,16 +167,29 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         value: kira_ir::IrExprId,
         type_id: NativeStateTypeId,
+        drop_glue: Option<u32>,
     ) -> Result<LLVMValueRef, LlvmError> {
         let ty = self.type_of(value);
         let value = self.lower_expr(value)?;
         let node = self.codegen.encode_native_state_value(value, ty)?;
         let out = self.alloca_i64(c"native.state.token");
-        let status = self.call(
-            self.codegen.runtime.native_state_new,
-            &mut [self.codegen.const_int(type_id.as_word() as i64), node, out],
-            c"native.state.status",
-        );
+        let status = match drop_glue {
+            Some(glue) => self.call(
+                self.codegen.runtime.native_state_new_dropping,
+                &mut [
+                    self.codegen.const_int(type_id.as_word() as i64),
+                    node,
+                    self.codegen.const_i32(glue),
+                    out,
+                ],
+                c"native.state.status",
+            ),
+            None => self.call(
+                self.codegen.runtime.native_state_new,
+                &mut [self.codegen.const_int(type_id.as_word() as i64), node, out],
+                c"native.state.status",
+            ),
+        };
         self.check_native_state_status(status);
         // SAFETY: `out` is this function's live i64 alloca initialized by the
         // successful runtime call.
@@ -218,37 +268,47 @@ impl FunctionLowering<'_, '_> {
     pub(super) fn lower_native_user_data(
         &mut self,
         state: kira_ir::IrExprId,
+        borrowed: bool,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let kira_ir::IrExpr::Local(slot) = *self.codegen.program.expr(state) else {
-            return self.lower_expr(state);
-        };
-        if self
-            .function
-            .native_state_locals
-            .get(slot as usize)
-            .copied()
-            .flatten()
-            .is_some()
-        {
-            return self.lower_expr(state);
+        if borrowed {
+            let pointer = self.addressable(state)?.ok_or(LlvmError::internal(
+                "nativeUserDataBorrow operand that is not an addressable owner place",
+            ))?;
+            // SAFETY: NativeState is one i64 token word and `pointer` addresses
+            // the owner place semantics already validated.
+            return Ok(unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    self.codegen.types.i64,
+                    pointer,
+                    c"native.state.borrow".as_ptr(),
+                )
+            });
         }
-        let pointer = self.local_pointer(slot)?;
-        // SAFETY: a handle local is an i64 token slot in the entry block.
-        let token = unsafe {
-            LLVMBuildLoad2(
-                self.codegen.builder,
-                self.codegen.types.i64,
-                pointer,
-                c"native.state.handle".as_ptr(),
-            )
-        };
-        let status = self.call(
-            self.codegen.runtime.native_state_retain,
-            &mut [token],
-            c"native.state.status",
-        );
-        self.check_native_state_status(status);
-        Ok(token)
+
+        // `nativeUserData(owner)` is the explicit owner-clone operation. A
+        // place keeps its owner and receives one retained reference in the
+        // result; a temporary already owns the reference it evaluates to and
+        // transfers that one directly.
+        if let Some(pointer) = self.addressable(state)? {
+            // SAFETY: NativeState is represented by one i64 token word.
+            let token = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    self.codegen.types.i64,
+                    pointer,
+                    c"native.state.clone".as_ptr(),
+                )
+            };
+            let status = self.call(
+                self.codegen.runtime.native_state_retain,
+                &mut [token],
+                c"native.state.status",
+            );
+            self.check_native_state_status(status);
+            return Ok(token);
+        }
+        self.lower_expr(state)
     }
 
     /// Adds one owner to a callback state and yields a harmless expression value.
@@ -256,7 +316,7 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         token: kira_ir::IrExprId,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let token = self.lower_expr(token)?;
+        let token = self.lower_borrowed_expr(token)?;
         let status = self.call(
             self.codegen.runtime.native_state_retain,
             &mut [token],
@@ -271,8 +331,16 @@ impl FunctionLowering<'_, '_> {
     pub(super) fn lower_native_state_release(
         &mut self,
         token: kira_ir::IrExprId,
+        explicit_target: Option<Type>,
     ) -> Result<LLVMValueRef, LlvmError> {
+        let token_ty = self.type_of(token);
         let token = self.lower_expr(token)?;
+        let target =
+            explicit_target.or_else(|| self.codegen.program.types.native_state_target(token_ty));
+        if let Some(target) = target {
+            self.codegen.release_drop_state(token, target)?;
+            return Ok(self.codegen.const_bool(false));
+        }
         let status = self.call(
             self.codegen.runtime.native_state_release,
             &mut [token],
@@ -321,17 +389,29 @@ impl FunctionLowering<'_, '_> {
         }
         let token = self.native_state_token_of_local(slot)?;
         let node = self.codegen.encode_native_state_value(value, ty)?;
+        let old_out = self.alloca(self.codegen.types.ptr, c"native.state.old.node");
         let status = self.call(
             self.codegen.runtime.native_state_replace,
             &mut [
                 token,
                 self.codegen.const_int(type_id.as_word() as i64),
                 node,
+                old_out,
             ],
             c"native.state.status",
         );
         self.check_native_state_status(status);
-        Ok(())
+        // SAFETY: a successful replacement initializes one owned old-node pointer.
+        let old_node = unsafe {
+            LLVMBuildLoad2(
+                self.codegen.builder,
+                self.codegen.types.ptr,
+                old_out,
+                c"native.state.old.node".as_ptr(),
+            )
+        };
+        let old = self.codegen.decode_native_state_value(old_node, ty)?;
+        self.drop_value(old, ty)
     }
 
     /// The address of the value one recovered-view local names.
@@ -385,11 +465,39 @@ impl FunctionLowering<'_, '_> {
                 c"native.updated".as_ptr(),
             )
         };
-        self.replace_native_state_local(slot, type_id, ty, updated)
+        let token = self.native_state_token_of_local(slot)?;
+        let node = self.codegen.encode_native_state_value(updated, ty)?;
+        let old_out = self.alloca(self.codegen.types.ptr, c"native.state.snapshot.old.node");
+        let status = self.call(
+            self.codegen.runtime.native_state_replace,
+            &mut [
+                token,
+                self.codegen.const_int(type_id.as_word() as i64),
+                node,
+                old_out,
+            ],
+            c"native.state.status",
+        );
+        self.check_native_state_status(status);
+        // SAFETY: a successful replacement initializes one owned old-node pointer.
+        let old_node = unsafe {
+            LLVMBuildLoad2(
+                self.codegen.builder,
+                self.codegen.types.ptr,
+                old_out,
+                c"native.state.snapshot.old.node".as_ptr(),
+            )
+        };
+        let old = self.codegen.decode_native_state_value(old_node, ty)?;
+        if self.codegen.program.types.user_drop(ty).is_some() {
+            self.codegen.drop_recovered_root_snapshot(old, ty)
+        } else {
+            self.drop_value(old, ty)
+        }
     }
 
     /// The payload address for the token held in local `slot`.
-    fn native_state_payload_of_local(
+    pub(super) fn native_state_payload_of_local(
         &mut self,
         slot: u32,
         type_id: NativeStateTypeId,
@@ -399,7 +507,10 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// The token word held in local `slot`.
-    fn native_state_token_of_local(&mut self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
+    pub(super) fn native_state_token_of_local(
+        &mut self,
+        slot: u32,
+    ) -> Result<LLVMValueRef, LlvmError> {
         let pointer = self.local_pointer(slot)?;
         // SAFETY: a recovered-view local is allocated as an i64 token slot.
         Ok(unsafe {
@@ -495,7 +606,7 @@ impl FunctionLowering<'_, '_> {
         self.alloca(self.codegen.types.i64, name)
     }
 
-    fn alloca(&self, ty: LLVMTypeRef, name: &std::ffi::CStr) -> LLVMValueRef {
+    pub(super) fn alloca(&self, ty: LLVMTypeRef, name: &std::ffi::CStr) -> LLVMValueRef {
         // SAFETY: the builder is on a live function block and `ty` belongs to the
         // module's context.
         unsafe { LLVMBuildAlloca(self.codegen.builder, ty, name.as_ptr()) }

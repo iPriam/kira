@@ -10,6 +10,25 @@
 
 use super::*;
 
+/// A compound assignment stores `target op value`, so it type-checks under the
+/// operator's rules: `+=` needs operands `+` accepts, and reports through the
+/// operator when they do not.
+#[test]
+fn a_compound_assignment_checks_under_its_operator() {
+    assert!(
+        diagnostics("@Main function main() { var i = 0 i += 5 i *= 2 print(i) return }").is_empty()
+    );
+    assert!(
+        diagnostics("@Main function main() { var m = 6 m &= 3 m <<= 2 print(m) return }")
+            .is_empty()
+    );
+    // The operator, not the assignment, reports operands it cannot combine.
+    assert_eq!(
+        codes(r#"@Main function main() { var i = 0 i += "s" print(i) return }"#),
+        vec!["KSEM071"]
+    );
+}
+
 /// The condition is `Bool` and nothing else. There is no truthiness.
 #[test]
 fn a_conditional_condition_must_be_a_bool() {

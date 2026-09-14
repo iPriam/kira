@@ -156,23 +156,18 @@ fn a_task_body_taking_a_value_that_cannot_move_is_refused() {
     assert!(refusal.message.contains("cannot cross"), "{refusal:?}");
 }
 
-/// The representation rule is narrower than the `Send` rule today: a `String`
-/// moves between threads, and a task slot still holds one machine word, so it
-/// is `KSEM159` that refuses this and not `KSEM312`.
+/// `Send` is the whole type gate a task body faces. A `String` moves between
+/// threads and crosses a slot as the token a channel payload does, so a task
+/// taking one is clean — neither the body-shape `KSEM159` nor the `Send`
+/// `KSEM312` fires.
 #[test]
-fn a_task_body_taking_a_sendable_non_scalar_is_refused_by_the_slot_rule() {
+fn a_task_body_taking_a_sendable_non_scalar_is_accepted() {
     let items = diagnostics(
         "async function count(text: String) -> Int { return text.count }\n\
          @Main function main() {\n    let handle = Task { count(\"ab\") }\n\
          \n    print(handle.await)\n    return\n}\n",
     );
-    let codes: Vec<String> = items
-        .iter()
-        .filter_map(Diagnostic::code_text)
-        .map(str::to_owned)
-        .collect();
-    assert!(codes.contains(&"KSEM159".to_owned()), "{items:?}");
-    assert!(!codes.contains(&"KSEM312".to_owned()), "{items:?}");
+    assert!(items.is_empty(), "{items:?}");
 }
 
 #[test]

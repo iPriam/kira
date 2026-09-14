@@ -37,10 +37,12 @@
 use kira_semantics_model::hir::{HirAttempt, HirAttemptStep, HirExpr, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{EnumId, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, Expr, ExprId, MatchArm, Stmt, StmtId, TypeRefId};
+use kira_syntax_model::ast::{
+    Block, Expr, ExprId, MatchArm, MatchBinding, MatchPattern, Stmt, StmtId, TypeRefId,
+};
 
 use crate::analyze::{Analyzer, FnCtx};
-use crate::stmt::matches::ResolvedArm;
+use crate::stmt::matches::{ResolvedArm, arm_is_wildcard};
 
 /// The `Ok`/`Error` pair a `try` operand has to have.
 struct ResultShape {
@@ -50,6 +52,24 @@ struct ResultShape {
     failure: EnumId,
     /// The `Ok` variant's payload type, which is what the `let` binds.
     ok_payload: Type,
+}
+
+/// The resolved handler arms plus the coverage bookkeeping the exhaustiveness
+/// check reads.
+struct ResolvedHandlers {
+    /// The arms, each a selecting test (or `None` for the `else` arm) and body.
+    arms: Vec<ResolvedArm>,
+    /// The failure tags the arms handle, for the missing-variant report.
+    covered: Vec<u32>,
+    /// Whether an `else` arm caught the rest.
+    wildcard: bool,
+    /// Whether every arm resolved; a coverage report is suppressed otherwise.
+    clean: bool,
+}
+
+struct ResolvedHandlerVariants {
+    tags: Vec<u32>,
+    binding: Option<(MatchBinding, u32)>,
 }
 
 /// One `try`'s result value: where it lives and what shape it has.
@@ -295,10 +315,15 @@ impl Analyzer<'_> {
         let mut body = vec![bind];
 
         let tag_slot = self.bind_tag(ctx, failure_slot, failure_ty, &mut body);
-        let resolved =
-            self.resolve_handlers(ctx, frame.shape.failure, failure_slot, guard.handlers);
+        let resolved = self.resolve_handlers(
+            ctx,
+            frame.shape.failure,
+            failure_slot,
+            tag_slot,
+            guard.handlers,
+        );
         self.check_handler_coverage(frame.shape.failure, &resolved, guard);
-        body.extend(self.build_chain(tag_slot, resolved));
+        body.extend(self.build_chain(resolved.arms));
         ctx.pop_scope();
         body
     }
@@ -324,17 +349,89 @@ impl Analyzer<'_> {
     }
 
     /// Resolves each handler arm against the failure enum, reporting unknown
-    /// and repeated variants in source order.
+    /// and repeated variants in source order. An `else` arm catches every
+    /// remaining failure.
     fn resolve_handlers(
         &mut self,
         ctx: &mut FnCtx,
         failure: EnumId,
         slot: LocalId,
+        tag_slot: LocalId,
         handlers: &[MatchArm],
-    ) -> Vec<ResolvedArm> {
-        let mut resolved: Vec<ResolvedArm> = Vec::with_capacity(handlers.len());
+    ) -> ResolvedHandlers {
+        let mut arms: Vec<ResolvedArm> = Vec::with_capacity(handlers.len());
+        let mut covered: Vec<u32> = Vec::new();
+        let mut wildcard = false;
+        let mut clean = true;
         for arm in handlers {
-            let name = self.interner.resolve(arm.variant).to_owned();
+            if wildcard {
+                self.emit(
+                    arm.span,
+                    "KSEM381",
+                    "an `else` arm must be the last arm; the arms after it can never run",
+                );
+                clean = false;
+                continue;
+            }
+            if arm_is_wildcard(arm) {
+                wildcard = true;
+                let body = {
+                    ctx.push_scope();
+                    let body = self.analyze_block(ctx, &arm.body);
+                    ctx.pop_scope();
+                    body
+                };
+                arms.push(ResolvedArm { test: None, body });
+                continue;
+            }
+            let Some(ResolvedHandlerVariants { tags, binding }) =
+                self.resolve_handler_variants(failure, arm, &mut covered)
+            else {
+                clean = false;
+                continue;
+            };
+            let tests: Vec<_> = tags
+                .iter()
+                .map(|&tag| self.tag_test(tag_slot, tag))
+                .collect();
+            let test = self.any_of(tests);
+            let body = self.analyze_enum_arm_body(ctx, failure, slot, binding, &arm.body);
+            arms.push(ResolvedArm { test, body });
+        }
+        ResolvedHandlers {
+            arms,
+            covered,
+            wildcard,
+            clean,
+        }
+    }
+
+    /// Resolves the variant patterns of one handler arm to their tags and, for a
+    /// single variant, its payload binding.
+    fn resolve_handler_variants(
+        &mut self,
+        failure: EnumId,
+        arm: &MatchArm,
+        covered: &mut Vec<u32>,
+    ) -> Option<ResolvedHandlerVariants> {
+        let mut tags: Vec<u32> = Vec::new();
+        let mut bindings: Vec<(MatchBinding, u32)> = Vec::new();
+        let alternation = arm.patterns.len() > 1;
+        for pattern in &arm.patterns {
+            let MatchPattern::Variant {
+                variant,
+                variant_span,
+                binding: pattern_binding,
+            } = pattern
+            else {
+                self.emit(
+                    pattern.span(),
+                    "KSEM140",
+                    "a `handle` arm takes a failure variant name or `else`",
+                );
+                continue;
+            };
+            let name = self.interner.resolve(*variant).to_owned();
             let Some(tag) = self
                 .program
                 .types
@@ -343,7 +440,7 @@ impl Analyzer<'_> {
                 .and_then(|def| def.variant_index(&name))
             else {
                 self.emit(
-                    arm.variant_span,
+                    *variant_span,
                     "KSEM140",
                     format!(
                         "`{name}` is not a variant of the failure enum `{}`",
@@ -352,21 +449,36 @@ impl Analyzer<'_> {
                 );
                 continue;
             };
-            if resolved.iter().any(|existing| existing.tag == tag) {
+            if covered.contains(&tag) || tags.contains(&tag) {
                 self.emit(
-                    arm.variant_span,
+                    *variant_span,
                     "KSEM142",
                     format!("failure `{name}` is already handled by an earlier arm"),
                 );
                 continue;
             }
-            let body = self.analyze_arm_body(ctx, failure, slot, tag, arm);
-            resolved.push(ResolvedArm { tag, body });
+            if let Some(pattern_binding) = pattern_binding {
+                bindings.push((*pattern_binding, tag));
+            }
+            tags.push(tag);
         }
-        resolved
+        if tags.is_empty() {
+            return None;
+        }
+        if alternation && !bindings.is_empty() {
+            self.emit(
+                arm.span,
+                "KSEM384",
+                "a payload binding is not allowed on an arm that matches several patterns",
+            );
+        }
+        let binding = bindings.first().copied();
+        covered.extend(tags.iter().copied());
+        Some(ResolvedHandlerVariants { tags, binding })
     }
 
-    /// Reports failure variants no handler covers.
+    /// Reports failure variants no handler covers, unless an `else` arm covers
+    /// them.
     ///
     /// Skipped when an arm failed to resolve, for the reason `match`'s coverage
     /// check skips: a misspelled variant already reported would otherwise be
@@ -374,10 +486,10 @@ impl Analyzer<'_> {
     fn check_handler_coverage(
         &mut self,
         failure: EnumId,
-        resolved: &[ResolvedArm],
+        resolved: &ResolvedHandlers,
         guard: &Guard<'_>,
     ) {
-        if resolved.len() != guard.handlers.len() {
+        if !resolved.clean || resolved.wildcard {
             return;
         }
         let Some(def) = self.program.types.enums().get(failure) else {
@@ -387,7 +499,7 @@ impl Analyzer<'_> {
             .variants
             .iter()
             .enumerate()
-            .filter(|(index, _)| !resolved.iter().any(|arm| arm.tag as usize == *index))
+            .filter(|(index, _)| !resolved.covered.contains(&(*index as u32)))
             .map(|(_, variant)| variant.name.clone())
             .collect();
         if missing.is_empty() {

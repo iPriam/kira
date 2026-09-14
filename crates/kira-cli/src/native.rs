@@ -106,6 +106,7 @@ pub fn build_debug(
     optimize: bool,
     foreign_link: &NativeLinkInputs,
     debug: &DebugInfo,
+    sanitize: kira_llvm_backend::Sanitize,
 ) -> Result<NativeArtifacts, NativeError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -124,9 +125,7 @@ pub fn build_debug(
         // A debugger session attaches to a process on this machine, so a debug
         // build is this machine's whatever else the invocation asked for.
         target: NativeBuildTarget::host(),
-        // The debugger reads the un-instrumented program; ASan's shadow
-        // bookkeeping between every load would be noise under a breakpoint.
-        sanitize: kira_llvm_backend::Sanitize::None,
+        sanitize,
     };
     Ok(kira_llvm_backend::build_native_debug(
         program, &options, debug,

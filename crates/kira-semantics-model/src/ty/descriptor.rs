@@ -63,6 +63,8 @@ pub enum DescriptorFamily {
     Distinct = 8,
     /// A runtime type descriptor: the type of `value.type` itself.
     RuntimeType = 9,
+    /// `Number`, the exact base-10 decimal.
+    Number = 10,
 }
 
 impl DescriptorFamily {
@@ -383,6 +385,7 @@ pub(super) fn family_of(ty: Type) -> Option<DescriptorFamily> {
         Type::Float(_) => DescriptorFamily::Float,
         Type::Bool => DescriptorFamily::Bool,
         Type::String => DescriptorFamily::String,
+        Type::Number => DescriptorFamily::Number,
         Type::RawPtr | Type::ForeignPtr(_) => DescriptorFamily::RawPtr,
         Type::Struct(_) => DescriptorFamily::Struct,
         Type::Array(_) => DescriptorFamily::Array,

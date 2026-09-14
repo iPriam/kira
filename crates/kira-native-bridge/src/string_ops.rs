@@ -27,6 +27,7 @@ use kira_runtime_abi::StringOp;
 
 use crate::array::{KArray, kira_rt_array_new, kira_rt_array_slot};
 use crate::runtime::{KStr, bytes_of, bytes_to_handle, drop_handle};
+use crate::values::int_array;
 
 /// The width of one `KStr` slot in an array of strings.
 const STRING_SLOT: usize = size_of::<KStr>();
@@ -246,6 +247,29 @@ pub unsafe extern "C" fn kira_rt_string_split(value: KStr, separator: KStr) -> K
         unsafe { slot.cast::<KStr>().write(handle) };
     }
     array
+}
+
+/// The bytes of `value`, as a `[U8]`, freeing it.
+///
+/// One element per byte of the string's UTF-8, the same units `.count` and
+/// `charAt` index. A Kira integer array holds each element in an i64-wide slot
+/// like every other integer array, so this builds through `int_array` rather
+/// than packing bytes — `String(bytes)` reads them back the same way.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_string_bytes(value: KStr) -> KArray {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let values: Vec<i64> = unsafe { bytes_of(value) }
+        .iter()
+        .map(|&byte| i64::from(byte))
+        .collect();
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    // SAFETY: an i64-wide slot is exactly what `int_array` requires, and what a
+    // Kira `[U8]` holds each element in.
+    unsafe { int_array(&values, size_of::<i64>() as i64) }
 }
 
 /// The `kira_rt_*` symbol one operation is performed by.

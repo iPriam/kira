@@ -95,6 +95,38 @@ comptime macro Equatable {
     }
 }
 
+// Field-wise interpolation for plain value structs.
+//
+// The generated function deliberately joins the ordinary `lerp` overload set:
+// a Float field uses Foundation's scalar overload, Point/Size/vector/Color fields
+// use their overloads, and a nested `@Derive(Lerp)` struct recursively resolves
+// to the function this macro generated for that type. A field with no lerp
+// surface therefore fails as an ordinary unknown overload at the field itself,
+// which is more useful than inventing interpolation semantics for Bool/String.
+comptime macro Lerp {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var inits: [Syntax] = []
+        for field in target.fields {
+            inits.append(quote {
+                #{field.name}: lerp(from.#{field.name}, to.#{field.name}, amount)
+            })
+        }
+        return quote {
+            function lerp(
+                from: borrow #{target.name},
+                to: borrow #{target.name},
+                amount: Float
+            ) -> #{target.name} {
+                return #{target.name} {
+                    #{Syntax.join(inits, ", ")}
+                }
+            }
+        }
+    }
+}
+
 comptime macro Clone {
     kind { derive }
     appliesTo { struct enum distinct }

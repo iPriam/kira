@@ -233,6 +233,12 @@ impl<'a> Analyzer<'a> {
                 let template = written
                     .rsplit_once('.')
                     .map_or(written, |(_, member)| member);
+                if template == "NativeState" && args.len() == 1 {
+                    if let Some(target) = self.program.types.native_state_target(actual) {
+                        self.infer_type_ref_inner(args[0], target, state);
+                    }
+                    return;
+                }
                 let instantiation = match actual {
                     Type::Enum(id) => self.program.types.enums().instantiation(id),
                     Type::Struct(id) => self.generic_instance_arguments.get(&id),

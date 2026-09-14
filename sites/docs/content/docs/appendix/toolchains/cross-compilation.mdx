@@ -30,7 +30,7 @@ The last two are separate flags because they are separate decisions, made by dif
 
 ## Three Prerequisites
 
-**The managed LLVM must carry the target's code generator.** `llvm-metadata.toml` pins `X86;AArch64;WebAssembly` so every published bundle can emit for every machine Kira publishes for, but a bundle installed before that pin carries only the one belonging to the runner that built it. Such a build reports the missing generator by name, and `knvm install-llvm --force` replaces the bundle.
+**The managed LLVM must carry the target's code generator.** `llvm-metadata.toml` pins `X86;AArch64;WebAssembly` so every published bundle can emit for every machine Kira publishes for, but a bundle installed before that pin carries only the one belonging to the runner that built it. Such a build reports the missing generator by name, and `knvm llvm install --force` replaces the bundle.
 
 **The managed LLVM must ship `lld`.** clang selects a linker rather than containing one, and the only linker a machine has by default builds for that machine: a Windows host handed an ELF object to a PE linker and got `unrecognised emulation mode: elf_x86_64`. A bundle without `lld` refuses the cross link by name.
 

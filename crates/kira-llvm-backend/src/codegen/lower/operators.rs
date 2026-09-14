@@ -15,6 +15,13 @@ use llvm_sys::{LLVMIntPredicate, LLVMRealPredicate};
 use super::FunctionLowering;
 use crate::LlvmError;
 
+/// One lazy branch of a select expression.
+pub(super) struct SelectArm<'a> {
+    pub(super) setup: &'a [kira_ir::IrStmt],
+    pub(super) value: IrExprId,
+    pub(super) cleanup: &'a [u32],
+}
+
 impl FunctionLowering<'_, '_> {
     /// Lowers a unary operator.
     pub(super) fn lower_unary(&mut self, op: IrUnOp, value: LLVMValueRef) -> LLVMValueRef {
@@ -454,8 +461,8 @@ impl FunctionLowering<'_, '_> {
     pub(super) fn lower_select(
         &mut self,
         cond: IrExprId,
-        then: IrExprId,
-        otherwise: IrExprId,
+        then_arm: SelectArm<'_>,
+        otherwise_arm: SelectArm<'_>,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         let condition = self.lower_expr(cond)?;
@@ -470,7 +477,9 @@ impl FunctionLowering<'_, '_> {
         unsafe { LLVMBuildCondBr(builder, condition, then_block, else_block) };
 
         self.position_at(then_block);
-        let then_value = self.lower_expr(then)?;
+        self.lower_block(then_arm.setup)?;
+        let then_value = self.lower_expr(then_arm.value)?;
+        self.lower_select_cleanup(then_arm.cleanup)?;
         // SAFETY: the then block is unterminated; join it to the end. The exit
         // block is re-read rather than assumed, because lowering the branch may
         // itself have created blocks (a nested conditional, or a division).
@@ -480,7 +489,9 @@ impl FunctionLowering<'_, '_> {
         };
 
         self.position_at(else_block);
-        let else_value = self.lower_expr(otherwise)?;
+        self.lower_block(otherwise_arm.setup)?;
+        let else_value = self.lower_expr(otherwise_arm.value)?;
+        self.lower_select_cleanup(otherwise_arm.cleanup)?;
         // SAFETY: as above, for the else branch.
         let else_exit = unsafe {
             LLVMBuildBr(builder, done_block);
@@ -499,6 +510,17 @@ impl FunctionLowering<'_, '_> {
             phi
         };
         Ok(result)
+    }
+
+    /// Releases locals whose lexical lifetime belongs to one select branch,
+    /// after the branch value has been materialized for the join.
+    fn lower_select_cleanup(&mut self, locals: &[u32]) -> Result<(), LlvmError> {
+        for &slot in locals {
+            let ty = self.local_type(slot)?;
+            let pointer = self.local_pointer(slot)?;
+            self.release_local_if_live(slot, pointer, ty)?;
+        }
+        Ok(())
     }
 
     /// Lowers `&&`/`||` as branches, evaluating the right operand only when the

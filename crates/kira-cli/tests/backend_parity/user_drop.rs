@@ -130,3 +130,162 @@ function main() {
     );
     assert_eq!(output, "19900\n");
 }
+
+/// A recovered callback-state value is a view, not a second owner. Reading or
+/// writing through that view must not run its user `Drop` body; the body belongs
+/// to the state itself and runs exactly once when the final userdata owner is
+/// released.
+#[test]
+fn native_state_recover_is_an_alias_and_drops_exactly_once() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct NativeDrp: Drop {
+    var label: String
+    var tag: Int
+    function drop(borrow mut self) { print(self.tag) return }
+}
+
+@Main
+function main() {
+    let token = nativeUserData(nativeState(NativeDrp(label: "state", tag: 1)))
+    var view = nativeRecover<NativeDrp>(token)
+    print(view.tag)
+    view.tag = 2
+    print(view.tag)
+    nativeUserDataRelease(token)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n2\n");
+}
+
+/// Hybrid native functions use backend-neutral value-tree state rather than the
+/// whole-program LLVM box. A field read through the recovered view may therefore
+/// materialize a temporary snapshot, whose field storage must be cleaned up
+/// without running the root `Drop` body as though the snapshot were an owner.
+#[test]
+fn native_hybrid_recover_snapshot_does_not_run_drop_early() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct NativeHybridDrp: Drop {
+    var label: String
+    var tag: Int
+    function drop(borrow mut self) { print(self.tag) return }
+}
+
+@Native
+function nativeWork() {
+    let token = nativeUserData(nativeState(NativeHybridDrp(label: "state", tag: 4)))
+    var view = nativeRecover<NativeHybridDrp>(token)
+    print(view.tag)
+    view.tag = 5
+    nativeUserDataRelease(token)
+    return
+}
+
+@Main
+function main() {
+    nativeWork()
+    return
+}
+"#,
+    );
+    assert_eq!(output, "4\n5\n");
+}
+
+/// A state handle is affine, so an owner that is not explicitly released still
+/// destroys its Drop-bearing value when the handle leaves scope.
+#[test]
+fn drop_native_state_is_destroyed_by_automatic_scope_release() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct ScopedNativeDrp: Drop {
+    var label: String
+    var tag: Int
+    function drop(borrow mut self) { print(self.tag) return }
+}
+
+@Native
+function nativeWork() {
+    let state = nativeState(ScopedNativeDrp(label: "scope", tag: 7))
+    return
+}
+
+@Main
+function main() {
+    nativeWork()
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\n");
+}
+
+#[test]
+fn nested_drop_in_callback_state_releases_displaced_and_final_values() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct NestedDropLeaf: Drop {
+    var tag: Int
+    function drop(borrow mut self) { print(self.tag) return }
+}
+
+struct NestedDropBox {
+    var leaf: NestedDropLeaf
+}
+
+@Native
+function nativeWork() {
+    let state = nativeState(NestedDropBox { leaf: NestedDropLeaf(tag: 1) })
+    var view = nativeRecover<NestedDropBox>(state)
+    print(view.leaf.tag + 10)
+    view.leaf = NestedDropLeaf(tag: 2)
+    print(view.leaf.tag + 20)
+    return
+}
+
+@Main
+function main() {
+    nativeWork()
+    return
+}
+"#,
+    );
+    assert_eq!(output, "11\n1\n22\n2\n");
+}
+
+#[test]
+fn nested_native_state_owner_releases_through_the_active_engine() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct NestedStatePayload: Drop {
+    var tag: Int
+    function drop(borrow mut self) { print(self.tag) return }
+}
+
+struct NestedStateBox {
+    var child: NativeState<NestedStatePayload>
+}
+
+@Native
+function nativeWork() {
+    let child = nativeState(NestedStatePayload(tag: 1))
+    let outer = nativeState(NestedStateBox { child: move child })
+    var view = nativeRecover<NestedStateBox>(outer)
+    var childView = nativeRecover<NestedStatePayload>(view.child)
+    print(childView.tag)
+    view.child = nativeState(NestedStatePayload(tag: 2))
+    print(9)
+    return
+}
+
+@Main
+function main() {
+    nativeWork()
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n1\n9\n2\n");
+}

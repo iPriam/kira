@@ -16,6 +16,7 @@
 //! only `Int`<->`Float` does arithmetic work. `rawPointerWord(pointer)` is the
 //! inverse tag change from an opaque pointer word to `U64`.
 
+use kira_runtime_abi::NumberOp;
 use kira_semantics_model::hir::{ConvertKind, HirExpr, HirExprId};
 use kira_semantics_model::{IntSpelling, Type};
 use kira_source::Span;
@@ -80,6 +81,28 @@ impl Analyzer<'_> {
         // conversion error on top of it.
         if operand_ty == Type::Error {
             return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        // A `Number` converts out through its own operation: `Int(n)` truncates
+        // toward zero, `Float(n)` takes the nearest float. The result carries the
+        // written width — every integer shares one runtime representation.
+        if operand_ty == Type::Number {
+            let op = match target {
+                Type::Int(_) => NumberOp::ToInt,
+                Type::Float(_) => NumberOp::ToFloat,
+                _ => {
+                    self.emit(
+                        span,
+                        "KSEM209",
+                        format!("a `Number` converts to an `Int` or a `Float`, not `{name}`"),
+                    );
+                    return Some(self.program.exprs.alloc(HirExpr::Error));
+                }
+            };
+            return Some(self.program.exprs.alloc(HirExpr::NumberOperation {
+                op,
+                operands: vec![operand],
+                ty: target,
+            }));
         }
         let Some(kind) = conversion_kind(operand_ty, target) else {
             let message = if target == Type::RawPtr {
@@ -245,6 +268,68 @@ impl Analyzer<'_> {
             operand,
             kind,
             ty: to,
+        }))
+    }
+
+    /// Recognizes `Number(x)`: an exact decimal built from an `Int` (exact), a
+    /// `String` (parsed, trapping on text that is not a decimal), or a `Float`
+    /// (the nearest decimal). `Number(n)` on a `Number` is the value itself.
+    ///
+    /// Returns `None` when the call is not this conversion, so the caller carries
+    /// on to the ordinary paths.
+    pub(super) fn analyze_number_conversion(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<HirExprId> {
+        if name != "Number" || ctx.resolve(name).is_some() {
+            return None;
+        }
+        let values = Self::argument_values(args);
+        if values.len() != 1 {
+            for &value in &values {
+                self.analyze_expr(ctx, value);
+            }
+            self.emit(
+                span,
+                "KSEM210",
+                format!(
+                    "a conversion to `Number` takes exactly one argument, found {}",
+                    values.len()
+                ),
+            );
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        let operand = self.analyze_expr(ctx, values[0]);
+        let operand_ty = self.program.expr(operand).type_of();
+        if operand_ty == Type::Error {
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        let op = match operand_ty {
+            Type::Int(_) => NumberOp::FromInt,
+            Type::String => NumberOp::FromString,
+            Type::Float(_) => NumberOp::FromFloat,
+            // Converting a `Number` to a `Number` is the value unchanged.
+            Type::Number => return Some(operand),
+            _ => {
+                self.emit(
+                    span,
+                    "KSEM209",
+                    format!(
+                        "`{}` cannot be converted to `Number`: a Number is built from an Int, a \
+                         Float, or a decimal String",
+                        self.type_name(operand_ty)
+                    ),
+                );
+                return Some(self.program.exprs.alloc(HirExpr::Error));
+            }
+        };
+        Some(self.program.exprs.alloc(HirExpr::NumberOperation {
+            op,
+            operands: vec![operand],
+            ty: Type::Number,
         }))
     }
 }

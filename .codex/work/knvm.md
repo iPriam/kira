@@ -109,6 +109,6 @@ against this repo before any release exists.
 
 ## Still to build
 
-Archive checksum verification; `knvm install-llvm`; listing versions available
+Archive checksum verification; `knvm llvm install`; listing versions available
 remotely rather than installed; knvm self-update; per-project toolchain
 pinning; and the `curl | sh` bootstrap.

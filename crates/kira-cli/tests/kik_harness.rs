@@ -67,6 +67,25 @@ fn kik(name: &str) -> PathBuf {
 /// an alias. The refused half cannot be a running program at all, so it lives
 /// in the package below.
 #[test]
+fn grouped_extern_library_runs_on_every_backend() {
+    let path = kik("grouped-ffi");
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the grouped extern harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "true\n",
+            "the grouped extern call diverged on {backend}"
+        );
+    }
+}
+
+#[test]
 fn a_macro_is_reachable_through_the_import_that_names_its_package() {
     let path = kik("macro-imports");
     let path = path.to_str().expect("a utf-8 path");
@@ -116,6 +135,22 @@ fn the_refusal_harness_refuses_every_program_in_it() {
         reported.contains("KMAC001"),
         "a macro from a package the file never imported must not expand:\n{reported}"
     );
+    for (code, behavior) in [
+        ("KSEM373", "borrowing userdata from an owner temporary"),
+        ("KSEM375", "recovering through an owned temporary"),
+        ("KSEM376", "copying an affine state field out of its owner"),
+        (
+            "KSEM377",
+            "boxing a NativeState owner as callback-state root",
+        ),
+        ("KSEM378", "retaining an already tracked NativeState owner"),
+    ] {
+        assert_eq!(
+            count(code),
+            1,
+            "the refusal harness must report {behavior} exactly once under {code}:\n{reported}"
+        );
+    }
 }
 
 /// A run that ends with payloads still queued releases the storage they name.
@@ -224,7 +259,7 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         "the ffi harness reported failures: {tally}"
     );
     assert_eq!(
-        tally, "306 passed, 0 failed, 0 skipped, 306 total",
+        tally, "308 passed, 0 failed, 0 skipped, 308 total",
         "the ffi harness tally changed"
     );
 }
@@ -441,7 +476,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1544 passed, 0 failed, 0 skipped, 1544 total");
+    assert_eq!(vm, "1569 passed, 0 failed, 0 skipped, 1569 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 

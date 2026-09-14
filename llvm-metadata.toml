@@ -1,8 +1,8 @@
 # The pinned LLVM toolchain: the contract between this repo, CI, and the
-# downloader (`knvm install-llvm`). The downloader is knvm rather than kira
+# downloader (`knvm llvm install`). The downloader is knvm rather than kira
 # because kira links the LLVM backend: a kira that provisioned LLVM would have
 # to be built before the bundle it installs. knvm links none, so it builds from
-# a bare checkout with `cargo run -p kira-knvm -- install-llvm`.
+# a bare checkout with `cargo run -p kira-knvm -- llvm install`.
 #
 # This file is the single source of truth for which LLVM Kira expects, which
 # release owns the published bundles, and the exact archive name per supported

@@ -490,46 +490,66 @@ impl Parser<'_> {
         self.tree.add_type(TypeRef::Error { span })
     }
 
-    /// Parses `(A, B) -> R`, with the cursor on `(`.
-    ///
-    /// The result is mandatory: a function type with no `->` names nothing, so
-    /// a missing arrow is reported and the whole type recovers to
-    /// [`TypeRef::Error`] rather than silently becoming `() -> Void`.
-    ///
-    /// A parameter may carry an ownership prefix — `(borrow GraphicsEvent) ->
-    /// Void` — exactly as a declared parameter may. The mode is carried on the
-    /// type rather than dropped: it is invisible at run time but decisive at the
-    /// ownership check, so an indirect call reads it to decide whether an
-    /// argument needs `move`.
+    /// Parses a parenthesized type. The closing `)` decides the form:
+    /// `(A)` is grouping, `(A, B)` is a tuple, and `(A, B) -> R` is a function
+    /// type. Ownership prefixes are meaningful only on the function form.
     fn parse_function_type(&mut self) -> TypeRefId {
         let start = self.current().span;
         self.bump(); // `(`
         let mut params = Vec::new();
         let mut param_ownership = Vec::new();
+        let mut saw_comma = false;
         while !self.at(TokenKind::RParen) && !self.at_eof() {
             let before = self.pos;
             let (mode, _) = self.parse_ownership_prefix();
             param_ownership.push(mode);
             params.push(self.parse_type_ref());
-            self.eat(TokenKind::Comma);
-            // A parameter that consumed nothing would spin; force progress.
+            if self.eat(TokenKind::Comma) {
+                saw_comma = true;
+            } else {
+                break;
+            }
             if self.pos == before {
                 self.bump();
             }
         }
         self.expect(TokenKind::RParen);
-        if !self.eat(TokenKind::Arrow) {
+        let paren_span = Span::from_bounds(start.start, self.previous_end());
+
+        if self.eat(TokenKind::Arrow) {
+            let result = self.parse_type_ref();
             let span = Span::from_bounds(start.start, self.previous_end());
-            self.error(span, "KPAR038", "expected `->` in a function type");
-            return self.tree.add_type(TypeRef::Error { span });
+            return self.tree.add_type(TypeRef::Function {
+                params,
+                param_ownership,
+                result,
+                span,
+            });
         }
-        let result = self.parse_type_ref();
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.add_type(TypeRef::Function {
-            params,
-            param_ownership,
-            result,
-            span,
+
+        if params.len() == 1 && !saw_comma {
+            return params[0];
+        }
+        if params.len() < 2 || params.len() > 4 {
+            self.error(
+                paren_span,
+                "KPAR091",
+                "tuple values and tuple types support two through four elements",
+            );
+        }
+        if param_ownership
+            .iter()
+            .any(|mode| *mode != OwnershipMode::Owned)
+        {
+            self.error(
+                paren_span,
+                "KPAR038",
+                "ownership prefixes in parentheses require a function type with `->`",
+            );
+        }
+        self.tree.add_type(TypeRef::Tuple {
+            elements: params,
+            span: paren_span,
         })
     }
 }

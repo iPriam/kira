@@ -150,7 +150,7 @@ impl ExportType {
 /// from use keeps the table and the signatures that index it consistent by
 /// construction: there is no way to write a handle type pointing at a class the
 /// table does not have.
-pub(crate) fn build_export_table(program: &IrProgram) -> Result<ExportTable, CompileError> {
+pub fn build_export_table(program: &IrProgram) -> Result<ExportTable, CompileError> {
     let mut classes: Vec<String> = Vec::new();
     let mut functions = Vec::with_capacity(program.exports.len());
     for export in &program.exports {
@@ -238,6 +238,7 @@ fn export_type(
         Type::Distinct(_)
         | Type::Array(_)
         | Type::Enum(_)
+        | Type::Number
         | Type::RawPtr
         | Type::ForeignPtr(_)
         | Type::CString

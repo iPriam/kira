@@ -292,7 +292,9 @@ pub fn server(cert_path: &str) -> Result<i64, NetworkError> {
     std::fs::write(cert_path, &certificate_der).map_err(|_| NetworkError::Io)?;
 
     let socket = std::net::UdpSocket::bind(loopback(0)).map_err(|_| NetworkError::Bind)?;
-    socket.set_nonblocking(true).map_err(|_| NetworkError::Bind)?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|_| NetworkError::Bind)?;
     let endpoint = {
         let _guard = handle.enter();
         Endpoint::new(
@@ -341,17 +343,30 @@ pub fn server(cert_path: &str) -> Result<i64, NetworkError> {
 
 /// The port a server bound.
 pub fn server_port(id: i64) -> Result<i64, NetworkError> {
-    let servers = state().servers.lock().map_err(|_| NetworkError::RuntimeInit)?;
-    let server = servers.get(&(id as u64)).ok_or(NetworkError::UnknownHandle)?;
+    let servers = state()
+        .servers
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    let server = servers
+        .get(&(id as u64))
+        .ok_or(NetworkError::UnknownHandle)?;
     Ok(i64::from(server.port))
 }
 
 /// The next channel a server has accepted, `0` when none is waiting, or a
 /// negative code when the handle is unknown.
 pub fn accept(id: i64) -> Result<i64, NetworkError> {
-    let servers = state().servers.lock().map_err(|_| NetworkError::RuntimeInit)?;
-    let server = servers.get(&(id as u64)).ok_or(NetworkError::UnknownHandle)?;
-    let mut accepted = server.accepted.lock().map_err(|_| NetworkError::RuntimeInit)?;
+    let servers = state()
+        .servers
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
+    let server = servers
+        .get(&(id as u64))
+        .ok_or(NetworkError::UnknownHandle)?;
+    let mut accepted = server
+        .accepted
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
     match accepted.try_recv() {
         Ok(channel) => Ok(channel as i64),
         Err(mpsc::error::TryRecvError::Empty) => Ok(0),
@@ -453,7 +468,10 @@ pub fn send(id: i64, text: &str) -> Result<(), NetworkError> {
 /// no frame remains.
 pub fn receive(id: i64) -> Result<i64, NetworkError> {
     let channel = channel(id)?;
-    let mut inbound = channel.inbound.lock().map_err(|_| NetworkError::RuntimeInit)?;
+    let mut inbound = channel
+        .inbound
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
     match inbound.try_recv() {
         Ok(bytes) => {
             // The frame is kept as its raw bytes, not a lossy UTF-8 string: a
@@ -492,7 +510,10 @@ pub fn read_scalar(id: i64) -> Result<i64, NetworkError> {
     }
     let (scalar, advance) = {
         let rest = &selection.bytes[cursor..];
-        match std::str::from_utf8(rest).ok().and_then(|text| text.chars().next()) {
+        match std::str::from_utf8(rest)
+            .ok()
+            .and_then(|text| text.chars().next())
+        {
             Some(character) => (i64::from(u32::from(character)), character.len_utf8()),
             None => return Ok(crate::request::END_OF_SELECTION),
         }
@@ -521,7 +542,10 @@ pub fn read_byte(id: i64) -> Result<i64, NetworkError> {
 /// Appends one byte to the frame being staged for sending.
 pub fn send_byte(id: i64, byte: i32) -> Result<(), NetworkError> {
     let channel = channel(id)?;
-    let mut outgoing = channel.outgoing.lock().map_err(|_| NetworkError::RuntimeInit)?;
+    let mut outgoing = channel
+        .outgoing
+        .lock()
+        .map_err(|_| NetworkError::RuntimeInit)?;
     outgoing.push((byte & 255) as u8);
     Ok(())
 }
@@ -530,10 +554,16 @@ pub fn send_byte(id: i64, byte: i32) -> Result<(), NetworkError> {
 pub fn send_flush(id: i64) -> Result<(), NetworkError> {
     let channel = channel(id)?;
     let frame = {
-        let mut outgoing = channel.outgoing.lock().map_err(|_| NetworkError::RuntimeInit)?;
+        let mut outgoing = channel
+            .outgoing
+            .lock()
+            .map_err(|_| NetworkError::RuntimeInit)?;
         std::mem::take(&mut *outgoing)
     };
-    channel.outbound.send(frame).map_err(|_| NetworkError::Canceled)
+    channel
+        .outbound
+        .send(frame)
+        .map_err(|_| NetworkError::Canceled)
 }
 
 /// Closes a server or a channel and forgets its handle. Unknown handles are

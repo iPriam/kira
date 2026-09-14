@@ -1,0 +1,9 @@
+// A lazy pull iterator.
+//
+// The iterator itself is only a closure. State belongs to whatever that closure
+// captures, so an iterator can walk an array, a tree, a stream, or a custom
+// traversal without materializing an intermediate collection. `for value in it`
+// is the language surface: the compiler repeatedly calls `next` until `.None`.
+struct Iterator<Value> {
+    let next: () -> Option<Value>
+}

@@ -43,7 +43,40 @@ There is no subtyping between classes (`KSEM063`), no implicit numeric widening,
 
 ## Arrays
 
-`[T]` for any `T`, nested to any depth. An array is a shared handle that moves on binding and detaches on write. Its surface is `.append(v)`, `.count`, and `xs[i]`.
+`[T]` for any `T`, nested to any depth. An array is a shared handle that moves on binding and detaches on write.
+
+Its surface is `.append(v)`, `.count`, `xs[i]`, `.contains(v)`, `.rev()`, and `.sort_by(compare)`.
+
+- `contains` performs a linear scan and requires `element == value` to be defined.
+- `rev()` returns a reversed array value. `for x in xs.rev()` is recognized as reverse iteration and walks the original array without first building the reversed copy.
+- `sort_by` returns a sorted copy. Its comparator has the shape `(borrow T, borrow T) -> Bool` and returns `true` when the first value belongs before the second.
+
+## Tuples
+
+Tuple values and tuple types have two through four elements.
+
+```kira
+let pair: (Int, String) = (7, "seven")
+let point = (10, 20, 30)
+print(pair.0)
+print(pair.1)
+```
+
+A tuple is an ordinary value aggregate after analysis. Its elements are read with `.0`, `.1`, `.2`, and `.3`, and a tuple may be returned from a function like any other value:
+
+```kira
+function split() -> (Int, String) {
+    return (42, "answer")
+}
+```
+
+Parentheses around one value or one type remain grouping, so `(value)` and `(Int)` are not one-element tuples.
+
+## Iterators
+
+`Iterator<T>` is Foundation's lazy pull iterator. It stores one `next: () -> Option<T>` closure. A `for value in iterator` loop repeatedly calls that closure until it returns `.None`; `.Some(value)` becomes the loop binding. The iterator expression is evaluated once, and `continue` pulls the next value normally.
+
+Iterator state belongs to whatever the `next` closure captures, so a custom iterator can walk a tree, stream values, or generate values without materializing an intermediate array.
 
 ## Function Types
 
@@ -109,7 +142,7 @@ The representation is an integer width, a float width, `Bool`, `RawPtr`, or anot
 
 The type is **transparent**: it has the size, the alignment, and the ABI of its representation, with no wrapper value and no allocation. Lowering rewrites every distinct type to its representation before any backend sees a program, so the two crossings compile to no instruction at all.
 
-Its whole operator surface is `==` and `!=` between two values of the same distinct type. Arithmetic, ordering, and `print` are refused (`KSEM071`): an id is named, not counted. Reading anything but `raw` off one is `KSEM349`, and constructing one from the wrong type is `KSEM348`.
+Its operator surface is its representation's. Arithmetic, bitwise, and shift operators between two values of the same distinct type — or one and a bare literal — yield the distinct type again; the comparisons and equality yield `Bool`; and a distinct type over an integer indexes an array. A bare `Int`/`Float` literal adapts into it exactly as it adapts into a written integer width. The nominal boundary is what stays refused (`KSEM071`): two *different* distinct types share no operator, and a distinct type does not combine with a *written* representation value — only a bare literal pairs. `print` is refused too, so a distinct type is rendered through `@Derive(Serializable)` or `.raw`. Reading anything but `raw` off one is `KSEM349`, and constructing one from the wrong type is `KSEM348`.
 
 At an `@FFI.Extern` signature a distinct type crosses as its representation, so the C prototype is the scalar's. The Kira side stays nominal: a parameter written `TabId` takes a `TabId` and refuses the `U32` underneath it (`KSEM183`).
 

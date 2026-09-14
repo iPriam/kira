@@ -8,6 +8,7 @@ description: "`kira debug` on all three backends, what a stop is on each, the VM
 ```bash
 kira debug app.kira --break priceCart          # the VM's own debugger
 kira debug app.kira --backend llvm --lldb      # LLDB over native code
+kira debug app.kira --backend llvm --sanitize address --lldb
 kira debug app.kira --lldb-dap --dap-continues 4
 kira debug app.kira --prepare                  # build it, describe it, run nothing
 ```
@@ -21,6 +22,8 @@ kira debug app.kira --prepare                  # build it, describe it, run noth
 | `llvm` | machine code with DWARF | a native symbol or a source line |
 
 Native code has machine instructions and a line table, so LLDB debugs it the way it debugs anything else. Bytecode has neither. The VM instead calls one native probe, `kira_vm_debug_probe`, before every interpreted instruction, and publishes the decoded stop beside it:
+
+An LLVM debug session keeps requested AddressSanitizer instrumentation alongside DWARF. Sanitizer reports therefore resolve native Kira frames to their source location, and LLDB can inspect the same failing image.
 
 | Symbol | What it holds |
 | --- | --- |
