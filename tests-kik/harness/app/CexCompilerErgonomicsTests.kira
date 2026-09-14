@@ -162,6 +162,36 @@ construct CexArrayContainsReverseAndSort() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(31238) return e }
 }
 
+construct CexArraySortBoundaryCases() extends Test {
+    test {
+        let empty: [Int] = []
+        let sortedEmpty = empty.sort_by { a, b in return a < b }
+        let single = [7].sort_by { a, b in return a < b }
+        return sortedEmpty.count * 100 + single.count * 10 + single[0]
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(17) return e }
+}
+
+construct CexArraySortDuplicates() extends Test {
+    test {
+        let sorted = [5, 1, 3, 1, 4, 2, 5].sort_by { a, b in return a < b }
+        var score = 0
+        for value in sorted { score = score * 10 + value }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1123455) return e }
+}
+
+construct CexArraySortDescending() extends Test {
+    test {
+        let sorted = [1, 6, 2, 5, 3, 4].sort_by { a, b in return a > b }
+        var score = 0
+        for value in sorted { score = score * 10 + value }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(654321) return e }
+}
+
 construct CexReverseForKeepsContinueSemantics() extends Test {
     test {
         var total = 0
