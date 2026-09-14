@@ -119,6 +119,27 @@ impl HostCapabilities for Host<'_> {
         }
     }
 
+    fn native_state_create_dropping(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+        glue: Option<u32>,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .create_dropping(ty, value, glue),
+            None => match glue {
+                Some(glue) => self
+                    .session
+                    .library
+                    .native_state_create_dropping(ty, value, glue),
+                None => self.session.library.native_state_create(ty, value),
+            },
+        }
+    }
+
     fn native_state_recover(
         &mut self,
         token: NativeStateToken,
@@ -138,7 +159,7 @@ impl HostCapabilities for Host<'_> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         match &self.session.vm_state {
             Some(state) => state
                 .lock()
@@ -166,6 +187,19 @@ impl HostCapabilities for Host<'_> {
                 .release(token)
                 .map(|_| ()),
             None => self.session.library.native_state_release(token),
+        }
+    }
+
+    fn native_state_release_dropping(
+        &mut self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .release_dropping(token),
+            None => self.session.library.native_state_release_dropping(token),
         }
     }
 
@@ -212,19 +246,18 @@ impl HostCapabilities for Host<'_> {
         ty: NativeStateTypeId,
         path: &[NativeStatePathStep],
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         match &self.session.vm_state {
-            Some(state) => {
-                *state
-                    .lock()
-                    .unwrap_or_else(|held| held.into_inner())
-                    .write_at(token, ty, path)? = value;
-                Ok(())
-            }
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .replace_at(token, ty, path, value),
             None => {
                 let mut root = self.session.library.native_state_recover(token, ty)?;
-                *native_state_walk_mut(&mut root, path)? = value;
-                self.session.library.native_state_replace(token, ty, root)
+                let old = std::mem::replace(native_state_walk_mut(&mut root, path)?, value);
+                let replaced_root = self.session.library.native_state_replace(token, ty, root)?;
+                drop(replaced_root);
+                Ok(old)
             }
         }
     }
@@ -237,23 +270,20 @@ impl HostCapabilities for Host<'_> {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         match &self.session.vm_state {
-            Some(state) => match state
+            Some(state) => state
                 .lock()
                 .unwrap_or_else(|held| held.into_inner())
-                .write_at(token, ty, path)?
-            {
-                NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
-                _ => return Err(NativeStateError::PathMismatch),
-            },
+                .append_at(token, ty, path, value),
             None => {
                 let mut root = self.session.library.native_state_recover(token, ty)?;
                 match native_state_walk_mut(&mut root, path)? {
                     NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
                     _ => return Err(NativeStateError::PathMismatch),
                 }
-                self.session.library.native_state_replace(token, ty, root)?;
+                let replaced_root = self.session.library.native_state_replace(token, ty, root)?;
+                drop(replaced_root);
+                Ok(())
             }
         }
-        Ok(())
     }
 }

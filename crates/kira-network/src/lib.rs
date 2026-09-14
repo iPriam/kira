@@ -8,12 +8,14 @@
 //! is driven by Tokio on its runtime thread.
 
 mod api;
+mod command;
 mod http;
 mod http3;
 mod io;
 mod request;
 mod runtime;
 mod websocket;
+mod webtransport;
 
 pub use api::{
     AsyncUdpSocket, BodySender, CancellationToken, DnsResolver, HttpClient, HttpClientConfig,
@@ -116,6 +118,142 @@ pub extern "C" fn kira_network_result(handle: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_network_https_server() -> i64 {
     runtime::start_https_server().map_or_else(runtime::error_code, OperationId::as_i64)
+}
+
+/// Starts a shell command and returns its operation handle, or a negative error
+/// code. Poll it like a request; its status is the exit code and its body is the
+/// captured output. `cwd` empty runs in the current directory.
+///
+/// # Safety
+///
+/// Both arguments must be NUL-terminated strings valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_command_start(
+    command: *const c_char,
+    cwd: *const c_char,
+) -> i64 {
+    // SAFETY: both arguments are the caller's NUL-terminated strings, valid for
+    // this call by the contract above.
+    let arguments = unsafe { (borrowed(command), borrowed(cwd)) };
+    match arguments {
+        (Ok(command), Ok(cwd)) => {
+            command::start(command, cwd).map_or_else(runtime::error_code, OperationId::as_i64)
+        }
+        (Err(error), _) | (_, Err(error)) => error.code(),
+    }
+}
+
+/// The wall-clock time now, in milliseconds since the Unix epoch.
+///
+/// A clock, not a networking operation, but it rides here because this is the
+/// native library Foundation already links for its runtime services and a
+/// program that needs the time should not have to name a second one. Answers a
+/// negative code only if the clock is set before the epoch, which a real machine
+/// is not.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_unix_millis() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => runtime::error_code(NetworkError::Io),
+    }
+}
+
+/// Binds a QUIC WebTransport server, writes its certificate to `cert_path`, and
+/// returns its handle. Clients that trust that certificate can then connect.
+///
+/// # Safety
+///
+/// `cert_path` must be a NUL-terminated string valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_wt_server(cert_path: *const c_char) -> i64 {
+    // SAFETY: `cert_path` is the caller's NUL-terminated string, valid for this
+    // call by the contract above.
+    let cert_path = unsafe { borrowed(cert_path) };
+    match cert_path {
+        Ok(cert_path) => webtransport::server(cert_path).unwrap_or_else(runtime::error_code),
+        Err(error) => error.code(),
+    }
+}
+
+/// Returns the port a WebTransport server bound, or a negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_server_port(handle: i64) -> i64 {
+    webtransport::server_port(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Returns the next channel a server has accepted, `0` when none is waiting, or
+/// a negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_accept(handle: i64) -> i64 {
+    webtransport::accept(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Connects to a WebTransport server on `port`, trusting the certificate at
+/// `cert_path`, and returns a channel handle immediately.
+///
+/// # Safety
+///
+/// `cert_path` must be a NUL-terminated string valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_wt_connect(port: u16, cert_path: *const c_char) -> i64 {
+    // SAFETY: `cert_path` is the caller's NUL-terminated string, valid for this
+    // call by the contract above.
+    let cert_path = unsafe { borrowed(cert_path) };
+    match cert_path {
+        Ok(cert_path) => webtransport::connect(port, cert_path).unwrap_or_else(runtime::error_code),
+        Err(error) => error.code(),
+    }
+}
+
+/// Queues one text message to send over a channel.
+///
+/// # Safety
+///
+/// `text` must be a NUL-terminated string valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_network_wt_send(handle: i64, text: *const c_char) -> i64 {
+    // SAFETY: `text` is the caller's NUL-terminated string, valid for this call
+    // by the contract above.
+    let text = unsafe { borrowed(text) };
+    completed(text.and_then(|text| webtransport::send(handle, text)))
+}
+
+/// Selects the next inbound frame for reading and returns its length in bytes,
+/// `0` when none has arrived, or a negative code when the channel has closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_receive(handle: i64) -> i64 {
+    webtransport::receive(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Reads the next Unicode scalar of the selected frame, or `-1` at its end.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_read_scalar(handle: i64) -> i64 {
+    webtransport::read_scalar(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Reads the next raw byte of the selected frame, or `-1` at its end, for a
+/// message read as bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_read_byte(handle: i64) -> i64 {
+    webtransport::read_byte(handle).unwrap_or_else(runtime::error_code)
+}
+
+/// Appends one byte to the frame being staged to send.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_send_byte(handle: i64, byte: i32) -> i64 {
+    completed(webtransport::send_byte(handle, byte))
+}
+
+/// Sends the staged bytes as one frame and clears the stage.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_send_flush(handle: i64) -> i64 {
+    completed(webtransport::send_flush(handle))
+}
+
+/// Closes a WebTransport server or channel handle. Unknown handles are ignored.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_network_wt_close(handle: i64) {
+    webtransport::close(handle);
 }
 
 /// Reads a NUL-terminated C argument as UTF-8 text.

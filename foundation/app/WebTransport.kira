@@ -1,0 +1,173 @@
+// Foundation's WebTransport surface: a QUIC channel that stays open and carries
+// whole text messages both ways.
+//
+// The `kira_network` C ABI is bound by autobind into `app/bindings/network.kira`
+// — generated from the header, not hand-written — and this file is the ergonomic
+// layer over it, the way `Net.kira` is for one-shot requests. A one-shot request
+// answers once and closes; a shell talking to a component wants a connection
+// that lives, so this is a different surface over the same binding rather than a
+// second kind of request.
+//
+// Nothing here opens a socket itself. A server binds a QUIC endpoint and writes
+// its certificate to a path; a client that trusts that path connects on the
+// server's port. Both then hand over messages and read back whatever has
+// arrived, polling the same cooperative way the rest of Foundation does.
+
+// A bound server, waiting for peers to connect.
+struct WtServer {
+    let handle: Int
+}
+
+// One live bidirectional channel to a peer.
+//
+// A server holds one of these per connected peer; a client holds the single one
+// it opened. Sending and receiving are the same calls on either side.
+struct WtChannel {
+    let handle: Int
+}
+
+// What a receive found on a channel.
+//
+// Three cases, not an `Option`, because "nothing has arrived yet" and "the peer
+// is gone" are different things to do about: the first is waited on, the second
+// ends the loop. Collapsing them into absence would make a closed channel look
+// like a quiet one and spin forever on it.
+enum WtInbound {
+    // A whole message arrived.
+    Message(String)
+    // Nothing has arrived since the last receive. Wait and ask again.
+    Idle
+    // The channel has closed and drained. Nothing more will come.
+    Closed
+}
+
+// Binds a server and publishes its certificate to `certPath`, returning it.
+//
+// A returned handle whose `.handle` is not positive is a bind that failed, and
+// the number is the library's negative code. A caller checks `wtServerReady`
+// rather than reaching into the field.
+function wtServe(certPath: borrow String) -> WtServer {
+    return WtServer { handle: kira_network_wt_server(certPath) }
+}
+
+// Whether a server bound. A false here means the endpoint or the certificate
+// write failed, and the conversation cannot be had.
+function wtServerReady(server: borrow WtServer) -> Bool {
+    return server.handle > 0
+}
+
+// The port a server bound, or a negative error code.
+function wtServerPort(server: borrow WtServer) -> Int {
+    return kira_network_wt_server_port(server.handle)
+}
+
+// The next peer that has connected, or `None` when none is waiting.
+//
+// Polled rather than waited on: a server settles this each turn of its loop
+// alongside everything else it does, so a new peer is picked up without a thread
+// parked on the endpoint.
+function wtAccept(server: borrow WtServer) -> Option<WtChannel> {
+    let handle = kira_network_wt_accept(server.handle)
+    if handle > 0 {
+        return .Some(WtChannel { handle: handle })
+    }
+    return .None
+}
+
+// Connects to a server on `port`, trusting the certificate at `certPath`.
+//
+// The channel is returned at once; the QUIC handshake completes behind it. Sends
+// made before it is up are buffered, and a receive reports `Idle` until the
+// first message crosses. A handshake that fails surfaces as `Closed` on the
+// first receive.
+function wtConnect(port: Int, certPath: borrow String) -> WtChannel {
+    return WtChannel { handle: kira_network_wt_connect(U16(port), certPath) }
+}
+
+// Sends one whole message over a channel. Answers false when the channel has
+// closed and the message could not be queued.
+function wtSend(channel: borrow WtChannel, message: borrow String) -> Bool {
+    return kira_network_wt_send(channel.handle, message) == 0
+}
+
+// Reads the next message on a channel, or reports that there is none yet or that
+// the channel has closed.
+function wtReceive(channel: borrow WtChannel) -> WtInbound {
+    let length = kira_network_wt_receive(channel.handle)
+    if length > 0 {
+        return WtInbound.Message(wtReadText(channel.handle))
+    }
+    if length == 0 {
+        return WtInbound.Idle
+    }
+    return WtInbound.Closed
+}
+
+// What reading a channel as bytes found.
+enum WtInboundBytes {
+    // A whole frame arrived, as its raw bytes.
+    Frame([U8])
+    // Nothing has arrived since the last read.
+    Idle
+    // The channel has closed.
+    Closed
+}
+
+// Sends one whole message as raw bytes — the path a binary message (Kten) takes,
+// where text's NUL-terminated string cannot carry arbitrary bytes. Answers false
+// when the channel has closed.
+function wtSendBytes(channel: borrow WtChannel, bytes: borrow [U8]) -> Bool {
+    var index = 0
+    while index < bytes.count {
+        if kira_network_wt_send_byte(channel.handle, I32(Int(bytes[index]))) != 0 {
+            return false
+        }
+        index = index + 1
+    }
+    return kira_network_wt_send_flush(channel.handle) == 0
+}
+
+// Reads the next frame on a channel as raw bytes.
+function wtReceiveBytes(channel: borrow WtChannel) -> WtInboundBytes {
+    let length = kira_network_wt_receive(channel.handle)
+    if length > 0 {
+        var out: [U8] = []
+        var byte = kira_network_wt_read_byte(channel.handle)
+        while byte >= 0 {
+            out.append(U8(byte & 255))
+            byte = kira_network_wt_read_byte(channel.handle)
+        }
+        return WtInboundBytes.Frame(move out)
+    }
+    if length == 0 {
+        return WtInboundBytes.Idle
+    }
+    return WtInboundBytes.Closed
+}
+
+// Closes a server or a channel. Both hold a `handle`, and the C surface forgets
+// whichever it is, so one call serves both.
+function wtCloseServer(server: borrow WtServer) {
+    kira_network_wt_close(server.handle)
+    return
+}
+
+function wtCloseChannel(channel: borrow WtChannel) {
+    kira_network_wt_close(channel.handle)
+    return
+}
+
+// The selected message as text.
+//
+// The C surface returns scalars, the one direction text crosses a boundary that
+// returns `int64_t`, so the message is rebuilt here the way a response body is
+// in `Net.kira`.
+function wtReadText(handle: Int) -> String {
+    var text = ""
+    var scalar = kira_network_wt_read_scalar(handle)
+    while scalar >= 0 {
+        text = text + scalarText(scalar)
+        scalar = kira_network_wt_read_scalar(handle)
+    }
+    return text
+}

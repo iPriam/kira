@@ -5,22 +5,21 @@
 //! `{...}` body if it has one and becomes an [`Item::Unsupported`] node, so one
 //! malformed declaration never derails the rest of the file.
 //!
-//! Two grammars that surround an item live in submodules of this one, so this
-//! file stays about items: [`foreign`] parses the `@FFI.*` blocks, and
-//! [`type_refs`] parses written types and the signature pieces every declaration
-//! shares.
+//! Declaration-specific parsing lives in submodules so this file stays focused
+//! on item dispatch and shared function parsing.
 
+mod extern_library;
 mod foreign;
+mod namespace;
 mod type_refs;
+mod unsupported;
 
 use kira_core::Symbol;
-use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_runtime_abi::Execution;
-use kira_source::{FileSpan, Span};
+use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ExportMark, FfiTypeMark, ForeignKind, ForeignMark, Function, ImportDecl, Item,
-    UnsupportedItem,
+    Block, ExportMark, FfiTypeMark, ForeignKind, ForeignMark, Function, Item,
 };
 
 use crate::Parser;
@@ -118,6 +117,7 @@ impl Parser<'_> {
                     self.items.push(Item::Import(declaration));
                 }
             }
+            TokenKind::Namespace => self.parse_namespace(),
             TokenKind::Class => {
                 if let Some(declaration) = self.parse_class() {
                     self.items.push(Item::Class(declaration));
@@ -132,6 +132,13 @@ impl Parser<'_> {
                 if let Some(declaration) = self.parse_trait() {
                     self.items.push(Item::Trait(declaration));
                 }
+            }
+            // `extern library Name { function ... }` is contextual sugar for a
+            // run of `@FFI.Extern` declarations that all share one library and
+            // the C ABI. `extern` and `library` stay ordinary identifiers
+            // everywhere this exact top-level head does not appear.
+            TokenKind::Identifier if self.at_extern_library_block() => {
+                self.parse_extern_library_block();
             }
             // `extend Family { ... }` leads with the contextual keyword
             // `extend`: an ordinary identifier everywhere else, and a
@@ -566,58 +573,6 @@ impl Parser<'_> {
         self.parse_block()
     }
 
-    /// Parses `import Module[.Sub…] [as Alias]`.
-    ///
-    /// Recovery: a malformed path yields no item at all rather than a partial
-    /// one, because an import with no module names nothing a later phase could
-    /// resolve — the parser has already said what was wrong, and inventing a
-    /// module would produce a second, misleading "unresolved import".
-    fn parse_import(&mut self) -> Option<ImportDecl> {
-        let start = self.current().span;
-        self.expect(TokenKind::Import);
-        let mut path = Vec::new();
-        let path_start = self.current().span;
-        loop {
-            if !self.at(TokenKind::Identifier) {
-                self.error(
-                    self.current().span,
-                    "KPAR016",
-                    "expected a module name after `import`",
-                );
-                return None;
-            }
-            let span = self.current().span;
-            path.push(self.intern_span(span));
-            self.bump();
-            if !self.eat(TokenKind::Dot) {
-                break;
-            }
-        }
-        let path_span = Span::from_bounds(path_start.start, self.previous_end());
-        // `as` is a keyword, so the alias clause needs no contextual lookahead.
-        let (alias, alias_span) = if self.eat(TokenKind::As) {
-            if self.at(TokenKind::Identifier) {
-                let span = self.current().span;
-                let symbol = self.intern_span(span);
-                self.bump();
-                (Some(symbol), Some(span))
-            } else {
-                self.error(self.current().span, "KPAR017", "expected a name after `as`");
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-        let span = Span::from_bounds(start.start, self.previous_end());
-        Some(ImportDecl {
-            path,
-            path_span,
-            alias,
-            alias_span,
-            span,
-        })
-    }
-
     pub(crate) fn parse_block(&mut self) -> Block {
         let start = self.current().span;
         if !self.expect(TokenKind::LBrace) {
@@ -667,80 +622,5 @@ impl Parser<'_> {
         self.expect(TokenKind::RBrace);
         let span = Span::from_bounds(start.start, self.previous_end());
         Block { stmts, span }
-    }
-
-    // ----- unsupported constructs (parse-don't-crash) -------------------
-
-    fn parse_unsupported_item(&mut self) {
-        let start = self.current().span;
-        self.parse_unsupported_item_from(start);
-    }
-
-    fn parse_unsupported_item_from(&mut self, start: Span) {
-        let keyword = unsupported_keyword(self.current_kind(), self.text_of(self.current().span));
-        // Walk forward: if a `{...}` body appears before the next top-level
-        // starter, consume it balanced; otherwise stop at the next starter.
-        while !self.at_eof() {
-            match self.current_kind() {
-                TokenKind::LBrace => {
-                    self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
-                    break;
-                }
-                kind if is_item_start(kind) && self.current().span != start => break,
-                _ => {
-                    self.bump();
-                }
-            }
-        }
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.items
-            .push(Item::Unsupported(UnsupportedItem { keyword, span }));
-        let file_span = FileSpan::new(self.source, span);
-        let mut diagnostic = Diagnostic::single(
-            Severity::Error,
-            format!("`{keyword}` is not supported yet"),
-            Label::primary(file_span, "not yet supported in this compiler"),
-        );
-        diagnostic.code = Some(Code::known("KSEM900"));
-        diagnostic.phase = Some("parser");
-        diagnostic.help = Some(
-            "the v0 subset supports functions, structs, let/var, if/while, and arithmetic"
-                .to_owned(),
-        );
-        self.diagnostics.push(diagnostic);
-    }
-}
-
-/// Whether `kind` can begin a top-level item, used to bound error recovery.
-fn is_item_start(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::At
-            | TokenKind::Function
-            | TokenKind::Struct
-            | TokenKind::Enum
-            | TokenKind::Type
-            | TokenKind::Class
-            | TokenKind::Construct
-            | TokenKind::Trait
-            | TokenKind::Import
-    )
-}
-
-/// A stable label for an unsupported construct, for diagnostics.
-fn unsupported_keyword(kind: TokenKind, text: &str) -> &'static str {
-    match kind {
-        TokenKind::Enum => "enum",
-        TokenKind::Class => "class",
-        TokenKind::Import => "import",
-        // `Package` is a real declaration form this parser has not built.
-        // Every other identifier-led form is an ordinary name: a declaration
-        // backed by a family is written `construct Name(…) extends Family`, so
-        // no identifier begins one.
-        TokenKind::Identifier => match text {
-            "Package" => "Package",
-            _ => "declaration",
-        },
-        _ => "declaration",
     }
 }

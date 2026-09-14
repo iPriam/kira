@@ -100,11 +100,39 @@ int64_t kira_network_response_rewind(int64_t handle);
 int64_t kira_network_response_read_byte(int64_t handle);
 int64_t kira_network_response_read_scalar(int64_t handle);
 
+/* Starts a shell command; poll like a request, status is the exit code, body is
+ * the captured output. cwd empty runs in the current directory. */
+int64_t kira_network_command_start(const char *command, const char *cwd);
+
+/* The wall-clock time now, in milliseconds since the Unix epoch. */
+int64_t kira_network_unix_millis(void);
+
 /* Idempotently cancels and removes an operation. */
 void kira_network_cancel(int64_t handle);
 
 /* Compatibility alias for kira_network_cancel. */
 void kira_network_close(int64_t handle);
+
+/*
+ * A QUIC WebTransport channel: a long-lived bidirectional message stream
+ * between local peers, apart from the one-shot operation handles above.
+ *
+ * A server binds and writes its certificate to cert_path; a client that trusts
+ * that certificate connects on the server's port. Both send whole text frames
+ * and receive them by selecting the next arrival and reading it out scalar by
+ * scalar, the same way a response body is read.
+ */
+int64_t kira_network_wt_server(const char *cert_path);
+int64_t kira_network_wt_server_port(int64_t handle);
+int64_t kira_network_wt_accept(int64_t handle);
+int64_t kira_network_wt_connect(uint16_t port, const char *cert_path);
+int64_t kira_network_wt_send(int64_t handle, const char *text);
+int64_t kira_network_wt_receive(int64_t handle);
+int64_t kira_network_wt_read_scalar(int64_t handle);
+int64_t kira_network_wt_read_byte(int64_t handle);
+int64_t kira_network_wt_send_byte(int64_t handle, int32_t byte);
+int64_t kira_network_wt_send_flush(int64_t handle);
+void kira_network_wt_close(int64_t handle);
 
 #ifdef __cplusplus
 } /* extern "C" */

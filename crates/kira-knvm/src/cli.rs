@@ -29,6 +29,27 @@ impl VersionSpec {
     }
 }
 
+/// What `knvm llvm` does to the managed LLVM tree.
+///
+/// One verb owns every LLVM operation because they share a home the toolchain
+/// verbs never touch: `<toolchains-root>/llvm/<version>/`, a versioned sibling
+/// of the installed toolchains that a channel install must not write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlvmAction {
+    /// Report the pinned version and what is installed.
+    Status,
+    /// Download and install the pinned bundle for this host.
+    Install {
+        /// Whether to replace a bundle that is already installed.
+        force: bool,
+    },
+    /// Remove one installed version's whole tree.
+    Uninstall {
+        /// The version to remove.
+        version: String,
+    },
+}
+
 /// A parsed `knvm` invocation.
 ///
 /// A verb this enum accepts is a verb that runs: nothing here is a placeholder.
@@ -57,11 +78,8 @@ pub enum KnvmCommand {
     List,
     /// Report the versions published on every channel.
     ListRemote,
-    /// Provision the pinned LLVM bundle the native backend links.
-    InstallLlvm {
-        /// Whether to replace a bundle that is already installed.
-        force: bool,
-    },
+    /// Manage the LLVM bundle the native backend links.
+    Llvm(LlvmAction),
     /// Replace the installed tools with the newest published build.
     SelfUpdate {
         /// Which channel to take the newest tools from.
@@ -142,9 +160,10 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
             // `libffi` where a version goes is the engine, not a toolchain
             // called `libffi`. It is spelled as an argument to `install` rather
             // than as an `install-libffi` verb because it is a thing knvm
-            // installs, and the reason `install-llvm` is its own verb —
-            // that LLVM is a versioned sibling selected per toolchain — does
-            // not apply: libffi's version is the pin and nothing selects it.
+            // installs, and the reason LLVM has its own `llvm` verb — that it
+            // is a versioned sibling with its own install, uninstall, and status
+            // — does not apply: libffi's version is the pin and nothing selects
+            // it, so it has only the one operation.
             if rest.first().is_some_and(|first| first == "libffi") {
                 let force = match rest.get(1).map(String::as_str) {
                     None => false,
@@ -204,21 +223,7 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
                 }
             }
         }
-        "install-llvm" => {
-            // The version is the compiled-in pin and the host is this machine,
-            // so the only choice is whether to replace what is already there.
-            match rest.first().map(String::as_str) {
-                None => Ok(KnvmCommand::InstallLlvm { force: false }),
-                Some("--force") => {
-                    reject_arguments(&rest[1..])?;
-                    Ok(KnvmCommand::InstallLlvm { force: true })
-                }
-                Some(_) => {
-                    reject_arguments(rest)?;
-                    Ok(KnvmCommand::InstallLlvm { force: false })
-                }
-            }
-        }
+        "llvm" => parse_llvm(rest),
         "self-update" => {
             let parsed = parse_version_and_channel(rest)?;
             if let Some(version) = parsed.version {
@@ -260,6 +265,46 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
             Ok(KnvmCommand::Sinstall)
         }
         other => Err(UsageError::UnknownCommand(other.to_string())),
+    }
+}
+
+/// Parses `llvm [install [--force] | uninstall <version>]`.
+///
+/// A bare `llvm` reports status rather than erroring: it is the front door to
+/// the verb, the way a bare `knvm` is to the tool. `install` takes the pinned
+/// version and this host, so its only choice is whether to replace what is
+/// there; `uninstall` names an installed version, which — unlike `install` —
+/// is not the pin, because old versions are exactly what it removes.
+fn parse_llvm(rest: &[String]) -> Result<KnvmCommand, UsageError> {
+    match rest.first().map(String::as_str) {
+        None => Ok(KnvmCommand::Llvm(LlvmAction::Status)),
+        Some("install") => {
+            let force = match rest.get(1).map(String::as_str) {
+                None => false,
+                Some("--force") => {
+                    reject_arguments(&rest[2..])?;
+                    true
+                }
+                Some(extra) if extra.starts_with("--") => {
+                    return Err(UsageError::UnknownOption(extra.to_string()));
+                }
+                Some(extra) => return Err(UsageError::UnexpectedArgument(extra.to_string())),
+            };
+            Ok(KnvmCommand::Llvm(LlvmAction::Install { force }))
+        }
+        Some("uninstall") => {
+            let version = rest
+                .get(1)
+                .ok_or(UsageError::MissingVersion("llvm uninstall"))?;
+            if version.starts_with("--") {
+                return Err(UsageError::UnknownOption(version.clone()));
+            }
+            reject_arguments(&rest[2..])?;
+            Ok(KnvmCommand::Llvm(LlvmAction::Uninstall {
+                version: version.clone(),
+            }))
+        }
+        Some(other) => Err(UsageError::UnknownCommand(format!("llvm {other}"))),
     }
 }
 
@@ -323,7 +368,11 @@ pub fn usage(paint: crate::Paint) -> String {
             " <version|latest> [--channel]",
             "fetch a release and select it",
         ),
-        ("install-llvm", " [--force]", "the LLVM the backend links"),
+        (
+            "llvm",
+            " [install [--force]|uninstall <version>]",
+            "manage the LLVM the backend links",
+        ),
         (
             "install libffi",
             " [--force]",
@@ -391,289 +440,4 @@ pub fn usage(paint: crate::Paint) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse_args(arguments: &[&str]) -> Result<KnvmCommand, UsageError> {
-        let owned: Vec<String> = arguments.iter().map(|text| (*text).to_string()).collect();
-        parse(&owned)
-    }
-
-    /// A dev toolchain is what every downstream project then compiles through,
-    /// so the plain verb has to produce the optimized one.
-    #[test]
-    fn binstall_builds_an_optimized_toolchain_unless_debug_is_asked_for() {
-        assert_eq!(
-            parse_args(&["binstall"]),
-            Ok(KnvmCommand::Binstall {
-                profile: BuildProfile::Release,
-            })
-        );
-        assert_eq!(
-            parse_args(&["binstall", "--debug"]),
-            Ok(KnvmCommand::Binstall {
-                profile: BuildProfile::Debug,
-            })
-        );
-        assert_eq!(
-            parse_args(&["binstall", "--fast"]),
-            Err(UsageError::UnknownOption("--fast".to_string()))
-        );
-    }
-
-    #[test]
-    fn parses_install_with_the_default_channel() {
-        assert_eq!(
-            parse_args(&["install", "latest"]),
-            Ok(KnvmCommand::Install {
-                spec: VersionSpec::Latest,
-                channel: Channel::Release,
-            })
-        );
-        assert_eq!(
-            parse_args(&["install", "1.7.3"]),
-            Ok(KnvmCommand::Install {
-                spec: VersionSpec::Exact("1.7.3".to_string()),
-                channel: Channel::Release,
-            })
-        );
-    }
-
-    #[test]
-    fn parses_the_channel_flag_on_either_side_of_the_version() {
-        let expected = KnvmCommand::Install {
-            spec: VersionSpec::Latest,
-            channel: Channel::Dev,
-        };
-        assert_eq!(
-            parse_args(&["install", "latest", "--channel", "dev"]),
-            Ok(expected.clone())
-        );
-        assert_eq!(
-            parse_args(&["install", "--channel", "dev", "latest"]),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn parses_help() {
-        for spelling in ["help", "--help", "-h"] {
-            assert_eq!(parse_args(&[spelling]), Ok(KnvmCommand::Help));
-        }
-    }
-
-    #[test]
-    fn a_bare_invocation_is_the_overview_not_an_error() {
-        assert_eq!(parse_args(&[]), Ok(KnvmCommand::Overview));
-    }
-
-    #[test]
-    fn rejects_bad_usage_by_name() {
-        assert_eq!(
-            parse_args(&["frobnicate"]),
-            Err(UsageError::UnknownCommand("frobnicate".to_string()))
-        );
-        assert_eq!(
-            parse_args(&["install"]),
-            Err(UsageError::InstallMissingVersion)
-        );
-        assert_eq!(
-            parse_args(&["install", "latest", "--channel"]),
-            Err(UsageError::ChannelMissingValue)
-        );
-        assert_eq!(
-            parse_args(&["install", "latest", "--channel", "nightly"]),
-            Err(UsageError::UnknownChannel("nightly".to_string()))
-        );
-        assert_eq!(
-            parse_args(&["install", "latest", "--verbose"]),
-            Err(UsageError::UnknownOption("--verbose".to_string()))
-        );
-        assert_eq!(
-            parse_args(&["install", "1.7.3", "2.0.0"]),
-            Err(UsageError::UnexpectedArgument("2.0.0".to_string()))
-        );
-    }
-
-    #[test]
-    fn parses_list_and_refuses_arguments_it_has_no_use_for() {
-        assert_eq!(parse_args(&["list"]), Ok(KnvmCommand::List));
-        assert_eq!(
-            parse_args(&["list", "--channel", "dev"]),
-            Err(UsageError::UnknownOption("--channel".to_string())),
-            "list reports every channel, so a channel filter must be refused, not ignored"
-        );
-        assert_eq!(
-            parse_args(&["list", "1.7.3"]),
-            Err(UsageError::UnexpectedArgument("1.7.3".to_string()))
-        );
-    }
-
-    #[test]
-    fn parses_use_under_both_spellings() {
-        for spelling in ["use", "switch"] {
-            assert_eq!(
-                parse_args(&[spelling, "1.7.3"]),
-                Ok(KnvmCommand::Use {
-                    version: "1.7.3".to_string(),
-                    channel: Channel::Release,
-                })
-            );
-        }
-        assert_eq!(
-            parse_args(&["use", "--channel", "dev", "2026.07.2"]),
-            Ok(KnvmCommand::Use {
-                version: "2026.07.2".to_string(),
-                channel: Channel::Dev,
-            })
-        );
-    }
-
-    #[test]
-    fn parses_uninstall() {
-        assert_eq!(
-            parse_args(&["uninstall", "1.7.3"]),
-            Ok(KnvmCommand::Uninstall {
-                version: "1.7.3".to_string(),
-                channel: Channel::Release,
-            })
-        );
-        assert_eq!(
-            parse_args(&["uninstall", "2026.07.2", "--channel", "dev"]),
-            Ok(KnvmCommand::Uninstall {
-                version: "2026.07.2".to_string(),
-                channel: Channel::Dev,
-            })
-        );
-    }
-
-    #[test]
-    fn requires_a_version_for_the_verbs_that_act_on_one() {
-        assert_eq!(parse_args(&["use"]), Err(UsageError::MissingVersion("use")));
-        assert_eq!(
-            parse_args(&["switch"]),
-            Err(UsageError::MissingVersion("use")),
-            "the alias must report the canonical verb"
-        );
-        assert_eq!(
-            parse_args(&["uninstall"]),
-            Err(UsageError::MissingVersion("uninstall"))
-        );
-    }
-
-    #[test]
-    fn keeps_latest_out_of_the_verbs_that_act_on_installed_versions() {
-        // `latest` is not special here: it is taken as a version name, which is
-        // then refused downstream as not installed. Nothing silently resolves a
-        // release feed for a local operation.
-        assert_eq!(
-            parse_args(&["use", "latest"]),
-            Ok(KnvmCommand::Use {
-                version: "latest".to_string(),
-                channel: Channel::Release,
-            })
-        );
-    }
-
-    #[test]
-    fn parses_the_two_shapes_of_list() {
-        assert_eq!(parse_args(&["list"]), Ok(KnvmCommand::List));
-        assert_eq!(
-            parse_args(&["list", "--remote"]),
-            Ok(KnvmCommand::ListRemote)
-        );
-        assert_eq!(
-            parse_args(&["list", "--remote", "dev"]),
-            Err(UsageError::UnexpectedArgument("dev".to_string())),
-            "`--remote` reports every channel, so a filter must be refused"
-        );
-    }
-
-    #[test]
-    fn parses_install_llvm_and_its_only_option() {
-        assert_eq!(
-            parse_args(&["install-llvm"]),
-            Ok(KnvmCommand::InstallLlvm { force: false })
-        );
-        assert_eq!(
-            parse_args(&["install-llvm", "--force"]),
-            Ok(KnvmCommand::InstallLlvm { force: true })
-        );
-        assert_eq!(
-            parse_args(&["install-llvm", "22.1.4"]),
-            Err(UsageError::UnexpectedArgument("22.1.4".to_string())),
-            "the version is the compiled-in pin, never an argument"
-        );
-    }
-
-    #[test]
-    fn parses_self_update_which_takes_a_channel_and_no_version() {
-        assert_eq!(
-            parse_args(&["self-update"]),
-            Ok(KnvmCommand::SelfUpdate {
-                channel: Channel::Release
-            })
-        );
-        assert_eq!(
-            parse_args(&["self-update", "--channel", "dev"]),
-            Ok(KnvmCommand::SelfUpdate {
-                channel: Channel::Dev
-            })
-        );
-        assert_eq!(
-            parse_args(&["self-update", "1.7.3"]),
-            Err(UsageError::UnexpectedArgument("1.7.3".to_string())),
-            "self-update takes the newest, so naming a version is a misunderstanding to report"
-        );
-    }
-
-    #[test]
-    fn parses_pin_and_unpin() {
-        assert_eq!(
-            parse_args(&["pin", "1.10.0"]),
-            Ok(KnvmCommand::Pin {
-                version: "1.10.0".to_string(),
-                channel: Channel::Release,
-            })
-        );
-        assert_eq!(
-            parse_args(&["pin", "2026.07.2", "--channel", "dev"]),
-            Ok(KnvmCommand::Pin {
-                version: "2026.07.2".to_string(),
-                channel: Channel::Dev,
-            })
-        );
-        assert_eq!(parse_args(&["pin"]), Err(UsageError::MissingVersion("pin")));
-        assert_eq!(parse_args(&["unpin"]), Ok(KnvmCommand::Unpin));
-        assert_eq!(
-            parse_args(&["unpin", "1.10.0"]),
-            Err(UsageError::UnexpectedArgument("1.10.0".to_string()))
-        );
-    }
-
-    #[test]
-    fn every_verb_the_usage_text_names_parses() {
-        let text = usage(crate::Paint::plain());
-        for verb in [
-            "install",
-            "install-llvm",
-            "binstall",
-            "sinstall",
-            "self-update",
-            "list",
-            "use",
-            "pin",
-            "unpin",
-            "uninstall",
-        ] {
-            assert!(
-                text.contains(verb),
-                "`{verb}` must be documented in the usage text"
-            );
-        }
-        assert!(
-            !text.contains("Not available yet"),
-            "no verb is a placeholder any more"
-        );
-    }
-}
+mod tests;

@@ -12,12 +12,31 @@
 use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Block, ForIterable, Stmt, StmtId};
+use kira_syntax_model::ast::{BinaryOp, Block, ForIterable, Stmt, StmtId};
 use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
 
 mod branches;
+
+/// The binary operator a compound-assignment token applies, or `None` when the
+/// token is not one. `<<=` and `>>=` cover the shifts; the rest are the
+/// arithmetic and bitwise operators.
+fn compound_assign_op(kind: TokenKind) -> Option<BinaryOp> {
+    Some(match kind {
+        TokenKind::PlusEq => BinaryOp::Add,
+        TokenKind::MinusEq => BinaryOp::Sub,
+        TokenKind::StarEq => BinaryOp::Mul,
+        TokenKind::SlashEq => BinaryOp::Div,
+        TokenKind::PercentEq => BinaryOp::Rem,
+        TokenKind::AmpEq => BinaryOp::BitAnd,
+        TokenKind::PipeEq => BinaryOp::BitOr,
+        TokenKind::CaretEq => BinaryOp::BitXor,
+        TokenKind::LtLtEq => BinaryOp::Shl,
+        TokenKind::GtGtEq => BinaryOp::Shr,
+        _ => return None,
+    })
+}
 
 impl Parser<'_> {
     /// Parses one statement, returning its arena handle, or `None` when the
@@ -47,14 +66,19 @@ impl Parser<'_> {
     fn parse_expr_or_assign(&mut self) -> StmtId {
         let start = self.current().span;
         let target = self.parse_expr();
-        if !self.eat(TokenKind::Equals) {
+        // A plain `=` assigns; a compound `+=` and its kin assign
+        // `target op value`. Anything else leaves the expression a statement.
+        let op = compound_assign_op(self.current_kind());
+        if op.is_none() && !self.at(TokenKind::Equals) {
             let span = Span::from_bounds(start.start, self.previous_end());
             return self.tree.add_stmt(Stmt::Expr { expr: target, span });
         }
+        self.bump(); // `=` or a compound operator
         let value = self.parse_expr();
         let span = Span::from_bounds(start.start, self.previous_end());
         self.tree.add_stmt(Stmt::Assign {
             target,
+            op,
             value,
             span,
         })
@@ -234,11 +258,13 @@ impl Parser<'_> {
             | TokenKind::StringLiteral
             | TokenKind::True
             | TokenKind::False
+            | TokenKind::Infinity
             | TokenKind::Identifier
             | TokenKind::LParen
             // `return try g()` — `try` is a prefix operator in expression
             // position, so it starts an expression like `-` and `!` do.
             | TokenKind::Try
+            | TokenKind::Match
             | TokenKind::Minus
             | TokenKind::Bang
             // `return ~mask` — `~` is a prefix operator like `-` and `!`, so
@@ -370,6 +396,28 @@ mod tests {
                 );
             }
             other => panic!("expected a `for`, got {other:?}"),
+        }
+    }
+
+    /// `i += 1` parses as an assignment carrying the `+` operator, not a plain
+    /// one; `i = 1` carries none.
+    #[test]
+    fn a_compound_assignment_carries_its_operator() {
+        use kira_syntax_model::ast::BinaryOp;
+        let (_, stmts) = body("function f() { i += 1 }");
+        match &stmts[0] {
+            Stmt::Assign { op: Some(op), .. } => assert_eq!(*op, BinaryOp::Add),
+            other => panic!("expected a compound assignment, got {other:?}"),
+        }
+        let (_, stmts) = body("function f() { i <<= 2 }");
+        match &stmts[0] {
+            Stmt::Assign { op: Some(op), .. } => assert_eq!(*op, BinaryOp::Shl),
+            other => panic!("expected a compound assignment, got {other:?}"),
+        }
+        let (_, stmts) = body("function f() { i = 1 }");
+        match &stmts[0] {
+            Stmt::Assign { op: None, .. } => {}
+            other => panic!("expected a plain assignment, got {other:?}"),
         }
     }
 

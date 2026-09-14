@@ -203,6 +203,7 @@ fn launch_for(
             options.release,
             link,
             info,
+            options.sanitize,
         )
         .map_err(|error| {
             err!("kira profile record: {error}");

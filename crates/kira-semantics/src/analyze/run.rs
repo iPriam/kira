@@ -170,6 +170,11 @@ impl<'a> Analyzer<'a> {
         // with every conformance now recorded, the variants can be filled and
         // the member shapes resolved.
         self.fill_trait_existentials();
+        // One namespace, one declaration per name: a top-level type whose name
+        // an import already provides is refused here, now that every struct,
+        // enum, class, distinct, alias, and family has a row and "already
+        // provided" no longer depends on collection order.
+        self.reject_cross_package_shadowing();
         // `@Derive(Copy)` asks a question about a whole reachable shape, so it
         // is answered once every struct, class, enum, and construct-backed type
         // exists and every payload is resolved.

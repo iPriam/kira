@@ -8,6 +8,7 @@ use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, TypeRefId};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::place::PlacePurpose;
 
 /// Which way a userdata token's owner count moves.
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +38,10 @@ impl Analyzer<'_> {
     ) -> Option<HirExprId> {
         Some(match name {
             "nativeState" => self.analyze_native_state(ctx, type_args, args, span),
-            "nativeUserData" => self.analyze_native_user_data(ctx, type_args, args, span),
+            "nativeUserData" => self.analyze_native_user_data(ctx, type_args, args, span, false),
+            "nativeUserDataBorrow" => {
+                self.analyze_native_user_data(ctx, type_args, args, span, true)
+            }
             "nativeRecover" => self.analyze_native_recover(ctx, type_args, args, span),
             "nativeUserDataRetain" => {
                 self.analyze_native_state_count(ctx, Counting::Retain, type_args, args, span)
@@ -62,28 +66,20 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let ty = self.program.expr(value).type_of();
+        if self.program.types.native_state_target(ty).is_some() {
+            self.emit(
+                span,
+                "KSEM377",
+                "`nativeState` cannot box a `NativeState` handle as the root value; move the handle as a field of an owning aggregate instead",
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         if ty != Type::Error && !self.native_state_eligible(ty) {
             self.emit(
                 span,
                 "KSEM214",
                 format!(
                     "`nativeState` requires a Kira-owned value, found `{}`",
-                    self.type_name(ty)
-                ),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-        // A boxed value leaves the frame that made it: `nativeStateFree` gives
-        // the box back from wherever a callback happened to be, and the store is
-        // not an engine — there is nothing there to enter a `Drop` body with.
-        if self.program.types.runs_user_drop(ty) {
-            self.emit(
-                span,
-                "KSEM304",
-                format!(
-                    "`nativeState` cannot box `{}`, which runs a user `Drop` body: the box \
-                     outlives the frame that made it and is freed where no engine is running to \
-                     enter the body. Keep the value in a frame, and box what it computes.",
                     self.type_name(ty)
                 ),
             );
@@ -106,24 +102,53 @@ impl Analyzer<'_> {
         type_args: &[TypeRefId],
         args: &[CallArg],
         span: Span,
+        borrowed: bool,
     ) -> HirExprId {
-        self.reject_intrinsic_type_args("nativeUserData", type_args, span);
-        let Some(state) = self.one_intrinsic_arg(ctx, "nativeUserData", args, span) else {
+        let name = if borrowed {
+            "nativeUserDataBorrow"
+        } else {
+            "nativeUserData"
+        };
+        self.reject_intrinsic_type_args(name, type_args, span);
+        let Some(state) = self.one_intrinsic_arg(ctx, name, args, span) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let ty = self.program.expr(state).type_of();
-        if ty != Type::Error && self.program.types.native_state_target(ty).is_none() {
+        let state_ty = self.program.expr(state).type_of();
+        if state_ty != Type::Error && self.program.types.native_state_target(state_ty).is_none() {
             self.emit(
                 span,
                 "KSEM215",
                 format!(
-                    "`nativeUserData` expects callback state, found `{}`",
-                    self.type_name(ty)
+                    "`{name}` expects callback state, found `{}`",
+                    self.type_name(state_ty)
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.program.exprs.alloc(HirExpr::NativeUserData { state })
+        if borrowed
+            && self
+                .resolve_place(ctx, args[0].value, PlacePurpose::UserDataBorrow)
+                .is_none()
+        {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if borrowed {
+            // The intrinsic borrows the owner in place. A field such as
+            // `wrapper.storage` therefore does not extract a second affine
+            // owner; claim the deferred field read exactly like any borrowed
+            // call argument does.
+            self.excuse_drop_extraction(state);
+        } else {
+            // `nativeUserData(owner)` is the explicit clone operation for a
+            // typed state owner. It may therefore copy an affine field on
+            // purpose; ordinary field reads are still refused.
+            self.excuse_drop_extraction(state);
+        }
+        self.program.exprs.alloc(HirExpr::NativeUserData {
+            state,
+            borrowed,
+            ty: if borrowed { Type::RawPtr } else { state_ty },
+        })
     }
 
     fn analyze_native_recover(
@@ -151,14 +176,40 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let raw_ty = self.program.expr(raw).type_of();
-        if raw_ty != Type::RawPtr && raw_ty != Type::Error {
+        let owned_state = self.program.types.native_state_target(raw_ty).is_some();
+        if raw_ty != Type::RawPtr && !owned_state && raw_ty != Type::Error {
             self.emit(
                 span,
                 "KSEM217",
                 format!(
-                    "`nativeRecover` expects `RawPtr`, found `{}`",
+                    "`nativeRecover` expects an owned userdata handle or borrowed `RawPtr`, found `{}`",
                     self.type_name(raw_ty)
                 ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // Recovery borrows an owner; it never manufactures another one. An
+        // owned state therefore has to be a real place whose token remains
+        // rooted for the duration of the borrow. Refusing owner temporaries is
+        // deliberately stricter than trying to invent an implicit lifetime for
+        // a retained temporary during lowering.
+        if owned_state
+            && self
+                .resolve_place(ctx, args[0].value, PlacePurpose::NativeRecoverBorrow)
+                .is_none()
+        {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if owned_state {
+            // Recovery is a borrow of the owner place, not an extraction of a
+            // second NativeState value.
+            self.excuse_drop_extraction(raw);
+        }
+        if self.program.types.native_state_target(target).is_some() {
+            self.emit(
+                span,
+                "KSEM377",
+                "`nativeRecover<NativeState<...>>` is not a root recovery; recover the owning aggregate and borrow its state field instead",
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
@@ -168,21 +219,6 @@ impl Analyzer<'_> {
                 "KSEM214",
                 format!(
                     "`nativeRecover` requires a Kira-owned type, found `{}`",
-                    self.type_name(target)
-                ),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-        // Nothing may be boxed that runs a body, so nothing may be recovered as
-        // one either: a recovered view is a value of the target type, and this
-        // is the position that says what that type is.
-        if self.program.types.runs_user_drop(target) {
-            self.emit(
-                span,
-                "KSEM304",
-                format!(
-                    "`nativeRecover` cannot recover `{}`, which runs a user `Drop` body: the box \
-                     it would name is freed where no engine is running to enter the body.",
                     self.type_name(target)
                 ),
             );
@@ -213,8 +249,13 @@ impl Analyzer<'_> {
         })
     }
 
-    /// `nativeUserDataRetain(token)` and `nativeUserDataRelease(token)`: one
-    /// owner more or fewer of the state a userdata token names.
+    /// Explicit callback-state owner counting.
+    ///
+    /// Kira code may release a tracked `NativeState<T>` owner early, but it may
+    /// never mint or destroy ownership through a `RawPtr`. A raw userdata word
+    /// is a borrow only. Ownership may cross into C only through a `retains:`
+    /// foreign parameter, whose `move` is visible to ownership analysis; C then
+    /// balances that transferred reference through the runtime ABI.
     fn analyze_native_state_count(
         &mut self,
         ctx: &mut FnCtx,
@@ -224,26 +265,55 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         let name = counting.name();
-        self.reject_intrinsic_type_args(name, type_args, span);
+        if !type_args.is_empty() {
+            self.reject_intrinsic_type_args(name, type_args, span);
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let Some(token) = self.one_intrinsic_arg(ctx, name, args, span) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let ty = self.program.expr(token).type_of();
-        if ty != Type::RawPtr && ty != Type::Error {
+        let owned = self.program.types.native_state_target(ty).is_some();
+
+        if matches!(counting, Counting::Retain) {
+            self.emit(
+                span,
+                "KSEM378",
+                "`nativeUserDataRetain` is not available to Kira code: manufacturing an owner without a typed affine value would make the release obligation invisible. Clone a tracked owner with `nativeUserData(owner)`, or transfer one to C with a `retains:` parameter and `move`.",
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+
+        if ty == Type::RawPtr {
+            self.emit(
+                span,
+                "KSEM379",
+                "`nativeUserDataRelease` cannot consume `RawPtr`: raw userdata is a borrow and carries no ownership. Release a tracked `NativeState<T>` owner, or let C balance an owner explicitly transferred through a `retains:` parameter.",
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if ty != Type::Error && !owned {
             self.emit(
                 span,
                 "KSEM361",
                 format!(
-                    "`{name}` expects a userdata token of type `RawPtr`, found `{}`. A handle \
-                     releases its own reference when it goes out of scope.",
+                    "`{name}` expects a tracked `NativeState<T>` owner, found `{}`.",
                     self.type_name(ty)
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.program.exprs.alloc(match counting {
-            Counting::Retain => HirExpr::NativeStateRetain { token },
-            Counting::Release => HirExpr::NativeStateRelease { token },
+        // Releasing an affine userdata owner consumes that owner. Its scope must
+        // not release the same reference a second time.
+        if owned
+            && let Some(arg) = args.first()
+            && let Some(local) = self.named_local(ctx, arg.value)
+        {
+            ctx.mark_moved(local, span);
+        }
+        self.program.exprs.alloc(HirExpr::NativeStateRelease {
+            token,
+            target: None,
         })
     }
 
@@ -261,15 +331,20 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let ty = self.program.expr(token).type_of();
-        if ty != Type::RawPtr
-            && ty != Type::Error
-            && self.program.types.native_state_target(ty).is_none()
-        {
+        if ty == Type::RawPtr {
+            self.emit(
+                span,
+                "KSEM379",
+                "`nativeStateFree` cannot consume `RawPtr`: raw userdata is a borrow and carries no ownership.",
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if ty != Type::Error && self.program.types.native_state_target(ty).is_none() {
             self.emit(
                 span,
                 "KSEM219",
                 format!(
-                    "`nativeStateFree` expects callback state or `RawPtr`, found `{}`",
+                    "`nativeStateFree` expects tracked callback state, found `{}`",
                     self.type_name(ty)
                 ),
             );
@@ -279,8 +354,8 @@ impl Analyzer<'_> {
             span,
             "KSEM360",
             "`nativeStateFree` is deprecated: it releases one reference, not the state. Let \
-             the handle go out of scope to release its reference, and pair every \
-             `nativeUserData` token with `nativeUserDataRelease`.",
+             the handle go out of scope to release its reference. Raw userdata is borrowed \
+             and cannot be released from Kira code.",
         );
         // Releasing through the handle consumes it: the handle's reference is
         // the one given up, so the binding no longer owns anything to release
@@ -290,9 +365,10 @@ impl Analyzer<'_> {
         {
             ctx.mark_moved(local, span);
         }
-        self.program
-            .exprs
-            .alloc(HirExpr::NativeStateRelease { token })
+        self.program.exprs.alloc(HirExpr::NativeStateRelease {
+            token,
+            target: None,
+        })
     }
 
     fn one_intrinsic_arg(
@@ -337,7 +413,11 @@ impl Analyzer<'_> {
     }
 
     fn statically_boxed_type(&self, raw: HirExprId) -> Option<Type> {
-        let HirExpr::NativeUserData { state } = self.program.expr(raw) else {
+        let raw_ty = self.program.expr(raw).type_of();
+        if let Some(target) = self.program.types.native_state_target(raw_ty) {
+            return Some(target);
+        }
+        let HirExpr::NativeUserData { state, .. } = self.program.expr(raw) else {
             return None;
         };
         self.program
@@ -423,6 +503,13 @@ impl Analyzer<'_> {
                 .cells()
                 .inner(id)
                 .is_some_and(|inner| self.native_state_eligible_inner(inner, visiting)),
+            // A nested NativeState remains an affine owner inside the portable
+            // tree; every backend preserves its token identity and release.
+            Type::NativeState(id) => self
+                .program
+                .types
+                .native_state_target(Type::NativeState(id))
+                .is_some_and(|target| self.native_state_eligible_inner(target, visiting)),
             // Recovering callback state is *typed*: `nativeRecover<T>` checks a
             // runtime identity against `T`. `Any` has no identity to check
             // (`TypeTable::native_state_type_id` gives it none), so boxing one
@@ -431,8 +518,8 @@ impl Analyzer<'_> {
             | Type::Error
             | Type::CString
             | Type::CBlock
+            | Type::Number
             | Type::RuntimeType
-            | Type::NativeState(_)
             | Type::Task(_)
             | Type::MainThreadTask(_)
             | Type::Any => false,

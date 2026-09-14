@@ -1,0 +1,671 @@
+// Kten — Kira Transport Encoding.
+//
+// A native Kira data format for IPC and the network. One value model with two
+// encodings: a textual form that is a Kira value literal (for files, config, and
+// reading on a terminal) and a compact binary form for what crosses a socket.
+// A value round-trips through either unchanged.
+//
+// Reading is always safe. A decode answers a `Result`: malformed bytes, a field
+// that is absent, a value of the wrong type are outcomes a caller matches, never
+// a trap. Decoded against a schema you hold a real typed value and read its
+// fields directly; read dynamically, every access is a `Result` you match.
+//
+// The binary reader never traps on hostile input — it decodes bytes from another
+// process, which may be a different version or something else entirely — so a
+// short or overrunning frame fails the decode rather than the program.
+
+// A Kten value. Objects are either tagged — `Type { … }`, carrying a type name a
+// reader validates against a schema or reads dynamically — or bare — `{ … }`,
+// ad-hoc data with no declared type. A case is an enum value: a name and zero or
+// more payload values.
+enum Kten {
+    Null
+    Bool(Bool)
+    Int(Int)
+    Float(Float)
+    Text(String)
+    Bytes([U8])
+    List([Kten])
+    Object(KtenObject)
+    Case(KtenCase)
+}
+
+struct KtenObject {
+    // The type name, or empty for a bare object.
+    let tag: String
+    let fields: [KtenField]
+}
+
+struct KtenField {
+    let name: String
+    let value: Kten
+}
+
+struct KtenCase {
+    let name: String
+    let payload: [Kten]
+}
+
+// Why a read produced no value.
+enum KtenError {
+    // The bytes are not a Kten document.
+    Malformed(String)
+    // The object carries no field of that name.
+    Absent(String)
+    // The value is not of the type asked for; the string names what was wanted.
+    WrongType(String)
+}
+
+// --- Builders ----------------------------------------------------------------
+
+function ktenNull() -> Kten {
+    return .Null
+}
+
+function ktenBool(value: Bool) -> Kten {
+    return .Bool(value)
+}
+
+function ktenInt(value: Int) -> Kten {
+    return .Int(value)
+}
+
+function ktenText(value: borrow String) -> Kten {
+    return .Text(value)
+}
+
+function ktenBytes(value: borrow [U8]) -> Kten {
+    return .Bytes(value)
+}
+
+function ktenList(values: [Kten]) -> Kten {
+    return .List(move values)
+}
+
+function ktenField(name: borrow String, value: Kten) -> KtenField {
+    return KtenField { name: name, value: move value }
+}
+
+// A tagged object: `Type { … }`.
+function ktenObject(tag: borrow String, fields: [KtenField]) -> Kten {
+    return .Object(KtenObject { tag: tag, fields: move fields })
+}
+
+// A bare object: `{ … }`, no type.
+function ktenBare(fields: [KtenField]) -> Kten {
+    return .Object(KtenObject { tag: "", fields: move fields })
+}
+
+function ktenCase(name: borrow String, payload: [Kten]) -> Kten {
+    return .Case(KtenCase { name: name, payload: move payload })
+}
+
+// --- Dynamic access ----------------------------------------------------------
+
+// The field named `name`, or why it is not there.
+function ktenGet(value: borrow Kten, name: borrow String) -> Result<Kten, KtenError> {
+    match value {
+        Object(object) -> {
+            var index = 0
+            while index < object.fields.count {
+                if object.fields[index].name == name {
+                    return .Ok(object.fields[index].value)
+                }
+                index = index + 1
+            }
+            return .Error(.Absent(name))
+        }
+        Null -> return .Error(.WrongType("object"))
+        Bool(_) -> return .Error(.WrongType("object"))
+        Int(_) -> return .Error(.WrongType("object"))
+        Float(_) -> return .Error(.WrongType("object"))
+        Text(_) -> return .Error(.WrongType("object"))
+        Bytes(_) -> return .Error(.WrongType("object"))
+        List(_) -> return .Error(.WrongType("object"))
+        Case(_) -> return .Error(.WrongType("object"))
+    }
+}
+
+// The element at `index` of a list.
+function ktenAt(value: borrow Kten, index: Int) -> Result<Kten, KtenError> {
+    match value {
+        List(items) -> {
+            if index < 0 || index >= items.count {
+                return .Error(.Absent(String(index)))
+            }
+            return .Ok(items[index])
+        }
+        Null -> return .Error(.WrongType("list"))
+        Bool(_) -> return .Error(.WrongType("list"))
+        Int(_) -> return .Error(.WrongType("list"))
+        Float(_) -> return .Error(.WrongType("list"))
+        Text(_) -> return .Error(.WrongType("list"))
+        Bytes(_) -> return .Error(.WrongType("list"))
+        Object(_) -> return .Error(.WrongType("list"))
+        Case(_) -> return .Error(.WrongType("list"))
+    }
+}
+
+function ktenAsText(value: borrow Kten) -> Result<String, KtenError> {
+    match value {
+        Text(text) -> return .Ok(text)
+        Null -> return .Error(.WrongType("text"))
+        Bool(_) -> return .Error(.WrongType("text"))
+        Int(_) -> return .Error(.WrongType("text"))
+        Float(_) -> return .Error(.WrongType("text"))
+        Bytes(_) -> return .Error(.WrongType("text"))
+        List(_) -> return .Error(.WrongType("text"))
+        Object(_) -> return .Error(.WrongType("text"))
+        Case(_) -> return .Error(.WrongType("text"))
+    }
+}
+
+function ktenAsInt(value: borrow Kten) -> Result<Int, KtenError> {
+    match value {
+        Int(number) -> return .Ok(number)
+        Null -> return .Error(.WrongType("int"))
+        Bool(_) -> return .Error(.WrongType("int"))
+        Float(_) -> return .Error(.WrongType("int"))
+        Text(_) -> return .Error(.WrongType("int"))
+        Bytes(_) -> return .Error(.WrongType("int"))
+        List(_) -> return .Error(.WrongType("int"))
+        Object(_) -> return .Error(.WrongType("int"))
+        Case(_) -> return .Error(.WrongType("int"))
+    }
+}
+
+function ktenAsBool(value: borrow Kten) -> Result<Bool, KtenError> {
+    match value {
+        Bool(flag) -> return .Ok(flag)
+        Null -> return .Error(.WrongType("bool"))
+        Int(_) -> return .Error(.WrongType("bool"))
+        Float(_) -> return .Error(.WrongType("bool"))
+        Text(_) -> return .Error(.WrongType("bool"))
+        Bytes(_) -> return .Error(.WrongType("bool"))
+        List(_) -> return .Error(.WrongType("bool"))
+        Object(_) -> return .Error(.WrongType("bool"))
+        Case(_) -> return .Error(.WrongType("bool"))
+    }
+}
+
+// The type tag of an object, or empty for a bare object or a non-object.
+function ktenTag(value: borrow Kten) -> String {
+    match value {
+        Object(object) -> return object.tag
+        Null -> return ""
+        Bool(_) -> return ""
+        Int(_) -> return ""
+        Float(_) -> return ""
+        Text(_) -> return ""
+        Bytes(_) -> return ""
+        List(_) -> return ""
+        Case(_) -> return ""
+    }
+}
+
+// --- Binary encoding ---------------------------------------------------------
+
+// The tag byte that opens each value on the wire.
+function ktenTagNull() -> Int { return 0 }
+function ktenTagBool() -> Int { return 1 }
+function ktenTagInt() -> Int { return 2 }
+function ktenTagFloat() -> Int { return 3 }
+function ktenTagText() -> Int { return 4 }
+function ktenTagBytes() -> Int { return 5 }
+function ktenTagList() -> Int { return 6 }
+function ktenTagObject() -> Int { return 7 }
+function ktenTagCase() -> Int { return 8 }
+
+// A growable byte buffer and the LEB128/zigzag primitives the format is written
+// in, mirroring the IPC wire.
+struct KtenWriter {
+    var bytes: [U8] = []
+
+    function putByte(value: Int) {
+        self.bytes.append(U8(value & 255))
+        return
+    }
+
+    function putVarUInt(value: U64) {
+        var rest = value
+        while rest >= U64(128) {
+            putByte(Int(rest & U64(127)) | 128)
+            rest = rest >> 7
+        }
+        putByte(Int(rest))
+        return
+    }
+
+    function putVarInt(value: Int) {
+        if value >= 0 {
+            putVarUInt(U64(value) * U64(2))
+            return
+        }
+        putVarUInt(U64(0 - (value + 1)) * U64(2) + U64(1))
+        return
+    }
+
+    function putString(value: borrow String) {
+        putVarUInt(U64(value.count))
+        var index = 0
+        while index < value.count {
+            putByte(value.charAt(index))
+            index = index + 1
+        }
+        return
+    }
+
+    function putRaw(value: borrow [U8]) {
+        var index = 0
+        while index < value.count {
+            self.bytes.append(value[index])
+            index = index + 1
+        }
+        return
+    }
+
+    function putValue(value: borrow Kten) {
+        match value {
+            Null -> putByte(ktenTagNull())
+            Bool(flag) -> {
+                putByte(ktenTagBool())
+                if flag {
+                    putByte(1)
+                } else {
+                    putByte(0)
+                }
+            }
+            Int(number) -> {
+                putByte(ktenTagInt())
+                putVarInt(number)
+            }
+            Float(number) -> {
+                // Not yet bit-exact: carried as its decimal text until Foundation
+                // exposes a float-bits primitive. The protocol uses no floats.
+                putByte(ktenTagFloat())
+                putString(String(number))
+            }
+            Text(text) -> {
+                putByte(ktenTagText())
+                putString(text)
+            }
+            Bytes(raw) -> {
+                putByte(ktenTagBytes())
+                putVarUInt(U64(raw.count))
+                putRaw(raw)
+            }
+            List(items) -> {
+                putByte(ktenTagList())
+                putVarUInt(U64(items.count))
+                var index = 0
+                while index < items.count {
+                    putValue(items[index])
+                    index = index + 1
+                }
+            }
+            Object(object) -> {
+                putByte(ktenTagObject())
+                putString(object.tag)
+                putVarUInt(U64(object.fields.count))
+                var index = 0
+                while index < object.fields.count {
+                    putString(object.fields[index].name)
+                    putValue(object.fields[index].value)
+                    index = index + 1
+                }
+            }
+            Case(variant) -> {
+                putByte(ktenTagCase())
+                putString(variant.name)
+                putVarUInt(U64(variant.payload.count))
+                var index = 0
+                while index < variant.payload.count {
+                    putValue(variant.payload[index])
+                    index = index + 1
+                }
+            }
+        }
+        return
+    }
+}
+
+// Encodes a value to its binary form, for transport.
+function ktenEncode(value: borrow Kten) -> [U8] {
+    var writer = KtenWriter {}
+    writer.putValue(value)
+    return writer.bytes
+}
+
+// --- Binary decoding ---------------------------------------------------------
+
+// A cursor over bytes that never traps: past the end, or on a length that runs
+// off the frame, it sets `failed` and every read after answers a default, so a
+// decode runs to completion and `failed` is the one thing a caller checks.
+struct KtenReader {
+    var bytes: [U8] = []
+    var cursor: Int = 0
+    var failed: Bool = false
+
+    function fail() {
+        self.failed = true
+        self.cursor = self.bytes.count
+        return
+    }
+
+    function takeByte() -> Int {
+        if cursor >= bytes.count {
+            fail()
+            return 0
+        }
+        let value = Int(bytes[cursor])
+        self.cursor = self.cursor + 1
+        return value
+    }
+
+    function takeVarUInt() -> U64 {
+        var result = U64(0)
+        var shift = 0
+        var more = true
+        while more {
+            if shift > 63 {
+                fail()
+                return U64(0)
+            }
+            let byte = takeByte()
+            if failed {
+                return U64(0)
+            }
+            result = result | (U64(byte & 127) << shift)
+            shift = shift + 7
+            more = (byte & 128) != 0
+        }
+        return result
+    }
+
+    function takeVarInt() -> Int {
+        let raw = takeVarUInt()
+        let half = raw >> 1
+        if (raw & U64(1)) == U64(0) {
+            return Int(half)
+        }
+        return 0 - Int(half) - 1
+    }
+
+    function takeRaw(length: Int) -> [U8] {
+        var out: [U8] = []
+        if length < 0 {
+            fail()
+            return out
+        }
+        var index = 0
+        while index < length {
+            if cursor >= bytes.count {
+                fail()
+                return out
+            }
+            out.append(bytes[cursor])
+            self.cursor = self.cursor + 1
+            index = index + 1
+        }
+        return out
+    }
+
+    function takeString() -> String {
+        let length = Int(takeVarUInt())
+        if failed {
+            return ""
+        }
+        let raw = takeRaw(length)
+        return ktenBytesToString(raw)
+    }
+
+    function takeValue() -> Kten {
+        let tag = takeByte()
+        if failed {
+            return .Null
+        }
+        if tag == ktenTagNull() {
+            return .Null
+        }
+        if tag == ktenTagBool() {
+            return .Bool(takeByte() != 0)
+        }
+        if tag == ktenTagInt() {
+            return .Int(takeVarInt())
+        }
+        if tag == ktenTagFloat() {
+            return .Float(ktenParseFloat(takeString()))
+        }
+        if tag == ktenTagText() {
+            return .Text(takeString())
+        }
+        if tag == ktenTagBytes() {
+            let length = Int(takeVarUInt())
+            return .Bytes(takeRaw(length))
+        }
+        if tag == ktenTagList() {
+            let count = Int(takeVarUInt())
+            var items: [Kten] = []
+            var index = 0
+            while index < count && failed == false {
+                items.append(takeValue())
+                index = index + 1
+            }
+            return .List(move items)
+        }
+        if tag == ktenTagObject() {
+            let objectTag = takeString()
+            let count = Int(takeVarUInt())
+            var fields: [KtenField] = []
+            var index = 0
+            while index < count && failed == false {
+                let name = takeString()
+                let value = takeValue()
+                fields.append(KtenField { name: name, value: move value })
+                index = index + 1
+            }
+            return .Object(KtenObject { tag: objectTag, fields: move fields })
+        }
+        if tag == ktenTagCase() {
+            let name = takeString()
+            let count = Int(takeVarUInt())
+            var payload: [Kten] = []
+            var index = 0
+            while index < count && failed == false {
+                payload.append(takeValue())
+                index = index + 1
+            }
+            return .Case(KtenCase { name: name, payload: move payload })
+        }
+        fail()
+        return .Null
+    }
+}
+
+// Decodes a value from its binary form, or answers why it could not.
+function ktenDecode(bytes: borrow [U8]) -> Result<Kten, KtenError> {
+    var reader = KtenReader { bytes: bytes, cursor: 0, failed: false }
+    let value = reader.takeValue()
+    if reader.failed {
+        return .Error(.Malformed("the bytes are not a Kten document"))
+    }
+    return .Ok(value)
+}
+
+// A decimal string as a `Float`, reusing Foundation's own decimal-to-float.
+//
+// The binary form carries a float as its decimal text until a float-bits
+// primitive lands; this reads it back. Exponent notation is not reconstructed —
+// `String(Float)` does not emit it for the values the protocol carries.
+function ktenParseFloat(text: borrow String) -> Float {
+    let negative = text.startsWith("-")
+    var fractionDigits = 0
+    var seenDot = false
+    var index = 0
+    while index < text.count {
+        let byte = Int(text.charAt(index))
+        if byte == 101 || byte == 69 {
+            break
+        }
+        if byte == 46 {
+            seenDot = true
+        }
+        if seenDot && byte >= 48 && byte <= 57 {
+            fractionDigits = fractionDigits + 1
+        }
+        index = index + 1
+    }
+    return jsonDecimalToFloat(text, negative, fractionDigits, 0)
+}
+
+// --- Text ------------------------------------------------------------------
+
+// Writes a value as its textual form: a Kira value literal.
+function ktenToText(value: borrow Kten) -> String {
+    match value {
+        Null -> return ".None"
+        Bool(flag) -> {
+            if flag {
+                return "true"
+            }
+            return "false"
+        }
+        Int(number) -> return String(number)
+        Float(number) -> return String(number)
+        Text(text) -> return "\"" + ktenEscape(text) + "\""
+        Bytes(raw) -> return "0x" + ktenHex(raw)
+        List(items) -> {
+            var out = "["
+            var index = 0
+            while index < items.count {
+                if index > 0 {
+                    out = out + ", "
+                }
+                out = out + ktenToText(items[index])
+                index = index + 1
+            }
+            return out + "]"
+        }
+        Object(object) -> {
+            var out = object.tag + " {"
+            var index = 0
+            while index < object.fields.count {
+                if index > 0 {
+                    out = out + ","
+                }
+                out = out + " " + object.fields[index].name + ": " + ktenToText(object.fields[index].value)
+                index = index + 1
+            }
+            return out + " }"
+        }
+        Case(variant) -> {
+            var out = "." + variant.name
+            if variant.payload.count > 0 {
+                out = out + "("
+                var index = 0
+                while index < variant.payload.count {
+                    if index > 0 {
+                        out = out + ", "
+                    }
+                    out = out + ktenToText(variant.payload[index])
+                    index = index + 1
+                }
+                out = out + ")"
+            }
+            return out
+        }
+    }
+}
+
+// --- UTF-8 and text helpers --------------------------------------------------
+
+// Rebuilds a `String` from a run of UTF-8 bytes, decoding multi-byte sequences.
+// A malformed sequence ends the read rather than trapping.
+function ktenBytesToString(bytes: borrow [U8]) -> String {
+    var out = ""
+    var index = 0
+    while index < bytes.count {
+        let b0 = Int(bytes[index])
+        if b0 < 128 {
+            out = out + scalarText(b0)
+            index = index + 1
+        } else {
+            if b0 >= 240 {
+                if index + 3 >= bytes.count {
+                    return out
+                }
+                let scalar = ((b0 & 7) << 18) | ((Int(bytes[index + 1]) & 63) << 12) | ((Int(bytes[index + 2]) & 63) << 6) | (Int(bytes[index + 3]) & 63)
+                out = out + scalarText(scalar)
+                index = index + 4
+            } else {
+                if b0 >= 224 {
+                    if index + 2 >= bytes.count {
+                        return out
+                    }
+                    let scalar = ((b0 & 15) << 12) | ((Int(bytes[index + 1]) & 63) << 6) | (Int(bytes[index + 2]) & 63)
+                    out = out + scalarText(scalar)
+                    index = index + 3
+                } else {
+                    if index + 1 >= bytes.count {
+                        return out
+                    }
+                    let scalar = ((b0 & 31) << 6) | (Int(bytes[index + 1]) & 63)
+                    out = out + scalarText(scalar)
+                    index = index + 2
+                }
+            }
+        }
+    }
+    return out
+}
+
+// Escapes a string for the textual form: quotes, backslashes, and newlines.
+//
+// Runs between escapes are copied whole with `substring`, so multi-byte UTF-8
+// passes through as itself rather than being split into per-byte scalars.
+function ktenEscape(text: borrow String) -> String {
+    var out = ""
+    var cut = 0
+    var index = 0
+    while index < text.count {
+        let byte = text.charAt(index)
+        if byte == 34 || byte == 92 || byte == 10 {
+            if index > cut {
+                out = out + text.substring(cut, index)
+            }
+            if byte == 34 {
+                out = out + "\\\""
+            } else {
+                if byte == 92 {
+                    out = out + "\\\\"
+                } else {
+                    out = out + "\\n"
+                }
+            }
+            cut = index + 1
+        }
+        index = index + 1
+    }
+    if index > cut {
+        out = out + text.substring(cut, index)
+    }
+    return out
+}
+
+// Lowercase hexadecimal of a byte run, for the textual `0x…` form.
+function ktenHex(bytes: borrow [U8]) -> String {
+    var out = ""
+    var index = 0
+    while index < bytes.count {
+        out = out + ktenHexDigit(Int(bytes[index]) >> 4) + ktenHexDigit(Int(bytes[index]) & 15)
+        index = index + 1
+    }
+    return out
+}
+
+function ktenHexDigit(value: Int) -> String {
+    if value < 10 {
+        return scalarText(48 + value)
+    }
+    return scalarText(97 + value - 10)
+}

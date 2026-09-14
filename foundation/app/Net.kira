@@ -1,0 +1,119 @@
+// Foundation's HTTP surface: send a request, get an answer back.
+//
+// The `kira_network` C ABI is bound by autobind into `app/bindings/network.kira`
+// — generated from the header, not hand-written — and this file is the ergonomic
+// layer over it: a header pair, an answer, and the two functions a caller needs.
+// Nothing here opens a socket itself; `kira_network` schedules the work on the
+// runtime's reactor and hands back an operation handle, and polling it is a
+// yield point so a Kira task cooperates rather than blocks while a request is in
+// flight.
+//
+// A program reaches all of this by importing Foundation. The archive that backs
+// it rides with Foundation and is linked only when a program actually calls one
+// of these functions.
+
+// One header a request carries.
+struct HttpHeader {
+    let name: String
+    let value: String
+}
+
+// What a request came back with.
+//
+// `status` is the HTTP status when one arrived; `code` is the library's own
+// negative code when nothing did — a refused connection, a certificate that
+// verified against nothing, a deadline. Keeping the two apart is the difference
+// between "the service said no" and "the service was never reached", which are
+// different things to do about.
+struct HttpAnswer {
+    let status: Int
+    let code: Int
+    let body: String
+}
+
+// Starts the loopback HTTPS server and returns its operation handle, or a
+// negative error code. Its certificate is the one `trustPort` trusts.
+function httpsServer() -> Int {
+    return kira_network_https_server()
+}
+
+// A bound server's port, or a negative error code.
+function serverPort(handle: Int) -> Int {
+    return kira_network_server_port(handle)
+}
+
+// Cancels and releases an operation handle.
+function networkClose(handle: Int) {
+    kira_network_close(handle)
+    return
+}
+
+// Sends one request and waits for its answer, yielding while it is in flight.
+//
+// `trustPort` is a loopback server's port whose generated certificate this
+// request should accept, or 0 for the ordinary case where the public roots
+// decide.
+function httpSend(
+    method: borrow String,
+    url: borrow String,
+    headers: borrow [HttpHeader],
+    body: borrow String,
+    timeoutMs: Int,
+    trustPort: Int
+) -> HttpAnswer {
+    let request = kira_network_request_new(method, url)
+    if request <= 0 {
+        return HttpAnswer { status: 0, code: request, body: "" }
+    }
+    var configured = kira_network_request_timeout_ms(request, timeoutMs)
+    if configured >= 0 && trustPort > 0 {
+        configured = kira_network_request_trust_loopback(request, U16(trustPort))
+    }
+    var index = 0
+    while configured >= 0 && index < headers.count {
+        configured = kira_network_request_header(request, headers[index].name, headers[index].value)
+        index = index + 1
+    }
+    if configured >= 0 && body != "" {
+        configured = kira_network_request_body_text(request, body)
+    }
+    if configured < 0 {
+        kira_network_request_discard(request)
+        return HttpAnswer { status: 0, code: configured, body: "" }
+    }
+    let operation = kira_network_request_send(request)
+    if operation <= 0 {
+        return HttpAnswer { status: 0, code: operation, body: "" }
+    }
+    // Polling is a yield point, so the scheduler keeps running whatever else
+    // this program has while the request is driven on the reactor.
+    var state = kira_network_poll(operation)
+    while state == 0 {
+        taskYield()
+        state = kira_network_poll(operation)
+    }
+    let result = kira_network_result(operation)
+    if result < 0 {
+        kira_network_close(operation)
+        return HttpAnswer { status: 0, code: result, body: "" }
+    }
+    kira_network_response_select_body(operation)
+    let text = httpReadText(operation)
+    kira_network_close(operation)
+    return HttpAnswer { status: result, code: 0, body: text }
+}
+
+// The selected response part as text.
+//
+// The C surface returns scalars, so the text is rebuilt here: `scalarText` turns
+// each code point back into a `String`, the one direction text crosses a
+// boundary that returns `int64_t`.
+function httpReadText(handle: Int) -> String {
+    var text = ""
+    var scalar = kira_network_response_read_scalar(handle)
+    while scalar >= 0 {
+        text = text + scalarText(scalar)
+        scalar = kira_network_response_read_scalar(handle)
+    }
+    return text
+}

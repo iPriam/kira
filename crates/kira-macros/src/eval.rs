@@ -11,7 +11,9 @@
 //!
 //! [`KMAC020`]: crate::diagnostics::UNSUPPORTED_IN_EXPAND
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::registry::ComptimeFunction;
 
@@ -19,7 +21,9 @@ use kira_core::Names;
 use kira_diagnostics::Severity;
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, MatchArm, Stmt, StmtId};
+use kira_syntax_model::ast::{
+    BinaryOp, Block, Expr, ExprId, ForIterable, Item, MatchArm, MatchPattern, Stmt, StmtId,
+};
 
 use crate::diagnostics;
 use crate::ksl::ShaderCompiler;
@@ -28,6 +32,7 @@ use crate::value::Value;
 
 pub(crate) mod methods;
 pub(crate) mod reflection;
+mod statements;
 
 /// The member name `.type` is rewritten to before parsing.
 pub(crate) const FIELD_TYPE: &str = "__kmac_field_type";
@@ -263,7 +268,23 @@ pub(crate) fn run_value(
     comptime: Comptime<'_>,
     lint: bool,
 ) -> Result<(Value, Vec<Report>), EvalError> {
-    run_nested(body, arguments, comptime, lint, 0)
+    run_value_shared(body, arguments, comptime, lint, Fuel::default())
+}
+
+/// Runs `body` against a step budget another evaluation already started.
+///
+/// What a nested evaluation needs — a `comptime function` a body called, or a
+/// declaration member a lint read — so a runaway callee spends the caller's
+/// fuel rather than minting fresh fuel per call and outrunning the limit by
+/// nesting.
+pub(crate) fn run_value_shared(
+    body: &Body,
+    arguments: Vec<(String, Value)>,
+    comptime: Comptime<'_>,
+    lint: bool,
+    fuel: Fuel,
+) -> Result<(Value, Vec<Report>), EvalError> {
+    run_nested(body, arguments, comptime, lint, 0, fuel)
 }
 
 /// The comptime functions in scope during an evaluation, by name.
@@ -293,12 +314,51 @@ pub(crate) struct Comptime<'a> {
 /// How deep one comptime call may nest inside another.
 const CALL_DEPTH_LIMIT: u32 = 32;
 
+/// How many statements one comptime evaluation may run, nested calls included.
+///
+/// A `while` already caps its own rounds and calls cap their depth, but neither
+/// bounds the whole run: a collector is one evaluation over every declaration
+/// in the program, so a loop that never exits — or one slow enough to look
+/// that way over a big program — would otherwise hang the compiler with no
+/// diagnostic. Whatever the shape, evaluation stops here under `KMAC010`.
+const STEP_LIMIT: u64 = 10_000_000;
+
+/// How many value cells one comptime evaluation may build, nested calls
+/// included.
+///
+/// Steps bound the rounds; this bounds what each round may build. Reads spend
+/// nothing — answering from what is there is linear in the program — but every
+/// fresh value does: concatenation, splits, replacements, renders, joins, body
+/// parses, and pushed items. A loop whose values grow without bound spends
+/// geometrically and stops here under `KMAC010`, while a linear pass over a big
+/// program spends its size a small number of times over.
+const CELL_LIMIT: u64 = 1_000_000_000;
+
+/// Steps spent and cells built by one comptime evaluation, shared with every
+/// nested call.
+///
+/// Reference-counted so a callee spends its caller's fuel: minting a fresh
+/// budget per nested call would let a recursive macro outrun the limit by
+/// nesting rather than by looping.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Fuel(Rc<FuelCounts>);
+
+/// The counters one evaluation and its nested calls share.
+#[derive(Debug, Default)]
+struct FuelCounts {
+    /// Statements executed, loop iterations included.
+    steps: Cell<u64>,
+    /// Value cells built by this evaluation and its nested calls.
+    cells: Cell<u64>,
+}
+
 fn run_nested(
     body: &Body,
     arguments: Vec<(String, Value)>,
     comptime: Comptime<'_>,
     lint: bool,
     depth: u32,
+    fuel: Fuel,
 ) -> Result<(Value, Vec<Report>), EvalError> {
     let mut evaluator = Evaluator {
         body,
@@ -311,6 +371,7 @@ fn run_nested(
         enums: comptime.enums.clone(),
         testing: comptime.testing,
         lint,
+        fuel,
     };
     let value = match evaluator.block(&body.block)? {
         Flow::Return(value) => value,
@@ -365,6 +426,8 @@ struct Evaluator<'a> {
     lint: bool,
     /// Whether the compiler is generating the `kira test` entrypoint.
     testing: bool,
+    /// Steps this evaluation has left to spend, shared with nested calls.
+    fuel: Fuel,
 }
 
 impl Evaluator<'_> {
@@ -403,292 +466,42 @@ impl Evaluator<'_> {
         )))
     }
 
-    /// Runs a block in its own scope.
-    fn block(&mut self, block: &Block) -> Result<Flow, EvalError> {
-        self.scopes.push(HashMap::new());
-        let mut flow = Flow::Normal;
-        for &id in &block.stmts {
-            flow = self.statement(id)?;
-            if !matches!(flow, Flow::Normal) {
-                break;
-            }
-        }
-        self.scopes.pop();
-        Ok(flow)
-    }
-
-    fn statement(&mut self, id: StmtId) -> Result<Flow, EvalError> {
-        match self.stmt(id).clone() {
-            Stmt::Let { name, init, .. } => {
-                let value = self.value(init)?;
-                let name = self.name(name).to_owned();
-                self.bind(&name, value);
-                Ok(Flow::Normal)
-            }
-            Stmt::Assign { target, value, .. } => {
-                let evaluated = self.value(value)?;
-                match self.expr(target).clone() {
-                    Expr::Name { symbol, .. } => {
-                        let name = self.name(symbol).to_owned();
-                        self.assign(&name, evaluated)?;
-                        Ok(Flow::Normal)
-                    }
-                    other => Err(EvalError::unsupported(format!(
-                        "assigning to a {}",
-                        shape(&other)
-                    ))),
-                }
-            }
-            Stmt::Return { value, .. } => {
-                let returned = match value {
-                    Some(id) => self.value(id)?,
-                    None => Value::Void,
-                };
-                Ok(Flow::Return(returned))
-            }
-            Stmt::Expr { expr, .. } => {
-                self.value(expr)?;
-                Ok(Flow::Normal)
-            }
-            Stmt::If {
-                cond,
-                then_block,
-                else_block,
-                ..
-            } => {
-                let taken = self.condition(cond)?;
-                if taken {
-                    self.block(&then_block)
-                } else if let Some(otherwise) = else_block {
-                    self.block(&otherwise)
-                } else {
-                    Ok(Flow::Normal)
-                }
-            }
-            Stmt::While { cond, body, .. } => {
-                let mut rounds = 0u32;
-                while self.condition(cond)? {
-                    rounds += 1;
-                    if rounds > LOOP_LIMIT {
-                        return Err(EvalError::coded(
-                            diagnostics::DEPTH_LIMIT,
-                            format!(
-                                "a `while` in an `expand` body ran more than {LOOP_LIMIT} times"
-                            ),
-                        ));
-                    }
-                    match self.block(&body)? {
-                        Flow::Return(value) => return Ok(Flow::Return(value)),
-                        Flow::Break => break,
-                        Flow::Normal | Flow::Continue => {}
-                    }
-                }
-                Ok(Flow::Normal)
-            }
-            Stmt::For {
-                name,
-                iterable,
-                body,
-                ..
-            } => self.for_loop(name, &iterable, &body),
-            Stmt::Match { subject, arms, .. } => self.match_statement(subject, &arms),
-            Stmt::Attempt { body, handlers, .. } => self.attempt_statement(&body, &handlers),
-            Stmt::Break { .. } => Ok(Flow::Break),
-            Stmt::Continue { .. } => Ok(Flow::Continue),
-            other => Err(EvalError::unsupported(statement_shape(&other))),
-        }
-    }
-
-    /// Runs an `attempt { … } handle { … }`.
+    /// Spends one evaluation step, refusing when the budget is gone.
     ///
-    /// The body runs statement by statement until a `try` unwraps a case that
-    /// turned out to be the failure one, at which point the rest of the body is
-    /// skipped and the arm naming that failure runs instead — which is what the
-    /// language does, and the reason statements after a `try` nest into its
-    /// success branch there.
+    /// Charged once per statement a body executes, loop iterations included,
+    /// so this is what stops a loop that never exits: whatever it does per
+    /// round, the rounds themselves are counted.
+    fn charge(&mut self) -> Result<(), EvalError> {
+        let spent = self.fuel.0.steps.get().saturating_add(1);
+        self.fuel.0.steps.set(spent);
+        if spent > STEP_LIMIT {
+            return Err(EvalError::coded(
+                diagnostics::DEPTH_LIMIT,
+                format!(
+                    "comptime evaluation ran more than {STEP_LIMIT} steps without returning; a loop that never exits stops the build here rather than hanging the compiler"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Spends `cells` of the build budget, refusing when it is gone.
     ///
-    /// `Result`-shaped is structural here as it is everywhere else: any case
-    /// named `Ok` succeeds and carries the value on, any other case is the
-    /// failure and is routed. Nothing nominal is required, so a body may `try`
-    /// an enum it declared itself.
-    fn attempt_statement(
-        &mut self,
-        body: &Block,
-        handlers: &[MatchArm],
-    ) -> Result<Flow, EvalError> {
-        self.scopes.push(HashMap::new());
-        let mut failure = None;
-        let mut flow = Flow::Normal;
-        for &id in &body.stmts {
-            match self.try_statement(id)? {
-                Attempted::Ran(next) => {
-                    flow = next;
-                    if !matches!(flow, Flow::Normal) {
-                        break;
-                    }
-                }
-                Attempted::Failed(case) => {
-                    failure = Some(case);
-                    break;
-                }
-            }
+    /// Charged for fresh values — concatenation, splits, renders, parses, and
+    /// pushes — never for reads, so a linear pass spends its size and a loop
+    /// whose values grow without bound spends geometrically.
+    fn charge_cells(&mut self, cells: u64) -> Result<(), EvalError> {
+        let spent = self.fuel.0.cells.get().saturating_add(cells);
+        self.fuel.0.cells.set(spent);
+        if spent > CELL_LIMIT {
+            return Err(EvalError::coded(
+                diagnostics::DEPTH_LIMIT,
+                format!(
+                    "comptime evaluation built more than {CELL_LIMIT} cells of values without returning; a loop whose values grow without bound stops the build here rather than hanging the compiler"
+                ),
+            ));
         }
-        self.scopes.pop();
-        let Some(case) = failure else {
-            return Ok(flow);
-        };
-        for arm in handlers {
-            if self.name(arm.variant) != case.variant {
-                continue;
-            }
-            self.scopes.push(HashMap::new());
-            if let Some(binding) = &arm.binding {
-                let name = self.name(binding.name).to_owned();
-                let payload = case.payload.clone().unwrap_or(Value::Void);
-                self.bind(&name, payload);
-            }
-            let mut handled = Flow::Normal;
-            for &id in &arm.body.stmts {
-                handled = self.statement(id)?;
-                if !matches!(handled, Flow::Normal) {
-                    break;
-                }
-            }
-            self.scopes.pop();
-            return Ok(handled);
-        }
-        Err(EvalError::unsupported(format!(
-            "an `attempt` with no handler for `{}`",
-            case.variant
-        )))
-    }
-
-    /// Runs one statement of an `attempt` body, reporting a `try` that failed.
-    fn try_statement(&mut self, id: StmtId) -> Result<Attempted, EvalError> {
-        let Stmt::Let { name, init, .. } = self.stmt(id).clone() else {
-            return Ok(Attempted::Ran(self.statement(id)?));
-        };
-        let Expr::Try { value, .. } = self.expr(init).clone() else {
-            return Ok(Attempted::Ran(self.statement(id)?));
-        };
-        let outcome = self.value(value)?;
-        let Value::EnumCase(case) = outcome else {
-            return Err(EvalError::unsupported(format!(
-                "`try` on a `{}`; it unwraps a `Result`-shaped enum case",
-                outcome.type_name()
-            )));
-        };
-        if case.variant != "Ok" {
-            return Ok(Attempted::Failed(*case));
-        }
-        let name = self.name(name).to_owned();
-        self.bind(&name, case.payload.clone().unwrap_or(Value::Void));
-        Ok(Attempted::Ran(Flow::Normal))
-    }
-
-    /// Runs a `match` over an enum case.
-    ///
-    /// An arm selects by variant name, which is all a case carries that matters
-    /// here: a bare `.Variant` never knew its enum, so matching on the name is
-    /// the only rule that works for both a case read from reflection and one the
-    /// body wrote itself.
-    ///
-    /// A subject no arm names is an error rather than a fall-through. The
-    /// language checks exhaustiveness before a program runs; an `expand` body is
-    /// evaluated rather than compiled, so the equivalent guarantee has to be
-    /// this — a macro that forgot a variant hears about it instead of silently
-    /// producing nothing.
-    fn match_statement(&mut self, subject: ExprId, arms: &[MatchArm]) -> Result<Flow, EvalError> {
-        let value = self.value(subject)?;
-        let Value::EnumCase(case) = value else {
-            return Err(EvalError::unsupported(format!(
-                "matching on a `{}`; `match` in an `expand` body selects a variant of an enum case",
-                value.type_name()
-            )));
-        };
-        for arm in arms {
-            if self.name(arm.variant) != case.variant {
-                continue;
-            }
-            self.scopes.push(HashMap::new());
-            if let Some(binding) = &arm.binding {
-                let name = self.name(binding.name).to_owned();
-                let payload = case.payload.clone().unwrap_or(Value::Void);
-                self.bind(&name, payload);
-            }
-            let mut flow = Flow::Normal;
-            for &id in &arm.body.stmts {
-                flow = self.statement(id)?;
-                if !matches!(flow, Flow::Normal) {
-                    break;
-                }
-            }
-            self.scopes.pop();
-            return Ok(flow);
-        }
-        Err(EvalError::unsupported(format!(
-            "a `match` with no arm for `{}`",
-            case.variant
-        )))
-    }
-
-    fn for_loop(
-        &mut self,
-        name: kira_core::Symbol,
-        iterable: &ForIterable,
-        body: &Block,
-    ) -> Result<Flow, EvalError> {
-        let name = self.name(name).to_owned();
-        let items = match iterable {
-            ForIterable::Range { start, end } => {
-                let (Value::Int(from), Value::Int(to)) = (self.value(*start)?, self.value(*end)?)
-                else {
-                    return Err(EvalError::unsupported("a range over non-integers"));
-                };
-                // Materialized lazily and bounded like a `while`: a range the
-                // width of an address space would otherwise be collected up
-                // front and end the compiler with an allocation failure
-                // instead of this diagnostic.
-                let count = to.saturating_sub(from).max(0);
-                if count > i64::from(LOOP_LIMIT) {
-                    return Err(EvalError::coded(
-                        diagnostics::DEPTH_LIMIT,
-                        format!(
-                            "a `for` in an `expand` body ranges over more than {LOOP_LIMIT} items"
-                        ),
-                    ));
-                }
-                (from..to).map(Value::Int).collect()
-            }
-            ForIterable::Each { array } => match self.value(*array)? {
-                Value::Array(items) => items,
-                other => {
-                    return Err(EvalError::unsupported(format!(
-                        "iterating a `{}`",
-                        other.type_name()
-                    )));
-                }
-            },
-        };
-        for item in items {
-            self.scopes.push(HashMap::new());
-            self.bind(&name, item);
-            let flow = self.block(body);
-            self.scopes.pop();
-            match flow? {
-                Flow::Return(value) => return Ok(Flow::Return(value)),
-                Flow::Break => break,
-                Flow::Normal | Flow::Continue => {}
-            }
-        }
-        Ok(Flow::Normal)
-    }
-
-    fn condition(&mut self, id: ExprId) -> Result<bool, EvalError> {
-        let value = self.value(id)?;
-        value.as_bool().ok_or_else(|| {
-            EvalError::unsupported(format!("a `{}` where a Bool is needed", value.type_name()))
-        })
+        Ok(())
     }
 
     /// Renders quote template `id` with `arguments` spliced in.
@@ -811,7 +624,14 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        match run_nested(&body, bound, comptime, self.lint, self.depth + 1) {
+        match run_nested(
+            &body,
+            bound,
+            comptime,
+            self.lint,
+            self.depth + 1,
+            self.fuel.clone(),
+        ) {
             Ok((value, reported)) => {
                 self.reported.extend(reported);
                 Some(Ok(value))
@@ -827,81 +647,4 @@ pub(crate) fn template_of(callee: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn run_body(text: &str, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
-        let body = compile(text).expect("a parseable expand body");
-        let functions = ComptimeFunctions::new();
-        let enums = HashMap::new();
-        let comptime = Comptime {
-            functions: &functions,
-            shaders: None,
-            platform: "unknown",
-            enums: &enums,
-            testing: false,
-        };
-        run(&body, arguments, comptime, false)
-    }
-
-    #[test]
-    fn arithmetic_and_conditionals_run() {
-        let outcome = run_body(
-            "var total: Int = 0\nvar i: Int = 0\nwhile i < 4 {\n    total = total + i\n    i = i + 1\n}\nif total > 5 {\n    return quote { big }\n}\nreturn quote { small }\n",
-            Vec::new(),
-        )
-        .expect("a result");
-        assert_eq!(outcome.syntax.trim(), "big");
-    }
-
-    #[test]
-    fn a_for_loop_over_an_array_binds_each_element() {
-        let outcome = run_body(
-            "var out: [Syntax] = []\nfor name in names {\n    out.append(quote { #{name} })\n}\nreturn quote { #{out} }\n",
-            vec![(
-                "names".to_owned(),
-                Value::Array(vec![
-                    Value::Identifier("a".to_owned()),
-                    Value::Identifier("b".to_owned()),
-                ]),
-            )],
-        )
-        .expect("a result");
-        assert!(outcome.syntax.contains('a'), "{}", outcome.syntax);
-        assert!(outcome.syntax.contains('b'), "{}", outcome.syntax);
-    }
-
-    #[test]
-    fn an_unsupported_statement_is_refused_rather_than_guessed() {
-        let error = run_body("match x {\n    Red -> return quote { }\n}\n", Vec::new())
-            .expect_err("a refusal");
-        assert_eq!(error.code, "KMAC020");
-    }
-
-    /// `Identifier(text)` builds the use-site identifier the text spells, so a
-    /// macro can name what only exists as a string — one branch per spelling
-    /// is the alternative, and it stops scaling at two.
-    #[test]
-    fn an_identifier_built_from_text_splices_as_a_name() {
-        let outcome = run_body(
-            "var name: Identifier = Identifier(\"answer\")\nreturn quote { #{name} }",
-            Vec::new(),
-        )
-        .expect("a result");
-        assert_eq!(outcome.syntax.trim(), "answer");
-    }
-
-    /// Text no identifier can spell is refused where the text is still
-    /// visible, not where the name would have landed.
-    #[test]
-    fn an_identifier_built_from_a_keyword_or_a_non_name_is_refused() {
-        for text in ["return", "9lives", "", "has space", "has-dash"] {
-            let error = run_body(
-                &format!("var name: Identifier = Identifier(\"{text}\")\nreturn quote {{ x }}"),
-                Vec::new(),
-            )
-            .expect_err("a refusal");
-            assert_eq!(error.code, "KMAC013", "{text}");
-        }
-    }
-}
+mod tests;

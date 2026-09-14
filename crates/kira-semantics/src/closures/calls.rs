@@ -93,7 +93,7 @@ impl Analyzer<'_> {
     /// The value becomes the dispatcher's first argument, exactly as a method's
     /// receiver becomes its function's first parameter — which is what keeps
     /// closures out of the IR and out of every backend.
-    fn analyze_closure_call(
+    pub(crate) fn analyze_closure_call(
         &mut self,
         ctx: &mut FnCtx,
         expr: HirExprId,
@@ -183,7 +183,7 @@ impl Analyzer<'_> {
     }
 
     /// The dispatcher for a function type, reserving its id on first need.
-    fn dispatcher_for(&mut self, repr: StructId) -> FuncId {
+    pub(crate) fn dispatcher_for(&mut self, repr: StructId) -> FuncId {
         if let Some(existing) = self.fn_types.get(repr).and_then(|info| info.dispatcher) {
             return existing;
         }
@@ -419,6 +419,15 @@ impl Analyzer<'_> {
             Type::Float(_) => HirExpr::Float(0.0),
             Type::Bool => HirExpr::Bool(false),
             Type::String => HirExpr::Str(String::new()),
+            // A `Number`'s zero is `Number(0)`: the integer zero, converted.
+            Type::Number => {
+                let zero = self.program.exprs.alloc(HirExpr::Int(0));
+                HirExpr::NumberOperation {
+                    op: kira_runtime_abi::NumberOp::FromInt,
+                    operands: vec![zero],
+                    ty: Type::Number,
+                }
+            }
             Type::Array(_) => HirExpr::ArrayNew {
                 ty,
                 elements: Vec::new(),

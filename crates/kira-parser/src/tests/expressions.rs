@@ -5,7 +5,30 @@ use kira_syntax_model::ast::{Expr, Item};
 
 use super::{first_stmt, parse_text};
 
-// ----- integer literals ----------------------------------------------
+// ----- numeric literals ----------------------------------------------
+
+/// The value of the single `let` initializer when it is a float literal.
+fn let_float(text: &str) -> f64 {
+    let result = parse_text(text);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
+        panic!("expected let");
+    };
+    let Expr::Float { value, .. } = result.tree.expr(*init) else {
+        panic!(
+            "expected a float literal, got {:?}",
+            result.tree.expr(*init)
+        );
+    };
+    *value
+}
+
+#[test]
+fn infinity_is_a_first_class_float_literal() {
+    let value = let_float("function f() { let n = infinity }");
+    assert!(value.is_infinite());
+    assert!(value.is_sign_positive());
+}
 
 /// The value of the single `let` initializer in `text`.
 fn let_int(text: &str) -> i64 {
@@ -276,6 +299,29 @@ fn parses_a_chained_field_read() {
     };
     // Left-associative: `(b.size).x`.
     assert!(matches!(result.tree.expr(*base), Expr::Field { .. }));
+}
+
+#[test]
+fn parentheses_group_one_value_and_commas_make_a_tuple() {
+    let grouped = parse_text("function f() { let x = (1) }");
+    assert!(grouped.diagnostics.is_empty(), "{:?}", grouped.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&grouped) else {
+        panic!("expected let");
+    };
+    assert!(matches!(
+        grouped.tree.expr(*init),
+        Expr::Int { value: 1, .. }
+    ));
+
+    let tuple = parse_text("function f() { let x = (1, 2, 3) }");
+    assert!(tuple.diagnostics.is_empty(), "{:?}", tuple.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&tuple) else {
+        panic!("expected let");
+    };
+    let Expr::Tuple { elements, .. } = tuple.tree.expr(*init) else {
+        panic!("expected tuple");
+    };
+    assert_eq!(elements.len(), 3);
 }
 
 #[test]

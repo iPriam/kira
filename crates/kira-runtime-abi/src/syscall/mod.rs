@@ -208,6 +208,56 @@ pub enum LinuxSyscall {
     /// can signal whatever started next. A descriptor refers to one process for
     /// as long as it is open, and to nothing at all afterwards.
     PidfdSendSignal = 50,
+    /// `socket(domain, type, protocol)` — an endpoint, before it has a name.
+    ///
+    /// The head of the family that lets two processes on this machine talk at
+    /// all. A pipe carries bytes and only bytes; a socket carries a message
+    /// with descriptors beside it, which is the whole reason the family is
+    /// here — see `sendmsg`.
+    Socket = 51,
+    /// `socketpair(domain, type, protocol, fds)` — two connected endpoints, and no name.
+    ///
+    /// What a parent hands a child it just spawned: a connected pair that
+    /// exists in nobody's filesystem, so there is no path to agree on, no
+    /// permission to get right, and no window in which the child is running and
+    /// the socket is not there yet.
+    Socketpair = 52,
+    /// `bind(fd, address, length)` — give an endpoint a name.
+    Bind = 53,
+    /// `listen(fd, backlog)` — take connections on a named endpoint.
+    Listen = 54,
+    /// `accept4(fd, address, length, flags)` — the next connection, as a descriptor.
+    ///
+    /// `accept4` rather than `accept`, for the same reason as `pipe2` and
+    /// `dup3`: the flags argument is where `SOCK_CLOEXEC` goes, and without it
+    /// a server that spawns anything leaks every client's connection into the
+    /// child. AArch64's table has no `accept` to fall back to in any case.
+    Accept4 = 55,
+    /// `connect(fd, address, length)` — reach a named endpoint.
+    Connect = 56,
+    /// `sendmsg(fd, message, flags)` — a message, and descriptors beside it.
+    ///
+    /// The call the rest of the family exists to reach. A `struct msghdr` can
+    /// carry ancillary data, and `SCM_RIGHTS` ancillary data carries open file
+    /// descriptors from one process to another. On Linux there is no other way
+    /// to hand a program a buffer somebody else allocated — which is what a
+    /// client handing a compositor a rendered frame is.
+    Sendmsg = 57,
+    /// `recvmsg(fd, message, flags)` — a message, and whatever descriptors came with it.
+    ///
+    /// The receiving half, and the one with the sharp edge: the descriptors
+    /// arrive inside a `struct cmsghdr` whose alignment is stricter than it
+    /// looks, and getting it wrong produces a descriptor that reads as -1 with
+    /// no error reported anywhere.
+    Recvmsg = 58,
+    /// `shutdown(fd, how)` — stop one direction without closing the descriptor.
+    Shutdown = 59,
+    /// `getsockname(fd, address, length)` — the name this endpoint answers to.
+    Getsockname = 60,
+    /// `setsockopt(fd, level, option, value, length)` — change how an endpoint behaves.
+    Setsockopt = 61,
+    /// `getsockopt(fd, level, option, value, length)` — read one of those back.
+    Getsockopt = 62,
 }
 
 /// Every system call this table knows, in tag order.
@@ -215,7 +265,7 @@ pub enum LinuxSyscall {
 /// A total list rather than a search: the frontend prints it when it refuses an
 /// unknown name, and a name that is in the enum but missing from here would be
 /// a call the author cannot discover.
-pub const LINUX_SYSCALLS: [LinuxSyscall; 51] = [
+pub const LINUX_SYSCALLS: [LinuxSyscall; 63] = [
     LinuxSyscall::Read,
     LinuxSyscall::Write,
     LinuxSyscall::Mount,
@@ -267,6 +317,18 @@ pub const LINUX_SYSCALLS: [LinuxSyscall; 51] = [
     LinuxSyscall::Clone3,
     LinuxSyscall::Waitid,
     LinuxSyscall::PidfdSendSignal,
+    LinuxSyscall::Socket,
+    LinuxSyscall::Socketpair,
+    LinuxSyscall::Bind,
+    LinuxSyscall::Listen,
+    LinuxSyscall::Accept4,
+    LinuxSyscall::Connect,
+    LinuxSyscall::Sendmsg,
+    LinuxSyscall::Recvmsg,
+    LinuxSyscall::Shutdown,
+    LinuxSyscall::Getsockname,
+    LinuxSyscall::Setsockopt,
+    LinuxSyscall::Getsockopt,
 ];
 
 /// How many arguments a Linux system call can take.
@@ -337,6 +399,18 @@ impl LinuxSyscall {
             48 => Some(Self::Clone3),
             49 => Some(Self::Waitid),
             50 => Some(Self::PidfdSendSignal),
+            51 => Some(Self::Socket),
+            52 => Some(Self::Socketpair),
+            53 => Some(Self::Bind),
+            54 => Some(Self::Listen),
+            55 => Some(Self::Accept4),
+            56 => Some(Self::Connect),
+            57 => Some(Self::Sendmsg),
+            58 => Some(Self::Recvmsg),
+            59 => Some(Self::Shutdown),
+            60 => Some(Self::Getsockname),
+            61 => Some(Self::Setsockopt),
+            62 => Some(Self::Getsockopt),
             _ => None,
         }
     }
@@ -400,6 +474,18 @@ impl LinuxSyscall {
             Self::Clone3 => "clone3",
             Self::Waitid => "waitid",
             Self::PidfdSendSignal => "pidfd_send_signal",
+            Self::Socket => "socket",
+            Self::Socketpair => "socketpair",
+            Self::Bind => "bind",
+            Self::Listen => "listen",
+            Self::Accept4 => "accept4",
+            Self::Connect => "connect",
+            Self::Sendmsg => "sendmsg",
+            Self::Recvmsg => "recvmsg",
+            Self::Shutdown => "shutdown",
+            Self::Getsockname => "getsockname",
+            Self::Setsockopt => "setsockopt",
+            Self::Getsockopt => "getsockopt",
         }
     }
 
@@ -474,6 +560,18 @@ impl LinuxSyscall {
                 Self::Clone3 => 435,
                 Self::Waitid => 95,
                 Self::PidfdSendSignal => 424,
+                Self::Socket => 198,
+                Self::Socketpair => 199,
+                Self::Bind => 200,
+                Self::Listen => 201,
+                Self::Accept4 => 242,
+                Self::Connect => 203,
+                Self::Sendmsg => 211,
+                Self::Recvmsg => 212,
+                Self::Shutdown => 210,
+                Self::Getsockname => 204,
+                Self::Setsockopt => 208,
+                Self::Getsockopt => 209,
             },
             SyscallArch::X86_64 => match self {
                 Self::Read => 0,
@@ -527,6 +625,18 @@ impl LinuxSyscall {
                 Self::Clone3 => 435,
                 Self::Waitid => 247,
                 Self::PidfdSendSignal => 424,
+                Self::Socket => 41,
+                Self::Socketpair => 53,
+                Self::Bind => 49,
+                Self::Listen => 50,
+                Self::Accept4 => 288,
+                Self::Connect => 42,
+                Self::Sendmsg => 46,
+                Self::Recvmsg => 47,
+                Self::Shutdown => 48,
+                Self::Getsockname => 51,
+                Self::Setsockopt => 54,
+                Self::Getsockopt => 55,
             },
         }
     }
@@ -610,7 +720,18 @@ impl LinuxSyscall {
             | Self::Ftruncate
             | Self::Fdatasync
             | Self::Getdents64
-            | Self::Syncfs => true,
+            | Self::Syncfs
+            | Self::Socket
+            | Self::Socketpair
+            | Self::Listen
+            | Self::Accept4
+            | Self::Connect
+            | Self::Sendmsg
+            | Self::Recvmsg
+            | Self::Shutdown
+            | Self::Getsockname
+            | Self::Setsockopt
+            | Self::Getsockopt => true,
             Self::Sync
             | Self::Mount
             | Self::Umount2
@@ -639,6 +760,7 @@ impl LinuxSyscall {
             | Self::Renameat2
             | Self::Fchmodat
             | Self::Statfs
+            | Self::Bind
             | Self::ExitGroup => false,
         }
     }
@@ -672,7 +794,18 @@ impl LinuxSyscall {
             | Self::Ftruncate
             | Self::Fdatasync
             | Self::Getdents64
-            | Self::Syncfs => "",
+            | Self::Syncfs
+            | Self::Socket
+            | Self::Socketpair
+            | Self::Listen
+            | Self::Accept4
+            | Self::Connect
+            | Self::Sendmsg
+            | Self::Recvmsg
+            | Self::Shutdown
+            | Self::Getsockname
+            | Self::Setsockopt
+            | Self::Getsockopt => "",
             Self::Sync => {
                 "would flush every filesystem mounted on the machine running the interpreter, \
                  taking no descriptor that could bound it to the program's own files"
@@ -738,6 +871,10 @@ impl LinuxSyscall {
             Self::Renameat2 => "would move a file on the developer's machine",
             Self::Fchmodat => "would change permissions on the developer's machine",
             Self::Statfs => "would answer about a filesystem of the developer's machine",
+            Self::Bind => {
+                "would create a socket name on the developer's filesystem, which outlives the run \
+                 and which the next one would find already there"
+            }
         }
     }
 }

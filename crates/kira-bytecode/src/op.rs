@@ -23,7 +23,7 @@ pub use kira_runtime_abi::ChannelPrim;
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
-pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
+pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, NumberOp, StringOp};
 use kira_runtime_abi::{ForeignType, MainThreadOp};
 /// Which property a [`Instruction::TypeField`] reads, re-exported so an engine
 /// decoding an instruction names it without reaching past the module format.
@@ -560,6 +560,13 @@ pub enum Instruction {
     /// keep paying that. See [`StringOp`] for the numbering, which is
     /// append-only.
     StringOp(StringOp),
+    /// Perform one `Number` operation, its [`NumberOp`] in the operand byte.
+    ///
+    /// The operands are already on the stack — one for a conversion or negation,
+    /// two for arithmetic and the comparisons — and this replaces them with the
+    /// result, exactly as `StringOp` does. One opcode for the whole decimal
+    /// surface, for the reason `StringOp` gives.
+    NumberOp(NumberOp),
     /// Pop an array, push the address of a C buffer holding its elements as
     /// `ty`.
     ///

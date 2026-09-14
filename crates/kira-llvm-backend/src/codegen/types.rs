@@ -32,6 +32,9 @@ pub(crate) struct Types {
     pub(super) i16: LLVMTypeRef,
     pub(super) i32: LLVMTypeRef,
     pub(super) i64: LLVMTypeRef,
+    /// The two-word value a `Number` is: its mantissa in the low half, its scale
+    /// in the high. A register pair, held inline like an `Int`.
+    pub(super) i128: LLVMTypeRef,
     /// A 32-bit IEEE float, used only at the foreign C boundary for `F32`.
     pub(super) f32: LLVMTypeRef,
     pub(super) f64: LLVMTypeRef,
@@ -66,6 +69,7 @@ impl Types {
                 i16: LLVMInt16TypeInContext(context),
                 i32: LLVMInt32TypeInContext(context),
                 i64: LLVMInt64TypeInContext(context),
+                i128: LLVMInt128TypeInContext(context),
                 f32: LLVMFloatTypeInContext(context),
                 f64: LLVMDoubleTypeInContext(context),
                 ptr: LLVMPointerTypeInContext(context, 0),

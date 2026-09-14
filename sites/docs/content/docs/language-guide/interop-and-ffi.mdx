@@ -20,9 +20,41 @@ function add(a: I32, b: I32) -> I32
 
 The three fields are required exactly once, and `abi` must be `c`. Repeatable `retains: <parameter>` fields mark parameters whose C callee keeps pointers after the call. A foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or `@Export`.
 
+Several C functions from one library may use the grouped shorthand when each Kira function name is also the C symbol name:
+
+```kira
+extern library ffimath {
+    function add(a: I32, b: I32) -> I32
+    function negate(value: I32) -> I32
+}
+```
+
+Each member is equivalent to an `@FFI.Extern` declaration with `library: ffimath`, `symbol:` equal to the function name, and `abi: c`. Use standalone `@FFI.Extern` when the C symbol differs from the Kira name or when the declaration needs fields such as `retains`.
+
 Two declarations may name the same C symbol, which is what a generated binding beside a hand-written one produces. They must agree on the ABI, the parameters, the result, and which parameters are retained: the linker binds one address, and each call site marshals for whichever declaration it resolved, so a disagreement is two contracts for one function that nothing downstream can catch.
 
 ## Taking a Symbol's Address
+
+One Kira name may be declared several times for one symbol, and that is how a symbol with no single C type is bound. `objc_msgSend` is the case: it is not variadic on arm64, so every selector it dispatches must be called through the prototype that selector actually has. The declarations must agree on the library, the symbol and the ABI, and each must differ from the others in its signature.
+
+```kira
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr) -> RawPtr
+
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr): Void
+
+@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }
+function msgSend(receiver: RawPtr, selector: RawPtr, index: U64) -> RawPtr
+```
+
+A call picks one shape by asking three questions in order, and each is only asked because the one before it left more than one answer:
+
+1. **How many arguments were written.** This settles most calls.
+2. **What those arguments are.** Two shapes of one selector rarely take the same types.
+3. **What the caller expects back.** Shapes that take the same arguments and differ only in what they answer with are separated by nothing else. A call on a line by itself expects nothing, so it means the shape that answers `Void`; an `if` condition expects `Bool`; a binding with a type annotation expects that type.
+
+A call that leaves more than one shape standing after all three is refused rather than guessed at, and the refusal lists what the surviving shapes answer with. Annotate what the call produces to settle it.
 
 `@FFI.Address` names a data symbol rather than a function. It takes no parameters and answers `RawPtr`: the address of the object, not what is stored at it. Reading the object is `@FFI.Pointer`'s job, through the pointer this hands back.
 
@@ -74,7 +106,7 @@ A pointer member of a C-layout struct that a literal leaves out zero-fills to th
 
 Foreign parameters borrow by default. Storage materialized for a `CString`, a C-layout image, or an array buffer stays live through the call and is freed when its owning value dies, so a per-frame descriptor releases its C blocks every frame.
 
-Use `retains:` only when C keeps pointers after return. It may name only a parameter that has C storage to keep — a pointer, a `CString`, or a C-layout struct. A number or a `Bool` has no block to transfer, so `retains:` on one is refused rather than making the call site `move` a value for nothing.
+Use `retains:` only when C keeps an argument after return. It may name a pointer, a `CString`, a C-layout struct, or a `NativeState<T>` owner. C storage moves to the engine's retained registry. A retained `NativeState<T>` instead transfers that affine owner directly to C, which later returns the token or releases it through the callback-state API. A number or a `Bool` carries nothing C can keep by ownership, so `retains:` on one is refused rather than making the call site `move` a value for nothing.
 
 ```kira
 @FFI.Extern {
@@ -89,7 +121,7 @@ let desc = SappDesc { windowTitle = "Kira" }
 sappRun(move desc)
 ```
 
-A retained named argument requires `move`. The call transfers its complete C-block ownership tree to the engine registry. VM storage is released with the instance; hybrid storage is released when the native session closes; a whole-process native program leaves it to process teardown. Retained roots and their child blocks are reported by native heap accounting.
+A retained named argument requires `move`. C-block ownership moves to the engine registry. A retained `NativeState<T>` is different: the call transfers exactly the moved state reference to C and the engine keeps no hidden second owner. If the call fails before C receives the argument, Kira releases the owner normally. C balances that transferred owner through the callback-state runtime ABI (`kira_rt_native_state_release`); Kira source cannot manufacture or destroy ownership through a `RawPtr`. Retained C-block roots and their child blocks are reported by native heap accounting.
 
 C blocks are uniquely owned and have no share count. C-layout values move on binding, while an explicit copy builds independent blocks and rewrites every embedded child address.
 
@@ -107,35 +139,44 @@ For a native API that carries a `void*` userdata token, these intrinsics move Ki
 
 | Written | What it does |
 | --- | --- |
-| `nativeState(value)` | Boxes a Kira value into callback-state storage and returns the owning handle. |
-| `nativeUserData(state)` | Exports an opaque `RawPtr` token that owns one reference to the state. |
-| `nativeRecover<T>(token)` | Turns a token back into typed mutable access to the stored state. |
-| `nativeUserDataRetain(token)` | Adds one owner, for native code that keeps the token past the call that received it. |
-| `nativeUserDataRelease(token)` | Removes one owner. The last release destroys the state and its contents exactly once. |
+| `nativeState(value)` | Boxes a Kira value and returns one affine `NativeState<T>` owner. |
+| `nativeUserData(owner)` | Clones a tracked owner. The result is another `NativeState<T>`, not a `RawPtr`. |
+| `nativeUserDataBorrow(owner)` | Borrows the owner's opaque userdata word as `RawPtr`. The word owns no reference by itself. |
+| `nativeRecover<T>(ownerOrToken)` | Borrows typed mutable access to the stored state from a tracked owner or a borrowed raw token. |
+| `nativeUserDataRetain(...)` | Refused in Kira source. An owner with no affine value would make its release obligation invisible. |
+| `nativeUserDataRelease(owner)` | Consumes one tracked `NativeState<T>` owner. `RawPtr` is refused. |
 
-Callback state is reference-counted. Creating it establishes one owner, the handle: moving the handle transfers that owner, and the handle gives its reference up when it goes out of scope, like any other owned value. Every `nativeUserData` call is one more owner, so every exported token is paired with one `nativeUserDataRelease`, and every `nativeUserDataRetain` with one more. Tokens are never reused: recovering or releasing through a token whose state lost its last owner traps rather than reading freed storage. Tokens belong to the runtime session that created them.
+`NativeState<T>` is an affine ownership type and may be written in parameters and aggregate fields. Moving it transfers exactly one owner, scope exit releases that owner, and `nativeUserData(owner)` is the explicit operation that creates another compiler-tracked owner. Kira does not implicitly erase an owned state into `RawPtr`, because a copyable pointer word cannot carry the release obligation. In a hybrid build, `NativeState<T>` parameters and results cross the `@Native`/`@Runtime` boundary as tracked owners of the same callback-state token. A borrowed parameter keeps the caller's owner, while `move` transfers one owner to the other engine.
+
+Callback state preserves ownership recursively. A boxed value may contain another `NativeState`, and structs nested anywhere in the value may implement `Drop`. Replacing a recovered field releases the displaced value immediately. Final state release runs every nested `Drop` body and nested state release in the same reverse-field order as an ordinary Kira value on VM, LLVM/native, and hybrid.
+
+`nativeUserDataBorrow(owner)` is the FFI view. Its `RawPtr` is valid while some tracked owner keeps the state alive, but the raw word itself owns nothing. Kira source cannot retain or release that word. If foreign code must keep state beyond a call, pass a `NativeState<T>` owner to an extern parameter declared with `retains:` and write `move owner`; that is the only Kira-to-C ownership transfer. C then owns exactly that reference and eventually balances it through the callback-state runtime ABI. Tokens are never reused: recovering a borrowed token after its final owner is gone traps instead of reading freed storage. Tokens belong to the runtime session that created them.
 
 ```kira
 struct Counter { var hits: Int = 0 }
 
-function exportCounter() -> RawPtr {
-    let state = nativeState(Counter {})
-    // The handle dies here; the token keeps the state alive on its own.
-    return nativeUserData(state)
+@FFI.Extern {
+    library: host,
+    symbol: host_keep_counter,
+    abi: c,
+    retains: userdata
 }
+function hostKeepCounter(userdata: RawPtr) -> Void
 
-@Main function main() {
-    let token = exportCounter()
-    var view = nativeRecover<Counter>(token)
-    view.hits = view.hits + 1
-    nativeUserDataRelease(token)
+function handCounterToC() {
+    let owner = nativeState(Counter {})
+    hostKeepCounter(move owner)
     return
 }
 ```
 
-`nativeStateFree(handle)` is deprecated and reported by `KSEM360`. It is one release through the handle, not an unconditional free, and it consumes the handle.
+The `RawPtr` spelling in the extern describes C's ABI, not Kira ownership. The call-site argument remains a typed affine owner until the `move` transfers it. Calling `nativeUserDataRetain` or trying `nativeUserDataRelease(RawPtr(...))` is a compile-time error.
 
-Recovery gives access to the stored state rather than a copy. This is not `@FFI.Struct { layout: c }`: that is a real memory-layout contract, while this is opaque transport whose layout native code is never meant to know.
+`nativeStateFree(owner)` is deprecated and reported by `KSEM360`. It consumes and releases one tracked owner; ordinary code lets the owner leave scope or uses `nativeUserDataRelease(owner)` explicitly.
+
+Recovery gives an aliasing view of the stored state rather than a second owned value. Borrowing an owned state therefore requires storage rooted in a local, and an ordinary member read cannot copy a value that contains `NativeState`. Borrow that member in place, explicitly clone the tracked owner with `nativeUserData`, or move the containing owner instead.
+
+This is not `@FFI.Struct { layout: c }`: that is a memory-layout contract visible to C, while callback state is opaque transport whose Kira layout native code never observes.
 
 ### What Foreign Code May Keep
 

@@ -1,0 +1,11 @@
+// Foundation's clock.
+//
+// The wall-clock time, for a program that needs to know when it is rather than
+// only how long to wait — `sleepMilliseconds` is the second, this is the first.
+// It rides the same `kira_network` archive Foundation already links, so reaching
+// it names no new library.
+
+// The time now, in milliseconds since the Unix epoch.
+function unixMillis() -> Int {
+    return kira_network_unix_millis()
+}

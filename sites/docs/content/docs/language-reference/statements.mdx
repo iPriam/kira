@@ -43,9 +43,9 @@ Writing through a path requires `var` at every step, not just the last.
 
 ## Loops
 
-`for i in a..b` walks a half-open integer range; `for x in xs` walks an array's elements. The bound expressions are evaluated once. The loop variable is a fresh immutable binding per iteration, scoped to the body.
+`for i in a..b` walks a half-open integer range; `for x in xs` walks an array's elements; `for x in iterator` pulls values from an `Iterator<T>` until it returns `.None`. The iterable or range bounds are evaluated once. The loop variable is a fresh immutable binding per iteration, scoped to the body.
 
-A `for` is rewritten into a `while` during analysis, and `continue` still advances the loop because the rewrite steps the cursor before the body rather than after it.
+A `for` is rewritten into lower-level control flow during analysis. `continue` advances every form correctly. Array loops step their cursor before the body, iterator loops call `next()` at the start of the next iteration, and `for x in xs.rev()` walks the source array backwards without allocating the reversed array value.
 
 `break` and `continue` outside a loop are reported rather than ignored.
 
@@ -58,15 +58,20 @@ match subject {
 }
 ```
 
-An arm takes a single statement or a block. Variants are unqualified. A parenthesized name binds the payload as an owned immutable copy, visible only in its own arm.
+An arm takes a single statement or a block. Enum variants are unqualified. A parenthesized name binds the payload as an owned immutable copy, visible only in its own arm. The subject may also be an `Int`, `Bool`, or `String`, whose arms are literals or (for an integer) a half-open `start..end` range. An arm head may list several patterns separated by `,` (an alternation), and an `else` arm is the catch-all, written last.
 
 | Rule | Code |
 | --- | --- |
-| Every variant covered | `KSEM129` |
+| Every enum variant covered, or `else` | `KSEM129` |
+| A scalar match ends with `else` (or a `Bool` covers both) | `KSEM380` |
+| `else` is the last arm | `KSEM381` |
 | No variant matched twice | `KSEM127` |
-| The subject is an enum | `KSEM125` |
+| No value matched twice | `KSEM382` |
+| A pattern matches the subject's type | `KSEM383` |
+| No payload binding on an alternation | `KSEM384` |
+| The subject is an enum or a scalar | `KSEM125` |
 
-There is no wildcard arm and no `else` arm. An exhaustive `match` whose arms all return is a definite return. A `break` inside an arm belongs to the enclosing loop.
+An exhaustive `match` whose arms all return is a definite return. A `break` inside an arm belongs to the enclosing loop.
 
 ## Attempt
 

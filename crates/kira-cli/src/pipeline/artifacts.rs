@@ -191,6 +191,7 @@ pub fn build(args: &[String]) -> i32 {
         }
         BackendMode::LlvmNative => match build_native(ir, &options, link) {
             Some(_) => {
+                stage_bundled_assets(std::path::Path::new(&options.path), &compiled);
                 out!("Successfully built");
                 EXIT_OK
             }
@@ -250,8 +251,79 @@ pub fn build(args: &[String]) -> i32 {
                 out!("Failed to build");
                 return EXIT_FAILURE;
             }
+            stage_bundled_assets(std::path::Path::new(&options.path), &compiled);
             out!("Successfully built {}", artifacts.executable().display());
             EXIT_OK
+        }
+    }
+}
+
+/// Stages every participating package's declared `assets` into a per-package
+/// `<name>.klbundle/resources/` under the program's build directory.
+///
+/// A dependency's assets do not otherwise reach the program that runs: the
+/// program is the only process on the machine, and it looks for a file beside
+/// itself, not inside a library it was built against. So the build lays each
+/// package's declared assets into a bundle named after that package, in the
+/// program's own `.kira-build/`, where the runtime's file layer finds them
+/// (see `kira_runtime_abi::file_system` path resolution). A KCoreUI catalog a
+/// toolkit ships reaches the app this way without the app restating it.
+///
+/// Best-effort: an asset a manifest names but that is not on disk was already
+/// reported by the frontend, and a copy that fails leaves the working-directory
+/// path as the only place to find it — the same place it was before.
+fn stage_bundled_assets(entry: &std::path::Path, compiled: &kira_build::Compiled) {
+    let build_directory = kira_project::build_directory(entry);
+
+    // The distinct package roots that took part in this build, the entry's own
+    // among them. A root appears under many source files; it is bundled once.
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for file in compiled.sources.iter() {
+        if let Some(root) = kira_project::package_root(std::path::Path::new(&file.path))
+            && !roots.contains(&root)
+        {
+            roots.push(root);
+        }
+    }
+
+    for root in roots {
+        // Only the declaration manifest (`package.kira`) carries an `assets`
+        // key; a package written in another manifest form simply has none to
+        // stage, so a parse that does not yield one is skipped, not an error.
+        let Some(manifest_path) = kira_project::MANIFEST_FILE_NAMES
+            .iter()
+            .map(|name| root.join(name))
+            .find(|path| path.is_file())
+        else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = kira_manifest::load_declaration(&text) else {
+            continue;
+        };
+        if manifest.assets.is_empty() {
+            continue;
+        }
+
+        let resources = build_directory
+            .join(format!("{}.klbundle", manifest.name))
+            .join("resources");
+        for entry in &manifest.assets {
+            let relative = entry.trim_start_matches("./").trim_matches('/');
+            if relative.is_empty() {
+                continue;
+            }
+            let source = root.join(relative);
+            if !source.is_file() {
+                continue;
+            }
+            let destination = resources.join(relative);
+            if let Some(parent) = destination.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(&source, &destination);
         }
     }
 }

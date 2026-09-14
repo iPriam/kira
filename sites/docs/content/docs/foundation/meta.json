@@ -3,9 +3,11 @@
   "pages": [
     "index",
     "geometry-and-values",
+    "bytes",
     "filesystem",
     "images",
     "json",
+    "networking",
     "compiling-kira",
     "running-kira",
     "testing"

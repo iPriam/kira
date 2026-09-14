@@ -102,7 +102,7 @@ pub enum LinkError {
          link for `{target}`\n\
          note: clang selects a linker rather than containing one, and the only \
          linker on this machine builds for this machine\n\
-         note: install a bundle built with lld (`knvm install-llvm --force`); \
+         note: install a bundle built with lld (`knvm llvm install --force`); \
          bundles published before `--target` existed carry clang alone"
     )]
     CrossLinkerMissing {

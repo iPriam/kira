@@ -168,7 +168,22 @@ jobs:
       # workspace crate, so the example that calls it is proved here on all
       # three engines rather than left to the sweep that has to skip it.
       - name: Build the native networking library
-        run: cargo build -p kira-network
+        shell: bash
+        # Foundation owns the transport now, so the archive is staged into the
+        # checkout Foundation `KIRA_FOUNDATION_HOME` points the runs below at —
+        # where its `NativeLibs/kira_network.toml` names it. The macOS key omits
+        # the `-none` abi the kira triple carries.
+        run: |
+          cargo build -p kira-network
+          net_triple="${{ matrix.host_key }}"
+          if [ "$net_triple" = "aarch64-macos" ]; then net_triple="aarch64-macos-none"; fi
+          dest="foundation/NativeLibs/lib/$net_triple"
+          mkdir -p "$dest"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/debug/kira_network.lib "$dest/"
+          else
+            cp target/debug/libkira_network.a "$dest/"
+          fi
 
       - name: Kira LLM pipeline on every backend
         shell: bash

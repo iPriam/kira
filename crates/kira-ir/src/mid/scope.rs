@@ -329,6 +329,11 @@ impl Scan<'_> {
                     self.expr(*argument, path, owners);
                 }
             }
+            IrExpr::NumberOperation { operands, .. } => {
+                for operand in operands {
+                    self.expr(*operand, path, owners);
+                }
+            }
             IrExpr::StringOf { value } | IrExpr::CLayoutAddress { value, .. } => {
                 self.expr(*value, path, owners)
             }
@@ -345,11 +350,11 @@ impl Scan<'_> {
                 self.expr(*value, path, owners);
             }
             IrExpr::NativeState { value, .. } => self.expr(*value, path, owners),
-            IrExpr::NativeUserData { state } => self.expr(*state, path, owners),
+            IrExpr::NativeUserData { state, .. } => self.expr(*state, path, owners),
             IrExpr::NativeRecover { raw, .. } | IrExpr::NativeStateTake { raw, .. } => {
                 self.expr(*raw, path, owners)
             }
-            IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token } => {
+            IrExpr::NativeStateRetain { token } | IrExpr::NativeStateRelease { token, .. } => {
                 self.expr(*token, path, owners)
             }
             IrExpr::Convert { operand, .. } => self.expr(*operand, path, owners),

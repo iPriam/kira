@@ -317,6 +317,18 @@ impl ResponseData {
         })
     }
 
+    /// A response assembled from something other than an HTTP exchange — a run
+    /// command's exit code and captured output — so a caller reads a command's
+    /// result through the very same status-and-body surface a request answers
+    /// with.
+    pub(crate) fn from_output(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body,
+        }
+    }
+
     /// The HTTP status code.
     pub(crate) fn status(&self) -> u16 {
         self.status

@@ -178,8 +178,7 @@ impl Program {
         vm.release_constants();
         let mut writebacks = Vec::with_capacity(captured.len());
         for (slot, value) in captured {
-            let lifted = vm.heap.lift(value);
-            vm.heap.drop_value(value);
+            let lifted = vm.heap.lift_transfer(value);
             writebacks.push((
                 slot,
                 lifted.ok_or(VmError::StructAtSeam {
@@ -187,8 +186,7 @@ impl Program {
                 })?,
             ));
         }
-        let lifted = vm.heap.lift(result);
-        vm.heap.drop_value(result);
+        let lifted = vm.heap.lift_transfer(result);
         Ok(NativeReturn {
             result: lifted.ok_or(VmError::StructAtSeam {
                 function: function_id,
@@ -276,8 +274,7 @@ impl Vm<'_> {
             Ok((value, captured)) => {
                 let mut writebacks = Vec::with_capacity(captured.len());
                 for (slot, value) in captured {
-                    let lifted = nested.heap.lift(value);
-                    nested.heap.drop_value(value);
+                    let lifted = nested.heap.lift_transfer(value);
                     writebacks.push((
                         slot,
                         lifted.ok_or(VmError::StructAtSeam {
@@ -285,8 +282,7 @@ impl Vm<'_> {
                         })?,
                     ));
                 }
-                let lifted = nested.heap.lift(value);
-                nested.heap.drop_value(value);
+                let lifted = nested.heap.lift_transfer(value);
                 Ok(NativeReturn {
                     result: lifted.ok_or(VmError::StructAtSeam {
                         function: function_id,

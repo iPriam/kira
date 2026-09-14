@@ -386,6 +386,16 @@ pub enum VmError {
         /// The function at the boundary.
         function: u32,
     },
+    /// A `Number` reached the native seam, which carries no decimal yet.
+    #[error("function {function} passes a Number across the native seam, which has no decimal form yet")]
+    NumberAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
+    /// A `Number` operation had no answer: overflow, a divide by zero, or text
+    /// that does not read as a decimal. The message is the decimal type's own.
+    #[error("{0}")]
+    NumberTrap(&'static str),
     /// A handle reached this seam, and this run has no heap that outlives it.
     ///
     /// A handle names an object in a heap that survives between calls; a `call`

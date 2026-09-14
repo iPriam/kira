@@ -4,11 +4,12 @@
 //! Two rules shape everything here, and both are the language's, not this
 //! file's:
 //!
-//! - A task **body** is a direct call to a named function taking scalars and
-//!   returning a scalar or nothing, or a bare scalar literal. Anything else is
-//!   `KSEM159`. The restriction is what makes a spawn's arguments evaluable at
-//!   the spawn site and its body runnable later, with no closure and no capture
-//!   analysis in between.
+//! - A task **body** is a direct call to a named function, or a bare numeric
+//!   literal. Anything else is `KSEM159`. The restriction is what makes a
+//!   spawn's arguments evaluable at the spawn site and its body runnable later,
+//!   with no closure and no capture analysis in between. What that call takes
+//!   and returns may be any `Send` value — exactly the set a channel carries —
+//!   and a value that is not `Send` is `KSEM312`.
 //! - A task **handle** is opaque. `.await`, `.requestCancel()`, and `.detach()`
 //!   are the whole surface; every other use is `KSEM158`. That is enforced by
 //!   the type — [`Type::Task`] is not an `Int` — rather than by a convention a
@@ -27,35 +28,7 @@ use kira_syntax_model::ast::{CallArg, Expr, ExprId, UnaryOp};
 use crate::analyze::{Analyzer, FnCtx};
 use crate::traits::markers::Marker;
 
-/// The scalar types a task body may take and hand back, before a `distinct` is
-/// resolved to what it is.
-///
-/// `Bool` is deliberately absent: a task's arguments and result travel through
-/// the executor as one machine word, and `Int`/`Float` are the two the compiler
-/// can already move in and out of one without inventing a representation.
-fn task_scalar(ty: Type) -> Option<TaskResult> {
-    match ty {
-        Type::Int(_) => Some(TaskResult::Int),
-        Type::Float(_) => Some(TaskResult::Float),
-        _ => None,
-    }
-}
-
 impl Analyzer<'_> {
-    /// The same answer as [`task_scalar`], with a `distinct` resolved to the
-    /// scalar it is.
-    ///
-    /// A distinct type is erased before IR exists, so one crossing a task slot
-    /// is already the word its representation is. Refusing it here would mean a
-    /// channel end could not reach the task that uses it, which is the only
-    /// place an end is ever going.
-    fn task_slot_scalar(&self, ty: Type) -> Option<TaskResult> {
-        match ty {
-            Type::Distinct(id) => task_scalar(self.program.types.distincts().representation(id)?),
-            other => task_scalar(other),
-        }
-    }
-
     /// Analyzes `Task { body }`.
     pub(crate) fn analyze_task_spawn(
         &mut self,
@@ -80,7 +53,7 @@ impl Analyzer<'_> {
             // slice admits.
             Expr::Int { .. } | Expr::Float { .. } => {
                 let value = self.analyze_expr(ctx, body);
-                let Some(result) = task_scalar(self.program.expr(value).type_of()) else {
+                let Some(result) = TaskResult::from_type(self.program.expr(value).type_of()) else {
                     return self.refuse_task_body(span);
                 };
                 self.program.exprs.alloc(HirExpr::TaskSpawn {
@@ -99,7 +72,7 @@ impl Analyzer<'_> {
             ) =>
             {
                 let value = self.analyze_expr(ctx, body);
-                let Some(result) = task_scalar(self.program.expr(value).type_of()) else {
+                let Some(result) = TaskResult::from_type(self.program.expr(value).type_of()) else {
                     return self.refuse_task_body(span);
                 };
                 self.program.exprs.alloc(HirExpr::TaskSpawn {
@@ -204,26 +177,15 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         }
         // A `Void` body joins as `Int` `0`: the join is a sequencing point, and
-        // sequencing still has to produce a value.
-        let result = match return_type {
-            Type::Void => Some(TaskResult::Int),
-            other => self.task_slot_scalar(other),
-        };
-        let Some(result) = result else {
+        // sequencing still has to produce a value. Every other return type is
+        // its own descriptor — the `Send` gate above already refused the ones a
+        // handle cannot yield.
+        let Some(result) = TaskResult::from_type(return_type) else {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
             }
             return self.refuse_task_body(span);
         };
-        if params
-            .iter()
-            .any(|param| self.task_slot_scalar(*param).is_none())
-        {
-            for arg in args {
-                self.analyze_expr(ctx, arg.value);
-            }
-            return self.refuse_task_body(span);
-        }
         if args.len() != params.len() {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
@@ -278,10 +240,9 @@ impl Analyzer<'_> {
     /// out is read by whoever joins. So both directions must be movable.
     ///
     /// Asked of the resolved signature rather than of the arguments, so the
-    /// answer is a fact about the function being spawned. Today the slot
-    /// representation narrows the same signature further ([`Self::refuse_task_body`],
-    /// `KSEM159`), and every type that rule admits is `Send`; this one is what
-    /// stays correct when that narrowing lifts.
+    /// answer is a fact about the function being spawned. This is the whole
+    /// type gate a task body faces: what a slot can carry is whatever `Send`
+    /// admits, crossing as the one word a channel payload does.
     fn task_sends_everything_it_crosses(
         &self,
         name: &str,
@@ -309,14 +270,13 @@ impl Analyzer<'_> {
         None
     }
 
-    /// Reports a task body outside the executable slice.
+    /// Reports a task body that is neither a call to a named function nor a
+    /// bare numeric literal — a body shape the deferred slice cannot run.
     fn refuse_task_body(&mut self, span: Span) -> HirExprId {
         self.emit(
             span,
             "KSEM159",
-            "a `Task { … }` body is a call to a named function taking `Int`/`Float` \
-             parameters and returning `Int`, `Float`, or nothing, or a bare numeric \
-             literal",
+            "a `Task { … }` body is a call to a named function, or a bare numeric literal",
         );
         self.program.exprs.alloc(HirExpr::Error)
     }
@@ -333,10 +293,7 @@ impl Analyzer<'_> {
         if name != "await" {
             return self.refuse_task_use(name, span);
         }
-        let ty = match result {
-            TaskResult::Int => Type::INT,
-            TaskResult::Float => Type::FLOAT,
-        };
+        let ty = result.value_type();
         self.program.exprs.alloc(HirExpr::TaskJoin { handle, ty })
     }
 

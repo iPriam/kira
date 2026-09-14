@@ -77,6 +77,14 @@ pub enum TypeRef {
         /// Span covering the name through the closing `>`.
         span: Span,
     },
+    /// A tuple type: `(Int, String)`. Tuples are structural compiler-minted
+    /// structs after semantic analysis, so no backend sees a special tuple type.
+    Tuple {
+        /// Element types in positional order. Arity is at least two.
+        elements: Vec<TypeRefId>,
+        /// Span covering the parentheses.
+        span: Span,
+    },
     /// An array type: `[Int]`.
     Array {
         /// The written element type.
@@ -125,6 +133,7 @@ impl TypeRef {
             | TypeRef::SomeConstruct { span, .. }
             | TypeRef::ConstructMember { span, .. }
             | TypeRef::Generic { span, .. }
+            | TypeRef::Tuple { span, .. }
             | TypeRef::Array { span, .. }
             | TypeRef::Function { span, .. }
             | TypeRef::Error { span } => *span,

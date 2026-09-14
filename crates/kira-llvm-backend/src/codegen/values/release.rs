@@ -38,8 +38,16 @@ impl Codegen<'_> {
                 let handle = unsafe {
                     LLVMBuildLoad2(self.builder, self.types.i64, at, c"native.state".as_ptr())
                 };
-                self.call(self.runtime.native_state_release, &mut [handle], c"");
-                Ok(())
+                let target = self.program.types.native_state_target(ty).ok_or(
+                    crate::LlvmError::internal("a native-state handle without a target type"),
+                )?;
+                // Always use the destroying release. A value-tree state may need
+                // the active engine because a nested field runs `Drop` or owns
+                // another NativeState even when the root itself has no body.
+                // Boxed whole-program state takes the same call and destroys
+                // itself in its generated free leaf, so one path stays correct
+                // as ownership grows more structural.
+                self.release_drop_state(handle, target)
             }
             Type::String => {
                 let last = self.runtime.str_free;
@@ -129,6 +137,122 @@ impl Codegen<'_> {
             }
             _ => Err(crate::LlvmError::internal("a drop of an unowned value")),
         }
+    }
+
+    /// Releases the storage owned by a materialized snapshot of a recovered
+    /// callback-state root without running that root's user `Drop` body.
+    ///
+    /// A hybrid recovered view is not another value owner. Reading one field may
+    /// materialize a backend-local snapshot so the field can be extracted, and
+    /// that snapshot owns cloned string/array/C-storage handles that must be
+    /// reclaimed. Its root body, however, belongs to the state token and runs
+    /// only when the final owner releases that state.
+    pub(in crate::codegen) fn release_recovered_root_snapshot(
+        &mut self,
+        at: LLVMValueRef,
+        ty: Type,
+    ) -> Result<(), crate::LlvmError> {
+        let Type::Struct(id) = ty else {
+            return Err(crate::LlvmError::internal(
+                "a recovered Drop snapshot whose root is not a struct",
+            ));
+        };
+        let struct_type = self.llvm_type(ty)?;
+        let def = self
+            .program
+            .types
+            .structs()
+            .get(id)
+            .ok_or(crate::LlvmError::internal(
+                "a recovered Drop struct not in the table",
+            ))?
+            .clone();
+        for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate().rev() {
+            let field = self.field_pointer(struct_type, at, index as u32);
+            if def.owns_c_storage_at(index as u32) {
+                // SAFETY: an owning C-layout slot contains one live or null
+                // C-block handle cloned into this snapshot.
+                let handle = unsafe {
+                    LLVMBuildLoad2(self.builder, self.types.i64, field, c"cblock".as_ptr())
+                };
+                self.call(self.runtime.cblock_free, &mut [handle], c"");
+                continue;
+            }
+            if self.owns_heap(field_ty) {
+                self.release_at(field, field_ty)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases one Drop-bearing callback-state owner. A boxed native token
+    /// destroys itself in the runtime and returns no tree. A value-tree token
+    /// returns its owned tree only on the final release; generated code then
+    /// rebuilds the value and enters the ordinary Kira release walk, which runs
+    /// its user `Drop` body before releasing the fields.
+    pub(in crate::codegen) fn release_drop_state(
+        &mut self,
+        handle: LLVMValueRef,
+        target: Type,
+    ) -> Result<(), crate::LlvmError> {
+        // SAFETY: the builder is positioned in a live function and both types
+        // belong to this module's context.
+        // SAFETY: the builder is positioned in a live function and the pointer
+        // type belongs to this module's context.
+        let out_node =
+            unsafe { LLVMBuildAlloca(self.builder, self.types.ptr, c"native.drop.node".as_ptr()) };
+        let status = self.call(
+            self.runtime.native_state_release_dropping,
+            &mut [handle, out_node],
+            c"native.state.status",
+        );
+        self.check_native_status_in_codegen(status);
+        // SAFETY: the runtime initialized `out_node` on every successful call.
+        let node = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                self.types.ptr,
+                out_node,
+                c"native.drop.value".as_ptr(),
+            )
+        };
+        let function = self.current_function();
+        // SAFETY: all values and blocks belong to this function and context.
+        let (drop_block, done_block) = unsafe {
+            let drop_block =
+                LLVMAppendBasicBlockInContext(self.context, function, c"native.drop.run".as_ptr());
+            let done_block =
+                LLVMAppendBasicBlockInContext(self.context, function, c"native.drop.done".as_ptr());
+            let null = LLVMConstNull(self.types.ptr);
+            let has_value = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                node,
+                null,
+                c"native.drop.present".as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, has_value, drop_block, done_block);
+            LLVMPositionBuilderAtEnd(self.builder, drop_block);
+            (drop_block, done_block)
+        };
+        let _ = drop_block;
+        let value = self.decode_native_state_value(node, target)?;
+        let llvm_type = self.llvm_type(target)?;
+        // SAFETY: `value` has `llvm_type` and this temporary exists only until
+        // the release walk below has consumed its ownership.
+        let slot = unsafe {
+            let slot = LLVMBuildAlloca(self.builder, llvm_type, c"native.drop.value.slot".as_ptr());
+            LLVMBuildStore(self.builder, value, slot);
+            slot
+        };
+        self.release_at_walk(slot, target)?;
+        // SAFETY: nested release code leaves the builder on an unterminated live
+        // block; both branches converge on `done_block`.
+        unsafe {
+            LLVMBuildBr(self.builder, done_block);
+            LLVMPositionBuilderAtEnd(self.builder, done_block);
+        }
+        Ok(())
     }
 
     /// Copies a shared object: the same handle, held once more, emitted inline.

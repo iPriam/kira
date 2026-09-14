@@ -55,6 +55,16 @@ impl Analyzer<'_> {
     /// `assignable_to` directly, so the check and the conversion stay one pair
     /// as the lattice grows.
     pub(crate) fn admits(&self, actual: Type, expected: Type) -> bool {
+        if let (Some(_), Some(Type::Any)) = (
+            self.program.types.native_state_target(actual),
+            self.program.types.native_state_target(expected),
+        ) {
+            // `NativeState<Any>` is the erased affine-owner shape. Every typed
+            // callback-state handle may move into it without changing the
+            // runtime token or losing ownership. The reverse is deliberately
+            // not admitted: recovery performs the checked type test.
+            return true;
+        }
         actual.assignable_to(expected)
     }
 

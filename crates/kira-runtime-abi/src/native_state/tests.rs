@@ -17,6 +17,9 @@ fn native_state_c_tags_and_statuses_are_pinned() {
     assert_eq!(NativeStateValueTag::RAW_PTR.0, 8);
     assert_eq!(NativeStateValueTag::CELL.0, 9);
     assert_eq!(NativeStateValueTag::ANY.0, 10);
+    assert_eq!(NativeStateValueTag::C_BLOCK.0, 11);
+    assert_eq!(NativeStateValueTag::NATIVE_STATE.0, 12);
+    assert_eq!(NativeStateValueTag::DROP_STRUCT.0, 13);
     assert_eq!(NativeStateStatus::OK.0, 0);
     assert_eq!(NativeStateStatus::NO_HOST.0, 1);
     assert_eq!(NativeStateStatus::NULL_TOKEN.0, 2);
@@ -24,6 +27,7 @@ fn native_state_c_tags_and_statuses_are_pinned() {
     assert_eq!(NativeStateStatus::WRONG_TYPE.0, 4);
     assert_eq!(NativeStateStatus::TOKEN_EXHAUSTED.0, 5);
     assert_eq!(NativeStateStatus::MALFORMED_VALUE.0, 6);
+    assert_eq!(NativeStateStatus::DROP_ENGINE_REQUIRED.0, 7);
 }
 
 /// A cell share survives the deep clone a write forces, and is given back
@@ -170,6 +174,85 @@ fn callback_state_teardown_releases_a_nested_enum_cell_share() {
         1,
         "final state teardown releases the nested enum cell once"
     );
+}
+
+#[test]
+fn a_unique_transport_owner_moves_without_releasing_its_reference() {
+    let retains = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retained = Arc::clone(&retains);
+    let released = Arc::clone(&releases);
+    let token = NativeStateToken::from_word(42);
+    let owner = NativeStateOwner::new(
+        token,
+        move |_| {
+            retained.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        },
+        move |_| {
+            released.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        },
+    );
+
+    assert_eq!(owner.into_token(), Ok(token));
+    assert_eq!(retains.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(releases.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn a_shared_transport_owner_keeps_one_obligation_until_the_last_snapshot_dies() {
+    let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let released = Arc::clone(&releases);
+    let owner = NativeStateOwner::new(
+        NativeStateToken::from_word(44),
+        |_| {},
+        move |_| {
+            released.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        },
+    );
+    let snapshot = owner.clone();
+    let owner = owner
+        .into_token()
+        .expect_err("a shared transport obligation cannot be stolen");
+    drop(owner);
+    assert_eq!(releases.load(std::sync::atomic::Ordering::Relaxed), 0);
+    drop(snapshot);
+    assert_eq!(releases.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+#[test]
+fn nested_state_and_drop_nodes_require_engine_mediated_final_release() {
+    let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let released = Arc::clone(&releases);
+    let nested = NativeStateOwner::new(
+        NativeStateToken::from_word(46),
+        |_| {},
+        move |_| {
+            released.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        },
+    );
+    let value = NativeStateValue::struct_of(vec![
+        NativeStateValue::dropping_struct_of(vec![NativeStateValue::Int(1)], 9),
+        NativeStateValue::NativeState(nested),
+    ]);
+    let mut store = NativeStateStore::new();
+    let token = store.create(LEFT, value).expect("state allocates");
+
+    assert_eq!(
+        store.release(token),
+        Err(NativeStateError::DropEngineRequired)
+    );
+    assert_eq!(
+        store.live(),
+        1,
+        "a refused plain release keeps the owner live"
+    );
+    let tree = store
+        .release_dropping(token)
+        .expect("destroying release succeeds")
+        .expect("the tree needs the active engine");
+    assert_eq!(store.live(), 0);
+    drop(tree);
+    assert_eq!(releases.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 #[test]

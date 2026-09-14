@@ -136,7 +136,7 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         self.library.native_state_replace(token, ty, value)
     }
 
@@ -146,6 +146,13 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
 
     fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.library.native_state_release(token)
+    }
+
+    fn native_state_release_dropping(
+        &mut self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        self.library.native_state_release_dropping(token)
     }
 
     fn native_state_check(

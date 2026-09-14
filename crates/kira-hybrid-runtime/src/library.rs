@@ -22,8 +22,8 @@ use std::sync::Arc;
 use kira_hybrid_definition::HybridFunction;
 use kira_runtime_abi::{
     BridgeValue, CBlockOffset, ChannelPrim, ChannelTrap, ForeignPointerWidth, NativeCBlock,
-    NativeStateError, NativeStateStatus, NativeStateToken, NativeStateTypeId, NativeStateValue,
-    NativeStateValueTag,
+    NativeStateError, NativeStateOwner, NativeStateStatus, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, NativeStateValueTag,
 };
 
 use crate::error::HybridError;
@@ -72,138 +72,8 @@ pub type RuntimeInvoker = unsafe extern "C" fn(
 /// one, and could not: `KiraString` is private to the runtime.
 pub type StrHandle = u64;
 
-type StrNewFn = unsafe extern "C" fn(data: *const u8, len: usize) -> *mut c_void;
-type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
-type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
-type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
-type HeapReportFn = unsafe extern "C" fn();
-type TaskResetFn = unsafe extern "C" fn();
-type ChannelTryFn = unsafe extern "C" fn(i64, i64, i64, i64, *mut i64) -> i64;
-type MainThreadRunFn = unsafe extern "C" fn(extern "C" fn() -> i32) -> i32;
-type MainThreadInstallDispatcherFn = unsafe extern "C" fn(*mut c_void);
-type MainThreadDispatcherFn = unsafe extern "C" fn(u32, *mut BridgeValue, u32, *mut BridgeValue);
-type MainThreadLifecycleResolverFn = unsafe extern "C" fn(u32) -> *mut c_void;
-type MainThreadLifecycleStartFn = unsafe extern "C" fn(u32) -> u8;
-type MainThreadLifecyclePumpFn = unsafe extern "C" fn(u64) -> u8;
-type MainThreadLifecycleResetFn = unsafe extern "C" fn();
-type LiveReloadMarkFn = unsafe extern "C" fn();
-type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
-type StateNode = *mut c_void;
-type StateIntFn = unsafe extern "C" fn(i64) -> StateNode;
-type StateAnyFn = unsafe extern "C" fn(u64, StateNode) -> StateNode;
-type StateReadAnyTypeFn = unsafe extern "C" fn(StateNode) -> u64;
-type StateRawPtrFn = unsafe extern "C" fn(u64) -> StateNode;
-type StateCellFn = unsafe extern "C" fn(u64) -> StateNode;
-type StateReadCellFn = unsafe extern "C" fn(StateNode) -> u64;
-type CellFreeFn = unsafe extern "C" fn(u64);
-type CellProxyNewFn = unsafe extern "C" fn(u64) -> u64;
-type CellProxyHandleFn = unsafe extern "C" fn(u64) -> u64;
-type StateFloatFn = unsafe extern "C" fn(f64) -> StateNode;
-type StateBoolFn = unsafe extern "C" fn(u8) -> StateNode;
-type StateStringFn = unsafe extern "C" fn(*mut c_void) -> StateNode;
-type StateAggregateFn = unsafe extern "C" fn(u32, u32, usize) -> StateNode;
-type StateSetChildFn = unsafe extern "C" fn(StateNode, usize, StateNode) -> u32;
-type StateTagFn = unsafe extern "C" fn(StateNode) -> u32;
-type StateReadIntFn = unsafe extern "C" fn(StateNode) -> i64;
-type StateReadRawPtrFn = unsafe extern "C" fn(StateNode) -> u64;
-type StateReadFloatFn = unsafe extern "C" fn(StateNode) -> f64;
-type StateReadBoolFn = unsafe extern "C" fn(StateNode) -> u8;
-type StateReadStringFn = unsafe extern "C" fn(StateNode) -> *mut c_void;
-type StateLenFn = unsafe extern "C" fn(StateNode) -> usize;
-type StateCBlockFn = unsafe extern "C" fn(*const u8, usize, usize) -> StateNode;
-type StateSetCBlockChildFn = unsafe extern "C" fn(StateNode, usize, u64, u32, StateNode) -> u32;
-type StateReadCBlockLenFn = unsafe extern "C" fn(StateNode) -> usize;
-type StateReadCBlockDataFn = unsafe extern "C" fn(StateNode) -> *const u8;
-type StateReadCBlockChildOffsetFn = unsafe extern "C" fn(StateNode, usize) -> u64;
-type StateReadCBlockChildWidthFn = unsafe extern "C" fn(StateNode, usize) -> u32;
-type StateEnumTagFn = unsafe extern "C" fn(StateNode) -> u32;
-type StateChildFn = unsafe extern "C" fn(StateNode, usize) -> StateNode;
-type StateNodeFreeFn = unsafe extern "C" fn(StateNode);
-type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
-type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
-type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
-type StateCountFn = unsafe extern "C" fn(u64) -> u32;
-type CBlockReleaseRetainedFn = unsafe extern "C" fn();
-/// The loaded library lease carried by a decoded cell's release closure.
-struct CellReleaseOwner<L> {
-    /// Keeps the image containing `free` loaded until all cell shares release.
-    _library: Arc<L>,
-    /// Resolved from the library held by `_library`.
-    free: CellFreeFn,
-}
-
-impl<L> CellReleaseOwner<L> {
-    fn new(library: Arc<L>, free: CellFreeFn) -> CellReleaseOwner<L> {
-        CellReleaseOwner {
-            _library: library,
-            free,
-        }
-    }
-
-    fn release(&self, handle: u64) {
-        // SAFETY: `free` came from the library held by this owner, and the
-        // owner remains alive for the duration of the call.
-        unsafe { (self.free)(handle) };
-    }
-}
-
-/// The symbols every hybrid library must export, whatever the program does.
-const STR_NEW: &[u8] = b"kira_rt_str_new\0";
-const STR_FREE: &[u8] = b"kira_rt_str_free\0";
-const STR_DATA: &[u8] = b"kira_rt_str_data\0";
-const STR_LEN: &[u8] = b"kira_rt_str_len\0";
-const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
-const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
-/// Optional, unlike the rest: an older library simply has no accounting.
-const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
-const TASK_RESET: &[u8] = b"kira_rt_task_reset\0";
-const CHANNEL_RESET: &[u8] = b"kira_rt_channel_reset\0";
-const CHANNEL_TRY: &[u8] = b"kira_rt_channel_try\0";
-const MAIN_THREAD_RUN: &[u8] = b"kira_rt_main_thread_run\0";
-const MAIN_THREAD_INSTALL_DISPATCHER: &[u8] = b"kira_rt_main_thread_install_dispatcher\0";
-const MAIN_THREAD_DISPATCHER: &[u8] = b"kira_main_thread_dispatch\0";
-const MAIN_THREAD_INSTALL_LIFECYCLE_RESOLVER: &[u8] =
-    b"kira_rt_main_thread_install_lifecycle_resolver\0";
-const MAIN_THREAD_LIFECYCLE_RESOLVER: &[u8] = b"kira_main_thread_lifecycle_resolve\0";
-const MAIN_THREAD_LIFECYCLE_START: &[u8] = b"kira_rt_main_thread_lifecycle_start_local\0";
-const MAIN_THREAD_LIFECYCLE_PUMP: &[u8] = b"kira_rt_main_thread_lifecycle_pump_local\0";
-const MAIN_THREAD_LIFECYCLE_RESET: &[u8] = b"kira_rt_main_thread_lifecycle_reset_local\0";
-const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
-const STATE_VALUE_ANY: &[u8] = b"kira_rt_native_value_any\0";
-const STATE_VALUE_READ_ANY_TYPE: &[u8] = b"kira_rt_native_value_read_any_type\0";
-const STATE_VALUE_RAW_PTR: &[u8] = b"kira_rt_native_value_raw_ptr\0";
-const CELL_FREE: &[u8] = b"kira_rt_cell_free\0";
-const CELL_VM_PROXY_NEW: &[u8] = b"kira_rt_cell_vm_proxy_new\0";
-const CELL_VM_PROXY_HANDLE: &[u8] = b"kira_rt_cell_vm_proxy_handle\0";
-const STATE_VALUE_CELL: &[u8] = b"kira_rt_native_value_cell\0";
-const STATE_VALUE_READ_CELL: &[u8] = b"kira_rt_native_value_read_cell\0";
-const STATE_VALUE_FLOAT: &[u8] = b"kira_rt_native_value_float\0";
-const STATE_VALUE_BOOL: &[u8] = b"kira_rt_native_value_bool\0";
-const STATE_VALUE_STRING: &[u8] = b"kira_rt_native_value_string\0";
-const STATE_VALUE_AGGREGATE: &[u8] = b"kira_rt_native_value_aggregate\0";
-const STATE_VALUE_SET_CHILD: &[u8] = b"kira_rt_native_value_set_child\0";
-const STATE_VALUE_TAG: &[u8] = b"kira_rt_native_value_tag\0";
-const STATE_VALUE_READ_INT: &[u8] = b"kira_rt_native_value_read_int\0";
-const STATE_VALUE_READ_RAW_PTR: &[u8] = b"kira_rt_native_value_read_raw_ptr\0";
-const STATE_VALUE_READ_FLOAT: &[u8] = b"kira_rt_native_value_read_float\0";
-const STATE_VALUE_READ_BOOL: &[u8] = b"kira_rt_native_value_read_bool\0";
-const STATE_VALUE_READ_STRING: &[u8] = b"kira_rt_native_value_read_string\0";
-const STATE_VALUE_LEN: &[u8] = b"kira_rt_native_value_len\0";
-const STATE_VALUE_CBLOCK: &[u8] = b"kira_rt_native_value_cblock\0";
-const STATE_VALUE_SET_CBLOCK_CHILD: &[u8] = b"kira_rt_native_value_set_cblock_child\0";
-const STATE_VALUE_READ_CBLOCK_LEN: &[u8] = b"kira_rt_native_value_read_cblock_len\0";
-const STATE_VALUE_READ_CBLOCK_DATA: &[u8] = b"kira_rt_native_value_read_cblock_data\0";
-const STATE_VALUE_CBLOCK_CHILD_OFFSET: &[u8] = b"kira_rt_native_value_cblock_child_offset\0";
-const STATE_VALUE_CBLOCK_CHILD_WIDTH: &[u8] = b"kira_rt_native_value_cblock_child_width\0";
-const STATE_VALUE_ENUM_TAG: &[u8] = b"kira_rt_native_value_enum_tag\0";
-const STATE_VALUE_CHILD: &[u8] = b"kira_rt_native_value_child\0";
-const STATE_VALUE_FREE: &[u8] = b"kira_rt_native_value_free\0";
-const STATE_NEW: &[u8] = b"kira_rt_native_state_new\0";
-const STATE_RECOVER: &[u8] = b"kira_rt_native_state_recover\0";
-const STATE_REPLACE: &[u8] = b"kira_rt_native_state_replace\0";
-const STATE_RETAIN: &[u8] = b"kira_rt_native_state_retain\0";
-const STATE_RELEASE: &[u8] = b"kira_rt_native_state_release\0";
-const CBLOCK_RELEASE_RETAINED: &[u8] = b"kira_rt_cblock_release_retained\0";
+mod abi;
+use abi::*;
 
 /// The native half of a hybrid program, loaded and bound.
 pub struct NativeLibrary {
@@ -249,9 +119,11 @@ pub struct NativeLibrary {
     install_invoker: InstallInvokerFn,
     live_reload_mark: LiveReloadMarkFn,
     state_value_int: StateIntFn,
+    state_value_number: StateNumberFn,
     state_value_any: StateAnyFn,
     state_value_read_any_type: StateReadAnyTypeFn,
     state_value_raw_ptr: StateRawPtrFn,
+    state_value_native_state: StateNativeStateFn,
     state_value_cell: StateCellFn,
     state_value_read_cell: StateReadCellFn,
     cell_release: Arc<CellReleaseOwner<libloading::Library>>,
@@ -264,7 +136,10 @@ pub struct NativeLibrary {
     state_value_set_child: StateSetChildFn,
     state_value_tag: StateTagFn,
     state_value_read_int: StateReadIntFn,
+    state_value_read_number: StateReadNumberFn,
     state_value_read_raw_ptr: StateReadRawPtrFn,
+    state_value_read_native_state: StateReadNativeStateFn,
+    state_value_read_drop_glue: StateReadDropGlueFn,
     state_value_read_float: StateReadFloatFn,
     state_value_read_bool: StateReadBoolFn,
     state_value_read_string: StateReadStringFn,
@@ -279,10 +154,12 @@ pub struct NativeLibrary {
     state_value_child: StateChildFn,
     state_value_free: StateNodeFreeFn,
     state_new: StateNewFn,
+    state_new_dropping: StateNewDroppingFn,
     state_recover: StateRecoverFn,
     state_replace: StateReplaceFn,
     state_retain: StateCountFn,
     state_release: StateCountFn,
+    state_release_dropping: StateReleaseDroppingFn,
     cblock_release_retained: CBlockReleaseRetainedFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
@@ -360,9 +237,11 @@ impl NativeLibrary {
         let main_thread_lifecycle_pump = bind(&library, path, MAIN_THREAD_LIFECYCLE_PUMP)?;
         let main_thread_lifecycle_reset = bind(&library, path, MAIN_THREAD_LIFECYCLE_RESET)?;
         let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
+        let state_value_number = bind(&library, path, STATE_VALUE_NUMBER)?;
         let state_value_any = bind(&library, path, STATE_VALUE_ANY)?;
         let state_value_read_any_type = bind(&library, path, STATE_VALUE_READ_ANY_TYPE)?;
         let state_value_raw_ptr = bind(&library, path, STATE_VALUE_RAW_PTR)?;
+        let state_value_native_state = bind(&library, path, STATE_VALUE_NATIVE_STATE)?;
         let state_value_cell = bind(&library, path, STATE_VALUE_CELL)?;
         let state_value_read_cell = bind(&library, path, STATE_VALUE_READ_CELL)?;
         let cell_free = bind(&library, path, CELL_FREE)?;
@@ -376,7 +255,10 @@ impl NativeLibrary {
         let state_value_set_child = bind(&library, path, STATE_VALUE_SET_CHILD)?;
         let state_value_tag = bind(&library, path, STATE_VALUE_TAG)?;
         let state_value_read_int = bind(&library, path, STATE_VALUE_READ_INT)?;
+        let state_value_read_number = bind(&library, path, STATE_VALUE_READ_NUMBER)?;
         let state_value_read_raw_ptr = bind(&library, path, STATE_VALUE_READ_RAW_PTR)?;
+        let state_value_read_native_state = bind(&library, path, STATE_VALUE_READ_NATIVE_STATE)?;
+        let state_value_read_drop_glue = bind(&library, path, STATE_VALUE_READ_DROP_GLUE)?;
         let state_value_read_float = bind(&library, path, STATE_VALUE_READ_FLOAT)?;
         let state_value_read_bool = bind(&library, path, STATE_VALUE_READ_BOOL)?;
         let state_value_read_string = bind(&library, path, STATE_VALUE_READ_STRING)?;
@@ -392,10 +274,12 @@ impl NativeLibrary {
         let state_value_child = bind(&library, path, STATE_VALUE_CHILD)?;
         let state_value_free = bind(&library, path, STATE_VALUE_FREE)?;
         let state_new = bind(&library, path, STATE_NEW)?;
+        let state_new_dropping = bind(&library, path, STATE_NEW_DROPPING)?;
         let state_recover = bind(&library, path, STATE_RECOVER)?;
         let state_replace = bind(&library, path, STATE_REPLACE)?;
         let state_retain = bind(&library, path, STATE_RETAIN)?;
         let state_release = bind(&library, path, STATE_RELEASE)?;
+        let state_release_dropping = bind(&library, path, STATE_RELEASE_DROPPING)?;
         let cblock_release_retained = bind(&library, path, CBLOCK_RELEASE_RETAINED)?;
 
         let mut trampolines = vec![None; functions.len()];
@@ -460,9 +344,11 @@ impl NativeLibrary {
             install_invoker,
             live_reload_mark,
             state_value_int,
+            state_value_number,
             state_value_any,
             state_value_read_any_type,
             state_value_raw_ptr,
+            state_value_native_state,
             state_value_cell,
             state_value_read_cell,
             cell_release,
@@ -475,7 +361,10 @@ impl NativeLibrary {
             state_value_set_child,
             state_value_tag,
             state_value_read_int,
+            state_value_read_number,
             state_value_read_raw_ptr,
+            state_value_read_native_state,
+            state_value_read_drop_glue,
             state_value_read_float,
             state_value_read_bool,
             state_value_read_string,
@@ -490,10 +379,12 @@ impl NativeLibrary {
             state_value_child,
             state_value_free,
             state_new,
+            state_new_dropping,
             state_recover,
             state_replace,
             state_retain,
             state_release,
+            state_release_dropping,
             cblock_release_retained,
             _library: library,
         })

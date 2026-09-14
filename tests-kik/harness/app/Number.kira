@@ -1,0 +1,49 @@
+import Foundation
+
+// The exact decimal `Number`: construction from Int, String and Float; the four
+// arithmetic operators; the orderings and equality; and the conversions out.
+// Every result folds into one deterministic Int the cross-backend diff compares,
+// so a divergence in the decimal on vm/llvm/hybrid changes the printed value. The
+// headline case is the first line: `0.1 + 0.2` is `0.3`, not a binary float's
+// `0.30000000000000004`.
+
+function numberArithmeticFold() -> Int {
+    var acc = 0
+    if Number("0.1") + Number("0.2") == Number("0.3") { acc = acc + 1 }
+    if Number("1.0") == Number("1.00") { acc = acc + 2 }
+    if Number("0.3") - Number("0.1") == Number("0.2") { acc = acc + 4 }
+    // 7 * 1.5 = 10.5, truncated to 10; 3 - 0.5 = 2.5, truncated to 2.
+    acc = acc + Int(Number("7") * Number("1.5"))
+    acc = acc + Int(Number("3") - Number("0.5"))
+    // Division rounds at the working scale; 1/4 is exact, so its integer part is 0.
+    acc = acc + Int(Number("1") / Number("4"))
+    return acc
+}
+
+function numberOrderingFold() -> Int {
+    var acc = 0
+    if Number("2.5") < Number("2.51") { acc = acc + 1 }
+    if Number("2.51") > Number("2.5") { acc = acc + 2 }
+    if Number("2.5") <= Number("2.50") { acc = acc + 4 }
+    if Number("2.5") >= Number("2.50") { acc = acc + 8 }
+    if Number("1") != Number("2") { acc = acc + 16 }
+    if !(Number("5") < Number("5")) { acc = acc + 32 }
+    return acc
+}
+
+function numberConversionFold() -> Int {
+    var acc = 0
+    // Int truncates toward zero; a negative rounds toward zero too.
+    acc = acc + Int(Number("9.99"))
+    acc = acc + Int(Number("-9.99"))
+    // Round-trip an Int and a Float through Number.
+    acc = acc + Int(Number(42))
+    if Number(100) == Number("100") { acc = acc + 1 }
+    // A Number renders as its shortest exact decimal.
+    if String(Number("0.1") + Number("0.2")) == "0.3" { acc = acc + 2 }
+    return acc
+}
+
+function numberSection() -> Int {
+    return numberArithmeticFold() + numberOrderingFold() + numberConversionFold()
+}

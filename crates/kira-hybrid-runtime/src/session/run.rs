@@ -166,7 +166,9 @@ impl Session {
                     *cell = kira_runtime_abi::NativeCell::from_vm(vm_handle, |_| {});
                 }
             }
-            NativeStateValue::Struct(fields) | NativeStateValue::Array(fields) => {
+            NativeStateValue::Struct(fields)
+            | NativeStateValue::DropStruct { fields, .. }
+            | NativeStateValue::Array(fields) => {
                 for field in Arc::make_mut(fields) {
                     self.rewrite_vm_cell_proxies_to_depth(field, depth);
                 }
@@ -183,7 +185,9 @@ impl Session {
             | NativeStateValue::Float(_)
             | NativeStateValue::Bool(_)
             | NativeStateValue::String(_)
+            | NativeStateValue::Number(_)
             | NativeStateValue::CBlock(_)
+            | NativeStateValue::NativeState(_)
             | NativeStateValue::RawPtr(_) => {}
         }
     }
@@ -409,7 +413,7 @@ impl MainThreadRunner for HybridMainThreadRunner<'_> {
                     .session
                     .call_native(function, &borrowed)
                     .map_err(|error| MainThreadError::Function(error.to_string()))?;
-                native_result_state(returned.result)
+                native_result_state(&self.session.library, returned.result)
             }
             Execution::Inherited => Err(MainThreadError::Function(
                 "hybrid manifest left a function's execution engine inherited".to_owned(),
@@ -452,13 +456,16 @@ fn owned_main_thread_arg(value: &NativeStateValue) -> Result<OwnedArg, MainThrea
         NativeStateValue::String(value) => OwnedArg::Str(value.clone()),
         NativeStateValue::RawPtr(value) => OwnedArg::RawPtr(*value),
         NativeStateValue::Enum { tag, payload: None } => OwnedArg::Enum(i64::from(*tag)),
-        NativeStateValue::Struct(_)
+        NativeStateValue::Number(_)
+        | NativeStateValue::Struct(_)
+        | NativeStateValue::DropStruct { .. }
         | NativeStateValue::Array(_)
         | NativeStateValue::Enum {
             payload: Some(_), ..
         }
         | NativeStateValue::Any { .. }
-        | NativeStateValue::CBlock(_) => OwnedArg::Aggregate(value.clone()),
+        | NativeStateValue::CBlock(_)
+        | NativeStateValue::NativeState(_) => OwnedArg::Aggregate(value.clone()),
         NativeStateValue::Cell(_) => {
             return Err(MainThreadError::Function(
                 "a captured cell cannot cross the main-thread boundary".to_owned(),
@@ -468,7 +475,10 @@ fn owned_main_thread_arg(value: &NativeStateValue) -> Result<OwnedArg, MainThrea
 }
 
 /// Converts a native target's owned result into the main-thread runner tree.
-fn native_result_state(value: NativeResult) -> Result<Option<NativeStateValue>, MainThreadError> {
+fn native_result_state(
+    library: &NativeLibrary,
+    value: NativeResult,
+) -> Result<Option<NativeStateValue>, MainThreadError> {
     Ok(match value {
         NativeResult::Void => None,
         NativeResult::Int(value) => Some(NativeStateValue::Int(value)),
@@ -476,6 +486,9 @@ fn native_result_state(value: NativeResult) -> Result<Option<NativeStateValue>, 
         NativeResult::Bool(value) => Some(NativeStateValue::Bool(value)),
         NativeResult::Str(value) => Some(NativeStateValue::String(value)),
         NativeResult::RawPtr(value) => Some(NativeStateValue::RawPtr(value)),
+        NativeResult::NativeState(token) => Some(NativeStateValue::NativeState(
+            library.native_state_owner(NativeStateToken::from_word(token)),
+        )),
         NativeResult::Enum(value) => Some(NativeStateValue::enum_of(
             u32::try_from(value).map_err(|_| {
                 MainThreadError::Function("native enum tag is too large".to_owned())

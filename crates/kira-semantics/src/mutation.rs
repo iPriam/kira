@@ -206,7 +206,7 @@ impl<'a> Analyzer<'a> {
             Expr::StructLit { fields, .. } => fields
                 .iter()
                 .any(|field| self.expr_mutates_self(field.value, owner)),
-            Expr::ArrayLit { elements, .. } => elements
+            Expr::Tuple { elements, .. } | Expr::ArrayLit { elements, .. } => elements
                 .iter()
                 .any(|&element| self.expr_mutates_self(element, owner)),
             Expr::DotMember {
@@ -235,6 +235,12 @@ impl<'a> Analyzer<'a> {
             }
             // A closure captures `self` by value, so a mutation inside its body
             // never reaches the enclosing method's receiver — it is not scanned.
+            Expr::Match { subject, arms, .. } => {
+                self.expr_mutates_self(*subject, owner)
+                    || arms
+                        .iter()
+                        .any(|arm| self.block_mutates_self(&arm.body, owner))
+            }
             Expr::TaskSpawn { .. }
             | Expr::Closure { .. }
             | Expr::DotMember { args: None, .. }

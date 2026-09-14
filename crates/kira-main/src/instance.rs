@@ -200,6 +200,7 @@ fn arg_tag(arg: &NativeArg<'_>) -> BridgeValueTag {
         NativeArg::Str(_) => BridgeValueTag::STRING,
         NativeArg::Handle(_) => BridgeValueTag::HANDLE,
         NativeArg::RawPtr(_) => BridgeValueTag::RAW_PTR,
+        NativeArg::NativeState(_) => BridgeValueTag::NATIVE_STATE,
         NativeArg::Enum(_) => BridgeValueTag::ENUM,
         NativeArg::Aggregate(_) => BridgeValueTag::NODE,
     }
@@ -215,6 +216,7 @@ fn describe_arg(arg: &NativeArg<'_>) -> &'static str {
         NativeArg::Str(_) => "a string",
         NativeArg::Handle(_) => "a handle",
         NativeArg::RawPtr(_) => "a raw pointer",
+        NativeArg::NativeState(_) => "a callback-state owner",
         NativeArg::Enum(_) => "an enum variant",
         NativeArg::Aggregate(_) => "a struct, array or enum value",
     }

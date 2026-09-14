@@ -6,6 +6,7 @@
 
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_source::Span;
 use kira_syntax_model::ast::{Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -25,7 +26,7 @@ impl Analyzer<'_> {
         cond: ExprId,
         then: ExprId,
         otherwise: ExprId,
-        span: kira_source::Span,
+        span: Span,
         expected: Option<Type>,
     ) -> HirExprId {
         let cond_hir = self.analyze_expr(ctx, cond);
@@ -101,8 +102,12 @@ impl Analyzer<'_> {
 
         self.program.exprs.alloc(HirExpr::Select {
             cond: cond_hir,
+            then_setup: Vec::new(),
             then: then_hir,
+            then_cleanup: Vec::new(),
+            otherwise_setup: Vec::new(),
             otherwise: otherwise_hir,
+            otherwise_cleanup: Vec::new(),
             ty,
         })
     }

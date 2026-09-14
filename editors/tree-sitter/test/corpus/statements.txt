@@ -72,6 +72,33 @@ function f() {
           right: (integer_literal))))))
 
 ================================================================================
+Compound assignment
+================================================================================
+
+function f() {
+    var i = 0
+    i += 1
+    i <<= 2
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    body: (block
+      (variable_declaration
+        name: (identifier)
+        value: (integer_literal))
+      (assignment_statement
+        left: (identifier)
+        right: (integer_literal))
+      (assignment_statement
+        left: (identifier)
+        right: (integer_literal)))))
+
+================================================================================
 Bare return
 ================================================================================
 
@@ -487,6 +514,54 @@ function f(s: borrow Shade) -> Int {
           body: (block
             (return_statement
               value: (integer_literal))))))))
+
+================================================================================
+A scalar `match` takes literals, ranges, alternation, and `else`
+================================================================================
+
+function f(n: Int) -> Int {
+    match n {
+        0 -> return 1
+        1, 2, 3 -> return 2
+        4..10 -> return 3
+        else -> return 4
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (match_statement
+        subject: (identifier)
+        (match_arm
+          pattern: (integer_literal)
+          body: (return_statement
+            value: (integer_literal)))
+        (match_arm
+          pattern: (integer_literal)
+          pattern: (integer_literal)
+          pattern: (integer_literal)
+          body: (return_statement
+            value: (integer_literal)))
+        (match_arm
+          pattern: (range_pattern
+            start: (integer_literal)
+            end: (integer_literal))
+          body: (return_statement
+            value: (integer_literal)))
+        (match_arm
+          pattern: (wildcard_pattern)
+          body: (return_statement
+            value: (integer_literal)))))))
 
 ================================================================================
 `attempt` routes every failure to a `handle` arm

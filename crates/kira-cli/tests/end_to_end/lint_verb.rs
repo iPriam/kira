@@ -98,17 +98,15 @@ fn filler_functions(count: usize, prefix: &str) -> String {
 
 const FILE_LENGTH_AT_40: &str = "import Foundation\n\n\
      construct FileLength() extends Lint {\n\
-     \x20   let code: String = \"KLINT003\"\n\
-     \x20   let severity: String = \"warning\"\n\
-     \x20   let enabled: Bool = true\n\
+     \x20   let code: KiraError = .KLINT003\n\
+     \x20   let level: LintLevel = .Warn\n\
      \x20   let limit: Int = 40\n\
      }\n";
 
 const MANUAL_INDEX_ON: &str = "import Foundation\n\n\
      construct ManualIndexLoop() extends Lint {\n\
-     \x20   let code: String = \"KLINT002\"\n\
-     \x20   let severity: String = \"warning\"\n\
-     \x20   let enabled: Bool = true\n\
+     \x20   let code: KiraError = .KLINT002\n\
+     \x20   let level: LintLevel = .Warn\n\
      }\n";
 
 /// Three manual index loops. Two sit in ONE declaration; the third's counter
@@ -328,7 +326,7 @@ fn a_lint_left_disabled_reports_nothing() {
         &[
             (
                 "linter.kira",
-                &FILE_LENGTH_AT_40.replace("enabled: Bool = true", "enabled: Bool = false"),
+                &FILE_LENGTH_AT_40.replace("level: LintLevel = .Warn", "level: LintLevel = .Allow"),
             ),
             ("app/main.kira", &filler(30)),
         ],
@@ -360,22 +358,21 @@ fn generated_bindings_are_never_measured() {
     assert!(!text.contains("KLINT003"), "{text}");
 }
 
-/// A package with no `linter.kira` asks for nothing, and gets nothing.
+/// A package with no `linter.kira` gets the standard set, not silence.
 ///
-/// And is told so. "Nothing found" and "nothing ran" are opposite facts, and a
-/// run that reports the first when the second is true is worse than one that
-/// reports nothing at all — it is the shape of a green build that checked no
-/// code. These four cases pin each outcome to its own sentence.
+/// Every lint has a level before any package says anything, so "nothing was
+/// asked for" is not an outcome a run can report — only what the standard set
+/// found, or that it found nothing. Silence with a number behind it is a clean
+/// run; silence without one would be an absent one.
 #[test]
-fn a_package_that_configures_no_lints_is_told_nothing_was_checked() {
+fn a_package_that_configures_no_lints_gets_the_standard_set() {
     let root = write_package("lint_none", &[("app/main.kira", &filler(30))]);
     let output = kira_lint(&root);
     let text = String::from_utf8_lossy(&output.stdout).into_owned()
         + &String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&root);
     assert!(!text.contains("KLINT"), "{text}");
-    assert!(text.contains("no lint is enabled"), "{text}");
-    assert!(text.contains("nothing was checked"), "{text}");
+    assert!(text.contains("1 lint(s) ran, nothing found"), "{text}");
 }
 
 #[test]
@@ -392,8 +389,10 @@ fn a_clean_run_says_how_many_lints_ran() {
         + &String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&root);
     // The count is the whole point: silence with a number behind it is a clean
-    // run, silence without one is an absent one.
-    assert!(text.contains("1 lint(s) ran, nothing found"), "{text}");
+    // run, silence without one is an absent one. Two lints ran here — the
+    // configured file ceiling and the standard index-loop check — and neither
+    // had anything to say about two small functions.
+    assert!(text.contains("2 lint(s) ran, nothing found"), "{text}");
 }
 
 #[test]
@@ -409,7 +408,7 @@ fn a_run_that_found_something_says_what_it_ran() {
     let text = String::from_utf8_lossy(&output.stdout).into_owned()
         + &String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&root);
-    assert!(text.contains("report(s) from 1 lint(s)"), "{text}");
+    assert!(text.contains("report(s) from 2 lint(s)"), "{text}");
 }
 
 /// `kira check` runs no lint at all, even where one is configured.

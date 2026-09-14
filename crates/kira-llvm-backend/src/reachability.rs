@@ -169,12 +169,20 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         }
         IrExpr::Select {
             cond,
+            then_setup,
             then,
+            otherwise_setup,
             otherwise,
             ..
         } => {
             walk_expr(program, *cond, facts);
+            for statement in then_setup {
+                walk_stmt(program, statement, facts);
+            }
             walk_expr(program, *then, facts);
+            for statement in otherwise_setup {
+                walk_stmt(program, statement, facts);
+            }
             walk_expr(program, *otherwise, facts);
         }
         IrExpr::StructNew { fields, .. } => {
@@ -222,6 +230,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
             walk_expr(program, *text, facts);
             for argument in arguments {
                 walk_expr(program, *argument, facts);
+            }
+        }
+        IrExpr::NumberOperation { operands, .. } => {
+            for operand in operands {
+                walk_expr(program, *operand, facts);
             }
         }
         IrExpr::StringSubstring { text, start, end } => {
@@ -278,11 +291,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, facts: &mut BodyFacts) {
         }
         | IrExpr::TypeCastResult { value: operand, .. }
         | IrExpr::NativeState { value: operand, .. }
-        | IrExpr::NativeUserData { state: operand }
+        | IrExpr::NativeUserData { state: operand, .. }
         | IrExpr::NativeRecover { raw: operand, .. }
         | IrExpr::NativeStateTake { raw: operand, .. }
         | IrExpr::NativeStateRetain { token: operand }
-        | IrExpr::NativeStateRelease { token: operand } => walk_expr(program, *operand, facts),
+        | IrExpr::NativeStateRelease { token: operand, .. } => walk_expr(program, *operand, facts),
         IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Int(_)
         | IrExpr::Float(_)

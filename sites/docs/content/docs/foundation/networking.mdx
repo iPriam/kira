@@ -1,0 +1,55 @@
+---
+title: Networking
+description: The HTTP surface `import Foundation` resolves to, how its binding is generated rather than written, where the archive ships, and why a program that never calls it links nothing extra.
+---
+
+`Net.kira` sends an HTTP request and reads the answer. A program reaches it by importing Foundation — there is no separate package to add and no `@FFI.Extern` to write.
+
+```kira
+import Foundation
+
+async function ask(url: borrow String) -> HttpAnswer {
+    var headers: [HttpHeader] = []
+    headers.append(HttpHeader { name: "accept", value: "application/json" })
+    return httpSend("GET", url, headers, "", 30000, 0)
+}
+```
+
+## The Surface
+
+```kira
+struct HttpHeader { let name: String; let value: String }
+
+struct HttpAnswer {
+    let status: Int   // the HTTP status, when one arrived
+    let code: Int     // the library's own negative code, when nothing did
+    let body: String
+}
+
+function httpSend(
+    method: borrow String,
+    url: borrow String,
+    headers: borrow [HttpHeader],
+    body: borrow String,
+    timeoutMs: Int,
+    trustPort: Int
+) -> HttpAnswer
+```
+
+`status` and `code` are kept apart because "the service said no" and "the service was never reached" are different things to do about. A completed request carries `status` and `code` 0; a request that never connected carries `status` 0 and a negative `code`.
+
+Polling the in-flight request is a yield point, so a Kira task cooperates rather than blocks while a request is on the wire. `httpsServer`, `serverPort`, and `networkClose` drive the loopback HTTPS server the toolchain ships, which is what lets a program be exercised end to end with no key and no internet; `trustPort` is that server's port, or 0 to trust the public roots.
+
+## The Binding Is Generated
+
+The `kira_network` C ABI is bound by [autobind](/docs/appendix/ffi-workflows/autobindings): `NativeLibs/kira_network.toml` names the header, and `app/bindings/network.kira` is the generated `@FFI.Extern` module, shipped as Foundation's own source. Widths come from clang, so `uint16_t port` is `U16` and `int64_t` is `Int` with nothing assumed. `Net.kira` is the ergonomic layer over that generated module.
+
+## What It Costs a Program That Does Not Use It
+
+Nothing. The network library is declared `optional`, and a static archive is selected onto a link line only to satisfy an `@FFI.Extern` a program actually reaches. A program that imports Foundation but never calls a network function references none of these symbols, so the archive — and the runtime it carries — is not linked.
+
+## Where the Archive Lives
+
+The archive rides inside Foundation's own tree, under `NativeLibs/lib/<triple>/`, staged there by `knvm binstall` and the release build. Because Foundation is found as a unit in every layout — the dev checkout, the shipped toolchain, a managed version — the archive resolves wherever Foundation does. It is a build artifact, not committed.
+
+Networking is host-only: the transport is native sockets, so there is no wasm target. A wasm build that never calls a network function is unaffected; one that does is refused for the target rather than mislinked.

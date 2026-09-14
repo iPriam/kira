@@ -92,6 +92,10 @@ KPAR084	expected a name after `distinct`
 KPAR085	a `distinct` declaration needs `= Representation`, the type it is at run time
 KPAR086	a `distinct` type is already copyable — its representation is a scalar word — so `@Derive(Copy)` claims nothing; drop it
 KPAR087	a `distinct` declaration takes no annotation: it names a type, runs no body, and crosses the C seam as the representation it is
+KPAR088	expected a namespace path segment
+KPAR089	a namespace holds `let` members and nested namespaces
+KPAR090	an `extern library` block contains only bodyless `function` declarations
+KPAR091	tuple values and tuple types support two through four elements
 KMAC001	a `name!(…)` call site names no macro
 KMAC002	a `name!(…)` call site passed the wrong number of fragments
 KMAC003	an `expr` fragment was given something that is not an expression
@@ -196,7 +200,7 @@ KSEM121	variant `…` takes no payload
 KSEM122	variant `…` takes exactly one payload value
 KSEM123	variant `…` expects a payload of `…`, found `…`
 KSEM124	variant `…` requires a payload value (no default is declared)
-KSEM125	a `match` subject must be an enum, found `…`
+KSEM125	a `match` subject must be an enum, an `Int`, a `Bool`, or a `String`, found `…`
 KSEM126	enum `…` has no variant `…`
 KSEM127	variant `…` is already matched by an earlier arm
 KSEM128	variant `…` carries no payload to bind
@@ -347,7 +351,6 @@ KSEM300	`…drop` is run by the release, not by a call: calling it here would ru
 KSEM301	`…` claims `Drop` but presents no `drop`: write `function drop(borrow mut self)` in its body or in an `extend …: Drop` block
 KSEM302	closure captures `…`, which is a `…` and runs a user `Drop` body
 KSEM303	`…` runs a user `Drop` body, so it cannot be an export …: a consumer holds it past every Kira frame, and the release that frees it happens where no engine is running to enter the body
-KSEM304	`nativeState` cannot box `…`, which runs a user `Drop` body
 KSEM305	`…` retains this argument, so it cannot be a `…`, which runs a user `Drop` body: a retained value is freed at teardown, after the last frame, where no engine is running to enter the body
 KSEM306	an enum payload may not be a `…`, which runs a user `Drop` body
 KSEM307	`@…` puts this body on one engine, and `…` runs a user `Drop` body, so it cannot cross to it
@@ -398,7 +401,23 @@ KSEM367	an operation a channel end does not have, including `.raw`
 KSEM368	`RawPtr` has no member `…`: it spells `RawPtr.null`, and `rawPointerWord(p)` reads the word itself
 KSEM369	an `@FFI.Address` function answers `RawPtr`, the address of the data symbol rather than what is stored at it
 KSEM370	two declarations bind one library symbol with different signatures, and the linker gives both the same address
-KSEM371	`retains` names a parameter that holds no C storage to keep: a retained parameter is a pointer, a `CString`, or an `@FFI.Struct { layout: c }`
+KSEM371	`retains` names a parameter that carries nothing C can keep by ownership: use a pointer, a `CString`, a `NativeState<T>`, or an `@FFI.Struct { layout: c }`
+KSEM372	`…` was declared at several shapes that all accept these arguments, and they differ only in what they answer with (…); annotate what the call is expected to produce
+KSEM373	borrowing callback-state userdata requires storage rooted in a local, not a temporary
+KSEM375	`nativeRecover` cannot borrow an owned `NativeState` temporary; bind the owner first
+KSEM376	an affine value containing native state cannot be copied out of its owner; borrow it in place or move the owner
+KSEM377	callback state cannot box or recover a `NativeState` as the root value; keep the nested owner inside an aggregate
+KSEM378	`nativeUserDataRetain` is unavailable in Kira source because an owner without a typed affine value would hide its release obligation
+KSEM379	raw userdata is a borrow and cannot be consumed by `nativeUserDataRelease` or `nativeStateFree`; release a tracked `NativeState<T>` owner instead
+KSEM380	a `match` on a scalar must end with an `else` arm; its values cannot be listed exhaustively
+KSEM381	an `else` arm must be the last arm; the arms after it can never run
+KSEM382	a value is matched by an earlier arm
+KSEM383	a `match` arm pattern does not match the subject's type
+KSEM384	a payload binding is not allowed on an arm that matches several patterns
+KSEM386	a `match` expression arm does not produce a value
+KSEM387	a `match` expression arm defers a writeback after its value
+KSEM388	the arms of a `match` expression produce incompatible types
+KSEM389	`contains` requires array elements comparable with `==`
 KSEM900	a keyword the parser recognizes but this compiler does not support yet
 KIR005	`…` derives `Copy`, but …, so `…` moves rather than copies. Remove the derive and let it move, borrow it, or give it an explicit duplication
 KBE001	a backend was asked for a feature it does not support

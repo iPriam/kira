@@ -10,7 +10,6 @@
 // loopback server this repository ships for running without a key.
 
 import Foundation
-import http
 
 // One turn of a conversation.
 struct ChatMessage {

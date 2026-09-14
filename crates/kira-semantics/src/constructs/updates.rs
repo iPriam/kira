@@ -32,13 +32,20 @@ impl Analyzer<'_> {
         self.constructs.contains_key(&id).then_some(id)
     }
 
+    /// Whether `ty` can be copied with braced field updates. Every concrete
+    /// stored-value struct participates; closure representation structs do not,
+    /// because their fields are a compiler implementation detail rather than a
+    /// user-visible value shape.
+    pub(crate) fn updateable_struct_id(&self, ty: Type) -> Option<StructId> {
+        self.concrete_or_plain_struct(ty)
+    }
+
     /// Type-checks `local { let field = value }` as a copy/update.
     ///
-    /// The local is read into one hidden binding before any override or child
-    /// expression is analyzed. Every unspecified field is then initialized by
-    /// reading that hidden value, which makes the one-evaluation rule visible
-    /// in HIR rather than relying on a backend to common-subexpression-eliminate
-    /// repeated reads.
+    /// Any ordinary stored-value struct participates. Construct-backed values
+    /// additionally keep their child-slot filling surface; plain data structs
+    /// simply have no child slots. The local is read into one hidden binding
+    /// before any override is analyzed, so the base is evaluated exactly once.
     pub(crate) fn analyze_construct_update(
         &mut self,
         ctx: &mut FnCtx,
@@ -50,7 +57,7 @@ impl Analyzer<'_> {
         let base_ty = self
             .cell_inner(ctx, local)
             .unwrap_or_else(|| ctx.local_type(local));
-        let Some(id) = self.concrete_construct_id(base_ty) else {
+        let Some(id) = self.updateable_struct_id(base_ty) else {
             for arg in args {
                 self.analyze_expr(ctx, arg.value);
             }
@@ -60,7 +67,7 @@ impl Analyzer<'_> {
             self.emit(
                 span,
                 "KSEM266",
-                "a braced construct update needs a concrete construct-backed value",
+                "a braced value update needs a concrete struct value",
             );
             return self.program.exprs.alloc(HirExpr::Error);
         };

@@ -12,6 +12,7 @@ A Kira `String` is a value: it owns its bytes, a copy is independent, and `+` bu
 | `s.substring(a, b)` | `String` | the half-open byte range `a ..< b` |
 | `s.indexOf(needle)` | `Int` | the first byte index of `needle`, or `-1` |
 | `String(x)` | `String` | a scalar rendered as text |
+| `s.bytes()` | `[U8]` | the string's raw UTF-8 bytes, one element per byte |
 | `s.dropLastScalar()` | `String` | `s` without its last Unicode scalar |
 | `scalarText(c)` | `String` | the text of the Unicode scalar at code point `c` |
 
@@ -24,6 +25,8 @@ Bytes rather than characters is the choice these operations make together. A pro
 `String(x)` renders exactly what `print` would, so a value printed and a value converted never disagree: `String(2.0)` is `"2"`, `String(1.0 / 3.0)` is `"0.3333333333333333"`, `String(true)` is `"true"`.
 
 An empty needle matches at the front, so `s.indexOf("")` is `0`.
+
+`s.bytes()` gives the same bytes `.count` measures and `charAt` indexes, as a `[U8]` a program can hand to a socket, a hash, or a foreign call. It is the byte-oriented surface made into a value: `"hi".bytes()` is `[104, 105]`. Foundation's `Bytes` module carries the same idea for the other scalars — `u32BytesLE`, `f64BytesBE`, and their readers turn integers, floats and `Bool` to and from `[U8]` with the byte order named rather than assumed.
 
 ## Writing a Literal
 

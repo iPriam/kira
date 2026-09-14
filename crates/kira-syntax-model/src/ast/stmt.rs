@@ -1,26 +1,25 @@
 //! Statements and the pieces that only appear inside them (blocks, `match`
 //! arms, and what a `for` iterates).
 
-use super::{ExprId, StmtId, TypeRefId};
+use super::{BinaryOp, ExprId, StmtId, TypeRefId};
 use crate::ownership::OwnershipMode;
 use kira_core::Symbol;
 use kira_source::Span;
 
 /// One arm of a [`Stmt::Match`].
 ///
-/// The head is a *pattern*, not an expression: a bare variant name with an
-/// optional binding for its payload. The name is
-/// unqualified — a `match` already knows the subject's enum, so `Red` names
-/// that enum's variant and `EmxColor.Red` is not the spelling.
+/// The head is one or more *patterns* — an enum variant (optionally binding its
+/// payload), a scalar literal, a half-open integer range, or the `else`
+/// catch-all. More than one pattern is an **alternation** (`Red, Green -> …`):
+/// the body runs when the subject matches any of them. An enum variant name is
+/// unqualified — a `match` already knows the subject's enum, so `Red` names that
+/// enum's variant and `EmxColor.Red` is not the spelling.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
-    /// The variant this arm selects, unqualified.
-    pub variant: Symbol,
-    /// Span of the variant's name token.
-    pub variant_span: Span,
-    /// The name bound to the variant's payload, when the arm wrote one.
-    pub binding: Option<MatchBinding>,
-    /// The statements run when the subject holds this variant.
+    /// The patterns this arm selects on, in source order. A wildcard arm holds
+    /// a single [`MatchPattern::Wildcard`]; an alternation holds several.
+    pub patterns: Vec<MatchPattern>,
+    /// The statements run when the subject matches one of `patterns`.
     ///
     /// An arrow arm (`Red -> return 1`) is a one-statement block; an
     /// arrow-block arm (`Red -> { … }`) is the block as written. They are the
@@ -28,6 +27,57 @@ pub struct MatchArm {
     pub body: Block,
     /// Span covering the whole arm.
     pub span: Span,
+}
+
+/// One pattern in a [`MatchArm`] head.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchPattern {
+    /// An enum variant, unqualified, optionally binding its payload:
+    /// `Label(text)`.
+    Variant {
+        /// The variant this pattern selects.
+        variant: Symbol,
+        /// Span of the variant's name token.
+        variant_span: Span,
+        /// The name bound to the variant's payload, when the arm wrote one.
+        binding: Option<MatchBinding>,
+    },
+    /// A scalar literal the subject is compared against: `1`, `"north"`,
+    /// `true`. The expression is always a literal.
+    Value {
+        /// The literal expression.
+        expr: ExprId,
+        /// Span covering the literal.
+        span: Span,
+    },
+    /// A half-open integer range, `start..end`: `start` is included, `end` is
+    /// not — the same meaning `for i in start..end` gives it.
+    Range {
+        /// The inclusive lower bound, a literal.
+        start: ExprId,
+        /// The exclusive upper bound, a literal.
+        end: ExprId,
+        /// Span covering the whole range.
+        span: Span,
+    },
+    /// The `else` catch-all, matching any subject not matched by an earlier
+    /// pattern.
+    Wildcard {
+        /// Span of the `else` keyword.
+        span: Span,
+    },
+}
+
+impl MatchPattern {
+    /// The span covering this pattern.
+    pub fn span(&self) -> Span {
+        match self {
+            MatchPattern::Variant { variant_span, .. } => *variant_span,
+            MatchPattern::Value { span, .. }
+            | MatchPattern::Range { span, .. }
+            | MatchPattern::Wildcard { span } => *span,
+        }
+    }
 }
 
 /// A `match` arm's payload binding: `Label(text)` binds `text`.
@@ -103,6 +153,11 @@ pub enum Stmt {
     Assign {
         /// The assigned-to place, as written.
         target: ExprId,
+        /// The compound operator, for `a += b` and its kin: the assignment
+        /// stores `target op value` rather than `value`. `None` is a plain
+        /// `a = b`. The target names the place once; semantics reads it, applies
+        /// the operator, and writes the result back.
+        op: Option<BinaryOp>,
         /// The value expression.
         value: ExprId,
         /// Span covering the statement.

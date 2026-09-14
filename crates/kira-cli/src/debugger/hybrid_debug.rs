@@ -1,0 +1,425 @@
+use super::*;
+
+/// Builds and runs a hybrid bundle with the VM debugger attached to its VM half.
+pub fn run_hybrid(
+    ir: &IrProgram,
+    source: &Path,
+    foreign_link: &NativeLinkInputs,
+    options: &DebugOptions,
+    info: &DebugInfo,
+) -> i32 {
+    let bundle =
+        match hybrid::build_debug(ir, source, options.compile.emit_llvm_ir, foreign_link, info) {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                err!("kira: {error}");
+                return EXIT_FAILURE;
+            }
+        };
+    out!("hybrid debug bundle: {}", bundle.manifest.display());
+    if options.lldb_dap {
+        warn_when_debugging_unauthorized();
+        return run_hybrid_under_lldb_dap(source, options, info, &bundle);
+    }
+    if options.lldb {
+        warn_when_debugging_unauthorized();
+        return run_hybrid_under_lldb(source, options, info, &bundle);
+    }
+    let session = match kira_hybrid_runtime::Session::load(&bundle.manifest) {
+        Ok(session) => session,
+        Err(error) => {
+            err!("kira: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let mode = if options.batch {
+        VmDebuggerMode::Batch
+    } else {
+        VmDebuggerMode::Interactive
+    };
+    let mut debugger = VmDebugger::new(mode);
+    debugger.set_disassemble_on_stop(options.disassemble);
+    debugger.set_source_info(info);
+    for value in &options.breakpoints {
+        if !debugger.add_breakpoint_text(value) {
+            err!("kira debug: invalid breakpoint `{value}`");
+            return EXIT_FAILURE;
+        }
+    }
+    // SAFETY: the debugger owns this Hybrid run and keeps process-environment
+    // access exclusive while the VM and native library execute.
+    match unsafe {
+        env::with_arguments(&options.compile.program_arguments, || {
+            session.run_with_debug(&mut debugger)
+        })
+    } {
+        Ok(()) => EXIT_OK,
+        Err(error) => {
+            err!("kira: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+/// Runs a debug hybrid bundle under real LLDB while the VM half reports its
+/// instruction stops from the launched host process.
+///
+/// LLDB owns the child process and can stop native functions in the loaded
+/// shared library. The child also installs [`VmDebugger`] in batch mode, so a
+/// runtime function breakpoint and a native function breakpoint can coexist in
+/// one transcript without two consumers fighting over stdin.
+fn run_hybrid_under_lldb(
+    source: &Path,
+    options: &DebugOptions,
+    info: &DebugInfo,
+    bundle: &hybrid::HybridBundle,
+) -> i32 {
+    let manifest = match read_hybrid_manifest(&bundle.manifest) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let target = match std::env::current_exe() {
+        Ok(target) => target,
+        Err(error) => {
+            err!("kira debug: cannot locate the LLDB host executable: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let mut launch = LldbLaunch::from_info(&target, info);
+    launch.breakpoints.clear();
+    if options.breakpoints.is_empty() {
+        if let Some(entry) = manifest
+            .entry
+            .and_then(|id| manifest.functions.iter().find(|function| function.id == id))
+            && entry.execution == Execution::Native
+            && let Some(symbol) = entry.exported_name.as_deref()
+        {
+            launch.add_breakpoint(symbol);
+        }
+    } else {
+        for requested in &options.breakpoints {
+            let name = breakpoint_function_name(requested);
+            let Some(function) = manifest_function(&manifest.functions, name) else {
+                err!("kira debug: no Hybrid function matches breakpoint `{requested}`");
+                return EXIT_FAILURE;
+            };
+            if function.execution == Execution::Native
+                && let Some(symbol) = function.exported_name.as_deref()
+            {
+                launch.add_breakpoint(symbol);
+            }
+        }
+    }
+    launch.disassemble = options.disassemble;
+    launch.batch = options.batch;
+    // Swift's Windows LLDB currently aborts while unwinding some frames from
+    // a hybrid DLL. The remaining post-stop queries still expose the native
+    // frame, registers, and CPU instructions without taking down the session.
+    launch.thread_backtrace = false;
+    launch.arguments = hybrid_host_arguments(&bundle.manifest, source, options);
+    print_llvm_source_context(source, info, &launch.breakpoints);
+    out!("LLDB hybrid host: {}", target.display());
+    match launch.launch() {
+        Ok(output) => {
+            if !output.stdout.is_empty() {
+                print!("{}", output.stdout);
+            }
+            if !output.stderr.is_empty() {
+                eprint!("{}", output.stderr);
+            }
+            EXIT_OK
+        }
+        Err(error) => {
+            err!("kira: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+/// Runs a hybrid host through LLDB's Debug Adapter Protocol.
+fn run_hybrid_under_lldb_dap(
+    source: &Path,
+    options: &DebugOptions,
+    info: &DebugInfo,
+    bundle: &hybrid::HybridBundle,
+) -> i32 {
+    let manifest = match read_hybrid_manifest(&bundle.manifest) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let target = match std::env::current_exe() {
+        Ok(target) => target,
+        Err(error) => {
+            err!("kira debug: cannot locate the LLDB DAP host executable: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let (native_symbols, needs_vm_probe) = match hybrid_breakpoints(&manifest, options) {
+        Ok(breakpoints) => breakpoints,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let mut launch = LldbDapLaunch::new(&target);
+    for symbol in &native_symbols {
+        launch.add_breakpoint(LldbDapBreakpoint::new(symbol));
+    }
+    if needs_vm_probe {
+        launch.add_breakpoint(LldbDapBreakpoint::new(VM_PROBE_SYMBOL));
+        launch.set_text_symbol(VM_TEXT_SYMBOL);
+    }
+    launch.set_disassemble(options.disassemble);
+    launch.set_continue_count(options.dap_continues);
+    launch.arguments = hybrid_host_arguments(&bundle.manifest, source, options);
+    print_llvm_source_context(source, info, &native_symbols);
+    out!("LLDB DAP hybrid host: {}", target.display());
+    run_dap_launch(launch)
+}
+
+/// Runs the private host command an LLDB launch uses for a hybrid session.
+pub(crate) fn run_hybrid_host(args: &[String]) -> i32 {
+    let options = match parse_hybrid_host_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            err!("kira: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let session = match kira_hybrid_runtime::Session::load(&options.manifest) {
+        Ok(session) => session,
+        Err(error) => {
+            err!("kira: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let functions = session
+        .manifest()
+        .functions
+        .iter()
+        .map(|function| (function.id, function.name.as_str()))
+        .collect::<Vec<_>>();
+
+    // Two observers, because a hybrid host is driven two ways. `--lldb` runs
+    // this host beside an LLDB that owns the native half, and the VM half
+    // reports its own stops as text. A frontend that owns the whole session
+    // instead needs the stops to come through the native probe, so that one
+    // debugger controls both halves.
+    let result = match options.probe {
+        true => {
+            let breakpoints = match vm_lldb::probe_breakpoints(&options.breakpoints, &functions) {
+                Ok(breakpoints) => breakpoints,
+                Err(error) => {
+                    err!("kira: {error}");
+                    return EXIT_FAILURE;
+                }
+            };
+            let mut observer = VmLldbObserver::with_breakpoints(breakpoints);
+            // SAFETY: this private host owns the entire debugged process and
+            // does not access the process environment from another thread
+            // while the session runs.
+            unsafe {
+                env::with_arguments(&options.program_arguments, || {
+                    session.run_with_debug(&mut observer)
+                })
+            }
+        }
+        false => {
+            let mut debugger = VmDebugger::new(VmDebuggerMode::Batch);
+            debugger.set_disassemble_on_stop(options.disassemble);
+            if let Some(source) = options.source.as_deref() {
+                debugger.set_source_file(source, &functions);
+            }
+            for breakpoint in &options.breakpoints {
+                if !debugger.add_breakpoint_text(breakpoint) {
+                    err!("kira: invalid VM breakpoint `{breakpoint}`");
+                    return EXIT_FAILURE;
+                }
+            }
+            // SAFETY: the same host-owned environment boundary as above.
+            unsafe {
+                env::with_arguments(&options.program_arguments, || {
+                    session.run_with_debug(&mut debugger)
+                })
+            }
+        }
+    };
+    match result {
+        Ok(()) => EXIT_OK,
+        Err(error) => {
+            err!("kira: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HybridHostOptions {
+    manifest: PathBuf,
+    source: Option<PathBuf>,
+    breakpoints: Vec<String>,
+    disassemble: bool,
+    /// Whether the VM half reports through the native probe rather than as text.
+    probe: bool,
+    program_arguments: Vec<String>,
+}
+
+fn parse_hybrid_host_args(args: &[String]) -> Result<HybridHostOptions, String> {
+    let mut manifest = None;
+    let mut source = None;
+    let mut breakpoints = Vec::new();
+    let mut disassemble = false;
+    let mut probe = false;
+    let mut program_arguments = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "`--manifest` expects a path".to_owned())?;
+                manifest = Some(PathBuf::from(value));
+                index += 1;
+            }
+            "--vm-source" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "`--vm-source` expects a path".to_owned())?;
+                source = Some(PathBuf::from(value));
+                index += 1;
+            }
+            "--vm-break" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "`--vm-break` expects a function or function:pc".to_owned())?;
+                breakpoints.push(value.clone());
+                index += 1;
+            }
+            "--vm-disassemble" => disassemble = true,
+            "--vm-no-disassemble" => disassemble = false,
+            "--vm-probe" => probe = true,
+            "--" => {
+                program_arguments.extend(args[index + 1..].iter().cloned());
+                break;
+            }
+            other => return Err(format!("unknown hybrid debug host argument `{other}`")),
+        }
+        index += 1;
+    }
+    Ok(HybridHostOptions {
+        manifest: manifest.ok_or_else(|| "hybrid debug host needs `--manifest`".to_owned())?,
+        source,
+        breakpoints,
+        disassemble,
+        probe,
+        program_arguments,
+    })
+}
+
+pub(super) fn hybrid_host_arguments(
+    manifest: &Path,
+    source: &Path,
+    options: &DebugOptions,
+) -> Vec<String> {
+    let mut arguments = vec![
+        HYBRID_DEBUG_HOST.to_owned(),
+        "--manifest".to_owned(),
+        manifest.display().to_string(),
+        "--vm-source".to_owned(),
+        source.display().to_string(),
+    ];
+    for breakpoint in &options.breakpoints {
+        arguments.push("--vm-break".to_owned());
+        arguments.push(breakpoint.clone());
+    }
+    arguments.push(if options.disassemble {
+        "--vm-disassemble".to_owned()
+    } else {
+        "--vm-no-disassemble".to_owned()
+    });
+    if options.prepare || options.lldb_dap {
+        arguments.push("--vm-probe".to_owned());
+    }
+    arguments.push("--".to_owned());
+    arguments.extend(options.compile.program_arguments.iter().cloned());
+    arguments
+}
+
+pub(super) fn read_hybrid_manifest(path: &Path) -> Result<HybridManifest, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read Hybrid manifest `{}`: {error}", path.display()))?;
+    HybridManifest::from_bytes(&bytes).map_err(|error| {
+        format!(
+            "cannot decode Hybrid manifest `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+pub(super) fn breakpoint_function_name(requested: &str) -> &str {
+    requested
+        .rsplit_once(':')
+        .filter(|(_, pc)| pc.parse::<usize>().is_ok())
+        .map_or(requested, |(name, _)| name)
+}
+
+fn manifest_function<'a>(
+    functions: &'a [HybridFunction],
+    name: &str,
+) -> Option<&'a HybridFunction> {
+    functions.iter().find(|function| {
+        function.name == name
+            || function.exported_name.as_deref() == Some(name)
+            || function.id.to_string() == name
+    })
+}
+
+fn hybrid_breakpoints(
+    manifest: &HybridManifest,
+    options: &DebugOptions,
+) -> Result<(Vec<String>, bool), String> {
+    let mut native_symbols = Vec::new();
+    let mut needs_vm_probe = false;
+    if options.breakpoints.is_empty() {
+        if let Some(entry) = manifest
+            .entry
+            .and_then(|id| manifest.functions.iter().find(|function| function.id == id))
+        {
+            match entry.execution {
+                Execution::Native => {
+                    if let Some(symbol) = entry.exported_name.as_deref() {
+                        native_symbols.push(symbol.to_owned());
+                    }
+                }
+                Execution::Runtime | Execution::Inherited => needs_vm_probe = true,
+            }
+        }
+    } else {
+        for requested in &options.breakpoints {
+            let name = breakpoint_function_name(requested);
+            let Some(function) = manifest_function(&manifest.functions, name) else {
+                return Err(format!(
+                    "no Hybrid function matches breakpoint `{requested}`"
+                ));
+            };
+            match function.execution {
+                Execution::Native => {
+                    let Some(symbol) = function.exported_name.as_deref() else {
+                        return Err(format!(
+                            "Hybrid function `{name}` has no native breakpoint symbol"
+                        ));
+                    };
+                    native_symbols.push(symbol.to_owned());
+                }
+                Execution::Runtime | Execution::Inherited => needs_vm_probe = true,
+            }
+        }
+    }
+    Ok((native_symbols, needs_vm_probe))
+}

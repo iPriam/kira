@@ -276,6 +276,15 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         self.inner.native_state_create(ty, value)
     }
 
+    fn native_state_create_dropping(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+        glue: Option<u32>,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.inner.native_state_create_dropping(ty, value, glue)
+    }
+
     fn native_state_recover(
         &mut self,
         token: NativeStateToken,
@@ -289,7 +298,7 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         self.inner.native_state_replace(token, ty, value)
     }
 
@@ -299,6 +308,13 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
 
     fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.inner.native_state_release(token)
+    }
+
+    fn native_state_release_dropping(
+        &mut self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        self.inner.native_state_release_dropping(token)
     }
 
     /// Enters this process's kernel, which is the same one the emitted call

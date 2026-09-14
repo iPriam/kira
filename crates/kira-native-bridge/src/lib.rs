@@ -29,6 +29,7 @@ pub mod hybrid;
 pub mod live;
 pub mod main_thread;
 pub mod native_state;
+pub mod number;
 mod pool;
 pub mod raw_memory;
 pub mod runtime;

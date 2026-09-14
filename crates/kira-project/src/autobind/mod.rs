@@ -50,6 +50,17 @@ pub struct AutobindContext {
     pub base_dir: PathBuf,
     /// The target this build selected.
     pub target: TargetTriple,
+    /// The sysroot a cross build's system headers come from, when the
+    /// invocation named one with `--sysroot`.
+    ///
+    /// A header a library ships almost always includes a C library header —
+    /// `webgpu.h` reaches `<math.h>` — and libclang finds those only under a
+    /// sysroot naming the target's headers. The host build finds them without
+    /// one, and an Apple target discovers its SDK, so this is `None` for both
+    /// and `Some` only for a named cross target. Same justification as the
+    /// target beside it: without it the header does not parse and the binding
+    /// is empty.
+    pub sysroot: Option<PathBuf>,
 }
 
 /// Why a library's bindings could not be generated.
@@ -188,6 +199,7 @@ pub fn plan(
             .iter()
             .map(|header| cache::describe_input(header))
             .collect(),
+        adopted: false,
     };
     let status = match cache::freshness(&stamp_file, &output, &stamp) {
         cache::Freshness::Current => AutobindStatus::Current,
@@ -205,9 +217,12 @@ pub fn plan(
     }))
 }
 
-/// Records an existing binding as current without touching it.
+/// Records an existing binding as one the generator adopted, without touching
+/// it. The stamp carries that provenance, so the next build adopts it again
+/// rather than falling silent — the note repeats — and never regenerates over
+/// the package's own source.
 pub fn adopt(plan: &AutobindPlan) -> Result<(), AutobindError> {
-    cache::write(&plan.stamp_file, &plan.stamp).map_err(|error| AutobindError::Io {
+    cache::write(&plan.stamp_file, &plan.stamp.adopted()).map_err(|error| AutobindError::Io {
         library: plan.library.clone(),
         path: plan.stamp_file.display().to_string(),
         message: error.to_string(),
@@ -370,6 +385,17 @@ fn clang_arguments(
     {
         arguments.push("-isysroot".to_owned());
         arguments.push(sdk);
+    }
+    // A named sysroot is where a cross target's `<math.h>` and every other C
+    // library header lives. The Apple branch above discovers its own; this is
+    // the one a `--sysroot` invocation passed for a Linux or Windows target,
+    // and without it the harvest of any header that reaches a system header
+    // binds nothing.
+    if let Some(sysroot) = &context.sysroot {
+        arguments.push(format!(
+            "--sysroot={}",
+            crate::native_sources::compiler_path(sysroot)
+        ));
     }
     // Each header's own directory, so a header that includes its neighbour by
     // bare name resolves the way it does when the library is compiled.

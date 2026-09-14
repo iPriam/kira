@@ -43,6 +43,8 @@ function main() {
     print(closuresSection())
     print(ownershipSection())
     print(strSection())
+    print(bytesSection())
+    print(numberSection())
     print(genSection())
     print(clsSection())
     print(cfSection())

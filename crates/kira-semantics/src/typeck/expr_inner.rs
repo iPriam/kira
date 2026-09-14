@@ -10,7 +10,7 @@ use kira_syntax_model::ast::{CallArg, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::classes::Qualifier;
-use crate::operators::{resolve_unary, unary_spelling};
+use crate::operators::unary_spelling;
 
 use super::calls;
 
@@ -49,6 +49,7 @@ impl Analyzer<'_> {
                 );
                 self.program.exprs.alloc(HirExpr::Error)
             }
+            Expr::Tuple { elements, .. } => self.analyze_tuple_value(ctx, &elements),
             Expr::ArrayLit { elements, span } => {
                 self.analyze_array_literal(ctx, &elements, span, expected)
             }
@@ -138,7 +139,18 @@ impl Analyzer<'_> {
                 if operand_ty == Type::Error {
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
-                match resolve_unary(op, operand_ty) {
+                // `-n` on a `Number` is its own operation, not the integer or
+                // float negation.
+                if operand_ty == Type::Number
+                    && matches!(op, kira_syntax_model::ast::UnaryOp::Neg)
+                {
+                    return self.program.exprs.alloc(HirExpr::NumberOperation {
+                        op: kira_runtime_abi::NumberOp::Negate,
+                        operands: vec![operand_hir],
+                        ty: Type::Number,
+                    });
+                }
+                match self.resolve_unary_typed(op, operand_ty) {
                     Some((hir_op, ty)) => self.program.exprs.alloc(HirExpr::Unary {
                         op: hir_op,
                         operand: operand_hir,
@@ -165,6 +177,11 @@ impl Analyzer<'_> {
                 otherwise,
                 span,
             } => self.analyze_conditional(ctx, cond, then, otherwise, span, expected),
+            Expr::Match {
+                subject,
+                arms,
+                span,
+            } => self.analyze_match_expression(ctx, subject, &arms, span, expected),
             Expr::Call {
                 callee,
                 callee_span,
@@ -177,6 +194,13 @@ impl Analyzer<'_> {
             } => {
                 let name = self.interner.resolve(callee).to_owned();
                 let local = ctx.resolve(&name);
+                let is_value_update = braced
+                    && local.is_some_and(|local| {
+                        let ty = self
+                            .cell_inner(ctx, local)
+                            .unwrap_or_else(|| ctx.local_type(local));
+                        self.updateable_struct_id(ty).is_some()
+                    });
                 let is_construct_update = braced
                     && local.is_some_and(|local| {
                         let ty = self
@@ -273,7 +297,10 @@ impl Analyzer<'_> {
                 {
                     return intrinsic;
                 }
-                if !type_args.is_empty() {
+                if !type_args.is_empty()
+                    && !self.is_generic_function(&name)
+                    && !self.is_generic_aggregate(&name)
+                {
                     self.emit(
                         callee_span,
                         "KSEM222",
@@ -289,7 +316,7 @@ impl Analyzer<'_> {
                 // binding wins over a function of the same name for the same
                 // reason a local wins over a field: the nearer name is the one
                 // a reader means.
-                if is_construct_update && let Some(local) = local {
+                if is_value_update && let Some(local) = local {
                     return self.analyze_construct_update(
                         ctx,
                         local,
@@ -310,6 +337,30 @@ impl Analyzer<'_> {
                         self.analyze_constant_closure_call(ctx, &name, &values, callee_span)
                 {
                     return call;
+                }
+                // Generic aggregates use their concrete specialization as the
+                // constructor target. The expected type is important for an
+                // empty/defaulted constructor; positional values provide the
+                // inference fallback for `Box(1)`.
+                if local.is_none() && self.is_generic_aggregate(&name) {
+                    let Some(id) = self.generic_aggregate_for_call(
+                        ctx,
+                        &name,
+                        &type_args,
+                        &args,
+                        expected,
+                        callee_span,
+                    ) else {
+                        for arg in &args {
+                            self.analyze_expr(ctx, arg.value);
+                        }
+                        return self.program.exprs.alloc(HirExpr::Error);
+                    };
+                    self.link_type_name(&name, callee_span);
+                    if self.classes.contains_key(&id) {
+                        return self.analyze_class_new(ctx, id, &values, callee_span);
+                    }
+                    return self.analyze_struct_memberwise_new(ctx, id, &args, callee_span);
                 }
                 // A class is constructed by calling it, so a call whose callee
                 // names a class is a constructor, not a function call.
@@ -387,6 +438,15 @@ impl Analyzer<'_> {
                     self.link_type_name(&name, callee_span);
                     return self.analyze_struct_memberwise_new(ctx, id, &args, callee_span);
                 }
+                // `TabId(word)` builds a value of a `distinct` type — the one
+                // way into one — and is recognized here for the reason a struct
+                // construction is: naming a type is not calling a function, so
+                // it must never be reported as a missing one.
+                if let Some(call) =
+                    self.analyze_distinct_construction(ctx, &name, &args, callee_span)
+                {
+                    return call;
+                }
                 // A bare call inside a method may name one of the receiver's
                 // own or inherited methods, the way a bare name may read one of
                 // its fields. A method exposes parameter names, so labels flow
@@ -410,6 +470,11 @@ impl Analyzer<'_> {
                 if let Some(call) = self.analyze_string_conversion(ctx, &name, &args, callee_span) {
                     return call;
                 }
+                // `Number(x)` builds an exact decimal from an Int, Float, or
+                // decimal String — a conversion, never an undefined function.
+                if let Some(call) = self.analyze_number_conversion(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 if let Some(call) = self.analyze_raw_pointer_word(ctx, &name, &args, callee_span) {
                     return call;
                 }
@@ -428,11 +493,14 @@ impl Analyzer<'_> {
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
                     self.analyze_print(&arg_hirs, callee_span)
-                } else if let Some(id) = self.foreign_named(&name) {
+                } else if let Some(shapes) = self.foreign_named(&name) {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no
-                    // ceremony — resolved to `Callee::Foreign`.
-                    self.analyze_foreign_call(ctx, id, &values, callee_span)
+                    // ceremony — resolved to `Callee::Foreign`. The expectation
+                    // rides along because a name may carry several shapes of one
+                    // symbol, and what the caller does with the result is the
+                    // only thing that separates the ones differing in it.
+                    self.analyze_foreign_call(ctx, &shapes, &values, callee_span, expected)
                 } else {
                     let trailing = match function_content {
                         Some(content) if !children.is_empty() => {
@@ -440,14 +508,16 @@ impl Analyzer<'_> {
                         }
                         _ => Vec::new(),
                     };
-                    self.analyze_user_call_from_syntax_with(
+                    self.analyze_user_call_from_syntax_with_type_args(calls::CallSyntax {
                         ctx,
-                        &name,
-                        &[],
-                        &args,
-                        &trailing,
-                        callee_span,
-                    )
+                        name: &name,
+                        leading: &[],
+                        type_args: &type_args,
+                        args: &args,
+                        trailing: &trailing,
+                        span: callee_span,
+                        allow_main_thread_target: false,
+                    })
                 }
             }
             Expr::StructLit {
@@ -490,6 +560,24 @@ impl Analyzer<'_> {
                 span,
             } => {
                 let name = self.interner.resolve(field).to_owned();
+                // A namespace access `A.B.C.member` names a module constant
+                // whose name is the whole dotted path — a namespace flattens to
+                // constants spelled that way. Recognized before the base is
+                // analyzed as a value, because a namespace root is not one; a
+                // dot cannot appear in an identifier, so a path that matches a
+                // constant was one, and an ordinary `point.x` reconstructs a
+                // name no constant carries and falls through untouched.
+                if let Some(path) = self.name_path_of(id)
+                    && let Some(read) = self.constant_read(&path, span)
+                {
+                    return read;
+                }
+                // `RawPtr.null` names a constant of a builtin type. The base is
+                // that type's name rather than a value, so it is recognized
+                // before anything analyzes it as one.
+                if let Some(null) = self.analyze_raw_pointer_member(ctx, base, &name, span) {
+                    return null;
+                }
                 // `ClsAlpha.v` reads a parent's field through `self`; the base
                 // is a type name, not a value, so it must be recognized before
                 // anything tries to analyze it as one.
@@ -532,6 +620,17 @@ impl Analyzer<'_> {
                 }
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();
+                // `value.type` is the one property every value has, so it is
+                // answered before any type's own members: a declaration cannot
+                // shadow it, which is what makes the descriptor reachable from
+                // a value of any type.
+                if name == "type" {
+                    return self.analyze_type_of(base_hir, base_ty, field_span);
+                }
+                // A descriptor's own members: what a type says about itself.
+                if base_ty == Type::RuntimeType {
+                    return self.analyze_type_property(base_hir, &name, field_span);
+                }
                 // `handle.await` is the one property a task handle has, and the
                 // handle is opaque, so anything else read off one is refused
                 // here rather than falling through to a field lookup that would
@@ -547,6 +646,10 @@ impl Analyzer<'_> {
                 if let Type::Task(result) = base_ty {
                     return self.analyze_task_property(base_hir, result, &name, field_span);
                 }
+                if let Type::MainThreadTask(result) = base_ty {
+                    return self
+                        .analyze_main_thread_task_property(base_hir, result, &name, field_span);
+                }
                 // An array has no fields, but it does have `.count` — a
                 // property, written with the same syntax a field read uses.
                 if base_ty.is_array() {
@@ -556,6 +659,12 @@ impl Analyzer<'_> {
                 // its byte count, written exactly as an array's is.
                 if base_ty == Type::String {
                     return self.analyze_string_property(base_hir, &name, field_span);
+                }
+                // A distinct type has no fields and one property: `.raw`, the
+                // representation it is. The one way out of one, written the way
+                // an array's `.count` is.
+                if let Type::Distinct(id) = base_ty {
+                    return self.analyze_distinct_property(base_hir, id, &name, field_span);
                 }
                 if let Type::Enum(family_id) = base_ty
                     && self.construct_family_computed_member(family_id, &name)

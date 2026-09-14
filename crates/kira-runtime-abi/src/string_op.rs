@@ -63,6 +63,14 @@ pub enum StringOp {
     /// longer UTF-8. Backspace in a text field is this operation, and it is the
     /// one place a program has to think in scalars rather than bytes.
     DropLastScalar = 8,
+    /// The text's bytes, as a `[U8]`.
+    ///
+    /// The raw UTF-8 the string is stored as, one element per byte — the same
+    /// units `.count`, `charAt` and `substring` already index. It is what lets a
+    /// program hand a string's bytes to a foreign call, a socket, or a hash
+    /// without a loop that reads them one at a time. `String(bytes)` is the
+    /// inverse.
+    Bytes = 11,
 }
 
 impl StringOp {
@@ -71,7 +79,7 @@ impl StringOp {
     /// The one place the set is written down: decoding indexes this rather than
     /// repeating a match, so a new operation cannot be added to the enum and
     /// forgotten by the decoder.
-    pub const ALL: [StringOp; 11] = [
+    pub const ALL: [StringOp; 12] = [
         StringOp::Contains,
         StringOp::StartsWith,
         StringOp::EndsWith,
@@ -83,6 +91,7 @@ impl StringOp {
         StringOp::DropLastScalar,
         StringOp::IsInt,
         StringOp::ToInt,
+        StringOp::Bytes,
     ];
 
     /// The wire byte this operation travels as.
@@ -115,6 +124,7 @@ impl StringOp {
             StringOp::DropLastScalar => "dropLastScalar",
             StringOp::IsInt => "isInt",
             StringOp::ToInt => "toInt",
+            StringOp::Bytes => "bytes",
         }
     }
 
@@ -133,7 +143,8 @@ impl StringOp {
             | StringOp::Uppercase
             | StringOp::DropLastScalar
             | StringOp::IsInt
-            | StringOp::ToInt => 0,
+            | StringOp::ToInt
+            | StringOp::Bytes => 0,
             StringOp::Contains | StringOp::StartsWith | StringOp::EndsWith | StringOp::Split => 1,
             StringOp::Replace => 2,
         }
@@ -160,6 +171,12 @@ impl StringOp {
         matches!(self, StringOp::Split)
     }
 
+    /// Whether the operation answers with a `[U8]`.
+    #[must_use]
+    pub const fn answers_byte_array(self) -> bool {
+        matches!(self, StringOp::Bytes)
+    }
+
     /// The `kira_rt_*` symbol native code calls to perform this operation.
     #[must_use]
     pub const fn runtime_symbol(self) -> &'static str {
@@ -175,6 +192,7 @@ impl StringOp {
             StringOp::DropLastScalar => "kira_rt_string_drop_last_scalar",
             StringOp::IsInt => "kira_rt_string_is_int",
             StringOp::ToInt => "kira_rt_string_to_int",
+            StringOp::Bytes => "kira_rt_string_bytes",
         }
     }
 }
@@ -196,6 +214,10 @@ mod tests {
         assert_eq!(StringOp::Trim.as_byte(), 5);
         assert_eq!(StringOp::Lowercase.as_byte(), 6);
         assert_eq!(StringOp::Uppercase.as_byte(), 7);
+        assert_eq!(StringOp::DropLastScalar.as_byte(), 8);
+        assert_eq!(StringOp::IsInt.as_byte(), 9);
+        assert_eq!(StringOp::ToInt.as_byte(), 10);
+        assert_eq!(StringOp::Bytes.as_byte(), 11);
     }
 
     #[test]

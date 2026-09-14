@@ -3,14 +3,18 @@ title: The Managed LLVM
 description: What llvm-metadata.toml pins, how a bundle is discovered, why the code generators are named outright, and what a missing one costs.
 ---
 
-The LLVM backend is a hard dependency of every `kira`, and its build script discovers a bundle at `~/.kira/toolchains/llvm/<version>/<host-key>` without being told where it is. `knvm install-llvm` is what puts one there.
+The LLVM backend is a hard dependency of every `kira`, and its build script discovers a bundle at `~/.kira/toolchains/llvm/<version>/<host-key>` without being told where it is. `knvm llvm install` is what puts one there.
 
 ```bash
-knvm install-llvm
-knvm install-llvm --force
+knvm llvm                    # pinned version, and what is installed
+knvm llvm install
+knvm llvm install --force
+knvm llvm uninstall <version>
 ```
 
 An already-usable bundle is left alone; `--force` removes and refetches it, the repair route for a tree interrupted mid-extraction. The test for "usable" is `include/llvm-c/Core.h`, which is exactly the test discovery applies, so nothing can be installed that discovery would then fail to find. The bundle lands under `llvm/` and touches no toolchain.
+
+A bare `knvm llvm` reports the pinned version and every version installed, `*` on the pin. `knvm llvm uninstall <version>` removes one version's whole tree, every host key under it, which is how an old bundle is cleared once the pin has moved past it. Removing the pinned version is allowed and warned about: the backend has no LLVM to link until `knvm llvm install` puts it back.
 
 The downloader is `knvm` rather than `kira` because `kira` links the LLVM backend: a `kira` that provisioned LLVM would have to be built before the bundle it installs. `knvm` links none, so it builds from a bare checkout.
 
@@ -44,10 +48,10 @@ The same discovery serves the pure LLVM/native backend and the native half of hy
 
 ## A Missing Generator
 
-A release owns its assets for good, so a pin that grows a generator after its release was cut installs a real LLVM that is short of it. `install-llvm` and `binstall` read what the bundle was built with from its own `llvm-config` and say which pinned generator is absent and what a compiler built against it will refuse, because the alternative is finding out from a build that wanted that device.
+A release owns its assets for good, so a pin that grows a generator after its release was cut installs a real LLVM that is short of it. `llvm install` and `binstall` read what the bundle was built with from its own `llvm-config` and say which pinned generator is absent and what a compiler built against it will refuse, because the alternative is finding out from a build that wanted that device.
 
 The backend links accordingly: the missing code generator's initializers are not compiled in, the rest of the compiler is, and the device reports itself unavailable by name. A bundle with no `WebAssembly` generator means the compiler refuses `--device wasm32`.
 
 ## Checksums
 
-Each bundle is published with a `.sha256` beside it, and `knvm install-llvm` checks the download against it before unpacking. This archive supplies the code generator every native artifact is built with, so an archive that is not the published one must not reach a build at all. A release that carries no sidecar installs with a warning saying the bundle went in unverified.
+Each bundle is published with a `.sha256` beside it, and `knvm llvm install` checks the download against it before unpacking. This archive supplies the code generator every native artifact is built with, so an archive that is not the published one must not reach a build at all. A release that carries no sidecar installs with a warning saying the bundle went in unverified.

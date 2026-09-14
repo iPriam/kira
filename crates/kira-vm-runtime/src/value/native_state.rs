@@ -1,6 +1,8 @@
 //! Conversion between VM heap values and backend-neutral callback state.
 
-use kira_runtime_abi::NativeStateValue;
+use std::sync::Arc;
+
+use kira_runtime_abi::{NativeStateOwner, NativeStateValue};
 
 use super::{Heap, Object, Value};
 
@@ -15,6 +17,7 @@ impl Heap {
             Value::Int(value) => NativeStateValue::Int(value),
             Value::Float(value) => NativeStateValue::Float(value),
             Value::Bool(value) => NativeStateValue::Bool(value),
+            Value::Number(decimal) => NativeStateValue::Number(decimal),
             Value::RawPtr(value) => NativeStateValue::RawPtr(value),
             Value::Str(id) => match self.take_object(id.0) {
                 Some(Object::Str(value)) => NativeStateValue::String(value.to_string()),
@@ -24,6 +27,7 @@ impl Heap {
                 // Moving the fields out is a write like any other: a struct
                 // sharing them would be left reading values this took over.
                 self.make_struct_unique(id);
+                let glue = self.drop_glue.remove(&id.0);
                 let fields = match self.take_object(id.0) {
                     Some(Object::Struct(fields)) => fields,
                     _ => return Err("a struct whose fields were already taken"),
@@ -33,7 +37,10 @@ impl Heap {
                     return Err("a struct still shared with another value");
                 };
                 let values = self.native_state_children(fields)?;
-                NativeStateValue::struct_of(values)
+                match glue {
+                    Some(glue) => NativeStateValue::dropping_struct_of(values, glue),
+                    None => NativeStateValue::struct_of(values),
+                }
             }
             Value::Array(id) => {
                 // Moving the elements out is a write like any other: an array
@@ -131,7 +138,15 @@ impl Heap {
             // always inside the engine holding the value.
             Value::CBlock(id) => NativeStateValue::CBlock(self.take_cblock_tree(id)?),
             Value::Void => return Err("a void value"),
-            Value::NativeState(_) => return Err("callback state inside callback state"),
+            Value::NativeState(token) => {
+                let retain_events = Arc::clone(&self.native_state_events);
+                let release_events = Arc::clone(&self.native_state_events);
+                NativeStateValue::NativeState(NativeStateOwner::new(
+                    token,
+                    move |token| retain_events.retain(token),
+                    move |token| release_events.release(token),
+                ))
+            }
             Value::MainThreadTask(_) => return Err("a main-thread task handle"),
             Value::Type(_) => return Err("a runtime type descriptor"),
             Value::NativeView { .. } => {
@@ -150,6 +165,7 @@ impl Heap {
     pub fn from_native_state(&mut self, value: &NativeStateValue) -> Value {
         match value {
             NativeStateValue::Int(value) => Value::Int(*value),
+            NativeStateValue::Number(value) => Value::Number(*value),
             NativeStateValue::Float(value) => Value::Float(*value),
             NativeStateValue::Bool(value) => Value::Bool(*value),
             NativeStateValue::RawPtr(value) => Value::RawPtr(*value),
@@ -160,6 +176,13 @@ impl Heap {
                     .map(|field| self.from_native_state(field))
                     .collect();
                 Value::Struct(self.alloc_struct(fields))
+            }
+            NativeStateValue::DropStruct { glue, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| self.from_native_state(field))
+                    .collect();
+                Value::Struct(self.alloc_struct_dropping(fields, *glue))
             }
             NativeStateValue::Array(elements) => {
                 let elements = elements
@@ -192,10 +215,84 @@ impl Heap {
                 self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
             }
             NativeStateValue::Cell(cell) => Value::RawPtr(cell.handle()),
+            NativeStateValue::NativeState(owner) => Value::NativeState(owner.duplicate_token()),
             NativeStateValue::CBlock(block) => Value::CBlock(self.copy_native_cblock(block)),
             // A main-thread task handle never becomes a state node, so there
             // is no reverse conversion for one.
         }
+    }
+
+    /// Moves one owned portable tree into this heap.
+    ///
+    /// A nested `NativeState` transfers its transport obligation when this is
+    /// the last transport holder. If a snapshot still shares that obligation,
+    /// materializing the Kira owner retains one reference and leaves the shared
+    /// transport owner alive for the snapshot.
+    pub fn consume_native_state(&mut self, value: NativeStateValue) -> Value {
+        match value {
+            NativeStateValue::Int(value) => Value::Int(value),
+            NativeStateValue::Number(value) => Value::Number(value),
+            NativeStateValue::Float(value) => Value::Float(value),
+            NativeStateValue::Bool(value) => Value::Bool(value),
+            NativeStateValue::RawPtr(value) => Value::RawPtr(value),
+            NativeStateValue::String(value) => Value::Str(self.alloc(value)),
+            NativeStateValue::Struct(fields) => {
+                let fields = Arc::try_unwrap(fields).unwrap_or_else(|shared| (*shared).clone());
+                let fields = fields
+                    .into_iter()
+                    .map(|field| self.consume_native_state(field))
+                    .collect();
+                Value::Struct(self.alloc_struct(fields))
+            }
+            NativeStateValue::DropStruct { glue, fields } => {
+                let fields = Arc::try_unwrap(fields).unwrap_or_else(|shared| (*shared).clone());
+                let fields = fields
+                    .into_iter()
+                    .map(|field| self.consume_native_state(field))
+                    .collect();
+                Value::Struct(self.alloc_struct_dropping(fields, glue))
+            }
+            NativeStateValue::Array(elements) => {
+                let elements = Arc::try_unwrap(elements).unwrap_or_else(|shared| (*shared).clone());
+                let elements = elements
+                    .into_iter()
+                    .map(|element| self.consume_native_state(element))
+                    .collect();
+                Value::Array(self.alloc_array(elements))
+            }
+            NativeStateValue::Enum { tag, payload } => {
+                let payload = payload.map(|payload| {
+                    let payload =
+                        Arc::try_unwrap(payload).unwrap_or_else(|shared| (*shared).clone());
+                    self.consume_native_state(payload)
+                });
+                Value::Enum(self.alloc_enum(u64::from(tag), payload))
+            }
+            NativeStateValue::Any { type_id, payload } => {
+                let payload = Arc::try_unwrap(payload).unwrap_or_else(|shared| (*shared).clone());
+                let payload = self.consume_native_state(payload);
+                Value::Erased(self.alloc_erased(type_id, payload))
+            }
+            NativeStateValue::Cell(cell)
+                if cell.is_vm_owned() && cell.handle() <= u32::MAX as u64 =>
+            {
+                self.copy_value(Value::Cell(super::CellId(cell.handle() as u32)))
+            }
+            NativeStateValue::Cell(cell) => Value::RawPtr(cell.handle()),
+            NativeStateValue::NativeState(owner) => match owner.into_token() {
+                Ok(token) => Value::NativeState(token),
+                Err(owner) => Value::NativeState(owner.duplicate_token()),
+            },
+            NativeStateValue::CBlock(block) => Value::CBlock(self.copy_native_cblock(&block)),
+        }
+    }
+
+    /// Releases one owned portable state value through the VM's normal value
+    /// destruction machinery, so nested user `Drop` bodies and NativeState
+    /// owners are handled by the same paths as ordinary values.
+    pub fn drop_native_state_value(&mut self, value: NativeStateValue) {
+        let runtime = self.consume_native_state(value);
+        self.drop_value(runtime);
     }
 
     fn native_state_children(

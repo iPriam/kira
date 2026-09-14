@@ -49,6 +49,11 @@ construct PrimitiveSqrtOfZero() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(0) return e }
 }
 
+construct PrimitiveCbrtPreservesTheRealSign() extends Test {
+    test { return Int(cbrt(27.0)) * 10 + Int(cbrt(-8.0)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(28) return e }
+}
+
 construct PrimitiveSinAndCosAtZero() extends Test {
     test { return Int(sin(0.0)) * 10 + Int(cos(0.0)) }
     expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
@@ -80,6 +85,17 @@ construct PrimitiveFloorAndCeilOnANegative() extends Test {
 construct PrimitiveAbsDropsTheSign() extends Test {
     test { return prmScaled(abs(0.0 - 1.5), 1) + prmScaled(abs(1.5), 1) }
     expect { let e: Result<Any, TestFailure> = .Ok(30) return e }
+}
+
+construct PrimitiveInfinityIsAFloatLiteral() extends Test {
+    test {
+        var score = 0
+        if infinity > 1.0 { score = score + 1 }
+        if -infinity < -1.0 { score = score + 10 }
+        if infinity == infinity { score = score + 100 }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(111) return e }
 }
 
 // --- the exponential and the logarithm -------------------------------------
