@@ -73,18 +73,14 @@ fn narrow(mantissa: i128, scale: u32) -> Result<Decimal, DecimalError> {
     Ok(Decimal { mantissa, scale })
 }
 
-/// A 128-bit quotient narrowed to the `i64` mantissa, dropping fractional digits
-/// to make it fit rather than trapping.
-///
-/// A division always lands at `MAX_SCALE`, and a quotient with a large integer
-/// part needs more than the sixty-four bits leave for that many fractional
-/// digits — `100 / 4` is `25`, which does not fit at eighteen places. Rounding
-/// the scale down until it fits is what keeps a plain division of two small
-/// numbers from overflowing; only a genuinely huge integer part, past what the
-/// mantissa holds at scale zero, still traps.
-fn narrow_quotient(mut mantissa: i128, mut scale: u32) -> Result<Decimal, DecimalError> {
-    while i64::try_from(mantissa).is_err() && scale > 0 {
-        mantissa = round_i128_to_scale(mantissa, scale, scale - 1)?;
+/// A 128-bit result narrowed to the `i64` mantissa, first shedding trailing
+/// fractional zeros so an exact value that only overflows because of its scale
+/// still fits. `10` aligned to scale eighteen is `10^19`, past the mantissa, yet
+/// the value is `10`: dropping the zeros lands it at scale zero rather than
+/// trapping. Removing a trailing zero is exact, so this never changes the value.
+fn narrow_reduced(mut mantissa: i128, mut scale: u32) -> Result<Decimal, DecimalError> {
+    while scale > 0 && mantissa % 10 == 0 {
+        mantissa /= 10;
         scale -= 1;
     }
     narrow(mantissa, scale)
@@ -263,14 +259,17 @@ impl Decimal {
         if integer.is_empty() && fraction.is_empty() {
             return Err(DecimalError::Parse);
         }
-        let mut mantissa: i64 = 0;
+        // The magnitude accumulates in 128 bits and takes its sign before
+        // narrowing, so the representable minimum — whose magnitude is one past
+        // `i64::MAX` — reads as itself rather than overflowing on its last digit.
+        let mut mantissa: i128 = 0;
         for byte in integer.bytes().chain(fraction.bytes()) {
             if !byte.is_ascii_digit() {
                 return Err(DecimalError::Parse);
             }
             mantissa = mantissa
                 .checked_mul(10)
-                .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+                .and_then(|value| value.checked_add(i128::from(byte - b'0')))
                 .ok_or(DecimalError::Overflow)?;
         }
         let scale = u32::try_from(fraction.len()).map_err(|_| DecimalError::Overflow)?;
@@ -280,20 +279,35 @@ impl Decimal {
         if negative {
             mantissa = -mantissa;
         }
+        let mantissa = i64::try_from(mantissa).map_err(|_| DecimalError::Overflow)?;
         Ok(Decimal { mantissa, scale })
+    }
+
+    /// The mantissa and scale with trailing fractional zeros shed, the shortest
+    /// representation of the same value. `1.00` (`{100, 2}`) becomes `{1, 0}`.
+    fn without_trailing_zeros(self) -> (i64, u32) {
+        let mut mantissa = self.mantissa;
+        let mut scale = self.scale;
+        while scale > 0 && mantissa % 10 == 0 {
+            mantissa /= 10;
+            scale -= 1;
+        }
+        (mantissa, scale)
     }
 
     /// The shortest exact decimal text for this value: a leading `-` when
     /// negative, the integer digits, and a `.` with the fractional digits when
-    /// the scale is not zero. `1.0` and `1.00` both print at their own scale.
+    /// there are any. Trailing fractional zeros are dropped, so `1.0` and `1.00`
+    /// both render as `1` — the shortest text that reads back to the same value.
     #[must_use]
     pub fn to_decimal_string(self) -> String {
-        if self.scale == 0 {
-            return self.mantissa.to_string();
+        let (mantissa, scale) = self.without_trailing_zeros();
+        if scale == 0 {
+            return mantissa.to_string();
         }
-        let negative = self.mantissa < 0;
-        let digits = self.mantissa.unsigned_abs().to_string();
-        let scale = self.scale as usize;
+        let negative = mantissa < 0;
+        let digits = mantissa.unsigned_abs().to_string();
+        let scale = scale as usize;
         let mut out = String::new();
         if negative {
             out.push('-');
@@ -327,7 +341,7 @@ impl Decimal {
             });
         }
         let (left, right, scale) = self.align(other)?;
-        narrow(left.checked_add(right).ok_or(DecimalError::Overflow)?, scale)
+        narrow_reduced(left.checked_add(right).ok_or(DecimalError::Overflow)?, scale)
     }
 
     /// Difference, exact.
@@ -343,7 +357,7 @@ impl Decimal {
             });
         }
         let (left, right, scale) = self.align(other)?;
-        narrow(left.checked_sub(right).ok_or(DecimalError::Overflow)?, scale)
+        narrow_reduced(left.checked_sub(right).ok_or(DecimalError::Overflow)?, scale)
     }
 
     /// Product, exact up to `MAX_SCALE`, half-to-even beyond it.
@@ -365,48 +379,79 @@ impl Decimal {
         narrow(round_i128_to_scale(wide, scale, target)?, target)
     }
 
-    /// Negation.
-    #[must_use]
-    pub fn negate(self) -> Self {
-        Decimal {
-            mantissa: self.mantissa.wrapping_neg(),
+    /// Negation, a trap when the value has no negative in range.
+    ///
+    /// The one value that traps is the representable minimum: its magnitude is
+    /// `i64::MAX + 1`, so the positive it would negate to does not fit the
+    /// mantissa. Every other value negates exactly.
+    pub fn negate(self) -> Result<Self, DecimalError> {
+        Ok(Decimal {
+            mantissa: self.mantissa.checked_neg().ok_or(DecimalError::Overflow)?,
             scale: self.scale,
-        }
+        })
     }
 
-    /// Quotient rounded half-to-even at `MAX_SCALE`, in 128-bit intermediates.
+    /// Quotient rounded half-to-even, at the largest scale up to `MAX_SCALE` that
+    /// its integer part leaves room for, in 128-bit intermediates.
+    ///
+    /// The scale is chosen before the single rounding, not by rounding at
+    /// `MAX_SCALE` and rounding the result again to fit — a second rounding of an
+    /// already-rounded mantissa drifts the last digit. Each candidate scale
+    /// rounds the *exact* rational `self / other` once; the largest whose result
+    /// fits the mantissa is the answer. A quotient whose integer part alone
+    /// exceeds the mantissa, past scale zero, traps.
     pub fn divide(self, other: Self) -> Result<Self, DecimalError> {
         if other.mantissa == 0 {
             return Err(DecimalError::DivideByZero);
         }
-        // value * 10^MAX_SCALE = (self.mantissa / other.mantissa) * 10^p.
-        let p = MAX_SCALE as i64 + other.scale as i64 - self.scale as i64;
+        // value * 10^scale = self.mantissa * 10^(scale + other.scale - self.scale)
+        //                    / other.mantissa.
+        let shift = other.scale as i64 - self.scale as i64;
         let self_mantissa = i128::from(self.mantissa);
         let other_mantissa = i128::from(other.mantissa);
-        let (numerator, denominator) = if p >= 0 {
-            let factor = pow10(u32::try_from(p).map_err(|_| DecimalError::Overflow)?)
-                .ok_or(DecimalError::Overflow)?;
-            (
-                self_mantissa
-                    .checked_mul(factor)
-                    .ok_or(DecimalError::Overflow)?,
-                other_mantissa,
-            )
-        } else {
-            let factor = pow10(u32::try_from(-p).map_err(|_| DecimalError::Overflow)?)
-                .ok_or(DecimalError::Overflow)?;
-            (
+        let mut scale = MAX_SCALE;
+        loop {
+            let candidate = Self::quotient_at_scale(
                 self_mantissa,
-                other_mantissa
-                    .checked_mul(factor)
-                    .ok_or(DecimalError::Overflow)?,
-            )
+                other_mantissa,
+                shift + scale as i64,
+                scale,
+            );
+            if let Some(decimal) = candidate {
+                return Ok(decimal);
+            }
+            if scale == 0 {
+                return Err(DecimalError::Overflow);
+            }
+            scale -= 1;
+        }
+    }
+
+    /// `self / other` rounded half-to-even to `scale` fractional digits, once,
+    /// as a `Decimal` — or `None` when that scaling or the narrowed result does
+    /// not fit, which asks the caller to try a smaller scale. `power` is
+    /// `scale + other.scale - self.scale`, the exponent that lifts the exact
+    /// rational to the working scale.
+    fn quotient_at_scale(
+        self_mantissa: i128,
+        other_mantissa: i128,
+        power: i64,
+        scale: u32,
+    ) -> Option<Self> {
+        let (numerator, denominator) = if power >= 0 {
+            let factor = pow10(u32::try_from(power).ok()?)?;
+            (self_mantissa.checked_mul(factor)?, other_mantissa)
+        } else {
+            let factor = pow10(u32::try_from(-power).ok()?)?;
+            (self_mantissa, other_mantissa.checked_mul(factor)?)
         };
         let mantissa = match divide_round_half_even_hinted(numerator, denominator) {
             Some(mantissa) => mantissa,
-            None => divide_round_half_even(numerator, denominator)?,
+            None => divide_round_half_even(numerator, denominator).ok()?,
         };
-        narrow_quotient(mantissa, MAX_SCALE)
+        i64::try_from(mantissa)
+            .ok()
+            .map(|mantissa| Decimal { mantissa, scale })
     }
 
     /// This value rounded to `target` fractional digits, half-to-even.
@@ -443,13 +488,25 @@ impl Decimal {
         self.mantissa as f64 / 10f64.powi(self.scale as i32)
     }
 
-    /// The `Number` nearest an `f64`, via its shortest decimal rendering so the
-    /// scale is the one a person reading the float would expect.
+    /// The `Number` nearest an `f64`: the float's actual binary value rounded to
+    /// as many fractional digits as fit, not its shortest round-tripping text.
+    ///
+    /// `0.1_f64` is not a tenth — it is `0.1000000000000000055…` — so `Number`
+    /// from it is `0.100000000000000006`, the documented "decimal nearest the
+    /// float, which was already rounded", distinct from the exact `Number("0.1")`.
+    /// Rendering to a fixed number of places asks the formatter for the true
+    /// value at that precision; the widest precision whose digits fit the mantissa
+    /// is the answer, and a value too large for even the integer part traps.
     pub fn from_f64(value: f64) -> Result<Self, DecimalError> {
         if !value.is_finite() {
             return Err(DecimalError::Parse);
         }
-        Self::parse(&format!("{value}"))
+        for places in (0..=MAX_SCALE as usize).rev() {
+            if let Ok(decimal) = Self::parse(&format!("{value:.places$}")) {
+                return Ok(decimal);
+            }
+        }
+        Err(DecimalError::Overflow)
     }
 }
 
@@ -479,119 +536,4 @@ fn round_i128_to_scale(mantissa: i128, scale: u32, target: u32) -> Result<i128, 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn dec(text: &str) -> Decimal {
-        Decimal::parse(text).expect("a decimal")
-    }
-
-    #[test]
-    fn the_tenths_add_exactly() {
-        // The whole reason the type exists: no binary-float 0.30000000000000004.
-        assert_eq!(dec("0.1").add(dec("0.2")).unwrap(), dec("0.3"));
-        assert_eq!(dec("0.1").add(dec("0.2")).unwrap().to_decimal_string(), "0.3");
-    }
-
-    #[test]
-    fn equality_is_numeric_not_representational() {
-        assert!(dec("1.0").equals(dec("1.00")).unwrap());
-        assert!(dec("1.0").equals(dec("1")).unwrap());
-        assert!(!dec("1.0").equals(dec("1.01")).unwrap());
-        assert_eq!(dec("1.0"), Decimal::from_parts(10, 1));
-        assert_ne!(dec("1.0"), dec("1.00"), "the stored forms still differ");
-    }
-
-    #[test]
-    fn multiply_and_subtract_are_exact() {
-        assert_eq!(dec("1.5").multiply(dec("1.5")).unwrap(), dec("2.25"));
-        assert_eq!(dec("0.3").subtract(dec("0.1")).unwrap(), dec("0.2"));
-        assert_eq!(dec("2").multiply(dec("-3.5")).unwrap(), dec("-7.0"));
-    }
-
-    #[test]
-    fn division_rounds_half_to_even_at_max_scale() {
-        let third = dec("1").divide(dec("3")).unwrap();
-        assert_eq!(third.scale(), MAX_SCALE);
-        assert!(third.to_decimal_string().starts_with("0.3333333333"));
-        assert_eq!(dec("1").divide(dec("4")).unwrap(), dec("0.25").round_to_scale(MAX_SCALE).unwrap());
-        assert_eq!(dec("2.5").round_to_scale(0).unwrap(), dec("2"));
-        assert_eq!(dec("3.5").round_to_scale(0).unwrap(), dec("4"));
-        assert_eq!(dec("-2.5").round_to_scale(0).unwrap(), dec("-2"));
-    }
-
-    #[test]
-    fn out_of_range_is_an_error_not_a_panic() {
-        assert_eq!(dec("1").divide(dec("0")), Err(DecimalError::DivideByZero));
-        let big = Decimal::from_parts(i64::MAX, 0);
-        assert_eq!(big.add(big), Err(DecimalError::Overflow));
-        // A product past the 64-bit mantissa traps rather than wrapping.
-        let wide = Decimal::from_parts(3_037_000_500, 0);
-        assert_eq!(wide.multiply(wide), Err(DecimalError::Overflow));
-    }
-
-    #[test]
-    fn parse_rejects_what_is_not_a_decimal() {
-        assert_eq!(Decimal::parse("abc"), Err(DecimalError::Parse));
-        assert_eq!(Decimal::parse(""), Err(DecimalError::Parse));
-        assert_eq!(Decimal::parse("1.2.3"), Err(DecimalError::Parse));
-        assert_eq!(dec("-0.05").to_decimal_string(), "-0.05");
-        assert_eq!(dec("42").to_decimal_string(), "42");
-    }
-
-    #[test]
-    fn to_int_truncates_toward_zero() {
-        assert_eq!(dec("3.9").to_i64().unwrap(), 3);
-        assert_eq!(dec("-3.9").to_i64().unwrap(), -3);
-    }
-
-    #[test]
-    fn the_hinted_divide_agrees_with_the_exact_divide() {
-        // The float-hinted quotient must equal the exact 128-bit one wherever it
-        // answers at all — its `None` is a fall back to the exact path, never a
-        // different result. A wide sample of both signs so the fast path and its
-        // correction and its fallback all fire.
-        let denominators = [
-            1_i128, 2, 3, 6, 7, 10, 16, 99, 100, 128, 9973, 1_000_003,
-            i128::from(i64::MAX),
-        ];
-        let numerators = [
-            0_i128, 1, 2, 5, 9, 10, 49, 50, 51, 149, 150, 151, 999, 1000, 1001,
-            123_456_789, 9_007_199_254_740_993, i128::from(i64::MAX),
-        ];
-        let mut fast_paths = 0_u32;
-        for &magnitude in &denominators {
-            for &denominator in &[magnitude, -magnitude] {
-                for &value in &numerators {
-                    for &numerator in &[value, -value] {
-                        let exact = divide_round_half_even(numerator, denominator).unwrap();
-                        if let Some(hinted) =
-                            divide_round_half_even_hinted(numerator, denominator)
-                        {
-                            assert_eq!(
-                                hinted, exact,
-                                "hinted != exact for {numerator} / {denominator}"
-                            );
-                            fast_paths += 1;
-                        }
-                    }
-                }
-            }
-        }
-        // The fast path must actually be taken, or the test proves nothing.
-        assert!(fast_paths > 100, "the hinted path never fired ({fast_paths})");
-    }
-
-    #[test]
-    fn division_results_are_unchanged_by_the_hint() {
-        // The observable `divide` answers, through whichever path, are the ones
-        // the exact algorithm gave before the hint existed.
-        assert!(dec("1").divide(dec("8")).unwrap().equals(dec("0.125")).unwrap());
-        assert_eq!(&dec("22").divide(dec("7")).unwrap().to_decimal_string()[..12], "3.1428571428");
-        assert_eq!(dec("-1").divide(dec("3")).unwrap(), dec("1").divide(dec("3")).unwrap().negate());
-        // A quotient with a large integer part reduces its scale to fit rather
-        // than trapping: 100 / 4 is 25.
-        assert!(dec("100").divide(dec("4")).unwrap().equals(dec("25")).unwrap());
-        assert!(dec("1000000000").divide(dec("2")).unwrap().equals(dec("500000000")).unwrap());
-    }
-}
+mod tests;

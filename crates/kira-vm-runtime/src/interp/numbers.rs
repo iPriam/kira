@@ -64,7 +64,7 @@ impl Vm<'_> {
             }
             NumberOp::ToInt => as_number(operands[0])?.to_i64().map(Value::Int).map_err(trap),
             NumberOp::ToFloat => Ok(Value::Float(as_number(operands[0])?.to_f64())),
-            NumberOp::Negate => Ok(Value::Number(as_number(operands[0])?.negate())),
+            NumberOp::Negate => as_number(operands[0])?.negate().map(Value::Number).map_err(trap),
             NumberOp::Add => self.number_binary(operands, Decimal::add),
             NumberOp::Subtract => self.number_binary(operands, Decimal::subtract),
             NumberOp::Multiply => self.number_binary(operands, Decimal::multiply),
