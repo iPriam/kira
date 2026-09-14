@@ -18,6 +18,13 @@ use super::*;
         assert_eq!(LinuxSyscall::Chroot.tag(), 11);
         assert_eq!(LinuxSyscall::Openat.tag(), 12);
         assert_eq!(LinuxSyscall::Close.tag(), 13);
+        assert_eq!(LinuxSyscall::Getsockopt.tag(), 62);
+        assert_eq!(LinuxSyscall::MemfdCreate.tag(), 63);
+        assert_eq!(LinuxSyscall::ClockSettime.tag(), 64);
+        assert_eq!(LinuxSyscall::TimerfdCreate.tag(), 65);
+        assert_eq!(LinuxSyscall::TimerfdSettime.tag(), 66);
+        assert_eq!(LinuxSyscall::TimerfdGettime.tag(), 67);
+        assert_eq!(LinuxSyscall::Uname.tag(), 68);
     }
 
     #[test]
@@ -73,6 +80,18 @@ use super::*;
         assert_eq!(LinuxSyscall::ExitGroup.number(x86_64), 231);
         assert_eq!(LinuxSyscall::Sync.number(aarch64), 81);
         assert_eq!(LinuxSyscall::Sync.number(x86_64), 162);
+        assert_eq!(LinuxSyscall::MemfdCreate.number(aarch64), 279);
+        assert_eq!(LinuxSyscall::MemfdCreate.number(x86_64), 319);
+        assert_eq!(LinuxSyscall::ClockSettime.number(aarch64), 112);
+        assert_eq!(LinuxSyscall::ClockSettime.number(x86_64), 227);
+        assert_eq!(LinuxSyscall::TimerfdCreate.number(aarch64), 85);
+        assert_eq!(LinuxSyscall::TimerfdCreate.number(x86_64), 283);
+        assert_eq!(LinuxSyscall::TimerfdSettime.number(aarch64), 86);
+        assert_eq!(LinuxSyscall::TimerfdSettime.number(x86_64), 286);
+        assert_eq!(LinuxSyscall::TimerfdGettime.number(aarch64), 87);
+        assert_eq!(LinuxSyscall::TimerfdGettime.number(x86_64), 287);
+        assert_eq!(LinuxSyscall::Uname.number(aarch64), 160);
+        assert_eq!(LinuxSyscall::Uname.number(x86_64), 63);
     }
 
     /// Two architectures answer and everything else is turned away here, which
@@ -134,7 +153,16 @@ use super::*;
     /// "acts on files" from putting it back.
     #[test]
     fn an_interpreter_serves_the_calls_that_act_only_on_descriptors() {
-        for syscall in [LinuxSyscall::Read, LinuxSyscall::Write, LinuxSyscall::Ppoll] {
+        for syscall in [
+            LinuxSyscall::Read,
+            LinuxSyscall::Write,
+            LinuxSyscall::Ppoll,
+            LinuxSyscall::MemfdCreate,
+            LinuxSyscall::TimerfdCreate,
+            LinuxSyscall::TimerfdSettime,
+            LinuxSyscall::TimerfdGettime,
+            LinuxSyscall::Uname,
+        ] {
             assert!(syscall.servable_by_an_interpreter(), "{}", syscall.label());
         }
         for syscall in [
@@ -145,6 +173,7 @@ use super::*;
             LinuxSyscall::Execve,
             LinuxSyscall::Wait4,
             LinuxSyscall::ExitGroup,
+            LinuxSyscall::ClockSettime,
         ] {
             assert!(!syscall.servable_by_an_interpreter(), "{}", syscall.label());
         }

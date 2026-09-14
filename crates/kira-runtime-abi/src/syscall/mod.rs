@@ -259,6 +259,31 @@ pub enum LinuxSyscall {
     Setsockopt = 61,
     /// `getsockopt(fd, level, option, value, length)` — read one of those back.
     Getsockopt = 62,
+    /// `memfd_create(name, flags)` — an anonymous file that lives in memory.
+    ///
+    /// The descriptor a shared buffer is passed over: a client fills a `memfd`,
+    /// hands the display server the descriptor, and the two map the same pages.
+    MemfdCreate = 63,
+    /// `clock_settime(clockid, time)` — move a system clock.
+    ///
+    /// The write half of the pair with `clock_gettime`. Setting the wall clock
+    /// is a machine-wide act, so a userland reserves it to the one service that
+    /// owns time and refuses every application the number.
+    ClockSettime = 64,
+    /// `timerfd_create(clockid, flags)` — a descriptor that becomes readable
+    /// when a timer expires.
+    ///
+    /// How an event loop waits on time in the same `epoll` set as its
+    /// descriptors, rather than blocking in `nanosleep` and answering nothing
+    /// else meanwhile.
+    TimerfdCreate = 65,
+    /// `timerfd_settime(fd, flags, new, old)` — arm or disarm a timer
+    /// descriptor.
+    TimerfdSettime = 66,
+    /// `timerfd_gettime(fd, current)` — how long a timer descriptor has left.
+    TimerfdGettime = 67,
+    /// `uname(buffer)` — the kernel's name, release, version, and machine.
+    Uname = 68,
 }
 
 /// Every system call this table knows, in tag order.
@@ -266,7 +291,7 @@ pub enum LinuxSyscall {
 /// A total list rather than a search: the frontend prints it when it refuses an
 /// unknown name, and a name that is in the enum but missing from here would be
 /// a call the author cannot discover.
-pub const LINUX_SYSCALLS: [LinuxSyscall; 63] = [
+pub const LINUX_SYSCALLS: [LinuxSyscall; 69] = [
     LinuxSyscall::Read,
     LinuxSyscall::Write,
     LinuxSyscall::Mount,
@@ -330,6 +355,12 @@ pub const LINUX_SYSCALLS: [LinuxSyscall; 63] = [
     LinuxSyscall::Getsockname,
     LinuxSyscall::Setsockopt,
     LinuxSyscall::Getsockopt,
+    LinuxSyscall::MemfdCreate,
+    LinuxSyscall::ClockSettime,
+    LinuxSyscall::TimerfdCreate,
+    LinuxSyscall::TimerfdSettime,
+    LinuxSyscall::TimerfdGettime,
+    LinuxSyscall::Uname,
 ];
 
 /// How many arguments a Linux system call can take.
@@ -412,6 +443,12 @@ impl LinuxSyscall {
             60 => Some(Self::Getsockname),
             61 => Some(Self::Setsockopt),
             62 => Some(Self::Getsockopt),
+            63 => Some(Self::MemfdCreate),
+            64 => Some(Self::ClockSettime),
+            65 => Some(Self::TimerfdCreate),
+            66 => Some(Self::TimerfdSettime),
+            67 => Some(Self::TimerfdGettime),
+            68 => Some(Self::Uname),
             _ => None,
         }
     }
@@ -487,6 +524,12 @@ impl LinuxSyscall {
             Self::Getsockname => "getsockname",
             Self::Setsockopt => "setsockopt",
             Self::Getsockopt => "getsockopt",
+            Self::MemfdCreate => "memfd_create",
+            Self::ClockSettime => "clock_settime",
+            Self::TimerfdCreate => "timerfd_create",
+            Self::TimerfdSettime => "timerfd_settime",
+            Self::TimerfdGettime => "timerfd_gettime",
+            Self::Uname => "uname",
         }
     }
 
@@ -573,6 +616,12 @@ impl LinuxSyscall {
                 Self::Getsockname => 204,
                 Self::Setsockopt => 208,
                 Self::Getsockopt => 209,
+                Self::MemfdCreate => 279,
+                Self::ClockSettime => 112,
+                Self::TimerfdCreate => 85,
+                Self::TimerfdSettime => 86,
+                Self::TimerfdGettime => 87,
+                Self::Uname => 160,
             },
             SyscallArch::X86_64 => match self {
                 Self::Read => 0,
@@ -638,6 +687,12 @@ impl LinuxSyscall {
                 Self::Getsockname => 51,
                 Self::Setsockopt => 54,
                 Self::Getsockopt => 55,
+                Self::MemfdCreate => 319,
+                Self::ClockSettime => 227,
+                Self::TimerfdCreate => 283,
+                Self::TimerfdSettime => 286,
+                Self::TimerfdGettime => 287,
+                Self::Uname => 63,
             },
         }
     }
