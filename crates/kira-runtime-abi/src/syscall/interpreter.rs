@@ -83,8 +83,14 @@ impl LinuxSyscall {
             | Self::Shutdown
             | Self::Getsockname
             | Self::Setsockopt
-            | Self::Getsockopt => true,
-            Self::Sync
+            | Self::Getsockopt
+            | Self::MemfdCreate
+            | Self::TimerfdCreate
+            | Self::TimerfdSettime
+            | Self::TimerfdGettime
+            | Self::Uname => true,
+            Self::ClockSettime
+            | Self::Sync
             | Self::Mount
             | Self::Umount2
             | Self::Reboot
@@ -157,7 +163,16 @@ impl LinuxSyscall {
             | Self::Shutdown
             | Self::Getsockname
             | Self::Setsockopt
-            | Self::Getsockopt => "",
+            | Self::Getsockopt
+            | Self::MemfdCreate
+            | Self::TimerfdCreate
+            | Self::TimerfdSettime
+            | Self::TimerfdGettime
+            | Self::Uname => "",
+            Self::ClockSettime => {
+                "would move the clock of the machine running the interpreter, which every other \
+                 process on it reads"
+            }
             Self::Sync => {
                 "would flush every filesystem mounted on the machine running the interpreter, \
                  taking no descriptor that could bound it to the program's own files"
