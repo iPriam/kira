@@ -147,7 +147,7 @@ use super::*;
     /// other seven act on the process or the machine, which under the
     /// interpreter is not the program's.
     ///
-    /// `sync` is among the seven deliberately. It is the one that reads as
+    /// `sync` is among the seven for a reason. It is the one that reads as
     /// file-shaped and is not: no descriptor bounds it, so it reaches every
     /// mount on the machine. Pinning it here is what keeps a later reading of
     /// "acts on files" from putting it back.

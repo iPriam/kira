@@ -763,7 +763,7 @@ pub enum SyscallError {
 /// no `SyscallArch` for a machine whose registers are unknown, so no caller has
 /// an unsupported case to handle.
 ///
-/// macOS is deliberately absent even on the same processors. Its system-call
+/// macOS is absent even on the same processors, and for a reason. Its system-call
 /// numbers are not a stable interface — Apple's supported entry is libSystem,
 /// the numbers move between releases, and a program that called them directly
 /// would break on an OS update with no diagnostic. Kira refuses the target
