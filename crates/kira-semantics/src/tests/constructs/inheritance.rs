@@ -52,6 +52,31 @@ construct One() extends Child {}
     );
 }
 
+/// A family method with a body is a default: a backed declaration that writes
+/// none of its own inherits it, and is not refused for "not implementing" it.
+/// Only a `@Required` obligation left unimplemented is `KSEM234`.
+#[test]
+fn a_default_family_method_is_inherited_without_being_required() {
+    let source = r#"
+construct Palette {
+    @Required let base: Int
+
+    function shade() -> Int {
+        return base
+    }
+}
+
+construct DefaultPalette() extends Palette {
+    let base = 1
+}
+"#;
+    assert!(
+        library_codes(source).is_empty(),
+        "{:?}",
+        library_codes(source)
+    );
+}
+
 /// A child may make a result more specific.
 #[test]
 fn a_child_may_narrow_a_result() {

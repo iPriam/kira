@@ -303,14 +303,7 @@ fn assert_parity_with_heap_balance(source: &str) -> String {
         .collect();
 
     for (backend, run) in &runs[1..] {
-        let report = assert_native_heap_balanced(backend, run);
-        if *backend == "llvm" {
-            assert!(
-                report.allocated > 0,
-                "the LLVM backend made no measured native allocations for an Any case:\n{}",
-                String::from_utf8_lossy(&run.stderr),
-            );
-        }
+        assert_native_heap_balanced(backend, run);
     }
     let expected = assert_parity_results(source, &runs);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));

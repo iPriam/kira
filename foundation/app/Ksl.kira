@@ -36,6 +36,13 @@ struct KslArtifact {
     var vertexHlsl: String = ""
     var fragmentHlsl: String = ""
     var computeHlsl: String = ""
+    // SPIR-V as its native 32-bit word stream, the form `vkCreateShaderModule`
+    // consumes. Carried as words rather than text so the Vulkan backend uploads
+    // the module directly with no runtime decode. Empty for a stage the shader
+    // does not have.
+    var vertexSpirv: [U32] = []
+    var fragmentSpirv: [U32] = []
+    var computeSpirv: [U32] = []
     var vertexGlsl: String = ""
     var fragmentGlsl: String = ""
     var computeGlsl: String = ""
@@ -89,6 +96,7 @@ comptime macro ksl {
         let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
         let glsl = Ksl.compile(input, ShaderBackend.Glsl)
         let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -105,6 +113,9 @@ comptime macro ksl {
                 vertexHlsl: #{hlsl.vertexSource},
                 fragmentHlsl: #{hlsl.fragmentSource},
                 computeHlsl: #{hlsl.computeSource},
+                vertexSpirv: #{spirv.vertexSpirv},
+                fragmentSpirv: #{spirv.fragmentSpirv},
+                computeSpirv: #{spirv.computeSpirv},
                 resourceReflection: #{msl.resourceReflection}
             )
         }

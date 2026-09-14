@@ -364,15 +364,21 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         // `Any` may occur in a `@Runtime` function that never crosses, so its
         // manifest row still needs a tag; crossing code validates what travels.
         Type::Any => BridgeValueTag::ANY,
+        // A callback-state owner may appear in a same-engine function signature.
+        // The manifest must be able to describe that function even though an
+        // actual cross-engine call carrying the affine owner remains unsupported
+        // and is rejected by the bridge lowering.
+        Type::NativeState(_) => BridgeValueTag::NATIVE_STATE,
         // A task handle names a row in the running program's own task table, so
         // it means nothing to the other engine and never crosses a hybrid seam.
         // A capture cell is shared mutable storage this engine counts holds on,
         // so it never crosses either — a hold taken on one side and released on
         // the other is a count neither engine owns. It is not surface, so no
         // signature an author writes reaches this arm.
+        // A `Number` is two words, so it crosses as a node like an aggregate.
+        Type::Number => BridgeValueTag::NODE,
         Type::CString
         | Type::CBlock
-        | Type::NativeState(_)
         | Type::Task(_)
         | Type::MainThreadTask(_)
         | Type::RuntimeType

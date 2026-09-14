@@ -280,7 +280,12 @@ impl<'a> Codegen<'a> {
                 // `kira_rt_cell_free` reads null as nothing to free, so a slot
                 // is reclaimable before the `CellNew` that fills it — which is
                 // what a slot inside a branch that never ran needs.
-                Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => {
+                Type::String
+                | Type::Number
+                | Type::Array(_)
+                | Type::Enum(_)
+                | Type::Any
+                | Type::Cell(_) => {
                     LLVMConstPointerNull(llvm_type)
                 }
                 // A fresh `RawPtr` slot holds the null pointer word (zero), the

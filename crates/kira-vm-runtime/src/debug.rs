@@ -46,6 +46,10 @@ pub mod value_tag {
     pub const MAIN_THREAD_TASK: u32 = 15;
     /// The slot contains a runtime type descriptor id.
     pub const RUNTIME_TYPE: u32 = 16;
+    /// The slot contains an inline `Number`; the payload is its mantissa's bits,
+    /// with the scale not carried here — the debugger reads the value's type for
+    /// the rest.
+    pub const NUMBER: u32 = 17;
 }
 
 /// One debugger-stable Kira value.
@@ -464,6 +468,7 @@ fn encode_value(value: Value) -> KiraVmDebugValue {
         Value::Int(value) => (value_tag::INT, value as u64),
         Value::Float(value) => (value_tag::FLOAT, value.to_bits()),
         Value::Bool(value) => (value_tag::BOOL, u64::from(value)),
+        Value::Number(value) => (value_tag::NUMBER, value.mantissa() as u64),
         Value::Str(id) => (value_tag::STRING, id.debug_word()),
         Value::Struct(id) => (value_tag::STRUCT, id.debug_word()),
         Value::Array(id) => (value_tag::ARRAY, id.debug_word()),

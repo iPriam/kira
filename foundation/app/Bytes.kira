@@ -1,0 +1,315 @@
+// Turning scalars into bytes and back.
+//
+// A `[U8]` is the shape a socket, a file, an FFI struct, and a hash all speak.
+// The scalars have to reach it and come back, and the one thing that must not be
+// left to each call site is the byte order: a length written little-endian and
+// read big-endian is a bug that passes every local test and fails across a wire.
+// So the order is in the name — `LE` or `BE` — and never in a caller's head.
+//
+// Integers decompose by shift and mask, which every backend already has. Floats
+// go through `floatToBits`/`floatToBits32`, the IEEE-754 reinterpretations, so a
+// float serializes as its exact bits rather than as a rounded number: `F32` is
+// four bytes and `F64` is eight, by the width they are spelled and not the width
+// they are stored at. Signed integers share the two's-complement bit pattern of
+// their unsigned counterpart, so they encode through it and sign-extend on the
+// way back.
+
+import Foundation
+
+// ─── Unsigned integers, little-endian ────────────────────────────────────────
+
+@Native
+function u8Bytes(value: U8) -> [U8] {
+    return [value]
+}
+
+@Native
+function u16BytesLE(value: U16) -> [U8] {
+    let v = U32(value)
+    return [U8(v & U32(255)), U8((v >> U32(8)) & U32(255))]
+}
+
+@Native
+function u32BytesLE(value: U32) -> [U8] {
+    return [
+        U8(value & U32(255)),
+        U8((value >> U32(8)) & U32(255)),
+        U8((value >> U32(16)) & U32(255)),
+        U8((value >> U32(24)) & U32(255)),
+    ]
+}
+
+@Native
+function u64BytesLE(value: U64) -> [U8] {
+    var bytes: [U8] = []
+    var shift = U64(0)
+    while shift < U64(64) {
+        bytes.append(U8((value >> shift) & U64(255)))
+        shift = shift + U64(8)
+    }
+    return bytes
+}
+
+// ─── Unsigned integers, big-endian ───────────────────────────────────────────
+
+@Native
+function u16BytesBE(value: U16) -> [U8] {
+    let v = U32(value)
+    return [U8((v >> U32(8)) & U32(255)), U8(v & U32(255))]
+}
+
+@Native
+function u32BytesBE(value: U32) -> [U8] {
+    return [
+        U8((value >> U32(24)) & U32(255)),
+        U8((value >> U32(16)) & U32(255)),
+        U8((value >> U32(8)) & U32(255)),
+        U8(value & U32(255)),
+    ]
+}
+
+@Native
+function u64BytesBE(value: U64) -> [U8] {
+    var bytes: [U8] = []
+    var shift = U64(64)
+    while shift > U64(0) {
+        shift = shift - U64(8)
+        bytes.append(U8((value >> shift) & U64(255)))
+    }
+    return bytes
+}
+
+// ─── Signed integers and the machine word ────────────────────────────────────
+//
+// `Int` is 64 bits, and a signed value's bytes are its two's-complement pattern,
+// which is exactly its unsigned counterpart's. So each of these reinterprets to
+// the unsigned width and encodes through it; the decoders below put the sign
+// back by widening from the top bit.
+
+// A byte is masked out with `& 255` after an arithmetic shift, so a negative
+// value's two's-complement bytes come out right without a conversion to an
+// unsigned type — which would trap, because `U32(-1)` and `U64(-1)` are checked
+// and refuse a value that does not fit. Masking never leaves range.
+
+@Native
+function i32BytesLE(value: I32) -> [U8] {
+    let bits = Int(value) & 0xFFFFFFFF
+    return [
+        U8(bits & 255),
+        U8((bits >> 8) & 255),
+        U8((bits >> 16) & 255),
+        U8((bits >> 24) & 255),
+    ]
+}
+
+@Native
+function i32BytesBE(value: I32) -> [U8] {
+    let bits = Int(value) & 0xFFFFFFFF
+    return [
+        U8((bits >> 24) & 255),
+        U8((bits >> 16) & 255),
+        U8((bits >> 8) & 255),
+        U8(bits & 255),
+    ]
+}
+
+@Native
+function intBytesLE(value: Int) -> [U8] {
+    var bytes: [U8] = []
+    var shift = 0
+    while shift < 64 {
+        bytes.append(U8((value >> shift) & 255))
+        shift = shift + 8
+    }
+    return bytes
+}
+
+@Native
+function intBytesBE(value: Int) -> [U8] {
+    var bytes: [U8] = []
+    var shift = 64
+    while shift > 0 {
+        shift = shift - 8
+        bytes.append(U8((value >> shift) & 255))
+    }
+    return bytes
+}
+
+// ─── Floats ──────────────────────────────────────────────────────────────────
+//
+// The bits exactly as IEEE-754 lays them out, NaN payload and all — a float is
+// four or eight bytes by the width it is spelled, so `F32` narrows through
+// `floatToBits32` before it is written.
+
+@Native
+function f32BytesLE(value: F32) -> [U8] {
+    return u32BytesLE(floatToBits32(value))
+}
+
+@Native
+function f32BytesBE(value: F32) -> [U8] {
+    return u32BytesBE(floatToBits32(value))
+}
+
+@Native
+function f64BytesLE(value: Float) -> [U8] {
+    return u64BytesLE(floatToBits(value))
+}
+
+@Native
+function f64BytesBE(value: Float) -> [U8] {
+    return u64BytesBE(floatToBits(value))
+}
+
+// ─── Bool ────────────────────────────────────────────────────────────────────
+
+@Native
+function boolBytes(value: Bool) -> [U8] {
+    if value { return [U8(1)] }
+    return [U8(0)]
+}
+
+// ─── Reading back, from an offset ────────────────────────────────────────────
+//
+// Each takes the buffer and the index of the first byte, so a reader walks a
+// packed structure by advancing the offset rather than reslicing. An index past
+// the end reads zero for the missing bytes, the same way a short read does.
+
+@Native
+function byteAt(bytes: borrow [U8], offset: Int) -> U8 {
+    if offset < 0 || offset >= bytes.count { return U8(0) }
+    return bytes[offset]
+}
+
+@Native
+function u8At(bytes: borrow [U8], offset: Int) -> U8 {
+    return byteAt(bytes, offset)
+}
+
+@Native
+function u16LEAt(bytes: borrow [U8], offset: Int) -> U16 {
+    let b0 = U32(byteAt(bytes, offset))
+    let b1 = U32(byteAt(bytes, offset + 1))
+    return U16(b0 | (b1 << U32(8)))
+}
+
+@Native
+function u16BEAt(bytes: borrow [U8], offset: Int) -> U16 {
+    let b0 = U32(byteAt(bytes, offset))
+    let b1 = U32(byteAt(bytes, offset + 1))
+    return U16((b0 << U32(8)) | b1)
+}
+
+@Native
+function u32LEAt(bytes: borrow [U8], offset: Int) -> U32 {
+    var value = U32(0)
+    var index = 0
+    while index < 4 {
+        value = value | (U32(byteAt(bytes, offset + index)) << U32(index * 8))
+        index = index + 1
+    }
+    return value
+}
+
+@Native
+function u32BEAt(bytes: borrow [U8], offset: Int) -> U32 {
+    var value = U32(0)
+    var index = 0
+    while index < 4 {
+        value = (value << U32(8)) | U32(byteAt(bytes, offset + index))
+        index = index + 1
+    }
+    return value
+}
+
+@Native
+function u64LEAt(bytes: borrow [U8], offset: Int) -> U64 {
+    var value = U64(0)
+    var index = 0
+    while index < 8 {
+        value = value | (U64(byteAt(bytes, offset + index)) << U64(index * 8))
+        index = index + 1
+    }
+    return value
+}
+
+@Native
+function u64BEAt(bytes: borrow [U8], offset: Int) -> U64 {
+    var value = U64(0)
+    var index = 0
+    while index < 8 {
+        value = (value << U64(8)) | U64(byteAt(bytes, offset + index))
+        index = index + 1
+    }
+    return value
+}
+
+// The eight bytes are OR-ed straight into an `Int` rather than read as a `U64`
+// and converted: `Int(u64)` is checked and traps on a value with the top bit
+// set, while OR-ing the last byte into bit 63 is how a negative `Int` is meant
+// to be built, and produces the two's-complement value `intBytes*` wrote.
+
+@Native
+function intLEAt(bytes: borrow [U8], offset: Int) -> Int {
+    var value = 0
+    var index = 0
+    while index < 8 {
+        value = value | (Int(byteAt(bytes, offset + index)) << (index * 8))
+        index = index + 1
+    }
+    return value
+}
+
+@Native
+function intBEAt(bytes: borrow [U8], offset: Int) -> Int {
+    var value = 0
+    var index = 0
+    while index < 8 {
+        value = (value << 8) | Int(byteAt(bytes, offset + index))
+        index = index + 1
+    }
+    return value
+}
+
+// Signed 32-bit reads sign-extend: a top bit set in the fourth byte makes the
+// value negative, which OR-ing the bytes into a positive `Int` does not do on
+// its own, so the sign is put back by subtracting 2^32 when that bit is set.
+
+@Native
+function i32LEAt(bytes: borrow [U8], offset: Int) -> I32 {
+    let bits = Int(u32LEAt(bytes, offset))
+    if bits >= 0x80000000 { return I32(bits - 0x100000000) }
+    return I32(bits)
+}
+
+@Native
+function i32BEAt(bytes: borrow [U8], offset: Int) -> I32 {
+    let bits = Int(u32BEAt(bytes, offset))
+    if bits >= 0x80000000 { return I32(bits - 0x100000000) }
+    return I32(bits)
+}
+
+@Native
+function f32LEAt(bytes: borrow [U8], offset: Int) -> F32 {
+    return F32(bitsToFloat32(u32LEAt(bytes, offset)))
+}
+
+@Native
+function f32BEAt(bytes: borrow [U8], offset: Int) -> F32 {
+    return F32(bitsToFloat32(u32BEAt(bytes, offset)))
+}
+
+@Native
+function f64LEAt(bytes: borrow [U8], offset: Int) -> Float {
+    return bitsToFloat(u64LEAt(bytes, offset))
+}
+
+@Native
+function f64BEAt(bytes: borrow [U8], offset: Int) -> Float {
+    return bitsToFloat(u64BEAt(bytes, offset))
+}
+
+@Native
+function boolAt(bytes: borrow [U8], offset: Int) -> Bool {
+    return byteAt(bytes, offset) != U8(0)
+}

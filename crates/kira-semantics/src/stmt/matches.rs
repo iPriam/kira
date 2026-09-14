@@ -1,14 +1,15 @@
-//! The `match` desugar: an enum's variants into the `if`/`else` chain the HIR
-//! already has.
+//! The `match` desugar: an enum's variants or a scalar's values into the
+//! `if`/`else` chain the HIR already has.
 //!
 //! # What this costs the backends
 //!
-//! Nothing. A `match` becomes exactly what a `switch` becomes — a chain of
-//! [`HirStmt::If`] over an `Int` comparison — so the IR, the bytecode compiler,
-//! the VM, the LLVM backend, and the WASM backend never learn `match` exists.
-//! The one thing `match` needs that `switch` did not is a way to read a
-//! variant's payload, and that is a single expression node
-//! ([`HirExpr::EnumPayload`]) rather than a statement form.
+//! Nothing. A `match` becomes a chain of [`HirStmt::If`] over a `Bool` test —
+//! an `Int` tag comparison for an enum, an equality or a range test for a
+//! scalar — so the IR, the bytecode compiler, the VM, the LLVM backend, and the
+//! WASM backend never learn `match` exists. The one thing an enum `match` needs
+//! that a plain `if` did not is a way to read a variant's payload, and that is a
+//! single expression node ([`HirExpr::EnumPayload`]) rather than a statement
+//! form.
 //!
 //! Given `match e { A -> P  B(x) -> Q }`:
 //!
@@ -19,43 +20,51 @@
 //! else           { let x = EnumPayload(<subject>); Q }
 //! ```
 //!
+//! A scalar `match n { 1, 2 -> P  0..10 -> Q  else -> R }` desugars the same
+//! way over the subject directly:
+//!
+//! ```text
+//! let <subject> = n
+//! if <subject> == 1 || <subject> == 2 { P }
+//! else if <subject> >= 0 && <subject> < 10 { Q }
+//! else { R }
+//! ```
+//!
 //! # Why the last arm is the `else`, not another `if`
 //!
 //! Because a `match` is checked exhaustive, the last arm runs whenever no
-//! earlier one did — so making it the unconditional `else` is not an
-//! optimization, it is the truth. It is also what makes
-//!
-//! ```text
-//! function areaOf(c: Circle) -> Int {
-//!     match c { Filled(shape) -> return shape.area; Empty -> return 0; }
-//! }
-//! ```
-//!
-//! a function that definitely returns: `body_definitely_returns` requires
-//! *both* arms of an `if` to return, and a trailing empty `else` would never
-//! satisfy it. The corpus writes that function with no trailing `return`, so
-//! the shape is forced.
-//!
-//! # Why `match` is checked and `switch` is not
-//!
-//! A `switch` label is an arbitrary expression, so there is no set of labels to
-//! be exhaustive over and no notion of two labels being the same one. A `match`
-//! arm names a variant of a known enum, so both questions have answers — and
-//! the corpus expects them asked. Neither check belongs to the other construct.
+//! earlier one did — so making it the unconditional tail is not an
+//! optimization, it is the truth. An `else` arm is written last for the same
+//! reason, and an arm after it can never run, which is refused.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId, HirStmt, HirStmtId, LocalId};
+mod scalar;
+pub(crate) use scalar::ScalarCoverage;
+
+use kira_semantics_model::hir::{HirBinaryOp, HirExpr, HirExprId, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{EnumId, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{ExprId, MatchArm};
+use kira_syntax_model::ast::{Block, ExprId, MatchArm, MatchBinding, MatchPattern};
 
 use crate::analyze::{Analyzer, FnCtx};
 
-/// One arm, resolved against the subject's enum.
+/// One arm, resolved to the test that selects it and the body it runs.
 pub(crate) struct ResolvedArm {
-    /// The variant discriminant.
-    pub(crate) tag: u32,
+    /// The `Bool` condition selecting this arm, or `None` for the `else` arm
+    /// and the unconditional last arm of an exhaustive chain.
+    pub(crate) test: Option<HirExprId>,
     /// The statements the arm runs, payload binding included.
     pub(crate) body: Vec<HirStmtId>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct EnumSubject {
+    pub(crate) id: EnumId,
+    pub(crate) slot: LocalId,
+}
+
+pub(crate) struct EnumArmResolution {
+    pub(crate) test: Option<HirExprId>,
+    pub(crate) binding: Option<(MatchBinding, u32)>,
 }
 
 impl Analyzer<'_> {
@@ -72,55 +81,90 @@ impl Analyzer<'_> {
         let subject_expr = self.analyze_expr(ctx, subject);
         let subject_ty = self.program.expr(subject_expr).type_of();
 
-        // A `match` selects on a variant, so a subject with no variants to
-        // select on is refused rather than guessed at. `Type::Error` is already
-        // reported, so it passes silently.
-        let Type::Enum(enum_id) = subject_ty else {
-            if subject_ty != Type::Error {
-                self.emit(
-                    subject_span,
-                    "KSEM125",
-                    format!(
-                        "a `match` subject must be an enum, found `{}`",
-                        self.type_name(subject_ty)
-                    ),
-                );
-            }
-            // Still analyze the arms' bodies so their own mistakes surface —
-            // but declare each binding first, as `Type::Error`. Without that,
-            // one bad subject turns every use of every binding into a second
-            // "undefined name" diagnostic, burying the error that caused it.
-            for arm in arms {
-                ctx.push_scope();
-                if let Some(binding) = arm.binding {
+        if let Type::Enum(enum_id) = subject_ty {
+            let slot = self.bind_hidden(ctx, subject_ty, subject_expr, out);
+            self.analyze_enum_match(ctx, EnumSubject { id: enum_id, slot }, arms, span, out);
+            return;
+        }
+        if self.is_scalar_match_subject(subject_ty) {
+            let slot = self.bind_hidden(ctx, subject_ty, subject_expr, out);
+            self.analyze_scalar_match(ctx, slot, subject_ty, arms, span, out);
+            return;
+        }
+
+        // A `match` selects on a variant or a scalar value, so a subject that is
+        // neither is refused rather than guessed at. `Type::Error` is already
+        // reported, so it passes silently. The arms' bodies are still analyzed
+        // so their own mistakes surface.
+        if subject_ty != Type::Error {
+            self.emit(
+                subject_span,
+                "KSEM125",
+                format!(
+                    "a `match` subject must be an enum, an `Int`, a `Bool`, or a `String`, \
+                     found `{}`",
+                    self.type_name(subject_ty)
+                ),
+            );
+        }
+        for arm in arms {
+            ctx.push_scope();
+            for pattern in &arm.patterns {
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = pattern
+                {
                     let name = self.interner.resolve(binding.name).to_owned();
                     let local = ctx.declare(&name, Type::Error, false);
                     ctx.note_binding_span(local, binding.span);
                 }
-                let body = self.analyze_block(ctx, &arm.body);
-                ctx.pop_scope();
-                out.extend(body);
             }
-            return;
-        };
+            let body = self.analyze_block(ctx, &arm.body);
+            ctx.pop_scope();
+            out.extend(body);
+        }
+    }
 
-        // Hidden, so no arm can name or shadow the subject's storage. It is
-        // read once per payload projection and once for the tag; every read
-        // clones and every consumer drops its clone, so the slot itself is
-        // freed exactly once, when the frame is.
-        let slot = ctx.declare_hidden(subject_ty, false);
+    /// Binds `value` to a fresh hidden slot and returns it, so a subject is read
+    /// once per test and once per payload projection rather than re-evaluated.
+    fn bind_hidden(
+        &mut self,
+        ctx: &mut FnCtx,
+        ty: Type,
+        value: HirExprId,
+        out: &mut Vec<HirStmtId>,
+    ) -> LocalId {
+        let slot = ctx.declare_hidden(ty, false);
         let bind = self.program.stmts.alloc(HirStmt::Let {
             local: slot,
-            init: subject_expr,
+            init: value,
         });
         out.push(bind);
+        slot
+    }
 
-        // The tag is read once rather than per arm: a chain of N arms would
-        // otherwise clone and drop the enum N times to ask N questions about
-        // one value.
+    /// Whether a subject type admits a scalar `match`: an integer of any
+    /// spelling, a `Bool`, or a `String`.
+    pub(crate) fn is_scalar_match_subject(&self, ty: Type) -> bool {
+        matches!(ty, Type::Int(_) | Type::Bool | Type::String)
+    }
+
+    // --- enum -----------------------------------------------------------------
+
+    /// Analyzes a `match` over an enum subject.
+    fn analyze_enum_match(
+        &mut self,
+        ctx: &mut FnCtx,
+        subject: EnumSubject,
+        arms: &[MatchArm],
+        span: Span,
+        out: &mut Vec<HirStmtId>,
+    ) {
+        let EnumSubject { id: enum_id, slot } = subject;
         let read = self.program.exprs.alloc(HirExpr::Local {
             local: slot,
-            ty: subject_ty,
+            ty: Type::Enum(enum_id),
         });
         let tag_expr = self.program.exprs.alloc(HirExpr::EnumTag { value: read });
         let tag_slot = ctx.declare_hidden(Type::INT, false);
@@ -131,28 +175,79 @@ impl Analyzer<'_> {
         out.push(bind_tag);
 
         let mut branch = crate::ownership::BranchMoves::start(ctx);
-        let resolved = self.resolve_arms(ctx, enum_id, slot, arms, &mut branch);
-        let exhaustive = self.check_coverage(enum_id, &resolved, arms, span);
+        let mut resolved: Vec<ResolvedArm> = Vec::with_capacity(arms.len());
+        let mut covered: Vec<u32> = Vec::new();
+        let mut wildcard = false;
+        let mut exhaustive_by_arms = true;
+
+        for arm in arms {
+            if wildcard {
+                self.emit(
+                    arm.span,
+                    "KSEM381",
+                    "an `else` arm must be the last arm; the arms after it can never run",
+                );
+                exhaustive_by_arms = false;
+                continue;
+            }
+            if arm_is_wildcard(arm) {
+                wildcard = true;
+                branch.enter_arm(ctx);
+                let body = self.analyze_block(ctx, &arm.body);
+                branch.leave_arm(ctx, self.body_definitely_returns(&body));
+                resolved.push(ResolvedArm { test: None, body });
+                continue;
+            }
+            let Some(resolution) = self.resolve_enum_arm(enum_id, tag_slot, arm, &mut covered)
+            else {
+                exhaustive_by_arms = false;
+                continue;
+            };
+            let EnumArmResolution { test, binding } = resolution;
+            branch.enter_arm(ctx);
+            let body = self.analyze_enum_arm_body(ctx, enum_id, slot, binding, &arm.body);
+            branch.leave_arm(ctx, self.body_definitely_returns(&body));
+            resolved.push(ResolvedArm { test, body });
+        }
+
+        let exhaustive =
+            self.check_enum_coverage(enum_id, &covered, wildcard, exhaustive_by_arms, span);
         branch.finish(ctx, exhaustive);
-        out.extend(self.build_chain(tag_slot, resolved));
+        out.extend(self.build_chain(resolved));
     }
 
-    /// Resolves each arm in source order, reporting unknown variants and
-    /// duplicated ones as it goes.
-    ///
-    /// Source order matters: it is the order the diagnostics come out in, and
-    /// it is what makes the *second* mention of a variant the duplicate.
-    fn resolve_arms(
+    /// Resolves one non-wildcard enum arm to its selecting test and, when it is
+    /// a single variant carrying a payload, its binding. Reports unknown and
+    /// repeated variants, alternation with a binding, and returns `None` when
+    /// the arm named no resolvable variant.
+    pub(crate) fn resolve_enum_arm(
         &mut self,
-        ctx: &mut FnCtx,
         enum_id: EnumId,
-        slot: LocalId,
-        arms: &[MatchArm],
-        branch: &mut crate::ownership::BranchMoves,
-    ) -> Vec<ResolvedArm> {
-        let mut resolved: Vec<ResolvedArm> = Vec::with_capacity(arms.len());
-        for arm in arms {
-            let name = self.interner.resolve(arm.variant).to_owned();
+        tag_slot: LocalId,
+        arm: &MatchArm,
+        covered: &mut Vec<u32>,
+    ) -> Option<EnumArmResolution> {
+        let mut tags: Vec<u32> = Vec::new();
+        let mut bindings: Vec<(MatchBinding, u32)> = Vec::new();
+        let alternation = arm.patterns.len() > 1;
+        for pattern in &arm.patterns {
+            let MatchPattern::Variant {
+                variant,
+                variant_span,
+                binding: pattern_binding,
+            } = pattern
+            else {
+                self.emit(
+                    pattern.span(),
+                    "KSEM383",
+                    format!(
+                        "a `match` on an enum takes variant patterns, not `{}`",
+                        self.type_name(Type::Enum(enum_id))
+                    ),
+                );
+                continue;
+            };
+            let name = self.interner.resolve(*variant).to_owned();
             let Some(tag) = self
                 .program
                 .types
@@ -161,49 +256,85 @@ impl Analyzer<'_> {
                 .and_then(|def| def.variant_index(&name))
             else {
                 self.emit(
-                    arm.variant_span,
+                    *variant_span,
                     "KSEM126",
                     format!(
                         "enum `{}` has no variant `{name}`",
                         self.type_name(Type::Enum(enum_id))
                     ),
                 );
-                // Skipped rather than kept: an arm with no tag has no test to
-                // build, and counting it toward coverage would turn one
-                // mistake into a spurious second diagnostic.
                 continue;
             };
-            if resolved.iter().any(|existing| existing.tag == tag) {
+            if covered.contains(&tag) || tags.contains(&tag) {
                 self.emit(
-                    arm.variant_span,
+                    *variant_span,
                     "KSEM127",
                     format!("variant `{name}` is already matched by an earlier arm"),
                 );
                 continue;
             }
-            // Exactly one arm runs, so each starts from the state at the
-            // `match` and contributes to the join only if it can reach it.
-            branch.enter_arm(ctx);
-            let body = self.analyze_arm_body(ctx, enum_id, slot, tag, arm);
-            branch.leave_arm(ctx, self.body_definitely_returns(&body));
-            resolved.push(ResolvedArm { tag, body });
+            if let Some(pattern_binding) = pattern_binding {
+                bindings.push((*pattern_binding, tag));
+            }
+            tags.push(tag);
         }
-        resolved
+        if tags.is_empty() {
+            return None;
+        }
+        // A binding on an alternation is refused once, but the first is still
+        // declared so the body's use of it does not cascade into an
+        // undefined-name error on top of the real one.
+        if alternation && !bindings.is_empty() {
+            self.emit(
+                arm.span,
+                "KSEM384",
+                "a payload binding is not allowed on an arm that matches several patterns",
+            );
+        }
+        let binding = bindings.first().copied();
+        covered.extend(tags.iter().copied());
+        let tests: Vec<HirExprId> = tags
+            .iter()
+            .map(|&tag| self.tag_test(tag_slot, tag))
+            .collect();
+        let test = self.any_of(tests);
+        Some(EnumArmResolution { test, binding })
     }
 
-    /// Analyzes one arm's body, with its payload binding in scope.
-    ///
-    /// The binding is declared in a scope of its own, wrapping the body's, so
-    /// it is visible to the arm and to nothing else — two arms may bind the
-    /// same name to different variants' payloads without colliding.
-    pub(crate) fn analyze_arm_body(
+    /// Analyzes one enum arm's body, with its payload binding in scope.
+    pub(crate) fn analyze_enum_arm_body(
         &mut self,
         ctx: &mut FnCtx,
         enum_id: EnumId,
         slot: LocalId,
-        tag: u32,
-        arm: &MatchArm,
+        binding: Option<(MatchBinding, u32)>,
+        body: &Block,
     ) -> Vec<HirStmtId> {
+        ctx.push_scope();
+        let mut out = Vec::new();
+        if let Some((binding, tag)) = binding {
+            // The binding names one variant's payload; a single-variant arm is
+            // the only shape that reaches here with a binding, so exactly one
+            // tag's payload type is in play.
+            self.bind_enum_payload(ctx, enum_id, slot, binding, tag, &mut out);
+        }
+        out.extend(self.analyze_block(ctx, body));
+        ctx.pop_scope();
+        out
+    }
+
+    /// Declares an arm's payload binding, reading it out of the subject slot.
+    pub(crate) fn bind_enum_payload(
+        &mut self,
+        ctx: &mut FnCtx,
+        enum_id: EnumId,
+        slot: LocalId,
+        binding: MatchBinding,
+        tag: u32,
+        out: &mut Vec<HirStmtId>,
+    ) {
+        // Its payload type is read from the enum definition. A binding on a
+        // payload-less variant simply binds nothing after reporting.
         let payload_ty = self
             .program
             .types
@@ -211,68 +342,47 @@ impl Analyzer<'_> {
             .get(enum_id)
             .and_then(|def| def.variant(tag))
             .and_then(|variant| variant.payload);
-
-        ctx.push_scope();
-        let mut body = Vec::new();
-        match (arm.binding, payload_ty) {
-            (Some(binding), Some(ty)) => {
-                let read = self.program.exprs.alloc(HirExpr::Local {
-                    local: slot,
-                    ty: Type::Enum(enum_id),
-                });
-                let payload = self
-                    .program
-                    .exprs
-                    .alloc(HirExpr::EnumPayload { value: read, ty });
-                let name = self.interner.resolve(binding.name).to_owned();
-                // Immutable: the corpus only ever reads a bound payload, and a
-                // binding that could be written would raise a question the
-                // corpus does not answer — whether the write reaches the enum.
-                let local = ctx.declare(&name, ty, false);
-                ctx.note_binding_span(local, binding.span);
-                let stmt = self.program.stmts.alloc(HirStmt::Let {
-                    local,
-                    init: payload,
-                });
-                body.push(stmt);
-            }
-            (Some(binding), None) => {
-                let name = self.interner.resolve(arm.variant).to_owned();
-                self.emit(
-                    binding.span,
-                    "KSEM128",
-                    format!("variant `{name}` carries no payload to bind"),
-                );
-            }
-            (None, Some(_)) => {
-                // Legal: an arm may ignore a payload it does not need. The
-                // corpus writes `Empty -> return 0` beside `Filled(s) -> …`,
-                // and nothing requires the payload be named.
-            }
-            (None, None) => {}
-        }
-        body.extend(self.analyze_block(ctx, &arm.body));
-        ctx.pop_scope();
-        body
+        let Some(ty) = payload_ty else {
+            self.emit(
+                binding.span,
+                "KSEM128",
+                "this variant carries no payload to bind",
+            );
+            return;
+        };
+        let read = self.program.exprs.alloc(HirExpr::Local {
+            local: slot,
+            ty: Type::Enum(enum_id),
+        });
+        let payload = self
+            .program
+            .exprs
+            .alloc(HirExpr::EnumPayload { value: read, ty });
+        let name = self.interner.resolve(binding.name).to_owned();
+        let local = ctx.declare(&name, ty, false);
+        ctx.note_binding_span(local, binding.span);
+        let stmt = self.program.stmts.alloc(HirStmt::Let {
+            local,
+            init: payload,
+        });
+        out.push(stmt);
     }
 
-    /// Reports variants no arm covers.
-    ///
-    /// Skipped when an arm failed to resolve: a misspelled variant already
-    /// reported would otherwise also show up as the variant it failed to name
-    /// being uncovered, which is one mistake told twice.
-    ///
-    /// Returns whether the arms cover every variant, which is also what decides
-    /// whether the code after the `match` has a path that ran no arm at all.
-    fn check_coverage(
+    /// Reports variants no arm covers, unless an `else` arm covers them.
+    /// Returns whether the arms are exhaustive.
+    pub(crate) fn check_enum_coverage(
         &mut self,
         enum_id: EnumId,
-        resolved: &[ResolvedArm],
-        arms: &[MatchArm],
+        covered: &[u32],
+        wildcard: bool,
+        clean: bool,
         span: Span,
     ) -> bool {
-        if resolved.len() != arms.len() {
+        if !clean {
             return false;
+        }
+        if wildcard {
+            return true;
         }
         let Some(def) = self.program.types.enums().get(enum_id) else {
             return false;
@@ -281,7 +391,7 @@ impl Analyzer<'_> {
             .variants
             .iter()
             .enumerate()
-            .filter(|(index, _)| !resolved.iter().any(|arm| arm.tag as usize == *index))
+            .filter(|(index, _)| !covered.contains(&(*index as u32)))
             .map(|(_, variant)| variant.name.clone())
             .collect();
         if missing.is_empty() {
@@ -299,34 +409,52 @@ impl Analyzer<'_> {
         false
     }
 
+    // --- shared ---------------------------------------------------------------
+
+    /// Combines several `Bool` tests with `||`, or returns the single test when
+    /// there is one. Empty input never happens: a resolved arm has at least one
+    /// test.
+    pub(crate) fn any_of(&mut self, tests: Vec<HirExprId>) -> Option<HirExprId> {
+        let mut iter = tests.into_iter();
+        let mut combined = iter.next()?;
+        for test in iter {
+            combined = self.program.exprs.alloc(HirExpr::Binary {
+                op: HirBinaryOp::Or,
+                lhs: combined,
+                rhs: test,
+                ty: Type::Bool,
+            });
+        }
+        Some(combined)
+    }
+
     /// Assembles the resolved arms into the `if`/`else` chain.
     ///
     /// Built from the back, because an `else` has to exist before the `if` that
     /// points at it. The last arm becomes the chain's tail unconditionally —
     /// see this module's header for why that is correctness, not shortcut.
-    pub(crate) fn build_chain(
-        &mut self,
-        tag_slot: LocalId,
-        resolved: Vec<ResolvedArm>,
-    ) -> Vec<HirStmtId> {
+    pub(crate) fn build_chain(&mut self, resolved: Vec<ResolvedArm>) -> Vec<HirStmtId> {
         let mut arms = resolved.into_iter().rev();
         let Some(last) = arms.next() else {
             return Vec::new();
         };
         let mut chain = last.body;
         for arm in arms {
-            let cond = self.tag_test(tag_slot, arm.tag);
-            let hir = self.program.stmts.alloc(HirStmt::If {
-                cond,
-                then_body: arm.body,
-                else_body: chain,
-            });
-            chain = vec![hir];
+            if let Some(cond) = arm.test {
+                let hir = self.program.stmts.alloc(HirStmt::If {
+                    cond,
+                    then_body: arm.body,
+                    else_body: chain,
+                });
+                chain = vec![hir];
+            } else {
+                chain = arm.body;
+            }
         }
         chain
     }
 
-    /// Builds `<tag> == <discriminant>` for one arm.
+    /// Builds `<tag> == <discriminant>` for one enum arm.
     pub(crate) fn tag_test(&mut self, tag_slot: LocalId, tag: u32) -> HirExprId {
         let read = self.program.exprs.alloc(HirExpr::Local {
             local: tag_slot,
@@ -334,10 +462,16 @@ impl Analyzer<'_> {
         });
         let expected = self.program.exprs.alloc(HirExpr::Int(i64::from(tag)));
         self.program.exprs.alloc(HirExpr::Binary {
-            op: kira_semantics_model::hir::HirBinaryOp::EqInt,
+            op: HirBinaryOp::EqInt,
             lhs: read,
             rhs: expected,
             ty: Type::Bool,
         })
     }
+}
+/// Whether an arm is the `else` catch-all.
+pub(crate) fn arm_is_wildcard(arm: &MatchArm) -> bool {
+    arm.patterns
+        .iter()
+        .any(|pattern| matches!(pattern, MatchPattern::Wildcard { .. }))
 }

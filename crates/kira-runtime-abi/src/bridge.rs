@@ -165,6 +165,17 @@ impl BridgeValueTag {
     /// C storage. The adapter passes the pointer through unchanged and never
     /// frees it.
     pub const CSTRING_PTR: BridgeValueTag = BridgeValueTag(13);
+
+    /// An affine callback-state owner, carried as its stable token word.
+    ///
+    /// Both halves of a mixed hybrid session use the loaded native library's
+    /// callback-state store, so the token names the same reference-counted state
+    /// on either side. Crossing transfers one tracked owner. A borrowed call
+    /// materializes a temporary retained owner before the crossing; an owned
+    /// call transfers the owner it already holds.
+    ///
+    /// Appended, never renumbered.
+    pub const NATIVE_STATE: BridgeValueTag = BridgeValueTag(14);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -232,6 +243,8 @@ pub enum BridgeData {
     Node(u64),
     /// An erased value as a pointer to a native-value node tree.
     Any(u64),
+    /// One affine callback-state owner. The payload is the opaque state token.
+    NativeState(u64),
 }
 
 impl BridgeValue {
@@ -275,6 +288,7 @@ impl BridgeValue {
             BridgeData::Enum(tag) => (BridgeValueTag::ENUM, tag as u64),
             BridgeData::Node(node) => (BridgeValueTag::NODE, node),
             BridgeData::Any(node) => (BridgeValueTag::ANY, node),
+            BridgeData::NativeState(token) => (BridgeValueTag::NATIVE_STATE, token),
         };
         BridgeValue {
             tag,
@@ -307,6 +321,7 @@ impl BridgeValue {
             BridgeValueTag::ENUM => BridgeData::Enum(self.payload as i64),
             BridgeValueTag::NODE => BridgeData::Node(self.payload),
             BridgeValueTag::ANY => BridgeData::Any(self.payload),
+            BridgeValueTag::NATIVE_STATE => BridgeData::NativeState(self.payload),
             _ => return None,
         })
     }
@@ -364,6 +379,8 @@ mod tests {
             BridgeData::Node(0x0123_4567_89ab_cdef),
             BridgeData::Any(0),
             BridgeData::Any(0x0123_4567_89ab_cdef),
+            BridgeData::NativeState(0),
+            BridgeData::NativeState(0x0123_4567_89ab_cdef),
         ] {
             let encoded = BridgeValue::encode(data);
             assert_eq!(
@@ -430,6 +447,7 @@ mod tests {
         assert_eq!(BridgeValueTag::ANY.0, 11);
         assert_eq!(BridgeValueTag::NODE.0, 12);
         assert_eq!(BridgeValueTag::CSTRING_PTR.0, 13);
+        assert_eq!(BridgeValueTag::NATIVE_STATE.0, 14);
     }
 
     /// A handle is written as tag 8 with the producer's word in the payload,

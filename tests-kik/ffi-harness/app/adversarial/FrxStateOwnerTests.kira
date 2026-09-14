@@ -1,10 +1,10 @@
 import Foundation
 
-// Callback-state owners counted across the @Native / @Runtime seam. Prefix: frx / Frx.
+// Callback-state ownership across the @Native / @Runtime seam. Prefix: frx / Frx.
 //
-// The two halves of a hybrid program share one store, so a token exported on
-// one side owns a reference the other side can release, and the state lives
-// exactly as long as one owner remains on either side.
+// The owner crosses as NativeState<T>, never as an owning RawPtr. A clone is an
+// explicit affine value and either engine may consume it; the remaining owner
+// stays live because both halves count the same state token.
 
 struct FrxCounter {
     var hits: Int = 0
@@ -12,37 +12,36 @@ struct FrxCounter {
 }
 
 @Native
-function frxNativeExport(start: Int) -> RawPtr {
+function frxNativeExport(start: Int) -> NativeState<FrxCounter> {
     let state = nativeState(FrxCounter { hits: start, label: "native" })
     return nativeUserData(state)
 }
 
 @Native
-function frxNativeBump(token: RawPtr) -> Int {
+function frxNativeBump(token: borrow NativeState<FrxCounter>) -> Int {
     var view = nativeRecover<FrxCounter>(token)
     view.hits = view.hits + 1
     return view.hits
 }
 
 @Native
-function frxNativeRelease(token: RawPtr) {
+function frxNativeConsume(token: NativeState<FrxCounter>) {
     nativeUserDataRelease(token)
     return
 }
 
 @Runtime
-function frxRuntimeExport(start: Int) -> RawPtr {
+function frxRuntimeExport(start: Int) -> NativeState<FrxCounter> {
     let state = nativeState(FrxCounter { hits: start, label: "runtime" })
     return nativeUserData(state)
 }
 
 @Runtime
-function frxRuntimeRetain(token: RawPtr) {
-    nativeUserDataRetain(token)
-    return
+function frxRuntimeClone(token: borrow NativeState<FrxCounter>) -> NativeState<FrxCounter> {
+    return nativeUserData(token)
 }
 
-construct FrxATokenExportedNativelyIsReleasedAtRuntime() extends Test {
+construct FrxAnOwnerExportedNativelyIsConsumedAtRuntime() extends Test {
     test {
         let token = frxNativeExport(40)
         let bumped = frxNativeBump(token)
@@ -55,11 +54,11 @@ construct FrxATokenExportedNativelyIsReleasedAtRuntime() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(4141) return e }
 }
 
-construct FrxARetainOnOneSideNeedsAReleaseOnEither() extends Test {
+construct FrxACloneOnOneSideCanBeConsumedOnTheOther() extends Test {
     test {
         let token = frxRuntimeExport(1)
-        frxRuntimeRetain(token)
-        frxNativeRelease(token)
+        let second = frxRuntimeClone(token)
+        frxNativeConsume(second)
         let bumped = frxNativeBump(token)
         var view = nativeRecover<FrxCounter>(token)
         var seen = 0
@@ -68,4 +67,43 @@ construct FrxARetainOnOneSideNeedsAReleaseOnEither() extends Test {
         return bumped * 10 + seen
     }
     expect { let e: Result<Any, TestFailure> = .Ok(22) return e }
+}
+
+@Runtime
+function frxRuntimeRead(token: borrow NativeState<FrxCounter>) -> Int {
+    return nativeRecover<FrxCounter>(token).hits
+}
+
+@Runtime
+function frxRuntimeTakeAndReturn(token: NativeState<FrxCounter>) -> NativeState<FrxCounter> {
+    var view = nativeRecover<FrxCounter>(token)
+    view.hits = view.hits + 3
+    return move token
+}
+
+@Native
+function frxNativeBorrowsAcrossRuntime(start: Int) -> Int {
+    let token = nativeState(FrxCounter { hits: start, label: "borrow" })
+    let before = frxRuntimeRead(token)
+    var view = nativeRecover<FrxCounter>(token)
+    view.hits = view.hits + 1
+    let after = frxRuntimeRead(token)
+    return before * 100 + after
+}
+
+@Native
+function frxNativeMovesThroughRuntime(start: Int) -> Int {
+    let token = nativeState(FrxCounter { hits: start, label: "move" })
+    let returned = frxRuntimeTakeAndReturn(move token)
+    return nativeRecover<FrxCounter>(returned).hits
+}
+
+construct FrxANativeBorrowAcrossRuntimeKeepsTheCallerOwner() extends Test {
+    test { return frxNativeBorrowsAcrossRuntime(2) }
+    expect { let e: Result<Any, TestFailure> = .Ok(203) return e }
+}
+
+construct FrxANativeOwnerCanMoveThroughRuntimeAndBack() extends Test {
+    test { return frxNativeMovesThroughRuntime(5) }
+    expect { let e: Result<Any, TestFailure> = .Ok(8) return e }
 }

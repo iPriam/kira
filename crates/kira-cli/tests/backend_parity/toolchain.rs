@@ -87,8 +87,8 @@ fn driver_source(good: &Path, bad: &Path) -> String {
 
     let badCheck = kira.check("{bad}", .Vm)
     printLine("bad errors: " + String(errorCount(badCheck.diagnostics)))
-    printLine("bad KSEM060: " + String(firstIsKsem060(badCheck.diagnostics)))
-    printLine("bad line: " + String(firstLine(badCheck.diagnostics)))
+    printLine("bad KSEM060: " + String(hasKsem060(badCheck.diagnostics)))
+    printLine("bad line: " + String(firstErrorLine(badCheck.diagnostics)))
 
     let goodRun = kira.runApp("{good}", .Vm, [])
     printLine("run exit: " + String(goodRun.exitCode))
@@ -107,18 +107,26 @@ function errorCount(diagnostics: borrow [KiraDiagnostic]) -> Int {{
     return count
 }}
 
-function firstIsKsem060(diagnostics: borrow [KiraDiagnostic]) -> Bool {{
-    if diagnostics.count == 0 {{
-        return false
+function hasKsem060(diagnostics: borrow [KiraDiagnostic]) -> Bool {{
+    var index = 0
+    while index < diagnostics.count {{
+        if diagnostics[index].code == .KSEM060 {{
+            return true
+        }}
+        index = index + 1
     }}
-    return diagnostics[0].code == .KSEM060
+    return false
 }}
 
-function firstLine(diagnostics: borrow [KiraDiagnostic]) -> Int {{
-    if diagnostics.count == 0 {{
-        return 0
+function firstErrorLine(diagnostics: borrow [KiraDiagnostic]) -> Int {{
+    var index = 0
+    while index < diagnostics.count {{
+        if diagnostics[index].severity == .Error {{
+            return diagnostics[index].line
+        }}
+        index = index + 1
     }}
-    return diagnostics[0].line
+    return 0
 }}
 "#
     )

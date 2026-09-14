@@ -48,7 +48,11 @@ impl Codegen<'_> {
                     )
                 })
             }
-            Type::Int(_) | Type::Bool | Type::RawPtr | Type::ForeignPtr(_) => {
+            Type::Int(_)
+            | Type::Bool
+            | Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::NativeState(_) => {
                 let (a, b) = self.load_operands(left, right, ty)?;
                 // SAFETY: both operands share one integer type and the builder
                 // is live.
@@ -127,10 +131,10 @@ impl Codegen<'_> {
                 let equal = self.call(self.runtime.any_eq, &mut [a, b], c"eq.enum");
                 Ok(self.truthy(equal))
             }
-            // Nothing else can be inside an erased value: `Void`, `Error`,
-            // `CString`, a cell, a task, and callback state are all refused by
-            // `Type::assignable_to` before `Any` takes them, and none is a
-            // struct field type that could carry one in sideways.
+            // Nothing else can be inside an erased value. NativeState itself
+            // is still refused as an erased root, but an affine aggregate may
+            // carry one as a field; its structural equality compares the opaque
+            // state token by identity above, exactly as the VM does.
             other => Err(crate::LlvmError::internal(format!(
                 "an equality of `{other:?}`, which no erasure admits,"
             ))),

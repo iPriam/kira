@@ -79,7 +79,7 @@ Coverage: `crates/kira-macros/src`,
 The GitHub transport has never been executed against the live API. Feed parsing,
 by-tag parsing, channel mapping, tag stripping, asset selection, and sidecar
 reading are unit-tested against canned API JSON, but no test opens a network
-connection. That covers `install`, `install-llvm`, `self-update`,
+connection. That covers `install`, `llvm install`, `self-update`,
 `list --remote`, and both bootstrap scripts equally: every one is exercised only
 down to the transport.
 

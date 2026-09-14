@@ -73,6 +73,7 @@ mod operators;
 mod ownership;
 mod place;
 mod raw_pointers;
+mod shadowing;
 pub(crate) mod stmt;
 mod strings;
 mod syscall;

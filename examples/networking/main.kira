@@ -1,72 +1,10 @@
 // Every operation below is started from an async body and joined through Kira's
-// cooperative Task scheduler. The native functions only schedule Tokio work;
-// they never block the Kira task while a socket is doing I/O.
+// cooperative Task scheduler. The transport is Foundation's — the `kira_network`
+// functions it binds only schedule the runtime's socket work and never block the
+// Kira task while a socket is doing I/O — so this example declares no FFI of its
+// own and carries no `NativeLibs`: `import Foundation` is the whole of it.
 
 import Foundation
-
-@FFI.Extern { library: kira_network, symbol: kira_network_http1_server, abi: c }
-function http1Server() -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_http1_client, abi: c }
-function http1Client(port: U16) -> Int
-
-@FFI.Extern { library: kira_network, symbol: kira_network_http2_server, abi: c }
-function http2Server() -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_http2_client, abi: c }
-function http2Client(port: U16) -> Int
-
-@FFI.Extern { library: kira_network, symbol: kira_network_http3_server, abi: c }
-function http3Server() -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_http3_client, abi: c }
-function http3Client(port: U16) -> Int
-
-@FFI.Extern { library: kira_network, symbol: kira_network_websocket_server, abi: c }
-function websocketServer() -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_websocket_client, abi: c }
-function websocketClient(port: U16) -> Int
-
-@FFI.Extern { library: kira_network, symbol: kira_network_io_roundtrip, abi: c }
-function ioRoundtrip() -> Int
-
-@FFI.Extern { library: kira_network, symbol: kira_network_server_port, abi: c }
-function serverPort(handle: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_poll, abi: c }
-function networkPoll(handle: Int) -> I32
-@FFI.Extern { library: kira_network, symbol: kira_network_result, abi: c }
-function networkResult(handle: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_close, abi: c }
-function networkClose(handle: Int)
-@FFI.Extern { library: kira_network, symbol: kira_network_cancel, abi: c }
-function networkCancel(handle: Int)
-
-@FFI.Extern { library: kira_network, symbol: kira_network_https_server, abi: c }
-function httpsServer() -> Int
-
-// A request is assembled against a handle and then sent. Every part crosses as
-// a `CString`, which is the one direction text moves at a C boundary: Kira
-// copies its `String` out NUL-terminated for the length of the call.
-@FFI.Extern { library: kira_network, symbol: kira_network_request_new, abi: c }
-function requestNew(method: CString, url: CString) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_header, abi: c }
-function requestHeader(request: Int, name: CString, value: CString) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_body_text, abi: c }
-function requestBodyText(request: Int, text: CString) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_version, abi: c }
-function requestVersion(request: Int, version: I32) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_trust_loopback, abi: c }
-function requestTrustLoopback(request: Int, port: U16) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_timeout_ms, abi: c }
-function requestTimeoutMs(request: Int, milliseconds: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_send, abi: c }
-function requestSend(request: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_request_discard, abi: c }
-function requestDiscard(request: Int)
-
-@FFI.Extern { library: kira_network, symbol: kira_network_response_status, abi: c }
-function responseStatus(handle: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_response_select_body, abi: c }
-function responseSelectBody(handle: Int) -> Int
-@FFI.Extern { library: kira_network, symbol: kira_network_response_read_scalar, abi: c }
-function responseReadScalar(handle: Int) -> Int
 
 // Polling is a Kira yield point, so the Kira scheduler keeps driving sibling
 // protocol tasks while Tokio completes the actual socket future.
@@ -74,12 +12,12 @@ function waitOperation(handle: Int) -> Int {
     if handle <= 0 {
         return handle
     }
-    var state = networkPoll(handle)
+    var state = kira_network_poll(handle)
     while state == 0 {
         taskYield()
-        state = networkPoll(handle)
+        state = kira_network_poll(handle)
     }
-    let value = networkResult(handle)
+    let value = kira_network_result(handle)
     networkClose(handle)
     return value
 }
@@ -100,18 +38,18 @@ function requestDeadlineMs() -> Int {
 // The deadline is the library's, set on the request before it is sent, so a
 // peer that sends headers and then stops still completes this operation with a
 // timeout rather than leaving it pending. Without one this loop yields forever:
-// `networkPoll` answers 0 for as long as nothing has arrived, and nothing ever
+// `kira_network_poll` answers 0 for as long as nothing has arrived, and nothing ever
 // arriving is exactly the case a timeout exists for.
 function waitResponse(handle: Int) -> Int {
     if handle <= 0 {
         return handle
     }
-    var state = networkPoll(handle)
+    var state = kira_network_poll(handle)
     while state == 0 {
         taskYield()
-        state = networkPoll(handle)
+        state = kira_network_poll(handle)
     }
-    return networkResult(handle)
+    return kira_network_result(handle)
 }
 
 // The response arrives one Unicode scalar at a time, because a C function
@@ -119,16 +57,16 @@ function waitResponse(handle: Int) -> Int {
 // each code point into the `String` this builds.
 function responseText(handle: Int) -> String {
     var text = ""
-    var scalar = responseReadScalar(handle)
+    var scalar = kira_network_response_read_scalar(handle)
     while scalar >= 0 {
         text = text + scalarText(scalar)
-        scalar = responseReadScalar(handle)
+        scalar = kira_network_response_read_scalar(handle)
     }
     return text
 }
 
 async function runHttp1() -> Int {
-    let server = http1Server()
+    let server = kira_network_http1_server()
     if server <= 0 {
         return server
     }
@@ -137,7 +75,7 @@ async function runHttp1() -> Int {
         networkClose(server)
         return port
     }
-    let client = http1Client(U16(port))
+    let client = kira_network_http1_client(U16(port))
     if client <= 0 {
         networkClose(server)
         return client
@@ -151,7 +89,7 @@ async function runHttp1() -> Int {
 }
 
 async function runHttp2() -> Int {
-    let server = http2Server()
+    let server = kira_network_http2_server()
     if server <= 0 {
         return server
     }
@@ -160,7 +98,7 @@ async function runHttp2() -> Int {
         networkClose(server)
         return port
     }
-    let client = http2Client(U16(port))
+    let client = kira_network_http2_client(U16(port))
     if client <= 0 {
         networkClose(server)
         return client
@@ -174,7 +112,7 @@ async function runHttp2() -> Int {
 }
 
 async function runHttp3() -> Int {
-    let server = http3Server()
+    let server = kira_network_http3_server()
     if server <= 0 {
         return server
     }
@@ -183,7 +121,7 @@ async function runHttp3() -> Int {
         networkClose(server)
         return port
     }
-    let client = http3Client(U16(port))
+    let client = kira_network_http3_client(U16(port))
     if client <= 0 {
         networkClose(server)
         return client
@@ -197,7 +135,7 @@ async function runHttp3() -> Int {
 }
 
 async function runWebsocket() -> Int {
-    let server = websocketServer()
+    let server = kira_network_websocket_server()
     if server <= 0 {
         return server
     }
@@ -206,7 +144,7 @@ async function runWebsocket() -> Int {
         networkClose(server)
         return port
     }
-    let client = websocketClient(U16(port))
+    let client = kira_network_websocket_client(U16(port))
     if client <= 0 {
         networkClose(server)
         return client
@@ -220,23 +158,23 @@ async function runWebsocket() -> Int {
 }
 
 async function runIo() -> Int {
-    return waitOperation(ioRoundtrip())
+    return waitOperation(kira_network_io_roundtrip())
 }
 
 async function runCancellation() -> Int {
-    let handle = ioRoundtrip()
+    let handle = kira_network_io_roundtrip()
     if handle <= 0 {
         return handle
     }
-    networkCancel(handle)
-    if networkPoll(handle) == -101 {
+    kira_network_cancel(handle)
+    if kira_network_poll(handle) == -101 {
         return 1
     }
     return -1
 }
 
 // One real HTTPS request. TLS is verified, not skipped: the loopback server
-// generates its certificate at startup, and `requestTrustLoopback` adds that one
+// generates its certificate at startup, and `kira_network_request_trust_loopback` adds that one
 // certificate to the public roots for this request. A request to a public
 // service is the same code without that line.
 async function runHttpsRequest() -> Int {
@@ -249,7 +187,7 @@ async function runHttpsRequest() -> Int {
         networkClose(server)
         return port
     }
-    let request = requestNew("POST", "https://127.0.0.1:" + String(port) + "/echo")
+    let request = kira_network_request_new("POST", "https://127.0.0.1:" + String(port) + "/echo")
     if request <= 0 {
         networkClose(server)
         return request
@@ -257,30 +195,30 @@ async function runHttpsRequest() -> Int {
     // Every setter answers 0 or a negative error code, so one carried value
     // says whether the request is still whole. A request that is not gets
     // discarded rather than sent: it holds native storage until it is.
-    var configured = requestTrustLoopback(request, U16(port))
+    var configured = kira_network_request_trust_loopback(request, U16(port))
     if configured >= 0 {
-        configured = requestVersion(request, I32(2))
+        configured = kira_network_request_version(request, I32(2))
     }
     if configured >= 0 {
-        configured = requestHeader(request, "x-kira-test", "carried")
+        configured = kira_network_request_header(request, "x-kira-test", "carried")
     }
     if configured >= 0 {
-        configured = requestBodyText(request, "{\"hello\":\"kira\"}")
+        configured = kira_network_request_body_text(request, "{\"hello\":\"kira\"}")
     }
     if configured < 0 {
-        requestDiscard(request)
+        kira_network_request_discard(request)
         networkClose(server)
         return configured
     }
-    requestTimeoutMs(request, requestDeadlineMs())
-    let operation = requestSend(request)
+    kira_network_request_timeout_ms(request, requestDeadlineMs())
+    let operation = kira_network_request_send(request)
     if operation <= 0 {
         networkClose(server)
         return operation
     }
     let status = waitResponse(operation)
-    let reported = responseStatus(operation)
-    let length = responseSelectBody(operation)
+    let reported = kira_network_response_status(operation)
+    let length = kira_network_response_select_body(operation)
     let text = responseText(operation)
     networkClose(operation)
     networkClose(server)
@@ -313,31 +251,31 @@ async function runJsonRequest() -> Int {
         networkClose(server)
         return port
     }
-    let request = requestNew("POST", "https://127.0.0.1:" + String(port) + "/json")
+    let request = kira_network_request_new("POST", "https://127.0.0.1:" + String(port) + "/json")
     if request <= 0 {
         networkClose(server)
         return request
     }
-    var configured = requestTrustLoopback(request, U16(port))
+    var configured = kira_network_request_trust_loopback(request, U16(port))
     if configured >= 0 {
-        configured = requestHeader(request, "x-kira-test", "carried")
+        configured = kira_network_request_header(request, "x-kira-test", "carried")
     }
     if configured >= 0 {
-        configured = requestBodyText(request, "{\"hello\":\"kira\"}")
+        configured = kira_network_request_body_text(request, "{\"hello\":\"kira\"}")
     }
     if configured < 0 {
-        requestDiscard(request)
+        kira_network_request_discard(request)
         networkClose(server)
         return configured
     }
-    requestTimeoutMs(request, requestDeadlineMs())
-    let operation = requestSend(request)
+    kira_network_request_timeout_ms(request, requestDeadlineMs())
+    let operation = kira_network_request_send(request)
     if operation <= 0 {
         networkClose(server)
         return operation
     }
     let status = waitResponse(operation)
-    let length = responseSelectBody(operation)
+    let length = kira_network_response_select_body(operation)
     let text = responseText(operation)
     networkClose(operation)
     networkClose(server)

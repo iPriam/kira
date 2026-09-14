@@ -1,0 +1,8 @@
+extern library kira_network {
+    function kira_network_unix_millis() -> Int
+}
+
+@Main function main() {
+    print(kira_network_unix_millis() > 0)
+    return
+}

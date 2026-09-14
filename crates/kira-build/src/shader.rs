@@ -58,8 +58,16 @@ pub(crate) fn precompile(
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     let mut sources: ShaderSources = Vec::new();
-    for (source_id, path) in kira_macros::shader_paths(files) {
-        kira_diagnostics::progress!("compiling shader {path}");
+    let paths = kira_macros::shader_paths(files);
+    // One stable phase for the timing report, then one live line for the
+    // display: a counter refreshing in place rather than a line per shader
+    // scrolling the recent history away.
+    if !paths.is_empty() {
+        kira_diagnostics::progress!("compiling shaders");
+    }
+    let total = paths.len();
+    for (index, (source_id, path)) in paths.into_iter().enumerate() {
+        kira_diagnostics::progress_live!("compiling shaders ({}/{total}) {path}", index + 1);
         let owner = roots
             .iter()
             .find(|(known, _)| *known == source_id)
@@ -360,16 +368,28 @@ fn emit(
                 }
             }
         }
-        // Shader artifacts carry SPIR-V words as hexadecimal text.
+        // An inline `ksl!` artifact carries SPIR-V as its native word stream
+        // (`*_spirv`); the on-disk `.spv` and the Khronos validator read the
+        // same words as hexadecimal text (`*_source`). Both come off the one
+        // emission so neither can drift from the other.
         BackendTarget::Spirv => {
             for stage in [Stage::Vertex, Stage::Fragment, Stage::Compute] {
                 match kira_spirv_backend::emit(ir, stage) {
                     Ok(words) => {
                         let text = kira_spirv_backend::hex(&words);
                         match stage {
-                            Stage::Vertex => compiled.vertex_source = text,
-                            Stage::Fragment => compiled.fragment_source = text,
-                            Stage::Compute => compiled.compute_source = text,
+                            Stage::Vertex => {
+                                compiled.vertex_source = text;
+                                compiled.vertex_spirv = words;
+                            }
+                            Stage::Fragment => {
+                                compiled.fragment_source = text;
+                                compiled.fragment_spirv = words;
+                            }
+                            Stage::Compute => {
+                                compiled.compute_source = text;
+                                compiled.compute_spirv = words;
+                            }
                         }
                     }
                     Err(refusal) => {

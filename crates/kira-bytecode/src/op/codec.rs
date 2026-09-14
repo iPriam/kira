@@ -12,7 +12,7 @@
 
 use super::{
     ChannelPrim, CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MainThreadOp, MathOp,
-    PathStep, PlacePath, StringOp, TaskPrim, WritebackTarget, opcode as o, step_tag,
+    NumberOp, PathStep, PlacePath, StringOp, TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.
@@ -298,6 +298,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         }
         Instruction::StringOp(op) => {
             out.push(o::STRING_OP);
+            out.push(op.as_byte());
+        }
+        Instruction::NumberOp(op) => {
+            out.push(o::NUMBER_OP);
             out.push(op.as_byte());
         }
         Instruction::ScalarText => out.push(o::SCALAR_TEXT),
@@ -665,6 +669,15 @@ impl Cursor<'_> {
                     offset: tag_offset,
                 })?;
                 Instruction::StringOp(op)
+            }
+            o::NUMBER_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = NumberOp::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::NumberOp(op)
             }
             o::SCALAR_TEXT => Instruction::ScalarText,
             o::ARRAY_ELEMENTS => {

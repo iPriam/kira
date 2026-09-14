@@ -38,9 +38,6 @@ fn no_node_form(ty: Type) -> LlvmError {
         // A task handle names work owned by the scheduler that spawned it, and
         // a copy of the handle in the other engine would name nothing there.
         Type::Task(_) => "a task handle inside native callback state",
-        // State inside state: the inner token names a box in a store the outer
-        // value knows nothing about.
-        Type::NativeState(_) => "native callback state inside native callback state",
         // `kira-ir` rewrites a distinct type to the scalar it is before a
         // backend runs, so one here means that pass was skipped rather than
         // that the shape has no node form — the scalar underneath has one.
@@ -58,6 +55,10 @@ impl Codegen<'_> {
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         Ok(match ty {
+            // A `Number` crosses as a node holding its two-word value.
+            Type::Number => {
+                self.call(self.runtime.native_value_number, &mut [value], c"native.number")
+            }
             Type::Int(_) => self.call(self.runtime.native_value_int, &mut [value], c"native.value"),
             Type::Float(_) => self.call(
                 self.runtime.native_value_float,
@@ -94,6 +95,11 @@ impl Codegen<'_> {
                 &mut [value],
                 c"native.value",
             ),
+            Type::NativeState(_) => self.call(
+                self.runtime.native_value_native_state,
+                &mut [value],
+                c"native.state.value",
+            ),
             Type::Struct(id) => {
                 let def = self
                     .program
@@ -104,7 +110,11 @@ impl Codegen<'_> {
                         "a native-state struct not in the table",
                     ))?
                     .clone();
-                let node = self.aggregate_node(NativeStateValueTag::STRUCT, 0, def.fields.len());
+                let (tag, metadata) = match def.drop_glue {
+                    Some(glue) => (NativeStateValueTag::DROP_STRUCT, glue),
+                    None => (NativeStateValueTag::STRUCT, 0),
+                };
+                let node = self.aggregate_node(tag, metadata, def.fields.len());
                 for (index, field_ty) in def.fields.iter().map(|field| field.ty).enumerate() {
                     let field = self.extract_field(value, index as u32);
                     let child = if def.owns_c_storage_at(index as u32) {
@@ -150,8 +160,7 @@ impl Codegen<'_> {
             | Type::Distinct(_)
             | Type::RuntimeType
             | Type::Task(_)
-            | Type::MainThreadTask(_)
-            | Type::NativeState(_) => {
+            | Type::MainThreadTask(_) => {
                 return Err(no_node_form(ty));
             }
         })
@@ -164,6 +173,9 @@ impl Codegen<'_> {
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         Ok(match ty {
+            Type::Number => {
+                self.read_and_free_node(node, self.runtime.native_value_read_number)
+            }
             Type::Int(_) => self.read_and_free_node(node, self.runtime.native_value_read_int),
             Type::Float(_) => self.read_and_free_node(node, self.runtime.native_value_read_float),
             Type::Bool => {
@@ -183,6 +195,9 @@ impl Codegen<'_> {
             // the node it went into, for `CString` exactly as for `RawPtr`.
             Type::RawPtr | Type::ForeignPtr(_) | Type::CString => {
                 self.read_and_free_node(node, self.runtime.native_value_read_raw_ptr)
+            }
+            Type::NativeState(_) => {
+                self.read_and_free_node(node, self.runtime.native_value_read_native_state)
             }
             Type::Struct(id) => {
                 let def = self
@@ -244,8 +259,7 @@ impl Codegen<'_> {
             | Type::Distinct(_)
             | Type::RuntimeType
             | Type::Task(_)
-            | Type::MainThreadTask(_)
-            | Type::NativeState(_) => {
+            | Type::MainThreadTask(_) => {
                 return Err(no_node_form(ty));
             }
         })
@@ -547,7 +561,7 @@ impl Codegen<'_> {
         }
     }
 
-    fn check_native_status_in_codegen(&self, status: LLVMValueRef) {
+    pub(in crate::codegen) fn check_native_status_in_codegen(&self, status: LLVMValueRef) {
         let builder = self.builder;
         // SAFETY: same control-flow construction as FunctionLowering's status
         // check, but needed by recursive helpers that live on Codegen.

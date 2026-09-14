@@ -40,6 +40,7 @@ impl Heap {
             Value::Int(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
+            Value::Number(d) => d.to_decimal_string(),
             Value::Str(id) => self.get(id).to_owned(),
             Value::Void => String::new(),
             // A struct and an array are both the `None` case, and for the same
@@ -99,6 +100,9 @@ impl Heap {
             // needs exactly this crossing: the runtime half mints or receives the
             // token and a native callback hands it back unchanged.
             NativeArg::RawPtr(value) => Value::RawPtr(value),
+            NativeArg::NativeState(token) => {
+                Value::NativeState(kira_runtime_abi::NativeStateToken::from_word(token))
+            }
             // A payload-less enum arrives as its variant tag and is rebuilt
             // here: nothing was borrowed and nothing was moved, because the
             // whole value is the number. A tag too large for the VM's own
@@ -131,6 +135,9 @@ impl Heap {
             NativeResult::Aggregate(tree) => self.from_native_state(&tree),
             // Callback userdata remains one opaque word across the native seam.
             NativeResult::RawPtr(value) => Value::RawPtr(value),
+            NativeResult::NativeState(token) => {
+                Value::NativeState(kira_runtime_abi::NativeStateToken::from_word(token))
+            }
             // Rebuilt from the tag, exactly as in `lower`: there is no owned
             // storage to move in, which is the whole difference from `Str`.
             NativeResult::Enum(tag) => match u64::try_from(tag) {
@@ -160,6 +167,11 @@ impl Heap {
             Value::Float(value) => NativeResult::Float(value),
             Value::Bool(value) => NativeResult::Bool(value),
             Value::Str(id) => NativeResult::Str(self.get(id).to_owned()),
+            // A `Number` has no native-seam form yet: the hybrid ABI carries no
+            // decimal, so it is the `None` case like a struct until it does. The
+            // signature check rejects a `Number` at the seam before a hybrid
+            // program is built, so this is a guard rather than a path.
+            Value::Number(_) => return None,
             // Callback userdata leaves through the native seam as the same
             // opaque word; neither side dereferences or frees it.
             Value::RawPtr(value) => NativeResult::RawPtr(value),
@@ -192,6 +204,23 @@ impl Heap {
             | Value::NativeView { .. }
             | Value::NativeSnapshot(_) => return None,
         })
+    }
+
+    /// Renders an owned value as a seam result, transferring what it owns.
+    ///
+    /// The plain [`Heap::lift`] leaves its argument untouched, which an affine
+    /// callback-state handle cannot do: rendering one as its token word without
+    /// giving up the reference would leave two owners of storage that releases
+    /// once. Crossing a handle out is a *move* — the reference becomes the
+    /// receiving side's, held as an opaque token it releases itself — so this is
+    /// the consuming form, and the caller must not also drop the value.
+    pub fn lift_transfer(&mut self, value: Value) -> Option<NativeResult> {
+        if let Value::NativeState(token) = value {
+            return Some(NativeResult::NativeState(token.as_word()));
+        }
+        let lifted = self.lift(value);
+        self.drop_value(value);
+        lifted
     }
 
     /// Copies `value` into a seam tree, leaving the original owned by its heap.
@@ -233,6 +262,7 @@ impl Heap {
             (ForeignType::F32, Value::Float(v)) => ForeignArg::F32(v as f32),
             (ForeignType::F64, Value::Float(v)) => ForeignArg::F64(v),
             (ForeignType::RawPtr, Value::RawPtr(w)) => ForeignArg::RawPtr(w),
+            (ForeignType::RawPtr, Value::NativeState(token)) => ForeignArg::RawPtr(token.as_word()),
             // A C block built for this argument — a struct's image or an
             // array's flattened elements — crosses as its payload address. The
             // block sits on the operand stack until the call returns, so the

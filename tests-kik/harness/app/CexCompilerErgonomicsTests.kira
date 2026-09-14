@@ -1,0 +1,213 @@
+import Foundation
+
+// Compiler-ergonomics regression coverage. These cases intentionally exercise
+// the source spelling, not internal HIR helpers, so both backends have to agree
+// on the complete parser -> semantics -> lowering path.
+
+function cexPair(n: Int) -> (Int, String) {
+    return (n + 1, "value=" + String(n))
+}
+
+construct CexTupleMultiReturn() extends Test {
+    test {
+        let pair: (Int, String) = cexPair(7)
+        return pair.0 + pair.1.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}
+
+function cexQuad() -> (Int, Int, Int, Int) {
+    return (1, 2, 3, 4)
+}
+
+construct CexFourElementTuple() extends Test {
+    test {
+        let quad = cexQuad()
+        return quad.0 * 1000 + quad.1 * 100 + quad.2 * 10 + quad.3
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1234) return e }
+}
+
+enum CexPick { A(Int) B(Int) }
+
+function cexMatch(value: CexPick) -> Int {
+    return match value {
+        A(x) -> {
+            let doubled = x * 2
+            doubled + 1
+        }
+        B(x) -> x + 100
+    }
+}
+
+construct CexExpressionMatchCarriesPayloadAndBlockValue() extends Test {
+    test { return cexMatch(.A(7)) + cexMatch(.B(3)) }
+    expect { let e: Result<Any, TestFailure> = .Ok(118) return e }
+}
+
+function cexStringMatch(value: Int) -> String {
+    return match value {
+        0 -> {
+            let prefix = "left"
+            prefix + "-zero"
+        }
+        else -> {
+            let prefix = "right"
+            prefix + "-other"
+        }
+    }
+}
+
+construct CexExpressionMatchOwnsArmLocals() extends Test {
+    test {
+        let left = cexStringMatch(0)
+        let right = cexStringMatch(1)
+        return left.count * 100 + right.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(911) return e }
+}
+
+function cexNestedScalarMatch(stream: Int, direct: Bool) -> Int {
+    return match stream <= 0 {
+        true -> 0
+        false -> match stream {
+            1 -> match direct {
+                true -> 10
+                false -> 11
+            }
+            else -> 20
+        }
+    }
+}
+
+construct CexNestedScalarExpressionMatch() extends Test {
+    test {
+        return cexNestedScalarMatch(0, false) * 10000
+            + cexNestedScalarMatch(1, true) * 100
+            + cexNestedScalarMatch(1, false) * 10
+            + cexNestedScalarMatch(2, false)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1130) return e }
+}
+
+struct CexInner { let x: Int let y: Int }
+struct CexOuter { let inner: CexInner let name: String }
+
+construct CexPlainStructCopyUpdate() extends Test {
+    test {
+        let original = CexOuter {
+            inner: CexInner { x: 1, y: 2 },
+            name: "old"
+        }
+        let changed = original { let inner.x = 9 let name = "new" }
+        return changed.inner.x + changed.inner.y + changed.name.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(14) return e }
+}
+
+function cexNumbers(limit: Int) -> Iterator<Int> {
+    var current = 0
+    return Iterator(next: { in
+        if current >= limit { return .None }
+        current += 1
+        return .Some(current)
+    })
+}
+
+construct CexLazyIteratorForLoop() extends Test {
+    test {
+        var total = 0
+        let values = cexNumbers(5)
+        for value in values {
+            if value == 3 { continue }
+            total += value
+        }
+        return total
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
+}
+
+@Derive(Lerp)
+struct CexLerpPoint { let x: Float let y: Float }
+
+@Derive(Lerp)
+struct CexLerpState { let point: CexLerpPoint let alpha: Float }
+
+construct CexDerivedFieldwiseLerp() extends Test {
+    test {
+        let a = CexLerpState {
+            point: CexLerpPoint { x: 0.0, y: 10.0 },
+            alpha: 0.0
+        }
+        let b = CexLerpState {
+            point: CexLerpPoint { x: 10.0, y: 30.0 },
+            alpha: 1.0
+        }
+        let value = lerp(a, b, 0.25)
+        return Int(value.point.x * 10.0) + Int(value.point.y) + Int(value.alpha * 100.0)
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(65) return e }
+}
+
+construct CexArrayContainsReverseAndSort() extends Test {
+    test {
+        let sorted = [4, 1, 3, 2].sort_by { a, b in return a < b }
+        let reversed = sorted.rev()
+        var score = sorted[0] * 1000 + sorted[1] * 100 + sorted[2] * 10 + sorted[3]
+        if sorted.contains(3) { score += 10000 }
+        if sorted.contains(8) == false { score += 20000 }
+        score += reversed[0]
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(31238) return e }
+}
+
+construct CexArraySortBoundaryCases() extends Test {
+    test {
+        let empty: [Int] = []
+        let sortedEmpty = empty.sort_by { a, b in return a < b }
+        let single = [7].sort_by { a, b in return a < b }
+        return sortedEmpty.count * 100 + single.count * 10 + single[0]
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(17) return e }
+}
+
+construct CexArraySortDuplicates() extends Test {
+    test {
+        let sorted = [5, 1, 3, 1, 4, 2, 5].sort_by { a, b in return a < b }
+        var score = 0
+        for value in sorted { score = score * 10 + value }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1123455) return e }
+}
+
+construct CexArraySortDescending() extends Test {
+    test {
+        let sorted = [1, 6, 2, 5, 3, 4].sort_by { a, b in return a > b }
+        var score = 0
+        for value in sorted { score = score * 10 + value }
+        return score
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(654321) return e }
+}
+
+construct CexReverseForKeepsContinueSemantics() extends Test {
+    test {
+        var total = 0
+        let values = [1, 2, 3, 4]
+        for value in values.rev() {
+            if value == 3 { continue }
+            total = total * 10 + value
+        }
+        return total
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(421) return e }
+}
+
+construct CexClampAndCbrt() extends Test {
+    test {
+        return clamp(15, 0, 10) + Int(cbrt(27.0))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(13) return e }
+}

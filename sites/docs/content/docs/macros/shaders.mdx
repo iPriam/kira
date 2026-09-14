@@ -11,11 +11,14 @@ comptime macro ksl {
     expand(input: Syntax) -> Syntax {
         let msl = Ksl.compile(input, ShaderBackend.Msl)
         let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 combinedMsl: #{msl.combinedSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
+                vertexSpirv: #{spirv.vertexSpirv},
+                fragmentSpirv: #{spirv.fragmentSpirv},
                 vertexEntry: #{msl.vertexEntry},
                 resourceReflection: #{msl.resourceReflection},
             )
@@ -36,11 +39,11 @@ The case carries no version. `Glsl` is the backend; which GLSL version it emits 
 
 ## What Comes Back
 
-The value `Ksl.compile` returns is a record whose every member is a `String`: `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`, `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and `resourceReflection`.
+The value `Ksl.compile` returns is a record. Its source members are each a `String`: `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`, `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and `resourceReflection`. Its SPIR-V members are `vertexSpirv`, `fragmentSpirv`, and `computeSpirv`, each a `[U32]` — the native word stream, not text.
 
-Every member is always present. A stage a shader does not have, and a source form a target does not use, read as the empty string rather than as an absent member, so a macro body asks whether one is empty instead of branching on a shape that varies per target. Being strings is also what makes inlining work at all: each one splices into a `quote` as a Kira string literal with its newlines and quotes already escaped.
+Every member is always present. A stage a shader does not have, and a source form a target does not use, read as the empty string (or the empty array for SPIR-V) rather than as an absent member, so a macro body asks whether one is empty instead of branching on a shape that varies per target. The source members being strings is what makes inlining work: each one splices into a `quote` as a Kira string literal with its newlines and quotes already escaped. The SPIR-V members splice as `[U32]` array literals for the same reason — a `[U32]` field reparses them into a word-stream constant with no runtime decode.
 
-Metal compiles one module holding every stage, so its whole source arrives in `combinedSource`; the other four compile a stage at a time and fill `vertexSource`, `fragmentSource`, and `computeSource`. SPIR-V is binary and arrives as hexadecimal with eight characters to a word, ready to be read straight into the `uint32_t` array `vkCreateShaderModule` takes.
+Metal compiles one module holding every stage, so its whole source arrives in `combinedSource`; the text targets compile a stage at a time and fill `vertexSource`, `fragmentSource`, and `computeSource`. SPIR-V is binary, so it arrives as the `[U32]` word stream `vkCreateShaderModule` takes directly. The `vertexSource`/`fragmentSource`/`computeSource` triple still carries the same words as hexadecimal — eight characters per word — for the on-disk `.spv` a file loader reads back.
 
 A target that cannot express a shape leaves its sources empty and reports a note, because the other targets still carry the shader and the build should still succeed. The one such shape is a SPIR-V compute entry point declaring output variables: `GLCompute` has none, and a compute shader publishes through storage.
 

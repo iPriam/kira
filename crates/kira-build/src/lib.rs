@@ -47,7 +47,9 @@ pub mod shader;
 pub mod wrapper;
 
 pub use autobind::{NativeDeclarationError, declaring_packages};
-pub use frontend::{Compiled, FrontendError, FrontendSession, compile, compile_as, compile_for};
+pub use frontend::{
+    Compiled, FrontendError, FrontendSession, compile, compile_as, compile_for, compile_for_in,
+};
 pub use hybrid::{
     HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions, HybridManifestOptions,
     build_hybrid_library, internal_function_count as hybrid_internal_function_count,

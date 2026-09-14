@@ -101,6 +101,15 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         self.store.create(ty, value)
     }
 
+    fn native_state_create_dropping(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+        glue: Option<u32>,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.store.create_dropping(ty, value, glue)
+    }
+
     fn native_state_recover(
         &mut self,
         token: NativeStateToken,
@@ -114,7 +123,7 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         self.store.replace(token, ty, value)
     }
 
@@ -141,9 +150,8 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         ty: NativeStateTypeId,
         path: &[NativeStatePathStep],
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
-        *self.store.write_at(token, ty, path)? = value;
-        Ok(())
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.store.replace_at(token, ty, path, value)
     }
 
     fn native_state_append(
@@ -153,13 +161,7 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         path: &[NativeStatePathStep],
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
-        match self.store.write_at(token, ty, path)? {
-            // The elements are shared with whoever last read this array, so the
-            // append buys a block of its own before it lands.
-            NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
-            _ => return Err(NativeStateError::PathMismatch),
-        }
-        Ok(())
+        self.store.append_at(token, ty, path, value)
     }
 
     fn native_state_retain(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
@@ -168,6 +170,13 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
 
     fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.store.release(token).map(|_| ())
+    }
+
+    fn native_state_release_dropping(
+        &mut self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        self.store.release_dropping(token)
     }
 
     fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {

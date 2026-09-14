@@ -202,6 +202,18 @@ impl Vm<'_> {
                     .collect();
                 Ok(Value::Array(self.heap.alloc_array(elements)))
             }
+            (StringOp::Bytes, []) => {
+                // One element per byte, each an `Int`, so a `[U8]` from the VM
+                // holds the same i64-wide elements the native runtime's
+                // `kira_rt_string_bytes` builds. The borrow of the heap ends when
+                // the collect finishes, before the array is allocated.
+                let bytes: Vec<Value> = text
+                    .as_bytes()
+                    .iter()
+                    .map(|&byte| Value::Int(i64::from(byte)))
+                    .collect();
+                Ok(Value::Array(self.heap.alloc_array(bytes)))
+            }
             // The arity was fixed by analysis and by the operand byte, so a
             // mismatch here is a malformed module rather than a program error.
             _ => Err(VmError::TypeMismatch { expected: "String" }),

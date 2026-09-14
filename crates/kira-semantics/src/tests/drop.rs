@@ -252,24 +252,42 @@ fn an_exported_parameter_that_runs_a_body_is_refused() {
     assert_eq!(codes, vec!["KSEM303"]);
 }
 
-// ----- KSEM304: callback state --------------------------------------------
+// ----- callback state Drop support ----------------------------------------
 
 #[test]
-fn native_state_cannot_box_a_value_that_runs_a_body() {
+fn native_state_accepts_a_root_value_that_runs_its_own_body() {
     let codes = tracing_codes("    var state = nativeState(D { tag: 0 })");
-    assert_eq!(codes, vec!["KSEM304"]);
+    assert!(codes.is_empty(), "{codes:?}");
 }
 
 #[test]
-fn native_recover_cannot_name_a_type_that_runs_a_body() {
+fn native_recover_accepts_a_root_type_that_runs_its_own_body() {
+    let codes = tracing_codes(
+        "    var state = nativeState(D { tag: 0 })\n\
+         \x20   var view = nativeRecover<D>(state)\n\
+         \x20   print(view.tag)",
+    );
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+#[test]
+fn native_state_accepts_nested_drop_obligations() {
+    let codes = tracing_codes(
+        "    var state = nativeState(Pair { first: D { tag: 1 }, second: D { tag: 2 } })",
+    );
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+#[test]
+fn native_recover_accepts_nested_drop_obligations() {
     let codes = codes(&format!(
-        "{TRACING}struct Counter {{ var n: Int }}\n\
-         @Main function main() {{\n\
-         \x20   var state = nativeState(Counter {{ n: 0 }})\n\
-         \x20   var view = nativeRecover<D>(nativeUserData(state))\n\
+        "{TRACING}@Main function main() {{\n\
+         \x20   var state = nativeState(Pair {{ first: D {{ tag: 1 }}, second: D {{ tag: 2 }} }})\n\
+         \x20   var view = nativeRecover<Pair>(state)\n\
+         \x20   print(view.first.tag)\n\
          \x20   return\n}}\n"
     ));
-    assert_eq!(codes, vec!["KSEM304"]);
+    assert!(codes.is_empty(), "{codes:?}");
 }
 
 // ----- KSEM305: a `retains:` foreign parameter ----------------------------

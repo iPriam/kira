@@ -12,8 +12,8 @@
 //! what is left on screen at the end is what the build actually said.
 
 use std::io::{IsTerminal, Write};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use kira_diagnostics::progress::ProgressSink;
 
@@ -52,6 +52,19 @@ const VISIBLE: usize = 6;
 /// one status row into two physical rows and breaks the redraw.
 const WIDTH: usize = 72;
 
+/// How often the surface repaints itself between phases.
+///
+/// A redraw is only ever cheaper than the phase it interrupts: one title row
+/// and a handful of history rows. This is what keeps the elapsed timer live
+/// while a single phase (macro expansion, analysis) holds the build for
+/// seconds without reporting anything in between. Fast enough that the
+/// shimmer glides instead of stepping.
+const TICK: Duration = Duration::from_millis(50);
+
+/// How many cells wide the bright band sweeping the title is: a short comet
+/// rather than a wash over the whole line.
+const SHIMMER_WIDTH: usize = 6;
+
 /// A drawn status surface.
 pub struct Surface {
     state: Mutex<State>,
@@ -63,6 +76,19 @@ struct State {
     started: Instant,
     history: Vec<String>,
     drawn: usize,
+    /// Repaint counter. Advanced by the ticker as well as by phases, so the
+    /// shimmer keeps sweeping even while the build says nothing new.
+    frame: u64,
+    /// Set while something else owns the terminal (see [`ProgressSink::suspend`]).
+    /// The ticker skips repaints until the next phase clears it, so a diagnostic
+    /// printed mid-build is not immediately painted over.
+    suspended: bool,
+    /// Set by [`Surface::finish`]. Tells the ticker to exit on its next wake.
+    done: bool,
+    /// Whether ANSI styling is wanted on this stderr. Decided once at install
+    /// from the same rules as [`kira_toolchain::Paint`]: off for `NO_COLOR`
+    /// and for a terminal that declares itself `dumb`.
+    styled: bool,
 }
 
 impl Surface {
@@ -74,15 +100,27 @@ impl Surface {
         if !std::io::stderr().is_terminal() {
             return None;
         }
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+        let dumb = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
         let surface = Arc::new(Self {
             state: Mutex::new(State {
                 title: format!("{command} Kira project"),
                 started: Instant::now(),
                 history: Vec::new(),
                 drawn: 0,
+                frame: 0,
+                suspended: false,
+                done: false,
+                styled: !no_color && !dumb,
             }),
         });
         kira_diagnostics::progress::install(surface.clone());
+        // Paint once up front, so the title and its timer are on screen from
+        // 0.0s rather than only once the first phase arrives.
+        if let Ok(mut state) = surface.state.lock() {
+            Surface::draw(&mut state);
+        }
+        spawn_ticker(&surface);
         Some(surface)
     }
 
@@ -93,11 +131,17 @@ impl Surface {
     pub fn finish(&self) {
         kira_diagnostics::progress::uninstall();
         if let Ok(mut state) = self.state.lock() {
+            state.done = true;
             erase(&mut state);
         }
     }
 
     /// Redraws the surface from `state`.
+    ///
+    /// Styling is applied *after* [`clamp`], so the ANSI escapes never count
+    /// toward the drawn width: they are zero-width on screen, and counting
+    /// them would wrap a styled row into two physical rows and break the
+    /// redraw math.
     fn draw(state: &mut State) {
         let mut out = std::io::stderr().lock();
         let mut buffer = String::new();
@@ -107,9 +151,19 @@ impl Surface {
             buffer.push_str("\x1b[1A\x1b[2K");
         }
         let elapsed = state.started.elapsed().as_secs_f32();
-        buffer.push_str(&clamp(&format!("{} ({elapsed:.1}s)", state.title)));
+        // The timer stays plain: the shimmer sweeps the words only, so the
+        // numbers never flicker between shades and stay readable at a glance.
+        let timer = format!(" ({elapsed:.1}s)");
+        let room = WIDTH.saturating_sub(timer.chars().count());
+        let name: String = state.title.chars().take(room).collect();
+        if state.styled {
+            buffer.push_str(&shimmer(&name, state.frame));
+        } else {
+            buffer.push_str(&name);
+        }
+        buffer.push_str(&timer);
         buffer.push('\n');
-        for line in &state.history {
+        for line in state.history.iter() {
             buffer.push_str(&clamp(&format!("  {line}")));
             buffer.push('\n');
         }
@@ -119,9 +173,88 @@ impl Surface {
     }
 }
 
+/// Repaints the surface on a timer until it is finished or dropped.
+///
+/// Progress reporting is event-driven — [`Surface::draw`] runs per phase — and
+/// the long phases (`analyzing`, `expanding macros`) hold the build for
+/// seconds without emitting one. Without this the elapsed timer visibly
+/// stalls and only jumps when the next phase lands. The ticker holds only a
+/// [`Weak`] handle, so it exits on its own once the last [`Surface`] is gone;
+/// progress stays best-effort and a failed spawn is silently no ticker rather
+/// than a failed build.
+fn spawn_ticker(surface: &Arc<Surface>) {
+    let weak: Weak<Surface> = Arc::downgrade(surface);
+    let _ = std::thread::Builder::new()
+        .name("kira-progress".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(TICK);
+                let Some(surface) = weak.upgrade() else {
+                    return;
+                };
+                let Ok(mut state) = surface.state.lock() else {
+                    continue;
+                };
+                if state.done {
+                    return;
+                }
+                if state.suspended || state.drawn == 0 {
+                    continue;
+                }
+                state.frame = state.frame.wrapping_add(1);
+                Surface::draw(&mut state);
+            }
+        });
+}
+
+/// Sweeps a whitish band across `line`, whose head sits at `frame`.
+///
+/// The head travels left to right and on past the end, so the tail fades out
+/// off the edge instead of being cut there; then it wraps with a single dark
+/// frame between passes rather than a long pause. Each
+/// cell behind the head steps one shade down the 256-colour grey ramp
+/// (white at the head, fading cell by cell into the plain text), which is
+/// what makes the falloff a gradient rather than a hard edge. `line` must
+/// already be [`clamp`]ed — escapes are zero-width, so styling first and
+/// clamping second would over-count and wrap.
+fn shimmer(line: &str, frame: u64) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let head = (frame as usize) % (chars.len() + SHIMMER_WIDTH);
+    let mut out = String::new();
+    for (index, cell) in chars.iter().enumerate() {
+        let behind = head.saturating_sub(index);
+        let Some(code) = (index <= head && behind < SHIMMER_WIDTH).then(|| {
+            // One grey step per cell back from the head: 255 at the front,
+            // fading down the ramp behind it.
+            let shade = 255u8.saturating_sub(behind as u8);
+            if behind == 0 {
+                format!("1;38;5;{shade}")
+            } else {
+                format!("38;5;{shade}")
+            }
+        }) else {
+            out.push(*cell);
+            continue;
+        };
+        out.push_str("\x1b[");
+        out.push_str(&code);
+        out.push('m');
+        out.push(*cell);
+        out.push_str("\x1b[0m");
+    }
+    out
+}
+
 impl ProgressSink for Surface {
     fn suspend(&self) {
         if let Ok(mut state) = self.state.lock() {
+            // Flagged before erasing under the same lock, so the ticker cannot
+            // slip a repaint in between and paint over the output that asked
+            // for the terminal.
+            state.suspended = true;
             erase(&mut state);
         }
     }
@@ -130,9 +263,27 @@ impl ProgressSink for Surface {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        // A new phase means the build is talking again, which ends whatever
+        // suspension stood the surface aside.
+        state.suspended = false;
         state.history.push(phase.to_owned());
         if state.history.len() > VISIBLE {
             state.history.remove(0);
+        }
+        Surface::draw(&mut state);
+    }
+
+    fn update(&self, phase: &str) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        // A counter refreshes the current line rather than adding one, so a
+        // hundred-item run reads as one live line instead of a hundred dead
+        // ones scrolling the recent history away.
+        state.suspended = false;
+        match state.history.last_mut() {
+            Some(current) => *current = phase.to_owned(),
+            None => state.history.push(phase.to_owned()),
         }
         Surface::draw(&mut state);
     }
@@ -206,5 +357,63 @@ mod tests {
             assert!(Surface::install("Building").is_none());
             assert!(!kira_diagnostics::progress::listening());
         }
+    }
+
+    #[test]
+    fn a_live_update_refreshes_the_current_line_instead_of_adding_one() {
+        let surface = Surface {
+            state: Mutex::new(State {
+                title: "Testing".to_owned(),
+                started: Instant::now(),
+                history: vec!["compiling shaders".to_owned()],
+                drawn: 0,
+                frame: 0,
+                suspended: false,
+                done: false,
+                styled: false,
+            }),
+        };
+        surface.update("compiling shaders (1/2) Glass.ksl");
+        surface.update("compiling shaders (2/2) Water.ksl");
+        let state = surface.state.lock().expect("the surface");
+        assert_eq!(
+            state.history,
+            vec!["compiling shaders (2/2) Water.ksl".to_owned()]
+        );
+    }
+
+    /// Strips the `ESC[…m` sequences [`shimmer`] emits, leaving visible text.
+    fn visible(text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(start) = rest.find("\x1b[") {
+            out.push_str(&rest[..start]);
+            let tail = &rest[start + 2..];
+            match tail.find('m') {
+                Some(end) => rest = &tail[end + 1..],
+                None => {
+                    rest = "";
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn the_shimmer_keeps_its_visible_text_and_moves_with_the_frame() {
+        let line = "Linting Kira project (1.2s)";
+        let first = shimmer(line, 0);
+        assert_eq!(visible(&first), line);
+        // The band travels: a frame with the head off the end (tail fading
+        // out) styles different cells than the opening frame.
+        let later = shimmer(line, line.chars().count() as u64);
+        assert_eq!(visible(&later), line);
+        assert_ne!(first, later);
+    }
+
+    #[test]
+    fn the_shimmer_on_empty_text_is_empty() {
+        assert_eq!(shimmer("", 42), "");
     }
 }

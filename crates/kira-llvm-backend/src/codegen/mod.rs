@@ -35,6 +35,7 @@ mod module;
 mod native_ffi;
 mod native_state;
 mod native_state_enums;
+mod native_state_path;
 mod native_state_values;
 #[cfg(test)]
 mod native_state_values_tests;
@@ -84,7 +85,7 @@ fn needs_fast_codegen(program: &IrProgram, plan: &Plan<'_>) -> bool {
     if !matches!(plan.target, CodegenTarget::Native(NativeTarget::Host)) {
         return false;
     }
-    if !cfg!(target_os = "windows") || plan.kind != ModuleKind::Executable {
+    if plan.kind != ModuleKind::Executable {
         return false;
     }
     let native_reachable = program

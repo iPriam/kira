@@ -1,0 +1,69 @@
+import Foundation
+
+// Namespaces: a nested named scope whose members are reached by their dotted
+// path. Prefix: nmx / Nmx.
+//
+// A `namespace A.B.C { let X = … }` is a name, not a runtime value. Each member
+// flattens to a module constant whose name is the whole dotted path, and an
+// access spelled the same way resolves to it. A path segment is an identifier
+// or a numeric token: a version-like `5.6` is one float the lexer reads, and it
+// is a segment in a path exactly as it is a literal in a value. Because a dot
+// cannot appear in an identifier, a qualified name never collides with a
+// declared one, so every case here behaves identically on both engines.
+//
+// Exercises: a plain member; a member reached through a numeric segment; a
+// nested namespace; a member read into arithmetic; and two namespaces that
+// share a prefix but not a leaf.
+
+namespace NmxAlpha.Beta {
+    let Value = 42
+}
+
+namespace NmxProviders.OpenAI.GPT.5.6 {
+    let Sol = 7
+    let Luna = 9
+}
+
+namespace NmxOuter.Inner {
+    let First = 3
+
+    namespace Deep {
+        let Second = 4
+    }
+}
+
+namespace NmxShared.Left {
+    let One = 100
+}
+
+namespace NmxShared.Right {
+    let Two = 200
+}
+
+construct NmxPlainMemberResolves() extends Test {
+    test {
+        return NmxAlpha.Beta.Value
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(42) return e }
+}
+
+construct NmxNumericSegmentResolves() extends Test {
+    test {
+        return NmxProviders.OpenAI.GPT.5.6.Sol + NmxProviders.OpenAI.GPT.5.6.Luna
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(16) return e }
+}
+
+construct NmxNestedNamespaceResolves() extends Test {
+    test {
+        return NmxOuter.Inner.First * 10 + NmxOuter.Inner.Deep.Second
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(34) return e }
+}
+
+construct NmxSharedPrefixKeepsLeavesApart() extends Test {
+    test {
+        return NmxShared.Left.One + NmxShared.Right.Two
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(300) return e }
+}

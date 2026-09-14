@@ -18,7 +18,7 @@ pub mod op;
 pub mod validate;
 
 pub use compile::{CompileError, compile, compile_hybrid};
-pub use exports::{ExportTable, ExportType, ModuleExport};
+pub use exports::{ExportTable, ExportType, ModuleExport, build_export_table};
 pub use module::{FrameRelease, FuncProto, LEGACY_MAGIC, MAGIC, Module, ModuleDecodeError};
 pub use op::{DecodeError, Instruction, decode, encode};
 pub use validate::ModuleValidateError;

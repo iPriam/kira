@@ -114,25 +114,7 @@ impl Analyzer<'_> {
     /// and this is what the word holds. A scalar is the word; a `Float` is its
     /// bits; anything that owns storage travels as a token naming it.
     fn channel_wire_type(&self, payload: Type) -> wire::Crossing {
-        let representation = match payload {
-            Type::Distinct(id) => self
-                .program
-                .types
-                .distincts()
-                .representation(id)
-                .unwrap_or(Type::INT),
-            other => other,
-        };
-        match representation {
-            Type::Float(_) => wire::Crossing::FloatBits,
-            other if other.is_scalar() => wire::Crossing::Word,
-            other => match self.program.types.native_state_type_id(other) {
-                Some(id) => wire::Crossing::Boxed(id),
-                // Unreachable through the payload rule, which refuses a type
-                // the store cannot hold before a channel over it is minted.
-                None => wire::Crossing::Word,
-            },
-        }
+        wire::Crossing::classify(&self.program.types, payload)
     }
 
     /// Why a value of this type cannot cross a channel, with the code the

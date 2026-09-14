@@ -68,14 +68,17 @@ pub enum MarshalError {
 /// An argument that fails to lower releases everything the arguments before it
 /// already created — those transfers were made for a call that is now not
 /// happening, and their maker is the only side that knows.
+enum Transfer {
+    String(StrHandle),
+    Node(*mut c_void),
+    NativeState(kira_runtime_abi::NativeStateToken),
+}
+
 pub fn lower_args(
     library: &NativeLibrary,
     args: &[NativeArg<'_>],
 ) -> Result<Vec<BridgeValue>, MarshalError> {
-    // The transfers each lowered argument created — its pointer, and whether
-    // it is a state node (node free) or a string handle (string free) — so a
-    // later failure can release them in order.
-    let mut transferred: Vec<(*mut c_void, bool)> = Vec::new();
+    let mut transferred = Vec::new();
     let mut lowered = Vec::with_capacity(args.len());
     for (index, argument) in args.iter().enumerate() {
         let data = match *argument {
@@ -85,7 +88,7 @@ pub fn lower_args(
             NativeArg::Bool(value) => BridgeData::Bool(value),
             NativeArg::Str(text) => {
                 let handle = library.new_string(text);
-                transferred.push((handle as *mut c_void, false));
+                transferred.push(Transfer::String(handle));
                 BridgeData::String(handle)
             }
             // A handle is one opaque word and copies like a scalar: there
@@ -94,6 +97,14 @@ pub fn lower_args(
             // A raw pointer is likewise one opaque word that copies like a
             // scalar; Kira never dereferences or frees it.
             NativeArg::RawPtr(pointer) => BridgeData::RawPtr(pointer),
+            NativeArg::NativeState(token) => {
+                let token = kira_runtime_abi::NativeStateToken::from_word(token);
+                library
+                    .native_state_retain(token)
+                    .map_err(|reason| MarshalError::Aggregate { index, reason })?;
+                transferred.push(Transfer::NativeState(token));
+                BridgeData::NativeState(token.as_word())
+            }
             // A payload-less enum is its variant tag: one word that copies
             // like a scalar, with nothing allocated here and nothing for
             // the callee to free.
@@ -107,7 +118,7 @@ pub fn lower_args(
                 // consumed by the trampoline it is handed to.
                 match unsafe { library.encode_state_value(tree) } {
                     Ok(node) => {
-                        transferred.push((node, true));
+                        transferred.push(Transfer::Node(node));
                         if matches!(tree, NativeStateValue::Any { .. }) {
                             BridgeData::Any(node as u64)
                         } else {
@@ -129,16 +140,20 @@ pub fn lower_args(
 /// Releases everything [`lower_args`] created before its failing argument:
 /// strings through the allocator's own free, state nodes through the node
 /// free — each exactly once, since neither has been shared with anyone yet.
-fn release_failed_transfers(library: &NativeLibrary, transferred: &[(*mut c_void, bool)]) {
-    for &(pointer, is_node) in transferred {
-        if is_node {
-            // SAFETY: each node was created by this library above and freed
-            // exactly once here.
-            unsafe { library.free_state_node(pointer) };
-        } else {
-            // SAFETY: each handle was created by this library above and freed
-            // exactly once here.
-            unsafe { library.free_string(pointer as StrHandle) };
+fn release_failed_transfers(library: &NativeLibrary, transferred: &[Transfer]) {
+    for transfer in transferred {
+        match *transfer {
+            Transfer::String(handle) => {
+                // SAFETY: this handle was freshly allocated for the abandoned call.
+                unsafe { library.free_string(handle) };
+            }
+            Transfer::Node(node) => {
+                // SAFETY: this node was freshly allocated for the abandoned call.
+                unsafe { library.free_state_node(node) };
+            }
+            Transfer::NativeState(token) => {
+                let _ = library.native_state_release(token);
+            }
         }
     }
 }
@@ -231,6 +246,7 @@ pub unsafe fn lift_result(
                 .map_err(|reason| MarshalError::Aggregate { index: 0, reason })?;
             NativeResult::Aggregate(tree)
         }
+        BridgeData::NativeState(token) => NativeResult::NativeState(token),
     })
 }
 
@@ -254,6 +270,8 @@ pub enum OwnedArg {
     Handle(u64),
     /// An opaque target-width pointer word, copied like a scalar.
     RawPtr(u64),
+    /// One affine callback-state owner transferred from native code.
+    NativeState(u64),
     /// A payload-less enum's variant tag, copied like a scalar.
     ///
     /// Owns nothing, so unlike [`OwnedArg::Str`] there was never a handle to
@@ -277,6 +295,7 @@ impl OwnedArg {
             OwnedArg::Str(text) => NativeArg::Str(text),
             OwnedArg::Handle(handle) => NativeArg::Handle(*handle),
             OwnedArg::RawPtr(pointer) => NativeArg::RawPtr(*pointer),
+            OwnedArg::NativeState(token) => NativeArg::NativeState(*token),
             OwnedArg::Enum(tag) => NativeArg::Enum(*tag),
             OwnedArg::Aggregate(tree) => NativeArg::Aggregate(tree),
         }
@@ -326,6 +345,7 @@ pub unsafe fn take_args(
             BridgeData::Handle(handle) => OwnedArg::Handle(handle),
             // An opaque pointer word: nothing to take ownership of.
             BridgeData::RawPtr(pointer) => OwnedArg::RawPtr(pointer),
+            BridgeData::NativeState(token) => OwnedArg::NativeState(token),
             BridgeData::CStringPtr(_) => {
                 failure.get_or_insert(MarshalError::UnknownTag {
                     index,
@@ -363,7 +383,16 @@ pub unsafe fn take_args(
     }
 
     match failure {
-        Some(error) => Err(error),
+        Some(error) => {
+            for argument in &owned {
+                if let OwnedArg::NativeState(token) = argument {
+                    let _ = library.native_state_release(
+                        kira_runtime_abi::NativeStateToken::from_word(*token),
+                    );
+                }
+            }
+            Err(error)
+        }
         None => Ok(owned),
     }
 }
@@ -381,6 +410,7 @@ pub fn lower_result(library: &NativeLibrary, result: NativeResult) -> BridgeValu
         NativeResult::Str(text) => BridgeData::String(library.new_string(&text)),
         NativeResult::Handle(handle) => BridgeData::Handle(handle),
         NativeResult::RawPtr(pointer) => BridgeData::RawPtr(pointer),
+        NativeResult::NativeState(token) => BridgeData::NativeState(token),
         NativeResult::Enum(tag) => BridgeData::Enum(tag),
         NativeResult::Aggregate(tree) => {
             // SAFETY: the node is allocated by this library and consumed by

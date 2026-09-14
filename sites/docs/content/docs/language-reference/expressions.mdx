@@ -5,9 +5,10 @@ description: Literals, operators and precedence, calls and labeled arguments, tr
 
 ## Primary Forms
 
-- Integer, float, string, and boolean literals.
+- Integer, float, string, and boolean literals. `infinity` is the positive IEEE `Float` infinity; `-infinity` is ordinary unary negation applied to it.
 - Identifiers and qualified names (`Geo.Point`, `bindings.callbacks`).
-- Grouped expressions.
+- Grouped expressions: `(value)`.
+- Tuple values with two through four elements: `(1, "two")`, `(x, y, z)`.
 - Array literals: `[1, 2, 3]`. Commas are optional where a newline separates the elements.
 - Struct literals: `Vec3 { x = 1, y = 2, z = 3 }`. `:` is accepted for the field binder and the two may be mixed.
 - Enum variants with a leading dot: `.Red`, `.Text("hi")`.
@@ -16,7 +17,7 @@ description: Literals, operators and precedence, calls and labeled arguments, tr
 - `Task { call(args) }`.
 - `MainThread.invoke { call(args) }`, `MainThread.spawn { call(args) }`, and `MainThread.post { call(args) }`.
 - `quote { … }` and `#{ value }`, inside a `comptime macro` only.
-- `nativeState(v)`, `nativeUserData(s)`, `nativeRecover<T>(t)`, `nativeUserDataRetain(t)`, `nativeUserDataRelease(t)`.
+- `nativeState(v)`, `nativeUserData(owner)`, `nativeUserDataBorrow(owner)`, `nativeRecover<T>(ownerOrBorrowedToken)`, and `nativeUserDataRelease(owner)`. `nativeUserDataRetain(...)` is recognized only to issue the ownership-safety diagnostic; Kira code cannot create an untracked raw owner.
 
 ## Operators
 
@@ -29,6 +30,25 @@ Loosest to tightest, exactly C's ladder. Unary `-`, `!`, and `~` bind tighter th
 `move x` and `copy x` are prefix operators, recognized only when an operand follows. A range `a..b` is not an expression: it appears only in a `for` header.
 
 `value is Type` and `value as Type` take a type on the right. They bind tighter than the comparisons and looser than the shifts, so `a is Point == b` tests first. `value` must be an `Any`; `is` answers whether it holds a `Type` by nominal runtime identity and releases the value, and `as` hands the held value back as an owned `Type`, trapping when it holds anything else. `Type` must be one an `Any` can hold: not `Void`, not `Any` itself.
+
+## Match Expressions
+
+A `match` may produce a value:
+
+```kira
+let label = match code {
+    0 -> "zero"
+    1..4 -> {
+        let prefix = "small"
+        prefix + "!"
+    }
+    else -> "other"
+}
+```
+
+Expression matches use the same enum, scalar, range, alternation, payload-binding, exhaustiveness, and `else` rules as statement matches. Each arm must produce a value. A braced arm may run statements first, but its final statement must be an expression whose value becomes the arm result. Every reachable arm must agree on one result type.
+
+The subject is evaluated once. Only the selected arm runs, including any payload binding, local declarations, calls, and drops inside that arm.
 
 ## Calls
 

@@ -1,8 +1,4 @@
-//! Array expression analysis: literals, index reads, `.count`, and `.append`.
-//!
-//! The array surface is exactly **two members** — `.append(v)` and `.count` —
-//! and that is not a subset of something larger: everything else is `KSEM101`.
-//! Refusing the rest is what keeps invented surface out of the language.
+//! Array expression analysis: literals, indexing, properties, and methods.
 //!
 //! # Why `.append` resolves a place and `.count` does not
 //!
@@ -18,13 +14,14 @@
 //! actually holds. `rows[0].xs.append(42)` landing in `rows` is that
 //! resolution, not an optimization on top of it.
 
+mod methods;
+
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
-use crate::place::PlacePurpose;
 
 /// The member a type declares to be indexable. Reserved by spelling rather than
 /// by a keyword: a subscript IS a method, it is only reached through different
@@ -280,7 +277,12 @@ impl Analyzer<'_> {
         let span = self.tree.expr(index).span();
         let hir = self.analyze_expr(ctx, index);
         let ty = self.program.expr(hir).type_of();
-        if !matches!(ty, Type::Int(_)) && ty != Type::Error {
+        // A distinct type over an integer indexes as the integer it is — a
+        // `distinct StreamId = Int` is a position like any other.
+        let indexes = matches!(ty, Type::Int(_))
+            || (matches!(ty, Type::Distinct(_))
+                && matches!(self.program.types.representation(ty), Type::Int(_)));
+        if !indexes && ty != Type::Error {
             self.emit(
                 span,
                 "KSEM102",
@@ -321,105 +323,11 @@ impl Analyzer<'_> {
         self.emit(span, "KSEM101", unsupported_member(name));
         self.program.exprs.alloc(HirExpr::Error)
     }
-
-    /// Type-checks `xs.<name>(args)` where `xs` is an array — the method side.
-    ///
-    /// `.append` is the only one, and it is the reason the *receiver syntax*
-    /// rather than the analyzed receiver is what arrives here: a place has to
-    /// be resolved from what was written.
-    pub(crate) fn analyze_array_method(
-        &mut self,
-        ctx: &mut FnCtx,
-        receiver: ExprId,
-        name: &str,
-        method_span: Span,
-        args: &[ExprId],
-    ) -> HirExprId {
-        if name == "count" {
-            self.emit(
-                method_span,
-                "KSEM101",
-                "`count` is a property: write `xs.count`, without parentheses",
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-        if name != "append" {
-            self.emit(method_span, "KSEM101", unsupported_member(name));
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-        self.analyze_array_append(ctx, receiver, method_span, args)
-    }
-
-    /// Type-checks `xs.append(v)`.
-    fn analyze_array_append(
-        &mut self,
-        ctx: &mut FnCtx,
-        receiver: ExprId,
-        method_span: Span,
-        args: &[ExprId],
-    ) -> HirExprId {
-        // The receiver is resolved to a place *first*, so `append` on something
-        // that is not a place is refused before its argument is analyzed
-        // against an element type there is no array to supply.
-        let Some((place, place_ty)) = self.resolve_place(ctx, receiver, PlacePurpose::Append)
-        else {
-            for &arg in args {
-                self.analyze_expr(ctx, arg);
-            }
-            return self.program.exprs.alloc(HirExpr::Error);
-        };
-        let element = self.program.types.element_of(place_ty);
-
-        if args.len() != 1 {
-            self.emit(
-                method_span,
-                "KSEM103",
-                format!("`append` takes exactly one argument, found {}", args.len()),
-            );
-            for &arg in args {
-                self.analyze_expr_expecting(ctx, arg, element);
-            }
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-
-        let value = self.analyze_expr_expecting(ctx, args[0], element);
-        let Some(element) = element else {
-            // The place resolved but is not an array. `resolve_place` reports
-            // the shape problems; this reports the type one.
-            if place_ty != Type::Error {
-                self.emit(
-                    method_span,
-                    "KSEM101",
-                    format!("type `{}` has no method `append`", self.type_name(place_ty)),
-                );
-            }
-            return self.program.exprs.alloc(HirExpr::Error);
-        };
-        let value_ty = self.program.expr(value).type_of();
-        if !self.admits(value_ty, element) {
-            let span = self.tree.expr(args[0]).span();
-            self.emit(
-                span,
-                "KSEM105",
-                format!(
-                    "cannot append a `{}` to an array of `{}`",
-                    self.type_name(value_ty),
-                    self.type_name(element)
-                ),
-            );
-        }
-        let value = self.coerce_into(value, element);
-        self.program
-            .exprs
-            .alloc(HirExpr::ArrayAppend { place, value })
-    }
 }
 
 /// The message for a member an array does not have.
-///
-/// Names the whole surface rather than only rejecting: the array surface is
-/// two members, and a reader who guessed `push` or `length` is better served by
-/// being told what does exist than by being told what does not.
 fn unsupported_member(name: &str) -> String {
-    format!("an array has no `{name}`; an array has `.append(value)` and `.count`")
+    format!(
+        "an array has no `{name}`; use `.count`, `.append(value)`, `.contains(value)`, `.rev()`, or `.sort_by(compare)`"
+    )
 }

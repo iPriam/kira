@@ -25,14 +25,14 @@
 use kira_semantics_model::hir::{HirExprId, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{HirExpr, OwnershipMode, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId};
+use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Stmt, StmtId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
 
 mod attempts;
 pub(crate) mod fors;
-mod matches;
+pub(crate) mod matches;
 
 impl Analyzer<'_> {
     /// Whether a statement list is guaranteed to execute a `return`.
@@ -119,7 +119,12 @@ impl Analyzer<'_> {
     /// block-expression to carry it (see [`FnCtx::hoist_stmt`]). Those run
     /// *before* the statement that produced them, so they are drained onto `out`
     /// ahead of it.
-    fn analyze_stmt(&mut self, ctx: &mut FnCtx, stmt_id: StmtId, out: &mut Vec<HirStmtId>) {
+    pub(crate) fn analyze_stmt(
+        &mut self,
+        ctx: &mut FnCtx,
+        stmt_id: StmtId,
+        out: &mut Vec<HirStmtId>,
+    ) {
         let mut produced = Vec::new();
         self.analyze_stmt_inner(ctx, stmt_id, &mut produced);
         out.extend(ctx.take_pending_stmts());
@@ -223,7 +228,9 @@ impl Analyzer<'_> {
                     .alloc(HirStmt::Let { local, init: value });
                 out.push(hir);
             }
-            Stmt::Assign { target, value, .. } => {
+            Stmt::Assign {
+                target, op, value, ..
+            } => {
                 let target_span = self.tree.expr(target).span();
                 // The place is resolved before the value for the same reason
                 // the annotation is: it is what supplies `xs = []` an element
@@ -231,10 +238,24 @@ impl Analyzer<'_> {
                 // expressions are evaluated before the value, on every backend.
                 let Some((place, place_ty)) = self.resolve_place(ctx, target, PlacePurpose::Assign)
                 else {
-                    self.analyze_expr(ctx, value);
+                    if let Some(op) = op {
+                        self.analyze_binary(ctx, op, target, value, target_span);
+                    } else {
+                        self.analyze_expr(ctx, value);
+                    }
                     return;
                 };
-                let value_expr = self.analyze_expr_expecting(ctx, value, Some(place_ty));
+                // A compound assignment stores `target op value`: the target is
+                // read as the left operand and the result written back to the
+                // same place. Reusing binary analysis gives it every operator
+                // rule — int/float selection, width agreement, operator
+                // overloads — for free, and reports a mismatch against the
+                // operator rather than the assignment.
+                let value_expr = if let Some(op) = op {
+                    self.analyze_binary(ctx, op, target, value, target_span)
+                } else {
+                    self.analyze_expr_expecting(ctx, value, Some(place_ty))
+                };
                 let value_ty = self.program.expr(value_expr).type_of();
                 if !self.admits(value_ty, place_ty) {
                     self.emit(
@@ -289,7 +310,17 @@ impl Analyzer<'_> {
                 out.push(hir);
             }
             Stmt::Expr { expr, .. } => {
-                let hir = self.analyze_expr(ctx, expr);
+                // A call on a line by itself discards what it answers with, and
+                // saying so is what lets a foreign name carrying several shapes
+                // resolve here: `[view endEncoding]` means the shape that
+                // answers nothing, and there is no other way to tell it from
+                // the five that answer something. Only a call, because only a
+                // call has shapes to choose between.
+                let hir = if matches!(self.tree.expr(expr), Expr::Call { .. }) {
+                    self.analyze_expr_expecting(ctx, expr, Some(Type::Void))
+                } else {
+                    self.analyze_expr(ctx, expr)
+                };
                 let hir = self.program.stmts.alloc(HirStmt::Expr { expr: hir });
                 out.push(hir);
             }
@@ -445,7 +476,7 @@ impl Analyzer<'_> {
     }
 
     /// Allocates a read of an `Int`-typed local, for a desugaring building one.
-    fn read_int_local(&mut self, local: LocalId) -> HirExprId {
+    pub(crate) fn read_int_local(&mut self, local: LocalId) -> HirExprId {
         self.program.exprs.alloc(HirExpr::Local {
             local,
             ty: Type::INT,
@@ -511,7 +542,11 @@ impl Analyzer<'_> {
 
     pub(crate) fn analyze_condition(&mut self, ctx: &mut FnCtx, expr: ExprId) -> HirExprId {
         let cond_span = self.tree.expr(expr).span();
-        let hir = self.analyze_expr(ctx, expr);
+        // A condition is a `Bool` or it is a mistake, so the expectation is not
+        // a guess and is worth passing: it is what tells a foreign name carrying
+        // several shapes which one `if [window isKeyWindow]` means. The check
+        // below still runs, because an expectation is not a coercion.
+        let hir = self.analyze_expr_expecting(ctx, expr, Some(Type::Bool));
         let ty = self.program.expr(hir).type_of();
         if ty != Type::Bool && ty != Type::Error {
             self.emit(

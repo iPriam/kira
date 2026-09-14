@@ -33,6 +33,26 @@ Assigning to a place requires `var` at *every* step, not just the last. Writing 
 
 A struct is also constructed by naming it. `Vec3(1, 2, 3)` fills the fields in declaration order and `Vec3(x: 1, y: 2, z: 3)` binds each by name, the two spellings the literal already had. A field the call does not reach takes its declared default, so a struct whose fields all default is built by `Type()`. The constructor lowers to the same struct value a literal produces.
 
+### Copy Updates
+
+A stored-value local may be copied while replacing selected fields:
+
+```kira
+let original = Box {
+    origin = Vec3 { x = 1, y = 2, z = 3 },
+    label = "old",
+}
+
+let changed = original {
+    let origin.x = 9
+    let label = "new"
+}
+```
+
+Fields not named by an update are copied from the base value. A dotted update rebuilds only the nested value path needed for that field. The base local is read once before any replacement expression is evaluated, so replacements cannot cause it to be evaluated repeatedly.
+
+The same syntax applies to ordinary stored-value structs and classes and to concrete construct-backed values. A closure value is not a user-visible stored-value shape and cannot be updated this way.
+
 ### Field Order and Cycles
 
 **Field type order does not matter.** Struct collection declares every name before resolving any field, so a field may name a struct declared later in the file or in another file of the same package. A by-value cycle still has no finite size: analysis detects it, reports `KSEM052`, and breaks the closing field to `Error` so recursive layout, copy, and drop walks stay total.
@@ -246,7 +266,18 @@ The type **costs nothing**. It has the size, the alignment, and the ABI of its r
 
 The representation is an integer width, a float width, `Bool`, `RawPtr`, or another distinct type. Anything that owns storage is refused (`KSEM345`): a name for a shape with fields is a `struct`.
 
-`==` and `!=` between two values of one distinct type are its whole operator surface. Arithmetic, ordering, and `print` are refused, which is the point — adding two ids or printing one as a number is treating an identity as a quantity. Fold, compare, and render one through the derives, or take `.raw` and say so.
+A distinct type carries the **whole operator surface of its representation**. Arithmetic, bitwise, and shift operators yield the distinct type again — a value stays inside the type it was minted in — while comparisons and equality yield `Bool`, and a distinct type over an integer indexes an array as the position it is. A bare literal adapts into a distinct type the way it adapts into a written integer width, so a position reads as itself:
+
+```kira
+distinct StreamId = Int
+
+var stream = StreamId(1)
+stream += 2                       // StreamId(3)
+if stream <= 0 { return }         // a bare literal adapts
+let group = layers[stream - 1]    // indexes as the Int it is
+```
+
+The nominal boundary still holds. Two **different** distinct types share no operator (`streamId + tabId` is `KSEM071`), and a distinct type does not mix with a *written* representation value — `tabId == U32(1)` is refused, because that is comparing an identity to the machine word underneath it; only a bare literal pairs. `print` is refused for the same reason, so render one through `@Derive(Serializable)` or take `.raw` and say so.
 
 ```kira
 @Derive(Equatable, Clone, Hashable, Serializable, Ordered)

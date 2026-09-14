@@ -99,10 +99,18 @@ pub enum IrExpr {
     Select {
         /// The `Bool` condition.
         cond: IrExprId,
+        /// Statements that execute only on the true edge before its value.
+        then_setup: Vec<super::IrStmt>,
         /// The value when the condition holds.
         then: IrExprId,
+        /// Branch-local slots released after the true value is materialized.
+        then_cleanup: Vec<u32>,
+        /// Statements that execute only on the false edge before its value.
+        otherwise_setup: Vec<super::IrStmt>,
         /// The value when it does not.
         otherwise: IrExprId,
+        /// Branch-local slots released after the false value is materialized.
+        otherwise_cleanup: Vec<u32>,
         /// The type both branches agreed on.
         ty: Type,
     },
@@ -329,6 +337,17 @@ pub enum IrExpr {
         /// What it answers with.
         ty: Type,
     },
+    /// One `Number` operation, told apart by its
+    /// [`NumberOp`](kira_runtime_abi::NumberOp): construction, arithmetic,
+    /// comparison, or a conversion out.
+    NumberOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::NumberOp,
+        /// The operands, in source order.
+        operands: Vec<IrExprId>,
+        /// What it answers with.
+        ty: Type,
+    },
     /// A scalar rendered as text (`String(x)`).
     StringOf {
         /// The value being rendered.
@@ -403,6 +422,10 @@ pub enum IrExpr {
         value: IrExprId,
         /// The stable runtime identity of the boxed type.
         type_id: NativeStateTypeId,
+        /// The user `Drop` body attached to the boxed root value, when any.
+        /// Value-tree backends preserve this so the final release can hand the
+        /// value back to an engine and run the body exactly once.
+        drop_glue: Option<u32>,
         /// The opaque handle type returned to Kira.
         ty: Type,
     },
@@ -410,6 +433,11 @@ pub enum IrExpr {
     NativeUserData {
         /// The state handle.
         state: IrExprId,
+        /// Whether this export is a non-owning raw token.
+        borrowed: bool,
+        /// The affine owner type for an owning export, or `RawPtr` for a
+        /// borrowed token.
+        ty: Type,
     },
     /// Recovers typed mutable access through a returned userdata token.
     NativeRecover {
@@ -445,6 +473,9 @@ pub enum IrExpr {
     NativeStateRelease {
         /// The state handle or raw token.
         token: IrExprId,
+        /// Static value type for a typed raw-token release. Native code needs
+        /// this to rebuild a value-tree state before running root `Drop` glue.
+        target: Option<Type>,
     },
     /// A scalar type-conversion, `Target(operand)`.
     ///

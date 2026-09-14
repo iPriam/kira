@@ -12,6 +12,7 @@ distinct DistinctTabId = U32
 distinct DistinctBookmarkId = U32
 distinct DistinctMillis = U64
 distinct DistinctTicks = DistinctMillis
+distinct DistinctStream = Int
 
 @Derive(Equatable, Clone, Hashable, Serializable, Ordered)
 distinct DistinctPort = U32
@@ -72,6 +73,44 @@ function distinctsSection() -> Int {
 
     score = score + distinctBookmarkIndex(DistinctBookmarkId(U32(2)))
     score = score + distinctTickCount(DistinctTicks(U64(5)))
+    return score
+}
+
+// A distinct type carries its representation's whole operator surface:
+// arithmetic and shifts yield the distinct type again, comparisons yield
+// `Bool`, a bare literal adapts into it, and a distinct-over-`Int` indexes an
+// array. Folded so a backend that lowered any operator differently answers a
+// different total. Compound assignment (`+=`, `<<=`, …) is exercised here too,
+// against both a sibling distinct value and a bare literal.
+function distinctOperatorSection() -> Int {
+    var s = DistinctStream(1)
+    s = s + DistinctStream(2)
+    s += DistinctStream(1)
+    s -= 1
+    var score = 0
+    if s == 3 {
+        score = score + 1
+    }
+    if s < DistinctStream(5) {
+        score = score + 10
+    }
+    if s >= 3 {
+        score = score + 100
+    }
+    let xs: [Int] = [10, 20, 30, 40]
+    score = score + xs[s]
+    let neg = -s
+    score = score + neg.raw
+    s *= DistinctStream(2)
+    score = score + s.raw
+
+    var flags = DistinctStream(6)
+    flags &= DistinctStream(3)
+    flags |= 8
+    flags ^= DistinctStream(1)
+    flags <<= 1
+    flags >>= 1
+    score = score + flags.raw
     return score
 }
 

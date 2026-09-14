@@ -27,6 +27,21 @@ fn an_extern_with_a_body_is_a_parse_error() {
     );
 }
 
+#[test]
+fn grouped_extern_library_declarations_share_library_and_resolve_normally() {
+    let text = r#"
+extern library ffimath {
+    function add(a: I32, b: I32) -> I32
+    function negate(value: I32) -> I32
+}
+@Main function main() {
+    print(add(1, negate(2)))
+    return
+}
+"#;
+    assert!(codes(text).is_empty(), "{:?}", codes(text));
+}
+
 // ----- annotation block meaning -------------------------------------------
 
 #[test]
@@ -92,6 +107,148 @@ fn two_foreign_functions_may_not_share_a_name() {
                 @Main function main() { return }";
     assert!(
         codes(text).iter().any(|code| code == "KSEM185"),
+        "{:?}",
+        codes(text)
+    );
+}
+
+// ----- one name, several shapes of one symbol -----------------------------
+
+#[test]
+fn one_name_carries_several_shapes_of_one_symbol() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: RawPtr, c: U64) -> RawPtr\n\
+                @Main function main() { return }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_repeated_name_binding_a_different_symbol_is_still_refused() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSendSuper, abi: c }\n\
+                function send(a: RawPtr, b: RawPtr) -> RawPtr\n\
+                @Main function main() { return }";
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM185"),
+        "{:?}",
+        codes(text)
+    );
+}
+
+#[test]
+fn a_repeated_shape_of_one_symbol_is_refused() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(b: RawPtr) -> RawPtr\n\
+                @Main function main() { return }";
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM185"),
+        "{:?}",
+        codes(text)
+    );
+}
+
+#[test]
+fn the_number_of_arguments_picks_the_shape() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: U64) -> RawPtr\n\
+                @Main function main() {\n\
+                    let one: RawPtr = send(RawPtr.null)\n\
+                    let two: RawPtr = send(RawPtr.null, U64(1))\n\
+                    return\n\
+                }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn the_argument_types_pick_the_shape() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: U64) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: Bool) -> RawPtr\n\
+                @Main function main() {\n\
+                    let one: RawPtr = send(RawPtr.null, U64(1))\n\
+                    let two: RawPtr = send(RawPtr.null, true)\n\
+                    return\n\
+                }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn what_the_caller_expects_picks_between_shapes_differing_only_in_the_result() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> U64\n\
+                @Main function main() {\n\
+                    let word: U64 = send(RawPtr.null)\n\
+                    let pointer: RawPtr = send(RawPtr.null)\n\
+                    return\n\
+                }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_call_on_a_line_by_itself_means_the_shape_that_answers_nothing() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr): Void\n\
+                @Main function main() {\n\
+                    send(RawPtr.null)\n\
+                    return\n\
+                }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_condition_picks_the_shape_that_answers_a_bool() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> Bool\n\
+                @Main function main() {\n\
+                    if send(RawPtr.null) { return }\n\
+                    return\n\
+                }";
+    assert_eq!(codes(text), Vec::<String>::new());
+}
+
+#[test]
+fn shapes_differing_only_in_the_result_are_refused_where_nothing_expects_one() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> U64\n\
+                @Main function main() {\n\
+                    let it = send(RawPtr.null)\n\
+                    return\n\
+                }";
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM372"),
+        "{:?}",
+        codes(text)
+    );
+}
+
+#[test]
+fn an_argument_count_no_shape_takes_names_the_counts_that_exist() {
+    let text = "@FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr) -> RawPtr\n\
+                @FFI.Extern { library: objc, symbol: objc_msgSend, abi: c }\n\
+                function send(a: RawPtr, b: U64) -> RawPtr\n\
+                @Main function main() {\n\
+                    let it: RawPtr = send(RawPtr.null, U64(1), U64(2))\n\
+                    return\n\
+                }";
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM062"),
         "{:?}",
         codes(text)
     );
@@ -205,7 +362,7 @@ function addWide(a: Int, b: Int) -> Int
 }
 
 #[test]
-fn retains_names_a_parameter_that_holds_c_storage() {
+fn retains_names_a_parameter_that_c_can_keep_by_ownership() {
     // A number has no block to transfer, so `retains:` on one promises a
     // transfer that cannot happen and makes the call site write `move` for it.
     let scalar = r#"
@@ -220,13 +377,15 @@ function keep(on: Bool): Void
 "#;
     assert_eq!(library_codes(flag), vec!["KSEM371"]);
 
-    // The three positions that do carry storage.
+    // C storage and callback-state ownership are both meaningful retain targets.
     let carriers = r#"
 @FFI.Struct { layout: c }
 struct Desc { var label: CString }
 
 @FFI.Pointer { target: Desc, ownership: borrowed }
 struct DescPtr {}
+
+struct State { var count: Int }
 
 @FFI.Extern { library: fixture, symbol: ffi_keep_text, abi: c, retains: text }
 function keepText(text: CString): Void
@@ -236,6 +395,9 @@ function keepDesc(desc: Desc): Void
 
 @FFI.Extern { library: fixture, symbol: ffi_keep_ptr, abi: c, retains: desc }
 function keepPtr(desc: DescPtr): Void
+
+@FFI.Extern { library: fixture, symbol: ffi_keep_state, abi: c, retains: state }
+function keepState(state: NativeState<State>): Void
 "#;
     assert!(
         library_diagnostics(carriers).is_empty(),

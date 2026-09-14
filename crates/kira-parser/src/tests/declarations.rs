@@ -1,7 +1,7 @@
 //! Function, execution annotation, construct, and struct declaration parsing.
 
 use kira_runtime_abi::Execution;
-use kira_syntax_model::ast::{ConstructKind, Expr, Item};
+use kira_syntax_model::ast::{ConstructKind, Expr, Item, TypeRef};
 
 use super::{first_stmt, only_function, only_struct, parse_text};
 
@@ -14,6 +14,26 @@ fn execution_annotations_select_an_engine() {
     let native = parse_text("@Native function f() { return }");
     assert_eq!(only_function(&native).execution, Execution::Native);
     assert!(native.diagnostics.is_empty());
+}
+
+#[test]
+fn parenthesized_types_distinguish_tuples_from_function_types() {
+    let tuple = parse_text("function pair() -> (Int, String) { return (1, \"x\") }");
+    assert!(tuple.diagnostics.is_empty(), "{:?}", tuple.diagnostics);
+    let tuple_function = only_function(&tuple);
+    let tuple_type = tuple_function.return_type.expect("tuple return type");
+    let TypeRef::Tuple { elements, .. } = tuple.tree.type_ref(tuple_type) else {
+        panic!("expected tuple type");
+    };
+    assert_eq!(elements.len(), 2);
+
+    let parsed = parse_text("function apply(f: (Int, String) -> Bool) { return }");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let function = only_function(&parsed);
+    let TypeRef::Function { params, .. } = parsed.tree.type_ref(function.params[0].ty) else {
+        panic!("expected function type");
+    };
+    assert_eq!(params.len(), 2);
 }
 
 #[test]

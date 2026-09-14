@@ -105,26 +105,86 @@ fn a_void_body_joins_as_an_int() {
 }
 
 #[test]
-fn a_task_body_outside_the_executable_slice_is_refused() {
+fn a_task_body_that_is_not_a_call_or_literal_is_refused() {
     assert!(
         codes(&program("let h = Task { tskSum(1, 2) + 1 }")).contains(&"KSEM159".to_owned()),
         "an expression that is not a direct call"
     );
-    assert_eq!(
-        codes(
+}
+
+#[test]
+fn a_task_body_may_take_and_return_any_send_value() {
+    // A `String` result, once refused for not being a scalar, now crosses as
+    // the token a channel payload does.
+    assert!(
+        diagnostics(
             "async function tskText() -> String { return \"x\" }\n\
-             @Main function main() { let h = Task { tskText() } return }"
-        ),
-        vec!["KSEM159"],
-        "a result that is not a scalar"
+             @Main function main() { let h = Task { tskText() } print(h.await) return }"
+        )
+        .is_empty(),
+        "a String result"
     );
-    assert_eq!(
-        codes(
-            "async function tskFlag(on: Bool) -> Int { return 1 }\n\
+    assert!(
+        diagnostics(
+            "async function tskFlag(on: Bool) -> Bool { return on }\n\
              @Main function main() { let h = Task { tskFlag(true) } return }"
-        ),
-        vec!["KSEM159"],
-        "a parameter that is not a scalar"
+        )
+        .is_empty(),
+        "a Bool parameter and result"
+    );
+    let cases = [
+        "struct S { let x: Int }\n\
+         async function tskStruct() -> S { return S { x: 1 } }\n\
+         @Main function main() { let h = Task { tskStruct() } print(h.await.x) return }",
+        "async function tskArr() -> [Int] { return [1, 2] }\n\
+         @Main function main() { let h = Task { tskArr() } print(h.await[0]) return }",
+        "enum E { A B }\n\
+         async function tskEnum() -> E { return .A }\n\
+         @Main function main() { let h = Task { tskEnum() } let e = h.await return }",
+        "async function tskAny() -> Any { return 1 }\n\
+         @Main function main() { let h = Task { tskAny() } let a: Any = h.await return }",
+        "distinct D = Int\n\
+         async function tskDist() -> D { return D(1) }\n\
+         @Main function main() { let h = Task { tskDist() } print(h.await.raw) return }",
+    ];
+    for case in cases {
+        assert!(diagnostics(case).is_empty(), "clean return: {case}");
+    }
+}
+
+#[test]
+fn a_task_body_may_take_any_send_value() {
+    let cases = [
+        "struct S { let x: Int }\n\
+         async function tskTake(s: S) -> Int { return s.x }\n\
+         @Main function main() { let h = Task { tskTake(S { x: 3 }) } print(h.await) return }",
+        "async function tskTake(a: [Int]) -> Int { return a[0] }\n\
+         @Main function main() { let h = Task { tskTake([7, 8]) } print(h.await) return }",
+        "enum E { A B }\n\
+         async function tskTake(e: E) -> Int { return 0 }\n\
+         @Main function main() { let h = Task { tskTake(.A) } print(h.await) return }",
+        "async function tskTake(a: Any) -> Int { return 0 }\n\
+         @Main function main() { let h = Task { tskTake(1) } print(h.await) return }",
+        "distinct D = Int\n\
+         async function tskTake(d: D) -> Int { return d.raw }\n\
+         @Main function main() { let h = Task { tskTake(D(5)) } print(h.await) return }",
+    ];
+    for case in cases {
+        assert!(diagnostics(case).is_empty(), "clean parameter: {case}");
+    }
+}
+
+#[test]
+fn a_task_body_that_does_not_send_everything_it_crosses_is_refused() {
+    // A function type is not `Send`: it keeps captures that the join over the
+    // whole program has not settled. It is refused for what it kept, not its
+    // width, and it is `KSEM312` rather than the body-shape `KSEM159`.
+    let text = "async function tskFn(): (Int) -> Int { return { v in return v } }\n\
+                @Main function main() { let h = Task { tskFn() } return }";
+    assert!(
+        codes(text).contains(&"KSEM312".to_owned()),
+        "a function-type result: {:?}",
+        diagnostics(text)
     );
 }
 

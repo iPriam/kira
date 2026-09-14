@@ -139,6 +139,13 @@ impl Vm<'_> {
                         .seam_tree(*value)
                         .ok_or(VmError::StructAtSeam { function: id })?,
                 ),
+                // A `Number` is two words, so it crosses as a node like an
+                // aggregate rather than in a one-word argument.
+                Value::Number(_) => Some(
+                    self.heap
+                        .seam_tree(*value)
+                        .ok_or(VmError::NumberAtSeam { function: id })?,
+                ),
                 // Only the payload-carrying ones: a payload-less enum crosses
                 // as its tag, with no tree and no allocation.
                 Value::Enum(enum_id) if self.heap.enum_seam_tag(enum_id).is_none() => Some(
@@ -176,6 +183,10 @@ impl Vm<'_> {
                 Value::Float(value) => NativeArg::Float(value),
                 Value::Bool(value) => NativeArg::Bool(value),
                 Value::Str(id) => NativeArg::Str(self.heap.get(id)),
+                Value::Number(_) => match &trees[index] {
+                    Some(tree) => NativeArg::Aggregate(tree),
+                    None => return Err(VmError::NumberAtSeam { function: id }),
+                },
                 Value::Void => NativeArg::Void,
                 // A struct, an array, and a payload-carrying enum all cross as
                 // the tree built above. The tree is this side's copy; the
@@ -207,8 +218,8 @@ impl Vm<'_> {
                 // A deferred read is refused with them, and is unreachable:
                 // `own_arguments` above rebuilt every one on this stack, so a
                 // state read arrives as the struct, array or enum it holds.
-                Value::NativeState(_)
-                | Value::MainThreadTask(_)
+                Value::NativeState(token) => NativeArg::NativeState(token.as_word()),
+                Value::MainThreadTask(_)
                 | Value::NativeSnapshot(_)
                 | Value::Type(_)
                 | Value::Cell(_) => {

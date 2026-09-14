@@ -62,12 +62,48 @@ impl<'a> Analyzer<'a> {
                 );
                 continue;
             }
-            if self.foreign_index.contains_key(&name) {
-                self.emit(
-                    function.name_span,
-                    "KSEM185",
-                    format!("`{annotation}` function `{name}` is already declared"),
-                );
+            // A repeat of a name is a second shape of one symbol, or a mistake.
+            //
+            // It is the first when the two declarations agree about *what* they
+            // bind — the same library, the same symbol, the same ABI — and
+            // differ only in the signature they call it through. That is
+            // `objc_msgSend`: not variadic on arm64, so every selector must be
+            // called through the prototype it actually has, and one Kira name
+            // carrying all of them is better than dozens of near-identical
+            // ones. It is the second whenever the two name different things.
+            if let Some(existing) = self.foreign_index.get(&name)
+                && let Some(&first) = existing.first()
+            {
+                let previous = &self.program.foreign[first.0 as usize];
+                if previous.library != hir_foreign.library
+                    || previous.symbol != hir_foreign.symbol
+                    || previous.abi != hir_foreign.abi
+                {
+                    self.emit(
+                        function.name_span,
+                        "KSEM185",
+                        format!(
+                            "`{annotation}` function `{name}` is already declared, binding                              `{}` in `{}`: one name may carry several shapes of one symbol,                              not two symbols",
+                            previous.symbol, previous.library
+                        ),
+                    );
+                    continue;
+                }
+                if existing.iter().any(|&other| {
+                    self.program.foreign[other.0 as usize].signature == hir_foreign.signature
+                }) {
+                    self.emit(
+                        function.name_span,
+                        "KSEM185",
+                        format!(
+                            "`{annotation}` function `{name}` is already declared with this                              signature: a second shape of one symbol has to differ from the                              shapes already written"
+                        ),
+                    );
+                    continue;
+                }
+                let id = ForeignId(self.program.foreign.len() as u32);
+                self.foreign_index.entry(name).or_default().push(id);
+                self.program.foreign.push(hir_foreign);
                 continue;
             }
             // Last, so the row `bound` records is one that is about to exist:
@@ -76,7 +112,7 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             let id = ForeignId(self.program.foreign.len() as u32);
-            self.foreign_index.insert(name, id);
+            self.foreign_index.insert(name, vec![id]);
             self.program.foreign.push(hir_foreign);
         }
     }
@@ -419,15 +455,12 @@ impl<'a> Analyzer<'a> {
         false
     }
 
-    /// Refuses a `retains:` naming a parameter that holds no C storage.
+    /// Refuses a `retains:` naming a parameter that carries nothing C can keep.
     ///
-    /// `retains:` transfers ownership of the blocks reachable from an argument
-    /// to the engine's retained registry, and makes the call site consume the
-    /// value with `move`. A parameter whose seam position is a number, a `Bool`,
-    /// or `Void` has no such block: nothing is transferred, and the `move` the
-    /// call site is then made to write consumes a value for no reason. The three
-    /// positions that do carry storage are a pointer word, a `CString`, and a
-    /// C-layout aggregate.
+    /// C storage moves to the engine's retained registry. A `NativeState<T>`
+    /// instead transfers its affine token owner directly to C. Numbers, `Bool`,
+    /// and `Void` carry neither kind of ownership, so making their call site
+    /// write `move` would consume a value for nothing.
     fn check_retained_storage(
         &mut self,
         function: &Function,
@@ -451,8 +484,9 @@ impl<'a> Analyzer<'a> {
                     param.name_span,
                     "KSEM371",
                     format!(
-                        "`retains` names `{}`, which holds no C storage to keep: a retained \
-                         parameter is a pointer, a `CString`, or an `@FFI.Struct {{ layout: c }}`",
+                        "`retains` names `{}`, which carries nothing C can keep by ownership: a \
+                         retained parameter is a pointer, a `CString`, a `NativeState<T>`, or an \
+                         `@FFI.Struct {{ layout: c }}`",
                         self.interner.resolve(param.name)
                     ),
                 );

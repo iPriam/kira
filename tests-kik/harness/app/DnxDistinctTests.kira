@@ -13,6 +13,13 @@ construct DnxDistinctPositionsFold() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(9329) return e }
 }
 
+construct DnxOperatorSurfaceFold() extends Test {
+    test {
+        return distinctOperatorSection()
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(165) return e }
+}
+
 construct DnxDerivesFold() extends Test {
     test {
         return distinctDerivesSection()

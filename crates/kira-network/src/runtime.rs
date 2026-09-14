@@ -177,6 +177,13 @@ pub fn error_code(error: NetworkError) -> i64 {
     error.code()
 }
 
+/// A clone of the shared Tokio runtime handle, for surfaces that own their own
+/// state rather than the one-shot [`Operation`] registry — the WebTransport
+/// channels drive their reader and writer tasks on it.
+pub(crate) fn tokio_handle() -> Result<Handle, NetworkError> {
+    Ok(runtime()?.handle.clone())
+}
+
 /// What a finished operation produced.
 ///
 /// A loopback operation answers with one number, and a request answers with a

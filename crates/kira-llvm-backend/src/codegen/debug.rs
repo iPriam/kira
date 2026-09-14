@@ -275,6 +275,9 @@ impl DebugBuilder {
             Type::Int(_) => ("Int", 64, 0x05),
             Type::Float(_) => ("Float", 64, 0x04),
             Type::Bool => ("Bool", 1, 0x02),
+            // A `Number` is a two-word value — mantissa and scale — so the
+            // debugger sees a 128-bit quantity under the type's own name.
+            Type::Number => ("Number", 128, 0x05),
             Type::RawPtr
             | Type::ForeignPtr(_)
             | Type::NativeState(_)

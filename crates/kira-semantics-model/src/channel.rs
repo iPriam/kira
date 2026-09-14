@@ -117,6 +117,32 @@ pub enum Crossing {
 }
 
 impl Crossing {
+    /// How a value of `ty` becomes the one machine word a slot holds.
+    ///
+    /// One classifier for every boundary a `Send` value crosses as a word — a
+    /// channel queue slot and a task argument or result slot alike — so the box
+    /// a sender writes and the recovery a reader performs agree by construction
+    /// rather than by each end reworking the payload type.
+    ///
+    /// A `distinct` type is erased before IR exists, so what crosses is its
+    /// representation. A scalar is the word; a `Float` is its bits; anything
+    /// that owns storage travels as a token naming it in the store.
+    pub fn classify(types: &crate::TypeTable, ty: crate::Type) -> Crossing {
+        use crate::Type;
+        let representation = match ty {
+            Type::Distinct(id) => types.distincts().representation(id).unwrap_or(Type::INT),
+            other => other,
+        };
+        match representation {
+            Type::Float(_) => Crossing::FloatBits,
+            other if other.is_scalar() => Crossing::Word,
+            other => match types.native_state_type_id(other) {
+                Some(id) => Crossing::Boxed(id),
+                None => Crossing::Word,
+            },
+        }
+    }
+
     /// Whether the queued word owns the storage it names.
     ///
     /// The question a receiver's close has to ask: a slot holding a token owns

@@ -71,6 +71,13 @@ fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
             let written: Vec<String> = args.iter().map(|&arg| type_spelling(result, arg)).collect();
             format!("{}<{}>", result.interner.resolve(*name), written.join(", "))
         }
+        TypeRef::Tuple { elements, .. } => {
+            let written: Vec<String> = elements
+                .iter()
+                .map(|&element| type_spelling(result, element))
+                .collect();
+            format!("({})", written.join(", "))
+        }
         TypeRef::Array { element, .. } => format!("[{}]", type_spelling(result, *element)),
         TypeRef::Function {
             params,

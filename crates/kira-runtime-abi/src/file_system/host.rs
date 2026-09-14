@@ -5,8 +5,10 @@
 //! host in [`FileSystemHost`] or by running as native code, where
 //! `kira_rt_fs_*` calls [`perform`] directly.
 
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 use super::{FileRequest, FileResponse, FileSystemError};
 use crate::{
@@ -29,34 +31,71 @@ pub fn perform(request: FileRequest<'_>) -> FileResponse {
             path,
             offset,
             count,
-        } => FileResponse::Bytes(read_range(path, offset, count)),
+        } => FileResponse::Bytes(read_range(resolved(path).as_ref(), offset, count)),
         FileRequest::WriteBytes { path, bytes } => {
             FileResponse::Flag(fs::write(path, bytes).is_ok())
         }
-        FileRequest::ReadText { path } => FileResponse::Text(read_text(path)),
+        FileRequest::ReadText { path } => FileResponse::Text(read_text(resolved(path).as_ref())),
         FileRequest::WriteText { path, text } => {
             FileResponse::Flag(fs::write(path, text.as_bytes()).is_ok())
         }
         FileRequest::ListDirectory { path } => FileResponse::Names(list_directory(path)),
-        FileRequest::IsDirectory { path } => {
-            FileResponse::Flag(fs::metadata(path).is_ok_and(|meta| meta.is_dir()))
-        }
+        FileRequest::IsDirectory { path } => FileResponse::Flag(
+            fs::metadata(resolved(path).as_ref()).is_ok_and(|meta| meta.is_dir()),
+        ),
         FileRequest::MakeDirectory { path } => FileResponse::Flag(make_directory(path)),
         FileRequest::RenamePath { from, to } => FileResponse::Flag(fs::rename(from, to).is_ok()),
         FileRequest::RemovePath { path } => FileResponse::Flag(remove_path(path)),
-        FileRequest::FileExists { path } => {
-            FileResponse::Flag(fs::metadata(path).is_ok_and(|meta| meta.is_file()))
-        }
+        FileRequest::FileExists { path } => FileResponse::Flag(
+            fs::metadata(resolved(path).as_ref()).is_ok_and(|meta| meta.is_file()),
+        ),
         FileRequest::PathExists { path } => {
             // `symlink_metadata` rather than `metadata`, so an entry that exists
             // but whose target does not — a broken symlink — still counts as
             // present, which is what "exists as any entry" means.
-            FileResponse::Flag(fs::symlink_metadata(path).is_ok())
+            FileResponse::Flag(fs::symlink_metadata(resolved(path).as_ref()).is_ok())
         }
-        FileRequest::FileSize { path } => {
-            FileResponse::Size(fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        FileRequest::FileSize { path } => FileResponse::Size(
+            fs::metadata(resolved(path).as_ref())
+                .map(|meta| meta.len())
+                .unwrap_or(0),
+        ),
+    }
+}
+
+/// The path a read should actually touch, redirected into a staged asset
+/// bundle when the working directory has nothing there.
+///
+/// A build lays each dependency package's declared assets under
+/// `.kira-build/<package>.klbundle/resources/<declared path>` (see `kira-cli`'s
+/// `stage_bundled_assets`). A program therefore asks for a file by the path its
+/// author declared — `Resources/Default.kcui`, say — and finds it even when the
+/// file ships inside a library's bundle rather than beside the program itself.
+///
+/// The rule is deliberately narrow, so this only ever turns a miss into a hit
+/// and never changes an answer the process already had: only a RELATIVE path
+/// that does not already resolve in the working directory is redirected, and
+/// only to a bundle entry that exists. A real working-directory file wins, an
+/// absolute path is never rewritten, and a path that is nowhere still reads as
+/// absent. Only reads are routed through here; a write keeps its literal path.
+fn resolved(path: &str) -> Cow<'_, Path> {
+    let direct = Path::new(path);
+    if direct.is_absolute() || direct.exists() {
+        return Cow::Borrowed(direct);
+    }
+    let Ok(entries) = fs::read_dir(".kira-build") else {
+        return Cow::Borrowed(direct);
+    };
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().ends_with(".klbundle") {
+            continue;
+        }
+        let candidate = entry.path().join("resources").join(path);
+        if candidate.exists() {
+            return Cow::Owned(candidate);
         }
     }
+    Cow::Borrowed(direct)
 }
 
 /// Reads at most `count` bytes from `offset`, answering with what it got.
@@ -64,7 +103,7 @@ pub fn perform(request: FileRequest<'_>) -> FileResponse {
 /// A true partial read: the file is opened and seeked, never read whole. A
 /// non-positive count, a negative offset, an offset past the end, a missing
 /// file, and a directory all produce no bytes.
-fn read_range(path: &str, offset: i64, count: i64) -> Vec<u8> {
+fn read_range(path: &Path, offset: i64, count: i64) -> Vec<u8> {
     let (Ok(offset), Ok(count)) = (u64::try_from(offset), usize::try_from(count)) else {
         return Vec::new();
     };
@@ -91,7 +130,7 @@ fn read_range(path: &str, offset: i64, count: i64) -> Vec<u8> {
 /// and reads the file back as text sees the bytes before it. `size` on
 /// `FileContents` still counts the whole file, which is how a caller tells the
 /// two apart.
-fn read_text(path: &str) -> String {
+fn read_text(path: &Path) -> String {
     let Ok(bytes) = fs::read(path) else {
         return String::new();
     };
@@ -235,6 +274,15 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         self.inner.native_state_create(ty, value)
     }
 
+    fn native_state_create_dropping(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+        glue: Option<u32>,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.inner.native_state_create_dropping(ty, value, glue)
+    }
+
     fn native_state_recover(
         &mut self,
         token: NativeStateToken,
@@ -248,7 +296,7 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
         value: NativeStateValue,
-    ) -> Result<(), NativeStateError> {
+    ) -> Result<NativeStateValue, NativeStateError> {
         self.inner.native_state_replace(token, ty, value)
     }
 
@@ -258,6 +306,13 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
 
     fn native_state_release(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.inner.native_state_release(token)
+    }
+
+    fn native_state_release_dropping(
+        &mut self,
+        token: NativeStateToken,
+    ) -> Result<Option<NativeStateValue>, NativeStateError> {
+        self.inner.native_state_release_dropping(token)
     }
 
     fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {

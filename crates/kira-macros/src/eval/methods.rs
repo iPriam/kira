@@ -73,7 +73,14 @@ impl Evaluator<'_> {
             Expr::Binary { op, lhs, rhs, .. } => {
                 let left = self.value(lhs)?;
                 let right = self.value(rhs)?;
-                binary(op, left, right)
+                let result = binary(op, left, right)?;
+                // Concatenation builds fresh text; every other operator answers
+                // in place, so only a string result spends build budget.
+                if matches!(result, Value::Str(_)) {
+                    let cells = result.cells();
+                    self.charge_cells(cells)?;
+                }
+                Ok(result)
             }
             Expr::Conditional {
                 cond,
@@ -119,14 +126,24 @@ impl Evaluator<'_> {
                 // surface does not answer, on a declaration that declares a
                 // member of that name, is that member — run now. Which is what
                 // makes a hook read like the code it replaces.
-                if let Value::Declaration(declaration) = &value
-                    && member(&value, &name).is_err()
+                //
+                // Probed once: a reflection read that succeeds is answered
+                // below, and only a miss falls through to the members.
+                let probed = member(&value, &name);
+                if probed.is_err()
+                    && let Value::Declaration(declaration) = &value
                     && declaration.members.iter().any(|(each, _)| each == &name)
                 {
                     let declaration = declaration.clone();
                     return self.member_value(&declaration, &name);
                 }
-                member(&value, &name)
+                let result = probed?;
+                // A miss-free read answers from what is there, except `body`,
+                // which parses the declaration behind it: the fresh parse
+                // spends its size, and every smaller read spends almost nothing.
+                let cells = result.cells();
+                self.charge_cells(cells)?;
+                Ok(result)
             }
             // `.Variant` / `.Variant(payload)`. Which enum it belongs to is the
             // expected type's business everywhere else in the language, and an
@@ -188,7 +205,11 @@ impl Evaluator<'_> {
     fn call(&mut self, callee: &str, args: &[CallArg]) -> Result<Value, EvalError> {
         let values = self.arguments(args)?;
         if let Some(template) = super::template_of(callee) {
-            return self.render(template, &values);
+            let result = self.render(template, &values)?;
+            // A rendered quote is fresh text, so it spends its size.
+            let cells = result.cells();
+            self.charge_cells(cells)?;
+            return Ok(result);
         }
         match (callee, values.as_slice()) {
             ("String", [Value::Int(n)]) => Ok(Value::Str(n.to_string())),
@@ -245,7 +266,11 @@ impl Evaluator<'_> {
                 return self.namespace_call(&name, method, &values);
             }
             // `append` writes through its receiver, so the receiver has to be a
-            // place rather than a value.
+            // place rather than a value. Pushed in place: cloning the whole
+            // array per push would make building one N pushes long cost O(N²)
+            // clones, which is how a worklist walk over a big declaration
+            // ground the compiler to a halt. Same values either way — the slot
+            // is uniquely owned, and every read clones — only the cost differs.
             if method == "append" {
                 let values = self.arguments(args)?;
                 let [item] = values.as_slice() else {
@@ -253,15 +278,26 @@ impl Evaluator<'_> {
                         "`append` with other than one argument",
                     ));
                 };
-                let Some(Value::Array(items)) = self.lookup(&name) else {
-                    return Err(EvalError::unsupported(format!(
-                        "`append` on `{name}`, which is not an array"
-                    )));
-                };
-                let mut items = items.clone();
-                items.push(item.clone());
-                self.assign(&name, Value::Array(items))?;
-                return Ok(Value::Void);
+                // The innermost binding wins, exactly as for assignment: a name
+                // rebound to a non-array in an inner scope is not an array.
+                for scope in self.scopes.iter_mut().rev() {
+                    if let Some(slot) = scope.get_mut(name.as_str()) {
+                        let Value::Array(items) = slot else {
+                            return Err(EvalError::unsupported(format!(
+                                "`append` on `{name}`, which is not an array"
+                            )));
+                        };
+                        items.push(item.clone());
+                        // The push cloned the item, so it spends the item's
+                        // cells — but not the array's length, because no array
+                        // was copied.
+                        self.charge_cells(item.cells())?;
+                        return Ok(Value::Void);
+                    }
+                }
+                return Err(EvalError::unsupported(format!(
+                    "`append` on `{name}`, which is not an array"
+                )));
             }
         }
         let value = self.value(receiver)?;
@@ -276,7 +312,13 @@ impl Evaluator<'_> {
             };
             return self.member_value(declaration, name);
         }
-        method_on(&value, method, &values)
+        // Splits, replacements, joins, and edits build fresh values; pure
+        // reads answer scalars — so charging the result spends growth and
+        // almost nothing else.
+        let result = method_on(&value, method, &values)?;
+        let cells = result.cells();
+        self.charge_cells(cells)?;
+        Ok(result)
     }
 
     /// Runs one member of a construct-backed declaration and hands back what it
@@ -341,7 +383,13 @@ impl Evaluator<'_> {
             enums: &self.enums.clone(),
             testing: self.testing,
         };
-        let (value, reported) = super::run_value(&compiled, Vec::new(), comptime, self.lint)?;
+        let (value, reported) = super::run_value_shared(
+            &compiled,
+            Vec::new(),
+            comptime,
+            self.lint,
+            self.fuel.clone(),
+        )?;
         self.reported.extend(reported);
         Ok(value)
     }
@@ -366,7 +414,10 @@ impl Evaluator<'_> {
                 }
                 // Joined syntax is assembled, not read: the pieces may come from
                 // anywhere, or from nowhere, so the join belongs to no one file.
-                Ok(Value::built(parts.join(separator)))
+                let joined = Value::built(parts.join(separator));
+                let cells = joined.cells();
+                self.charge_cells(cells)?;
+                Ok(joined)
             }
             // `Diagnostics.error("…", at: something)`, and its two quieter
             // siblings. The `at:` argument is whatever the macro is talking
@@ -428,7 +479,7 @@ impl Evaluator<'_> {
 }
 
 /// Applies a binary operator to two compile-time values.
-fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
+pub(crate) fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
     use BinaryOp::{Add, And, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Rem, Sub};
     match (op, &left, &right) {
         (Add, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.wrapping_add(*b))),

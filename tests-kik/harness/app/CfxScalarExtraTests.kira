@@ -63,9 +63,87 @@ function cfxsMax(a: Int, b: Int) -> Int {
     return a > b ? a : b
 }
 
+// A compound assignment folds the current value in before storing: `x += y`
+// stores `x + y`. One fold walks every operator — arithmetic, bitwise, and the
+// two shifts — through an integer local and an array element, so a backend that
+// evaluated the place or the fold differently answers a different number.
+function cfxsCompoundAssign() -> Int {
+    var i = 0
+    i += 5
+    i -= 2
+    i *= 4
+    i /= 2
+    i %= 5
+    var mask = 6
+    mask &= 3
+    mask |= 8
+    mask ^= 1
+    mask <<= 2
+    mask >>= 1
+    var xs: [Int] = [1, 2, 3]
+    xs[1] += 10
+    xs[2] *= 3
+    return i * 1000000 + mask * 1000 + xs[1] * 10 + xs[2]
+}
+
+// A generalized `match`: an enum with an alternation and an `else`, an `Int`
+// with literals, an alternation, a half-open range, and an `else`, and a `Bool`
+// covered by both sides. Folded so a backend that lowered any arm differently
+// answers a different number.
+enum CfxHue {
+    Red
+    Green
+    Blue
+    Cyan
+}
+
+function cfxsHueScore(h: borrow CfxHue) -> Int {
+    match h {
+        Red -> return 1
+        Green, Blue -> return 2
+        else -> return 9
+    }
+}
+
+function cfxsGrade(n: Int) -> Int {
+    match n {
+        0 -> return 100
+        1, 2, 3 -> return 200
+        4..10 -> return 300
+        else -> return 0
+    }
+}
+
+function cfxsMatchGeneralized() -> Int {
+    var score = 0
+    score = score + cfxsHueScore(.Red)
+    score = score + cfxsHueScore(.Blue) * 10
+    score = score + cfxsHueScore(.Cyan) * 100
+    score = score + cfxsGrade(0)
+    score = score + cfxsGrade(2) * 2
+    score = score + cfxsGrade(7)
+    score = score + cfxsGrade(50) + 5
+    let b = true
+    match b {
+        true -> score = score + 1000
+        false -> score = score + 2000
+    }
+    return score
+}
+
 // ---------------------------------------------------------------------------
 // Arithmetic identities
 // ---------------------------------------------------------------------------
+
+construct CfxSCompoundAssignment() extends Test {
+    test { return cfxsCompoundAssign() }
+    expect { let e: Result<Any, TestFailure> = .Ok(1022129) return e }
+}
+
+construct CfxSMatchGeneralized() extends Test {
+    test { return cfxsMatchGeneralized() }
+    expect { let e: Result<Any, TestFailure> = .Ok(2726) return e }
+}
 
 construct CfxSArithIdentityAddZero() extends Test {
     test { return 12345 + 0 }

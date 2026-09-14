@@ -4,13 +4,14 @@ A chat-completions client written in Kira: a question goes out over verified
 TLS, the answer comes back as JSON, and the conversation remembers what was
 said.
 
-```sh
-cargo build -p kira-network
+The transport is Foundation's — `httpSend` — so there is nothing to build or
+declare; the network library ships with the toolchain.
 
+```sh
 # Against a real service.
 OPENROUTER_API_KEY=... kira run --backend llvm examples/llm
 
-# With no key, against the loopback service `kira-network` ships.
+# With no key, against the loopback service the toolchain ships.
 kira run --backend vm examples/llm
 ```
 
@@ -45,8 +46,7 @@ history 5
 
 | File | Holds |
 | --- | --- |
-| `app/http.kira` | The `@FFI.Extern` declarations and one `httpSend`: a request goes out, an answer comes back, and the Kira scheduler keeps running while Tokio drives the socket. |
-| `app/chat.kira` | Messages in, a reply out: the request document, the response document, the five ways it can fail, the retry policy, and a `Conversation` that keeps its own history. |
+| `app/chat.kira` | Messages in, a reply out: the request document, the response document, the five ways it can fail, the retry policy, and a `Conversation` that keeps its own history. It sends over Foundation's `httpSend` — the transport is the standard library's, not this example's. |
 | `app/main.kira` | Reads the environment, takes two turns, prints what came back. |
 
 ## The request

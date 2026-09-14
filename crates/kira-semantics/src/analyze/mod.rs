@@ -192,7 +192,15 @@ pub(crate) struct Analyzer<'a> {
     /// signature and annotation checks approved. A foreign name may not collide
     /// with a user function's, which is what keeps a call resolving to exactly
     /// one [`kira_semantics_model::hir::Callee`].
-    pub(crate) foreign_index: HashMap<String, kira_semantics_model::hir::ForeignId>,
+    ///
+    /// One name maps to *several* declarations when a symbol has no single C
+    /// type. `objc_msgSend` is the case that forces it: on arm64 it is not
+    /// variadic, so every selector it dispatches must be called through the
+    /// prototype that selector actually has, and a graphics backend needs
+    /// dozens of them. The declarations in such a set agree on the library, the
+    /// symbol and the ABI, and differ only in signature; the call site picks
+    /// one. Every other name has a set of one.
+    pub(crate) foreign_index: HashMap<String, Vec<kira_semantics_model::hir::ForeignId>>,
     /// Whether the type being resolved sits in an `@FFI.Extern` signature.
     ///
     /// `CString` is legal only as a foreign parameter, so its seam-only refusal
@@ -520,7 +528,7 @@ impl Analyzer<'_> {
     /// Resolution that does not depend on which package the file itself belongs
     /// to: the declarations no package owns, then what this file's imports
     /// provide.
-    fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
+    pub(crate) fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
         let structs = self.program.types.structs();
         // The declarations no package owns — a bundled library like
         // `Foundation`, another module of the program, or a struct the compiler
@@ -581,7 +589,7 @@ impl Analyzer<'_> {
     /// belongs to: rows no package owns (a bundled library's declarations and
     /// the instantiations a generic template minted), then what this file's
     /// imports provide.
-    fn enum_beyond_own_package(&self, name: &str) -> Option<EnumId> {
+    pub(crate) fn enum_beyond_own_package(&self, name: &str) -> Option<EnumId> {
         let enums = self.program.types.enums();
         if self.imports.package_of(self.source).is_some()
             && let Some(id) = enums.lookup(name)

@@ -88,10 +88,10 @@ fn nested_array_types_resolve_and_index_twice() {
     );
 }
 
-// ----- the two-member surface ---------------------------------------
+// ----- member surface ------------------------------------------------
 
 #[test]
-fn an_array_has_exactly_append_and_count() {
+fn an_array_rejects_unknown_member_names() {
     assert_eq!(
         codes("@Main function main() { var xs: [Int] = [] xs.push(1) return }"),
         vec!["KSEM101"]

@@ -194,7 +194,7 @@ impl FunctionLowering<'_, '_> {
 
     /// Releases a local whose type runs a user `Drop`, only if it holds a
     /// value, and marks it empty.
-    fn release_local_if_live(
+    pub(super) fn release_local_if_live(
         &mut self,
         slot: u32,
         pointer: LLVMValueRef,
@@ -260,6 +260,9 @@ impl FunctionLowering<'_, '_> {
             .flatten()
         {
             let root_ty = self.local_type(place.local)?;
+            if !self.state_is_boxed() {
+                return self.store_native_state_place(place, type_id, root_ty, expr);
+            }
             if place.path.is_empty() {
                 let value = self.lower_expr(expr)?;
                 return self.replace_native_state_local(place.local, type_id, root_ty, value);
@@ -404,7 +407,7 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// Converts a foreign word into the owning representation a C slot stores.
-    fn prepare_store_value(
+    pub(in crate::codegen) fn prepare_store_value(
         &mut self,
         storage_ty: Type,
         expr: IrExprId,

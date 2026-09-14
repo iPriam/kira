@@ -203,10 +203,10 @@ impl Analyzer<'_> {
             | HirExpr::EnumTag { value: operand }
             | HirExpr::EnumPayload { value: operand, .. }
             | HirExpr::NativeState { value: operand, .. }
-            | HirExpr::NativeUserData { state: operand }
+            | HirExpr::NativeUserData { state: operand, .. }
             | HirExpr::NativeRecover { raw: operand, .. }
             | HirExpr::NativeStateRetain { token: operand }
-            | HirExpr::NativeStateRelease { token: operand }
+            | HirExpr::NativeStateRelease { token: operand, .. }
             | HirExpr::Convert { operand, .. }
             | HirExpr::Distinct { value: operand, .. }
             | HirExpr::IntoAny { value: operand, .. }
@@ -267,6 +267,7 @@ impl Analyzer<'_> {
                 exprs.extend(arguments.iter().copied());
             }
             HirExpr::MathOperation { operands, .. } => exprs.extend(operands.iter().copied()),
+            HirExpr::NumberOperation { operands, .. } => exprs.extend(operands.iter().copied()),
             HirExpr::FileSystem { args, .. }
             | HirExpr::Compiler { args, .. }
             | HirExpr::Env { args, .. } => exprs.extend(args.iter().copied()),

@@ -265,10 +265,22 @@ pub enum HirExpr {
     Select {
         /// The `Bool` condition.
         cond: HirExprId,
+        /// Statements that run only on the true branch, before its value.
+        then_setup: Vec<super::HirStmtId>,
         /// The value when the condition holds.
         then: HirExprId,
+        /// Locals whose lexical lifetime ends after the true-branch value has
+        /// been materialized. Keeping these branch-local is what lets an arm
+        /// own storage without releasing an uninitialized slot on the edge that
+        /// never ran.
+        then_cleanup: Vec<LocalId>,
+        /// Statements that run only on the false branch, before its value.
+        otherwise_setup: Vec<super::HirStmtId>,
         /// The value when it does not.
         otherwise: HirExprId,
+        /// Locals whose lexical lifetime ends after the false-branch value has
+        /// been materialized.
+        otherwise_cleanup: Vec<LocalId>,
         /// The type both branches agreed on.
         ty: Type,
     },
@@ -540,6 +552,20 @@ pub enum HirExpr {
         /// have.
         ty: Type,
     },
+    /// One `Number` operation — construction, arithmetic, comparison, or a
+    /// conversion out — told apart by its [`NumberOp`](kira_runtime_abi::NumberOp).
+    ///
+    /// Uniform in shape: one or two operands in source order, and a result type
+    /// carried because it is the op's, not the operands' — `Number("1")` answers
+    /// `Number`, `a < b` answers `Bool`, `String(n)` answers `String`.
+    NumberOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::NumberOp,
+        /// The operands, in source order.
+        operands: Vec<HirExprId>,
+        /// What it answers with.
+        ty: Type,
+    },
     /// A scalar rendered as text (`String(x)`).
     ///
     /// The rendering is the one `print` gives, so a value printed and a value
@@ -677,6 +703,12 @@ pub enum HirExpr {
     NativeUserData {
         /// The state handle.
         state: HirExprId,
+        /// Whether this is an explicitly borrowed raw-token export rather than
+        /// another affine owner of the state.
+        borrowed: bool,
+        /// The affine owner type for an owning export, or `RawPtr` for a
+        /// borrowed token.
+        ty: Type,
     },
     /// Recovers typed mutable access through a returned userdata token.
     NativeRecover {
@@ -697,6 +729,9 @@ pub enum HirExpr {
     NativeStateRelease {
         /// The state handle or raw token.
         token: HirExprId,
+        /// For an explicitly typed raw-token release, the value type whose
+        /// stored root `Drop` body must run on the final release.
+        target: Option<Type>,
     },
     /// A scalar type-conversion call, `Target(operand)` where `Target` is a numeric
     /// scalar type.
@@ -926,6 +961,7 @@ impl HirExpr {
             | HirExpr::CellNull { ty }
             | HirExpr::CellGet { ty, .. }
             | HirExpr::StringOperation { ty, .. }
+            | HirExpr::NumberOperation { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
@@ -938,7 +974,7 @@ impl HirExpr {
             // A byte read out of a string is a byte.
             HirExpr::StringCharAt { .. } => Type::Int(crate::IntSpelling::U8),
             HirExpr::StringSubstring { .. } | HirExpr::StringOf { .. } => Type::String,
-            HirExpr::NativeUserData { .. } => Type::RawPtr,
+            HirExpr::NativeUserData { ty, .. } => *ty,
             HirExpr::IntoAny { .. } => Type::Any,
             HirExpr::ArrayAppend { .. }
             | HirExpr::NativeStateRetain { .. }

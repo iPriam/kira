@@ -17,7 +17,7 @@ The one hole in that guarantee is `SIGKILL`: the staging cleanup is a `Drop` gua
 
 ## Checksums
 
-Every published archive carries a `<archive>.sha256` sidecar, and every route that downloads one verifies it before anything is unpacked: `install`, `install-llvm`, `self-update`, and both bootstrap scripts. A mismatch is fatal and installs nothing.
+Every published archive carries a `<archive>.sha256` sidecar, and every route that downloads one verifies it before anything is unpacked: `install`, `llvm install`, `self-update`, and both bootstrap scripts. A mismatch is fatal and installs nothing.
 
 An artifact with no sidecar still installs, because releases cut before sidecars existed have none, and says so. "Verified" and "no checksum was published" are different installs, and a user who cannot tell them apart has no way to notice the day verification stops happening.
 

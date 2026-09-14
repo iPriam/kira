@@ -151,6 +151,7 @@ fn visit_expr_types(expr: &mut IrExpr, erase: &dyn Fn(&mut Type)) {
         | IrExpr::ArrayNew { ty, .. }
         | IrExpr::Index { ty, .. }
         | IrExpr::StringOperation { ty, .. }
+        | IrExpr::NumberOperation { ty, .. }
         | IrExpr::FileSystem { ty, .. }
         | IrExpr::Compiler { ty, .. }
         | IrExpr::Env { ty, .. }

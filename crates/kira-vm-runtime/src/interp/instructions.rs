@@ -406,6 +406,26 @@ impl Vm<'_> {
                 let found = self.find_index_of(base, needle);
                 self.stack.push(Value::Int(found?));
             }
+            Instruction::NumberOp(op) => {
+                let op = *op;
+                let count = op.operand_count();
+                let mut operands = Vec::with_capacity(count);
+                for _ in 0..count {
+                    match self.pop() {
+                        Ok(value) => operands.push(value),
+                        Err(error) => {
+                            self.discard(operands);
+                            return Err(error);
+                        }
+                    }
+                }
+                // The operands were pushed in source order, so they come off
+                // reversed; restoring the order lets a subtraction or a
+                // comparison read them the way the source wrote them.
+                operands.reverse();
+                let produced = self.perform_number_op(op, &operands)?;
+                self.stack.push(produced);
+            }
             Instruction::StringOp(op) => {
                 let produced = self.with_string_args(|vm, arguments| {
                     // The arguments were pushed in source order, so they come
@@ -548,8 +568,26 @@ impl Vm<'_> {
                 self.stack.push(Value::RawPtr(value as u64));
             }
             Instruction::ConvertRawPtrToInt => {
-                let value = self.pop_foreign_pointer()?;
-                self.stack.push(Value::Int(value as i64));
+                let word = match self.pop()? {
+                    Value::RawPtr(address) => address,
+                    // An affine callback-state owner moved into a transport
+                    // word. A channel or task queue slot is one `Int`, and a
+                    // boxed payload crosses it as the token that names it: the
+                    // slot takes over the owner's single reference, and the
+                    // receiver's `NativeStateTake` releases it. Consuming the
+                    // owner here without a release event is the move — the
+                    // reference lives on in the word, exactly once. Native sees
+                    // one machine word either way; the VM is where the move is
+                    // spelled out.
+                    Value::NativeState(token) => token.as_word(),
+                    other => {
+                        self.heap.drop_value(other);
+                        return Err(VmError::TypeMismatch {
+                            expected: "a pointer into C storage",
+                        });
+                    }
+                };
+                self.stack.push(Value::Int(word as i64));
             }
             Instruction::ConvertFloatToBits => {
                 // A reinterpretation: the IEEE-754 bit pattern, unchanged. The

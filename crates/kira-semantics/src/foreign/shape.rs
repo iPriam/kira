@@ -27,6 +27,9 @@ impl<'a> Analyzer<'a> {
             Type::Float(FloatSpelling::Plain) => Some(ForeignType::F64),
             Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
             Type::Bool => Some(ForeignType::Bool),
+            // A `Number` is a heap decimal with no C scalar to be, so it does not
+            // cross the foreign seam; the caller reports the rejection.
+            Type::Number => None,
             // A distinct type crosses as the scalar it is. `foreign_seam_of`
             // already unwraps one before it reaches here; this arm answers the
             // direct callers so the mapping is total wherever it is asked.
@@ -58,6 +61,12 @@ impl<'a> Analyzer<'a> {
             // at, which is what a materialized image or flattened array *is*
             // to the callee.
             Type::RawPtr | Type::ForeignPtr(_) | Type::CBlock => Some(ForeignType::RawPtr),
+            // Callback state is already an opaque pointer-width token. Passing
+            // an owner to C borrows that word for an ordinary parameter; a
+            // `retains:` parameter transfers the owner instead. A result has no
+            // ownership annotation saying whether C transfers a reference, so
+            // it remains refused below rather than guessing an owner.
+            Type::NativeState(_) if position == Position::Param => Some(ForeignType::RawPtr),
             // A task handle names a row in the running program's own task table,
             // so it means nothing outside it and never crosses the C seam.
             Type::Task(_) | Type::MainThreadTask(_) => {
@@ -165,7 +174,17 @@ impl<'a> Analyzer<'a> {
             // A payload-less enum is an integer with named values, which is what
             // a C enum is. Its case's number is what crosses.
             Type::Enum(id) if self.enum_crosses_as_a_number(id) => Some(ForeignType::I32),
-            Type::Struct(_) | Type::Enum(_) | Type::NativeState(_) => {
+            Type::NativeState(_) => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "a `NativeState<T>` cannot be a foreign result: the declaration says \
+                     what type the token names but not whether C transfers an owner; return \
+                     `RawPtr` and recover it explicitly when C only lends the token",
+                );
+                None
+            }
+            Type::Struct(_) | Type::Enum(_) => {
                 self.emit(
                     span,
                     "KSEM182",

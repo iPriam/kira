@@ -34,6 +34,14 @@ pub(crate) enum PlacePurpose {
     /// An argument passed to a `borrow mut` parameter (`step(tree, 1)`), which
     /// must name mutable storage so the callee's writes reach the caller.
     BorrowMut,
+    /// A raw userdata borrow of stable local-rooted state storage. Unlike
+    /// `BorrowMut`, this only proves lifetime/location identity and does not
+    /// require the binding or fields along the path to be mutable.
+    UserDataBorrow,
+    /// Recovery through an owned state borrows the owner place for the lifetime
+    /// of the recovered view and therefore also requires stable local-rooted
+    /// storage without requiring mutability.
+    NativeRecoverBorrow,
 }
 
 impl PlacePurpose {
@@ -61,6 +69,14 @@ impl PlacePurpose {
                  temporary value would mutate something discarded immediately"
                     .to_owned()
             }
+            PlacePurpose::UserDataBorrow => {
+                "`nativeUserDataBorrow` requires callback-state storage rooted in a local so the borrowed token cannot outlive a temporary"
+                    .to_owned()
+            }
+            PlacePurpose::NativeRecoverBorrow => {
+                "`nativeRecover` borrowing an owned `NativeState` requires storage rooted in a local; bind the owner first instead of recovering a temporary"
+                    .to_owned()
+            }
         }
     }
 
@@ -73,6 +89,8 @@ impl PlacePurpose {
             PlacePurpose::Assign | PlacePurpose::Append => "KSEM025",
             PlacePurpose::MutCall => "KSEM211",
             PlacePurpose::BorrowMut => "KSEM248",
+            PlacePurpose::UserDataBorrow => "KSEM373",
+            PlacePurpose::NativeRecoverBorrow => "KSEM375",
         }
     }
 
@@ -92,6 +110,7 @@ impl PlacePurpose {
             PlacePurpose::BorrowMut => {
                 format!("cannot mutably borrow immutable binding `{name}` (declare it with `var`)")
             }
+            PlacePurpose::UserDataBorrow | PlacePurpose::NativeRecoverBorrow => String::new(),
         }
     }
 }
@@ -176,7 +195,11 @@ impl Analyzer<'_> {
                 if !reinitializes && !self.check_local_live(ctx, local, span) {
                     return None;
                 }
-                if !ctx.is_mutable(local) {
+                if !matches!(
+                    purpose,
+                    PlacePurpose::UserDataBorrow | PlacePurpose::NativeRecoverBorrow
+                ) && !ctx.is_mutable(local)
+                {
                     self.emit(span, "KSEM021", purpose.immutable_root(&name));
                     return None;
                 }
@@ -219,7 +242,11 @@ impl Analyzer<'_> {
                         .is_some_and(|def| def.mutable),
                     _ => false,
                 };
-                if !mutable {
+                if !matches!(
+                    purpose,
+                    PlacePurpose::UserDataBorrow | PlacePurpose::NativeRecoverBorrow
+                ) && !mutable
+                {
                     self.emit(
                         field_span,
                         "KSEM024",

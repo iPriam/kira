@@ -35,14 +35,33 @@ pub(super) struct Stamp {
     pub(super) key: String,
     /// One line per input file: size, modification time, path.
     pub(super) inputs: Vec<String>,
+    /// True when this records a binding the package shipped and this generator
+    /// adopted rather than wrote. An adopted binding is re-adopted on every
+    /// build — its note repeats, so a reader told it exists can read it — and it
+    /// is never regenerated over, because it is the package's own source.
+    pub(super) adopted: bool,
 }
 
 impl Stamp {
+    /// The same binding source: the declaration, target, and inputs, without
+    /// regard to whether it was adopted. Provenance decides whether to note and
+    /// re-adopt, not whether the recorded inputs still match today's.
+    fn same_source(&self, other: &Stamp) -> bool {
+        self.key == other.key && self.inputs == other.inputs
+    }
+
     /// Renders the stamp as the text written beside the binding.
+    ///
+    /// The `adopted` marker sits on its own line after the key. It is a bare
+    /// word, which `describe_input` never produces, so a stamp written before
+    /// the marker existed reads back as a generated one with its inputs intact.
     fn render(&self) -> String {
         let mut text = String::from("kira-autobind 1\n");
         text.push_str(&self.key);
         text.push('\n');
+        if self.adopted {
+            text.push_str("adopted\n");
+        }
         for input in &self.inputs {
             text.push_str(input);
             text.push('\n');
@@ -57,10 +76,26 @@ impl Stamp {
             return None;
         }
         let key = lines.next()?.to_owned();
+        let mut rest: Vec<String> = lines.map(str::to_owned).collect();
+        let adopted = rest.first().is_some_and(|line| line == "adopted");
+        if adopted {
+            rest.remove(0);
+        }
         Some(Self {
             key,
-            inputs: lines.map(str::to_owned).collect(),
+            inputs: rest,
+            adopted,
         })
+    }
+
+    /// This binding source, recorded as one the generator adopted rather than
+    /// wrote.
+    pub(super) fn adopted(&self) -> Stamp {
+        Stamp {
+            key: self.key.clone(),
+            inputs: self.inputs.clone(),
+            adopted: true,
+        }
     }
 }
 
@@ -114,7 +149,11 @@ pub(super) fn freshness(stamp_file: &Path, output: &Path, wanted: &Stamp) -> Fre
     match (recorded, output.exists()) {
         (_, false) => Freshness::Stale,
         (None, true) => Freshness::Adopt,
-        (Some(recorded), true) if &recorded == wanted => Freshness::Current,
+        // A binding the package shipped stays adopted: it is re-adopted every
+        // build so its note repeats, and it is never regenerated over even when
+        // a header's timestamp moves, because it is the package's own source.
+        (Some(recorded), true) if recorded.adopted => Freshness::Adopt,
+        (Some(recorded), true) if recorded.same_source(wanted) => Freshness::Current,
         (Some(_), true) => Freshness::Stale,
     }
 }
@@ -156,6 +195,7 @@ mod tests {
         Stamp {
             key: "kiratext aarch64-macos-none all_public".to_owned(),
             inputs: vec!["120 17 /pkg/NativeLibs/Text/kira_text.h".to_owned()],
+            adopted: false,
         }
     }
 
@@ -163,6 +203,31 @@ mod tests {
     fn a_stamp_round_trips_through_its_own_text() {
         let rendered = stamp().render();
         assert_eq!(Stamp::parse(&rendered), Some(stamp()));
+    }
+
+    #[test]
+    fn an_adopted_stamp_round_trips_and_keeps_its_inputs() {
+        let adopted = stamp().adopted();
+        assert!(adopted.adopted);
+        assert_eq!(Stamp::parse(&adopted.render()), Some(adopted.clone()));
+        // The marker is not mistaken for an input.
+        assert_eq!(adopted.inputs, stamp().inputs);
+    }
+
+    #[test]
+    fn an_adopted_binding_stays_adopted_so_its_note_repeats() {
+        let dir = TempDir::new("adopted-recurs");
+        let output = dir.0.join("text.kira");
+        let stamp_file = dir.0.join("text.stamp");
+        std::fs::write(&output, "// shipped by the package").expect("write the binding");
+        // Adoption records provenance rather than pretending the generator
+        // wrote it, so every later build adopts again instead of falling silent.
+        write(&stamp_file, &stamp().adopted()).expect("write the adopted stamp");
+        assert_eq!(freshness(&stamp_file, &output, &stamp()), Freshness::Adopt);
+        // Even a moved input does not regenerate over the package's own source.
+        let mut moved = stamp();
+        moved.inputs = vec!["121 18 /pkg/NativeLibs/Text/kira_text.h".to_owned()];
+        assert_eq!(freshness(&stamp_file, &output, &moved), Freshness::Adopt);
     }
 
     #[test]

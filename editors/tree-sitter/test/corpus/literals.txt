@@ -39,6 +39,26 @@ function f() -> Float {
         value: (float_literal)))))
 
 ================================================================================
+Infinity is a float literal
+================================================================================
+
+function f() -> Float {
+    return infinity
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    return_type: (return_type
+      (type_identifier))
+    body: (block
+      (return_statement
+        value: (float_literal)))))
+
+================================================================================
 1e5 is an integer followed by the identifier e5, not an exponent
 ================================================================================
 
