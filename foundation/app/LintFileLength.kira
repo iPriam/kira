@@ -1,0 +1,161 @@
+// The file-length lint (KLINT003), split from `LintRunner` so neither file
+// passes the ceiling this very lint enforces.
+//
+// A second `collector`: the compiler runs every collector over the whole
+// program, so this one judges file size while `LintRunner` judges the rest.
+// The compile-time evaluator calls no ordinary Kira function, so a collector
+// cannot share a helper with another — the configuration a lint reads is read
+// again here, from the same `LintDefaults` and `Lint` entries, rather than
+// passed across. `LintRunner` keeps the KLINT000 receipt and counts this lint
+// in it, so the runner still reports one honest total.
+
+comptime macro LintFileLength {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        if !Build.linting() {
+            return quote { }
+        }
+        // Restriction: a line ceiling is a policy a project chooses, not a
+        // defect. Off unless asked for by group or named outright.
+        var fileLengthLevel: LintLevel = .Allow
+        var fileLengthNamed: Bool = false
+        // 700 is the ceiling every Kira repo here writes to. An entry's `limit`
+        // overrides it; leaving it out takes this.
+        var fileLengthLimit: Int = 700
+        var askRestriction: Bool = false
+        for entry in declarations {
+            if entry.family == "LintDefaults" {
+                for member in entry.fields {
+                    if member.name.asString() == "groups" {
+                        let asked = String(member.initializer)
+                        if asked.contains("Restriction") {
+                            askRestriction = true
+                        }
+                    }
+                    if member.name.asString() == "level" {
+                        let written = String(member.initializer)
+                        if written.contains("Allow") {
+                            fileLengthLevel = .Allow
+                        }
+                        if written.contains("Warn") {
+                            fileLengthLevel = .Warn
+                        }
+                        if written.contains("Deny") {
+                            fileLengthLevel = .Deny
+                        }
+                    }
+                }
+            }
+        }
+        for entry in declarations {
+            if entry.family == "Lint" {
+                var code: String = ""
+                var level: LintLevel = .Warn
+                var levelWritten: Bool = false
+                var limit: Int = 0
+                for member in entry.fields {
+                    let written = String(member.initializer)
+                    if member.name.asString() == "code" {
+                        if written.contains("KLINT003") {
+                            code = "KLINT003"
+                        }
+                    }
+                    if member.name.asString() == "level" {
+                        levelWritten = true
+                        level = .Warn
+                        if written.contains("Allow") {
+                            level = .Allow
+                        }
+                        if written.contains("Deny") {
+                            level = .Deny
+                        }
+                    }
+                    if member.name.asString() == "limit" {
+                        limit = Int(written)
+                    }
+                }
+                if levelWritten && code == "KLINT003" {
+                    fileLengthNamed = true
+                    fileLengthLevel = level
+                }
+                if code == "KLINT003" && limit > 0 {
+                    fileLengthLimit = limit
+                }
+            }
+        }
+        // A group turns its lints on where nothing named them. An entry that
+        // named one still wins.
+        if askRestriction && fileLengthNamed == false {
+            fileLengthLevel = .Warn
+        }
+        let fileLengthOn: Bool = fileLengthLevel != .Allow
+
+        // KLINT003 — a file past the line ceiling.
+        //
+        // Size is the one property of a file a lint can judge without reading
+        // any of it, and the one a reviewer notices last: nothing about a
+        // 1400-line file fails to compile, so it grows until somebody measures.
+        //
+        // Reported once per file, on the LAST declaration in it — the one the
+        // file grew past the ceiling to hold, and the natural place to cut. A
+        // declaration re-scanned from detached text belongs to no file and
+        // reports `0` for both numbers, so it is skipped rather than counted as
+        // a zero-line file.
+        //
+        // "Last in its file" is read off the order rather than searched for.
+        // Declarations arrive grouped by file, in file order, so the last one
+        // of a file is whichever sits immediately before the file changes —
+        // one pass, carrying the previous.
+        //
+        // No `fix:`. Where to cut a long file is a judgement about what belongs
+        // together, and a lint that guessed would move code by line count.
+        //
+        // The report is written twice rather than through a helper: an `expand`
+        // body runs on the compile-time evaluator, which calls no ordinary Kira
+        // function.
+        if fileLengthOn {
+            var pendingFile: Int = -1
+            var pendingLines: Int = 0
+            var pendingAt: Syntax = quote { }
+            for target in declarations {
+                // Generated bindings are exempt, always. A `bindings/`
+                // directory holds machine-written code, matched on a
+                // separator-normalized copy so a Windows `app\bindings\` path
+                // is exempt too.
+                if target.path.replace("\\", "/").contains("/bindings/") {
+                    continue
+                }
+                if target.fileId != pendingFile {
+                    if pendingLines > fileLengthLimit {
+                        let message = "this file is " + String(pendingLines) +
+                            " lines, past the " + String(fileLengthLimit) +
+                            "-line ceiling; split it into cohesive modules"
+                        if fileLengthLevel == .Deny {
+                            Diagnostics.error(message, at: pendingAt, code: "KLINT003")
+                        }
+                        if fileLengthLevel != .Deny {
+                            Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
+                        }
+                    }
+                    pendingFile = target.fileId
+                }
+                pendingLines = target.fileLines
+                pendingAt = target.syntax
+            }
+            // The final file has no successor to notice the change.
+            if pendingLines > fileLengthLimit {
+                let message = "this file is " + String(pendingLines) +
+                    " lines, past the " + String(fileLengthLimit) +
+                    "-line ceiling; split it into cohesive modules"
+                if fileLengthLevel == .Deny {
+                    Diagnostics.error(message, at: pendingAt, code: "KLINT003")
+                }
+                if fileLengthLevel != .Deny {
+                    Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
+                }
+            }
+        }
+
+        return quote { }
+    }
+}

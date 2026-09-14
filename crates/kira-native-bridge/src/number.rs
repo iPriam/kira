@@ -92,10 +92,10 @@ pub extern "C" fn kira_rt_number_to_float(value: KNumber) -> f64 {
     unpack(value).to_f64()
 }
 
-/// One `Number` negated.
+/// One `Number` negated, trapping when the value has no negative in range.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_number_negate(value: KNumber) -> KNumber {
-    pack(unpack(value).negate())
+    pack_or_trap(unpack(value).negate())
 }
 
 /// Builds a binary arithmetic helper that traps on a decimal error.

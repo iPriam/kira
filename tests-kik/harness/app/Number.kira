@@ -44,6 +44,23 @@ function numberConversionFold() -> Int {
     return acc
 }
 
+function numberEdgeCasesFold() -> Int {
+    var acc = 0
+    // The shortest exact decimal drops trailing fractional zeros.
+    if String(Number("1.00")) == "1" { acc = acc + 1 }
+    if String(Number("2.50")) == "2.5" { acc = acc + 2 }
+    // A mixed-scale sum whose value is representable lands rather than trapping
+    // on the aligned scale: "10" at eighteen places is 10^19, past the mantissa.
+    if Number("10") + Number("0.000000000000000000") == Number("10") { acc = acc + 4 }
+    // The representable minimum reads back as itself.
+    if String(Number("-9223372036854775808")) == "-9223372036854775808" { acc = acc + 8 }
+    // A Float is the decimal nearest the float, which is not the exact tenth the
+    // string gives; the two are distinct.
+    if Number(0.1) != Number("0.1") { acc = acc + 16 }
+    return acc
+}
+
 function numberSection() -> Int {
-    return numberArithmeticFold() + numberOrderingFold() + numberConversionFold()
+    return numberArithmeticFold() + numberOrderingFold() + numberConversionFold() +
+        numberEdgeCasesFold()
 }
