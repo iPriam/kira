@@ -53,14 +53,14 @@ construct CtfFunctionRunsBranches() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok("zero") return e }
 }
 
-// `platformCurrent!()` folds to the build target's `Platform` case during
+// `targetPlatform!()` folds to the build target's `TargetPlatform` case during
 // expansion. The harness builds for the host it runs on — macOS, Linux, or
 // Windows — so the one thing true on every such build is that the case is a
 // known one, never `.Unknown`. Proving that proves the macro expanded and the
 // enum reached the runner on every backend.
 function ctfPlatformIsKnown() -> Int {
     var known = 0
-    match platformCurrent!() {
+    match targetPlatform!() {
         Linux -> { known = 1 }
         MacOS -> { known = 1 }
         Windows -> { known = 1 }
