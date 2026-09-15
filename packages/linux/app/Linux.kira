@@ -375,3 +375,76 @@ function linuxSync() -> Result<Int, LinuxError> {
 function linuxWaitForever() -> Result<Int, LinuxError> {
     return linuxDecode(linuxSysPpoll(RawPtr(0), U64(0), RawPtr(0), RawPtr(0)))
 }
+
+// ─── Time, identity, and shared memory ──────────────────────────────────────
+//
+// The calls a userland grows once it keeps time, reports the machine it runs on,
+// and shares a buffer with another process: `timerfd` so an event loop waits on
+// time in the same poll as its descriptors, `clock_settime` for the one service
+// that owns the clock, `uname` for the machine's identity, and `memfd_create`
+// for the anonymous memory a client hands a compositor.
+
+@FFI.Syscall { name: clock_settime }
+function linuxSysClockSettime(clockId: Int, time: RawPtr) -> Int
+
+@FFI.Syscall { name: timerfd_create }
+function linuxSysTimerfdCreate(clockId: Int, flags: Int) -> Int
+
+@FFI.Syscall { name: timerfd_settime }
+function linuxSysTimerfdSettime(fd: Int, flags: Int, newValue: RawPtr, oldValue: RawPtr) -> Int
+
+@FFI.Syscall { name: timerfd_gettime }
+function linuxSysTimerfdGettime(fd: Int, current: RawPtr) -> Int
+
+@FFI.Syscall { name: uname }
+function linuxSysUname(buffer: RawPtr) -> Int
+
+@FFI.Syscall { name: memfd_create }
+function linuxSysMemfdCreate(name: CString, flags: Int) -> Int
+
+// Sets a system clock from a `struct timespec` at `time`. The one call here that
+// acts on the machine rather than the caller's own descriptors, so a userland
+// reserves it to the service that owns time.
+@Native
+function linuxClockSettime(clockId: Int, time: RawPtr) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysClockSettime(clockId, time))
+}
+
+// A descriptor that becomes readable when a timer expires, so a poll loop waits
+// on time beside its other descriptors rather than blocking in a sleep.
+@Native
+function linuxTimerfdCreate(clockId: Int, flags: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysTimerfdCreate(clockId, flags))
+}
+
+// Arms or disarms a timer descriptor from a `struct itimerspec` at `newValue`,
+// writing the previous setting to `oldValue` when it is not null.
+@Native
+function linuxTimerfdSettime(
+    fd: Int, flags: Int, newValue: RawPtr, oldValue: RawPtr,
+) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysTimerfdSettime(fd, flags, newValue, oldValue))
+}
+
+// Reads how long a timer descriptor has left into a `struct itimerspec` at
+// `current`.
+@Native
+function linuxTimerfdGettime(fd: Int, current: RawPtr) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysTimerfdGettime(fd, current))
+}
+
+// Fills a `struct utsname` at `buffer` with the kernel's name, release, version,
+// and machine. The caller reads the fields out at their offsets, the way it
+// reads any structure the kernel writes.
+@Native
+function linuxUname(buffer: RawPtr) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysUname(buffer))
+}
+
+// An anonymous file that lives in memory, named only for debugging, answering a
+// descriptor onto pages two processes can map. This is the descriptor a shared
+// buffer crosses a process boundary as.
+@Native
+function linuxMemfdCreate(name: borrow String, flags: Int) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysMemfdCreate(name, flags))
+}
