@@ -29,6 +29,7 @@
 //! append-only: never rename one or change a signature in place.
 
 use std::ffi::{CStr, c_char};
+#[cfg(not(target_os = "linux"))]
 use std::io::Write;
 use std::slice;
 
@@ -105,6 +106,39 @@ pub(crate) unsafe fn drop_handle(handle: KStr) {
 
 /// Writes `bytes` followed by a newline to stdout, matching the VM host's
 /// line-oriented `print`.
+///
+/// On Linux the sink is the `write` syscall issued directly, so a program that
+/// only prints links no C library — the property a freestanding Kira userland
+/// (PID 1, a display server) is built on. Everywhere else it is
+/// `std::io::stdout`, because Kira does not issue raw syscalls on a platform
+/// whose numbers are not a stable interface — the macOS note on `LinuxSyscall`.
+#[cfg(target_os = "linux")]
+fn print_line(bytes: &[u8]) {
+    write_fd1(bytes);
+    write_fd1(b"\n");
+}
+
+/// Writes a whole buffer to file descriptor 1 through the `write` syscall.
+#[cfg(target_os = "linux")]
+fn write_fd1(mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        // SAFETY: `write(1, ptr, len)` with a real fd, a pointer into the live
+        // slice, and that slice's own length. Best-effort like the std path: a
+        // short or failed write drops the rest rather than trapping.
+        let written = unsafe {
+            kira_runtime_abi::syscall::perform(
+                kira_runtime_abi::syscall::LinuxSyscall::Write,
+                &[1, bytes.as_ptr() as i64, bytes.len() as i64],
+            )
+        };
+        match written {
+            Ok(count) if count > 0 => bytes = &bytes[count as usize..],
+            _ => return,
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn print_line(bytes: &[u8]) {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
