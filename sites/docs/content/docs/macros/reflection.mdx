@@ -79,12 +79,12 @@ Build.linting()  -> Bool     // true when `kira lint` asked for this compilation
 
 `Build.platform()` answers for the machine a build targets, not the one running the compiler, so a Mac cross-building `aarch64-linux-gnu` reads `"linux"`.
 
-Foundation wraps it in a typed selector. `Platform` is the enum form, and `platformCurrent!()` folds to the target's case during expansion, so the cases it is not never reach the program:
+Foundation wraps it in a typed selector. `TargetPlatform` is the enum form — named for the platform a build is *for*, since a bare `Platform` in a package merged everywhere would collide with the one a graphics or UI library means — and `targetPlatform!()` folds to the target's case during expansion, so the cases it is not never reach the program:
 
 ```kira
-enum Platform { Linux MacOS Windows Ios Wasm Unknown }
+enum TargetPlatform { Linux MacOS Windows Ios Wasm Unknown }
 
-match platformCurrent!() {
+match targetPlatform!() {
     Linux -> useTheWriteSyscall()
     MacOS -> useTheHostSink()
     Windows -> useTheHostSink()
