@@ -384,6 +384,9 @@ function linuxWaitForever() -> Result<Int, LinuxError> {
 // that owns the clock, `uname` for the machine's identity, and `memfd_create`
 // for the anonymous memory a client hands a compositor.
 
+@FFI.Syscall { name: clock_gettime }
+function linuxSysClockGettime(clockId: Int, time: RawPtr) -> Int
+
 @FFI.Syscall { name: clock_settime }
 function linuxSysClockSettime(clockId: Int, time: RawPtr) -> Int
 
@@ -401,6 +404,14 @@ function linuxSysUname(buffer: RawPtr) -> Int
 
 @FFI.Syscall { name: memfd_create }
 function linuxSysMemfdCreate(name: CString, flags: Int) -> Int
+
+// Reads a clock into a `struct timespec` at `time`: seconds at offset 0, nanos
+// at offset 8, each a 64-bit word. `1` is `CLOCK_MONOTONIC`, which only moves
+// forward and is what a userland paces itself off.
+@Native
+function linuxClockGettime(clockId: Int, time: RawPtr) -> Result<Int, LinuxError> {
+    return linuxDecode(linuxSysClockGettime(clockId, time))
+}
 
 // Sets a system clock from a `struct timespec` at `time`. The one call here that
 // acts on the machine rather than the caller's own descriptors, so a userland
