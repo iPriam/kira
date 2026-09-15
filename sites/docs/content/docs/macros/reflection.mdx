@@ -67,3 +67,31 @@ The other direction is open. Half of what a macro reflects on arrives as the tex
 Anything else is `KMAC009`. The same source expression splices two ways by type: `target.name` is an `Identifier` and splices bare as `Player`, while `target.name.asString()` is a `String` and splices as `"Player"`.
 
 Splices glue by source adjacency, so `mxp_#{name}` with no space before `#{` renders as the single identifier `mxp_Foo` while `a + b` keeps its spaces. Array splicing puts one element per line, which is right for statement lists and declaration bodies; a comma-separated list is built explicitly with `Syntax.join(items, separator: ", ")` and spliced as one `Syntax`.
+
+## Build and platform selection
+
+A comptime macro reads which build it runs in through `Build`:
+
+```kira
+Build.platform() -> String   // the target triple's OS: "linux", "macos", "windows", "ios", "emscripten"
+Build.linting()  -> Bool     // true when `kira lint` asked for this compilation
+```
+
+`Build.platform()` answers for the machine a build targets, not the one running the compiler, so a Mac cross-building `aarch64-linux-gnu` reads `"linux"`.
+
+Foundation wraps it in a typed selector. `Platform` is the enum form, and `platformCurrent!()` folds to the target's case during expansion, so the cases it is not never reach the program:
+
+```kira
+enum Platform { Linux MacOS Windows Ios Wasm Unknown }
+
+match platformCurrent!() {
+    Linux -> useTheWriteSyscall()
+    MacOS -> useTheHostSink()
+    Windows -> useTheHostSink()
+    Ios -> useTheHostSink()
+    Wasm -> useTheHostSink()
+    Unknown -> useTheHostSink()
+}
+```
+
+Because the fold happens before analysis, a branch the target does not take is never compiled, so a symbol only one platform links is never pulled onto another platform's binary. That is the compile-time selection a runtime `if` cannot give: a runtime check compiles every branch and links every symbol either way.
