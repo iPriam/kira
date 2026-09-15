@@ -5,8 +5,10 @@ description: The geometry value structs, their named algebra methods, the math p
 
 ## The Geometry Vocabulary
 
-`Point`, `Size`, `Rect`, `Vec2`, `Vec3`, `Vec4`, `Mat4`, and `Quaternion` are
-value structs. `Mat4` defaults to the identity, and the free function
+`Point`, `Size`, `Rect`, `Insets`, `Vec2`, `Vec3`, `Vec4`, `Mat4`, and
+`Quaternion` are value structs. `Insets` is the space kept clear along each edge
+of a rectangle — `top`, `leading`, `bottom`, `trailing` — a safe area or a
+margin. `Mat4` defaults to the identity, and the free function
 `mat4Identity()` returns it.
 
 ```kira
