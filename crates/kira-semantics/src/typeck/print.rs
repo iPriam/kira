@@ -4,7 +4,7 @@
 //! *rendered* — and that set is the contract `String(x)` mirrors.
 
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId};
+use kira_semantics_model::hir::{Builtin, Callee, HirBinaryOp, HirExpr, HirExprId};
 use kira_syntax_model::ast::{ExprId, TypeRefId};
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -114,6 +114,100 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         }
         self.program.exprs.alloc(HirExpr::EnumTag { value: args[0] })
+    }
+
+    /// `compare(a, b) -> Ordering`: the three-way order of two `Ordered` values
+    /// as Foundation's `Ordering` enum (`Less`, `Equal`, `Greater`).
+    ///
+    /// The native form of what `@Derive(Ordered)` generated as `compare_<Type>`,
+    /// built from the pieces already native: the structural three-way compare
+    /// answers a sign (`-1 / 0 / 1`), and `Ordering`'s three variants are exactly
+    /// that sign plus one (`Less = 0`, `Equal = 1`, `Greater = 2`), so the result
+    /// is `fromCode<Ordering>(compareSign + 1)` — no new primitive. A leaf that
+    /// carries no total order is refused here, exactly as `<` refuses it.
+    pub(super) fn analyze_compare(
+        &mut self,
+        args: &[HirExprId],
+        span: kira_source::Span,
+    ) -> HirExprId {
+        if args.len() != 2 {
+            self.emit(
+                span,
+                "KSEM080",
+                format!("`compare` takes exactly two values, found {}", args.len()),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let (left, right) = (args[0], args[1]);
+        let left_ty = self.program.expr(left).type_of();
+        let right_ty = self.program.expr(right).type_of();
+        if left_ty == Type::Error || right_ty == Type::Error {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if left_ty != right_ty {
+            self.emit(
+                span,
+                "KSEM081",
+                format!(
+                    "`compare` takes two values of one type, found `{}` and `{}`",
+                    self.type_name(left_ty),
+                    self.type_name(right_ty)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        if let Some(reason) = self.ordered_refusal(left_ty) {
+            self.emit(
+                span,
+                "KSEM391",
+                format!(
+                    "`{}` cannot be ordered with `compare`: {reason}",
+                    self.type_name(left_ty)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        // `Ordering` is Foundation's, so it is in scope wherever `compare` is used
+        // — a program that reaches ordering has imported Foundation. Its three
+        // payload-less variants in declaration order are `Less`, `Equal`,
+        // `Greater`, which is the sign-plus-one this builds.
+        let Some(ordering) = self.program.types.enums().lookup_any("Ordering") else {
+            self.emit(
+                span,
+                "KSEM081",
+                "`compare` answers Foundation's `Ordering`, which is not in scope; import \
+                 Foundation, or use `<` for a boolean order"
+                    .to_owned(),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let count = self
+            .program
+            .types
+            .enums()
+            .get(ordering)
+            .map_or(0, |def| def.variants.len());
+        // The structural sign, shifted into `Ordering`'s variant range.
+        let sign = self.program.exprs.alloc(HirExpr::Binary {
+            op: HirBinaryOp::CmpValue,
+            lhs: left,
+            rhs: right,
+            ty: Type::INT,
+        });
+        let one = self.program.exprs.alloc(HirExpr::Int(1));
+        let code = self.program.exprs.alloc(HirExpr::Binary {
+            op: HirBinaryOp::AddInt,
+            lhs: sign,
+            rhs: one,
+            ty: Type::INT,
+        });
+        let count = self.program.exprs.alloc(HirExpr::Int(count as i64));
+        self.program.exprs.alloc(HirExpr::Call {
+            callee: Callee::Builtin(Builtin::FromCode),
+            args: vec![code, count],
+            ty: Type::Enum(ordering),
+            writebacks: Vec::new(),
+        })
     }
 
     /// `hash(value)`: fold a `Hashable` value into one `Int`.

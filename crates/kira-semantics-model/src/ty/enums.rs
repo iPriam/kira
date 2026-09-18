@@ -181,6 +181,19 @@ impl EnumTable {
         self.lookup_owned(None, name)
     }
 
+    /// The first enum declared under `name`, whatever package owns it.
+    ///
+    /// Unlike [`lookup`](Self::lookup), which asks only the program's own files,
+    /// this reaches a bundled or dependency enum too — how the compiler finds a
+    /// Foundation type it names by hand, such as `Ordering` for `compare`.
+    pub fn lookup_any(&self, name: &str) -> Option<EnumId> {
+        self.defs
+            .iter()
+            .position(|def| def.name == name)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(EnumId)
+    }
+
     /// The enum `owner` declares under `name`, or `None` when it declares
     /// none.
     pub fn lookup_owned(&self, owner: Option<&str>, name: &str) -> Option<EnumId> {

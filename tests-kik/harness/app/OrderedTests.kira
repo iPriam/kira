@@ -39,3 +39,17 @@ construct OdxOrderedFollowsDeclarationOrder() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(63) return e }
 }
+
+// The native `compare(a, b)` answers the same `Ordering` the derived
+// `compare_OdxSeverity` does — `Less`/`Equal`/`Greater` — built from the
+// structural three-way compare with no `@Derive`, and it agrees on every backend.
+construct OdxNativeCompareMatchesDerived() extends Test {
+    test {
+        var total = 0
+        total = total + odxScore(compare(OdxSeverity.Note, OdxSeverity.Error))
+        total = total + odxScore(compare(OdxSeverity.Warning, OdxSeverity.Warning))
+        total = total + odxScore(compare(OdxSeverity.Error, OdxSeverity.Note))
+        return total
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(7) return e }
+}
