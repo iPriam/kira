@@ -464,14 +464,12 @@ construct CfxWhileNestedMatrix() extends Test {
 construct CfxWhileTripleNested() extends Test {
     test {
         var acc = 0
-        var a = 0
-        while a < 3 {
+        for a in 0..3 {
             for b in 0..3 {
                 for c in 0..3 {
                     acc = acc + a + b + c
                 }
             }
-            a = a + 1
         }
         // each of a,b,c contributes sum over 3*3=9 times: 9*(0+1+2)=27 each, total=81
         return acc

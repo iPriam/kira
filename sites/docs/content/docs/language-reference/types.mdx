@@ -114,7 +114,7 @@ let one: Scored = Key(n: 3)
 let both: [Scored] = [Key(n: 2), Token(n: 30)]
 ```
 
-The four compiler-known traits, `Copyable`, `Drop`, `Send`, and `Sync`, are refused there (`KSEM295`): they state facts about one type's own members and classify no values.
+The five compiler-known traits, `Copyable`, `Drop`, `Send`, `Sync`, and `Equatable`, are refused there (`KSEM295`): they state facts about one type's own shape and classify no values. `Equatable` names the structural-equality fact `==` reads — a type conforms when its every leaf is comparable — so it may bound a type parameter (`<T: Equatable>`) but, like the others, is derived rather than declared and cannot be written as an `extend` block.
 
 ## Family Types
 

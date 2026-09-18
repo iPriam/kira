@@ -1,0 +1,41 @@
+// Events (spec §9). The simplest signalable objects, and the first the portable
+// front implements: they need no kernel, so they exercise the whole handle,
+// rights, signal and completion machinery on every backend with pure library
+// state.
+//
+// An Event is a standalone signal word. Object.signal sets and clears SIGNALED
+// and the user bits; Object.waitAsync observes them on a Port. An EventPair is
+// two linked ends: signals set on one are observed on the other, and when the
+// last handle to one end closes, the other asserts PEER_CLOSED.
+
+import Foundation
+
+// The two handles EventPair.create returns, one per end.
+public struct HandlePair {
+    var first: Handle
+    var second: Handle
+}
+
+// Event.create — a standalone signal word carrying the default rights. `initial`
+// seeds the asserted signals (typically none, or SIGNALED for a pre-fired flag).
+public function eventCreate(process: borrow mut Tessera, initial: Signals) -> Result<Handle, Error> {
+    let masked = signalsIntersect(initial, signalsUserSettable())
+    let objectSlot = tessAddObject(process, .Event, masked, -1)
+    let handle = tessAddHandle(process, objectSlot, rightsDefault())
+    let out: Result<Handle, Error> = .Ok(handle)
+    return out
+}
+
+// EventPair.create — two linked ends. A signal asserted through one end's handle
+// lands on the peer, where the other end observes it; closing an end's last
+// handle asserts PEER_CLOSED on the surviving end.
+public function eventPairCreate(process: borrow mut Tessera) -> Result<HandlePair, Error> {
+    let slotFirst = tessAddObject(process, .EventPair, signalsNone(), -1)
+    let slotSecond = tessAddObject(process, .EventPair, signalsNone(), slotFirst)
+    process.objects[slotFirst].peerSlot = slotSecond
+    let handleFirst = tessAddHandle(process, slotFirst, rightsDefault())
+    let handleSecond = tessAddHandle(process, slotSecond, rightsDefault())
+    let pair = HandlePair { first: handleFirst, second: handleSecond }
+    let out: Result<HandlePair, Error> = .Ok(pair)
+    return out
+}

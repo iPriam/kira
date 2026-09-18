@@ -1,0 +1,223 @@
+// Errors: every failure is a structured value (spec §4).
+//
+// An error carries a code, the subsystem that produced it, a small flags word,
+// and a detail word that for policy failures is an audit reference the user can
+// be shown. `TESSERA_OK` is the all-zero value: code Ok, subsystem LibTessera,
+// no flags, zero detail.
+
+import Foundation
+
+// Which layer produced an error (spec §4).
+public enum Subsystem {
+    LibTessera
+    Kernel
+    Namespace
+    Presence
+    Launcher
+    Devices
+    Network
+    Display
+    Power
+    Audit
+    Gpu
+}
+
+// Why a call failed (spec §4). Boundary enums cross as `U32`; `errorCodeNumber`
+// is the mapping and `errorCodeIsOk` recognises the success value.
+public enum ErrorCode {
+    Ok
+    InvalidArgument
+    InvalidHandle
+    WrongType
+    AccessDenied
+    NotEntitled
+    OutOfRange
+    BufferTooSmall
+    NameTooLong
+    InvalidPath
+    Unsupported
+    NotFound
+    AlreadyExists
+    Busy
+    BadState
+    ShouldWait
+    Timeout
+    Cancelled
+    PeerClosed
+    OutOfMemory
+    NoSpace
+    QuotaExceeded
+    TooManyHandles
+    NotDirectory
+    IsDirectory
+    NotEmpty
+    ProtectedNode
+    GrantExpired
+    GrantRevoked
+    NoInteraction
+    NotFrontmost
+    NotMainProcess
+    UserDenied
+    ConnectionRefused
+    ConnectionReset
+    Unreachable
+    AddressInUse
+    AddressNotAvailable
+    DeviceLost
+    DeviceBusy
+    FormatUnsupported
+    Overrun
+    Underrun
+    Internal
+}
+
+// A structured failure (spec §4, 16 bytes on the wire).
+public struct Error {
+    var code: ErrorCode
+    var subsystem: Subsystem
+    var flags: U16
+    var detail: U64
+}
+
+// Error flags (spec §4): the detail word carries an audit reference / a backend
+// code, and RETRYABLE marks a failure worth retrying.
+public function errorFlagHasAuditRef() -> U16 { return U16(1) }
+public function errorFlagHasBackendCode() -> U16 { return U16(2) }
+public function errorFlagRetryable() -> U16 { return U16(4) }
+
+// The all-zero success value.
+public function errorOk() -> Error {
+    return Error { code: .Ok, subsystem: .LibTessera, flags: U16(0), detail: U64(0) }
+}
+
+// A plain LibTessera failure with no detail.
+public function errorOf(code: ErrorCode) -> Error {
+    return Error { code: code, subsystem: .LibTessera, flags: U16(0), detail: U64(0) }
+}
+
+// A failure from a stated subsystem carrying a detail word.
+public function errorDetailed(code: ErrorCode, subsystem: Subsystem, flags: U16, detail: U64) -> Error {
+    return Error { code: code, subsystem: subsystem, flags: flags, detail: detail }
+}
+
+// Whether an error is the success value.
+public function errorIsOk(error: borrow Error) -> Bool {
+    return errorCodeIsOk(error.code)
+}
+
+// Whether a code is Ok.
+public function errorCodeIsOk(code: borrow ErrorCode) -> Bool {
+    match code {
+        Ok -> { return true }
+        InvalidArgument -> { return false }
+        InvalidHandle -> { return false }
+        WrongType -> { return false }
+        AccessDenied -> { return false }
+        NotEntitled -> { return false }
+        OutOfRange -> { return false }
+        BufferTooSmall -> { return false }
+        NameTooLong -> { return false }
+        InvalidPath -> { return false }
+        Unsupported -> { return false }
+        NotFound -> { return false }
+        AlreadyExists -> { return false }
+        Busy -> { return false }
+        BadState -> { return false }
+        ShouldWait -> { return false }
+        Timeout -> { return false }
+        Cancelled -> { return false }
+        PeerClosed -> { return false }
+        OutOfMemory -> { return false }
+        NoSpace -> { return false }
+        QuotaExceeded -> { return false }
+        TooManyHandles -> { return false }
+        NotDirectory -> { return false }
+        IsDirectory -> { return false }
+        NotEmpty -> { return false }
+        ProtectedNode -> { return false }
+        GrantExpired -> { return false }
+        GrantRevoked -> { return false }
+        NoInteraction -> { return false }
+        NotFrontmost -> { return false }
+        NotMainProcess -> { return false }
+        UserDenied -> { return false }
+        ConnectionRefused -> { return false }
+        ConnectionReset -> { return false }
+        Unreachable -> { return false }
+        AddressInUse -> { return false }
+        AddressNotAvailable -> { return false }
+        DeviceLost -> { return false }
+        DeviceBusy -> { return false }
+        FormatUnsupported -> { return false }
+        Overrun -> { return false }
+        Underrun -> { return false }
+        Internal -> { return false }
+    }
+}
+
+// The wire number for an error code (spec §4).
+public function errorCodeNumber(code: borrow ErrorCode) -> U32 {
+    match code {
+        Ok -> { return U32(0) }
+        InvalidArgument -> { return U32(1) }
+        InvalidHandle -> { return U32(2) }
+        WrongType -> { return U32(3) }
+        AccessDenied -> { return U32(4) }
+        NotEntitled -> { return U32(5) }
+        OutOfRange -> { return U32(6) }
+        BufferTooSmall -> { return U32(7) }
+        NameTooLong -> { return U32(8) }
+        InvalidPath -> { return U32(9) }
+        Unsupported -> { return U32(10) }
+        NotFound -> { return U32(20) }
+        AlreadyExists -> { return U32(21) }
+        Busy -> { return U32(22) }
+        BadState -> { return U32(23) }
+        ShouldWait -> { return U32(24) }
+        Timeout -> { return U32(25) }
+        Cancelled -> { return U32(26) }
+        PeerClosed -> { return U32(27) }
+        OutOfMemory -> { return U32(30) }
+        NoSpace -> { return U32(31) }
+        QuotaExceeded -> { return U32(32) }
+        TooManyHandles -> { return U32(33) }
+        NotDirectory -> { return U32(40) }
+        IsDirectory -> { return U32(41) }
+        NotEmpty -> { return U32(42) }
+        ProtectedNode -> { return U32(43) }
+        GrantExpired -> { return U32(44) }
+        GrantRevoked -> { return U32(45) }
+        NoInteraction -> { return U32(50) }
+        NotFrontmost -> { return U32(51) }
+        NotMainProcess -> { return U32(52) }
+        UserDenied -> { return U32(53) }
+        ConnectionRefused -> { return U32(60) }
+        ConnectionReset -> { return U32(61) }
+        Unreachable -> { return U32(62) }
+        AddressInUse -> { return U32(63) }
+        AddressNotAvailable -> { return U32(64) }
+        DeviceLost -> { return U32(70) }
+        DeviceBusy -> { return U32(71) }
+        FormatUnsupported -> { return U32(72) }
+        Overrun -> { return U32(73) }
+        Underrun -> { return U32(74) }
+        Internal -> { return U32(90) }
+    }
+}
+
+// The wire number for a subsystem (spec §4).
+public function subsystemNumber(subsystem: borrow Subsystem) -> U16 {
+    match subsystem {
+        LibTessera -> { return U16(0) }
+        Kernel -> { return U16(1) }
+        Namespace -> { return U16(2) }
+        Presence -> { return U16(3) }
+        Launcher -> { return U16(4) }
+        Devices -> { return U16(5) }
+        Network -> { return U16(6) }
+        Display -> { return U16(7) }
+        Power -> { return U16(8) }
+        Audit -> { return U16(9) }
+        Gpu -> { return U16(10) }
+    }
+}

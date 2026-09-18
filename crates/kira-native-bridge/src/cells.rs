@@ -125,7 +125,7 @@ pub unsafe extern "C" fn kira_rt_cell_new_aggregate(
     free: Option<ElemFree>,
 ) -> KCell {
     // SAFETY: the caller supplies the value's bytes and matching leaves.
-    let payload = unsafe { move_aggregate(source, size, clone, free, None) };
+    let payload = unsafe { move_aggregate(source, size, clone, free, None, None, None) };
     kira_rt_cell_new(PAYLOAD_AGGREGATE, payload as u64)
 }
 
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn kira_rt_cell_set_aggregate(
     free: Option<ElemFree>,
 ) {
     // SAFETY: the caller supplies the value's bytes and matching leaves.
-    let payload = unsafe { move_aggregate(source, size, clone, free, None) };
+    let payload = unsafe { move_aggregate(source, size, clone, free, None, None, None) };
     // SAFETY: the payload is a live erased box this call just took ownership of.
     unsafe { kira_rt_cell_set(value, PAYLOAD_AGGREGATE, payload as u64) };
 }

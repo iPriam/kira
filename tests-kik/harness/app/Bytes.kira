@@ -10,10 +10,8 @@ import Foundation
 function bytesOfStringFold() -> Int {
     let b = "Kira 1.9".bytes()
     var acc = b.count
-    var i = 0
-    while i < b.count {
+    for i in 0..b.count {
         acc = acc + Int(b[i]) * (i + 1)
-        i = i + 1
     }
     return acc
 }

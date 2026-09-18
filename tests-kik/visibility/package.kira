@@ -1,0 +1,6 @@
+Package VisibilityHarness {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "VisibilityHarness"
+    let dependencies = [ Dependency { name: "VisLib", path: "lib" } ]
+}

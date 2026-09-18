@@ -1,0 +1,51 @@
+// Structural `hash(v)`: the native operation behind the `Hashable` trait, folding
+// a value into one `Int` consistently with `==` — a struct by its fields, an
+// array by its length then elements, an enum by its tag then payload, each leaf
+// an integer, a boolean, or a string's bytes. No `@Derive`.
+//
+// vm-only for now: the native backend's fold walk is not emitted yet, so
+// `kik_harness.rs` runs this on the vm and asserts llvm refuses it by name.
+// Equal values must hash equal (the contract with `==`); unequal ones here
+// happen to differ, which a fold gives without being required to.
+
+import Foundation
+
+struct Pt { let x: Int let y: Int }
+
+enum Grade { Bronze Silver Gold }
+
+// A scalar-payload enum hashes by tag then payload — folded through the runtime,
+// byte-identical on every backend.
+enum Measure { Empty Exact(Int) }
+
+// An enum carrying a *struct* payload hashes by tag then the aggregate payload
+// through the hash leaf its box carries — also byte-identical everywhere.
+enum Boxed { Nothing Wrap(Pt) }
+
+// A `<T: Hashable>` bound proves conformance is structural: `Pt` is accepted with
+// no declaration, because its leaves are hashable.
+function sameHash<T: Hashable>(a: T, b: T) -> Bool {
+    return hash(a) == hash(b)
+}
+
+@Main
+function main() {
+    // Equal values hash equal — the contract with `==`.
+    print(hash(Pt { x: 1, y: 2 }) == hash(Pt { x: 1, y: 2 }))
+    print(hash([1, 2, 3]) == hash([1, 2, 3]))
+    print(hash("kira") == hash("kira"))
+    print(hash(Grade.Silver) == hash(Grade.Silver))
+    // Unequal values fold differently here.
+    print(hash(Pt { x: 1, y: 2 }) == hash(Pt { x: 1, y: 3 }))
+    print(hash("kira") == hash("kera"))
+    print(hash(Grade.Bronze) == hash(Grade.Gold))
+    // Scalar-payload enum: equal payloads hash equal, unequal differ.
+    print(hash(Measure.Exact(7)) == hash(Measure.Exact(7)))
+    print(hash(Measure.Exact(7)) == hash(Measure.Exact(8)))
+    // Struct-payload enum: equal payloads hash equal, unequal differ.
+    print(hash(Boxed.Wrap(Pt { x: 1, y: 2 })) == hash(Boxed.Wrap(Pt { x: 1, y: 2 })))
+    print(hash(Boxed.Wrap(Pt { x: 1, y: 2 })) == hash(Boxed.Wrap(Pt { x: 1, y: 3 })))
+    // Through a generic `Hashable` bound.
+    print(sameHash(Pt { x: 5, y: 6 }, Pt { x: 5, y: 6 }))
+    return
+}

@@ -1,0 +1,9 @@
+// A failing assertion hard-traps: the message is emitted and the run exits
+// non-zero, with no line after it.
+import Foundation
+@Main
+function main() {
+    print("before-abort")
+    assertEqual(1, 2)
+    print("after-abort")
+}

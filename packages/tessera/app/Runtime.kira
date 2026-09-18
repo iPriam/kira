@@ -1,0 +1,291 @@
+// The portable front's runtime: the handle table and object store (spec §3.1).
+//
+// LibTessera is one portable front plus one backend per kernel (spec §21). This
+// file is the front's kernel-independent core: a per-process handle table and an
+// object store, with the signal-and-completion machinery that every object type
+// is observed through. Port, Event and EventPair (spec §5, §9) are built on it
+// with no kernel at all — they are pure library state — which is why they are
+// the first objects the front implements and run identically on every backend.
+//
+// A `Tessera` value is one process. The system-interface calls are free
+// functions over it (`handleClose(process, h)`), mirroring the C ABI's implicit
+// per-process table; a real backend threads the same state behind the same
+// calls.
+
+import Foundation
+
+// An armed `Object.waitAsync` (spec §3.5). `optionCode` is 0 Once, 1 Repeat,
+// 2 Edge — an Int rather than the enum so a Waiter stays a plain copyable row.
+public struct Waiter {
+    var live: Bool
+    var portSlot: Int
+    var key: Key
+    var signals: Signals
+    var optionCode: Int
+}
+
+// One entry in the object store: a kernel or system object shared by every
+// handle that names it. Destroyed when its last handle in the process is closed.
+public struct ObjectRecord {
+    var live: Bool
+    var objectType: ObjectType
+    var refcount: Int
+    var signals: Signals
+    var name: String
+    var objectId: U64
+    var peerSlot: Int
+    var queue: [Completion]
+    var queueHead: Int
+    var waiters: [Waiter]
+}
+
+// One entry in the handle table. The handle value packs this slot's index and
+// its generation, so a stale handle to a reused slot is rejected.
+public struct HandleSlot {
+    var live: Bool
+    var generation: U32
+    var objectSlot: Int
+    var rights: Rights
+}
+
+// One process: its handle table, its object store, and a monotonic nanosecond
+// counter that stamps completions.
+public struct Tessera {
+    var handles: [HandleSlot]
+    var objects: [ObjectRecord]
+    var nextObjectId: U64
+    var clock: U64
+}
+
+// A fresh process with an empty table and store.
+public function tesseraCreate() -> Tessera {
+    return Tessera { handles: [], objects: [], nextObjectId: U64(1), clock: U64(0) }
+}
+
+// ─── Handle value encoding (spec §3.1) ──────────────────────────────────────
+
+// The low 32 bits of a handle are its table index, the high 32 its generation.
+// Generation starts at 1, so a live handle value is never 0 (the INVALID name).
+public function handleEncode(index: Int, generation: U32) -> Handle {
+    return Handle((U64(generation) << U64(32)) | U64(index))
+}
+
+public function handleIndexOf(handle: Handle) -> Int {
+    return Int(handle.raw & U64(4294967295))
+}
+
+public function handleGenerationOf(handle: Handle) -> U32 {
+    return U32(handle.raw >> U64(32))
+}
+
+// The handle-table slot a handle names, or -1 if the handle is 0, out of range,
+// closed, or from an earlier generation of a reused slot.
+public function tessResolve(process: borrow Tessera, handle: Handle) -> Int {
+    if !handleIsValid(handle) {
+        return -1
+    }
+    let index = handleIndexOf(handle)
+    if index < 0 {
+        return -1
+    }
+    if index >= process.handles.count {
+        return -1
+    }
+    if !process.handles[index].live {
+        return -1
+    }
+    if process.handles[index].generation != handleGenerationOf(handle) {
+        return -1
+    }
+    return index
+}
+
+// ─── Object and handle allocation ───────────────────────────────────────────
+
+// Places a record in a free object slot (reusing a dead one) and returns its
+// index. Assigns the object its stable id.
+public function tessAddObject(process: borrow mut Tessera, objectType: ObjectType, initial: Signals, peerSlot: Int) -> Int {
+    let id = process.nextObjectId
+    process.nextObjectId = process.nextObjectId + U64(1)
+    var record = ObjectRecord {
+        live: true,
+        objectType: objectType,
+        refcount: 0,
+        signals: initial,
+        name: "",
+        objectId: id,
+        peerSlot: peerSlot,
+        queue: [],
+        queueHead: 0,
+        waiters: [],
+    }
+    var i = 0
+    while i < process.objects.count {
+        if !process.objects[i].live {
+            process.objects[i] = record
+            return i
+        }
+        i = i + 1
+    }
+    process.objects.append(record)
+    return process.objects.count - 1
+}
+
+// Mints a handle to an object with the given rights and takes one reference.
+public function tessAddHandle(process: borrow mut Tessera, objectSlot: Int, rights: Rights) -> Handle {
+    process.objects[objectSlot].refcount = process.objects[objectSlot].refcount + 1
+    var i = 0
+    while i < process.handles.count {
+        if !process.handles[i].live {
+            var generation = process.handles[i].generation + U32(1)
+            if generation == U32(0) {
+                generation = U32(1)
+            }
+            process.handles[i] = HandleSlot { live: true, generation: generation, objectSlot: objectSlot, rights: rights }
+            return handleEncode(i, generation)
+        }
+        i = i + 1
+    }
+    process.handles.append(HandleSlot { live: true, generation: U32(1), objectSlot: objectSlot, rights: rights })
+    return handleEncode(process.handles.count - 1, U32(1))
+}
+
+// Drops one reference to an object and, when the last is gone, destroys it: live
+// waiters complete with Cancelled and an EventPair peer asserts PEER_CLOSED.
+public function tessDropObject(process: borrow mut Tessera, objectSlot: Int) {
+    process.objects[objectSlot].refcount = process.objects[objectSlot].refcount - 1
+    if process.objects[objectSlot].refcount > 0 {
+        return
+    }
+    var i = 0
+    while i < process.objects[objectSlot].waiters.count {
+        if process.objects[objectSlot].waiters[i].live {
+            let portSlot = process.objects[objectSlot].waiters[i].portSlot
+            let key = process.objects[objectSlot].waiters[i].key
+            process.objects[objectSlot].waiters[i].live = false
+            let packet = completionCancelled(key, .Signal)
+            tessDeliverToPort(process, portSlot, move packet)
+        }
+        i = i + 1
+    }
+    let peer = process.objects[objectSlot].peerSlot
+    process.objects[objectSlot].live = false
+    if peer >= 0 {
+        if peer < process.objects.count {
+            if process.objects[peer].live {
+                tessRaiseSignals(process, peer, signalPeerClosed(), signalsNone())
+            }
+        }
+    }
+}
+
+// ─── Signal and completion delivery ─────────────────────────────────────────
+
+// The next monotonic timestamp.
+public function tessNow(process: borrow mut Tessera) -> Instant {
+    process.clock = process.clock + U64(1)
+    return Instant(process.clock)
+}
+
+// Appends a packet to a port's queue, stamps it, and asserts READABLE so a
+// waiter on the port (and the next Port.wait) sees it.
+public function tessDeliverToPort(process: borrow mut Tessera, portSlot: Int, packet: Completion) {
+    var stamped = packet
+    stamped.timestamp = tessNow(process)
+    process.objects[portSlot].queue.append(stamped)
+    tessRaiseSignals(process, portSlot, signalReadable(), signalsNone())
+}
+
+// Sets and clears signal bits on an object, then notifies every armed waiter
+// whose mask a bit newly asserted (spec §3.4, §3.5).
+public function tessRaiseSignals(process: borrow mut Tessera, objectSlot: Int, set: Signals, clear: Signals) {
+    let before = process.objects[objectSlot].signals
+    var after = signalsUnion(before, set)
+    after = signalsClear(after, clear)
+    process.objects[objectSlot].signals = after
+    let newly = Signals(after.raw & (u32Max() ^ before.raw))
+    tessNotify(process, objectSlot, newly)
+}
+
+// Fires every live waiter on an object whose mask intersects the newly-asserted
+// bits. Once disarms after firing; Repeat marks its packets MORE; a waiter on
+// its own port is skipped so a self-watching port cannot recurse.
+public function tessNotify(process: borrow mut Tessera, objectSlot: Int, newly: Signals) {
+    let current = process.objects[objectSlot].signals
+    var i = 0
+    while i < process.objects[objectSlot].waiters.count {
+        if process.objects[objectSlot].waiters[i].live {
+            let portSlot = process.objects[objectSlot].waiters[i].portSlot
+            if portSlot != objectSlot {
+                let mask = process.objects[objectSlot].waiters[i].signals
+                let optionCode = process.objects[objectSlot].waiters[i].optionCode
+                if signalsAny(newly, mask) {
+                    let key = process.objects[objectSlot].waiters[i].key
+                    let asserted = signalsIntersect(current, mask)
+                    let more = optionCode == 1
+                    if optionCode == 0 {
+                        process.objects[objectSlot].waiters[i].live = false
+                    }
+                    let packet = completionSignal(key, asserted, more)
+                    tessDeliverToPort(process, portSlot, move packet)
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Arms one waiter on an object. If the mask is already asserted, a level arming
+// (Once, Repeat) fires at once; an Edge arming waits for the next transition.
+public function tessArm(process: borrow mut Tessera, objectSlot: Int, portSlot: Int, key: Key, mask: Signals, optionCode: Int) {
+    process.objects[objectSlot].waiters.append(Waiter { live: true, portSlot: portSlot, key: key, signals: mask, optionCode: optionCode })
+    if optionCode != 2 {
+        let current = process.objects[objectSlot].signals
+        if signalsAny(current, mask) {
+            let last = process.objects[objectSlot].waiters.count - 1
+            let asserted = signalsIntersect(current, mask)
+            let more = optionCode == 1
+            if optionCode == 0 {
+                process.objects[objectSlot].waiters[last].live = false
+            }
+            let packet = completionSignal(key, asserted, more)
+            tessDeliverToPort(process, portSlot, move packet)
+        }
+    }
+}
+
+// Cancels every armed waiter across the process that targets a port with a key,
+// delivering one Cancelled packet each. Returns how many were cancelled.
+public function tessCancelKey(process: borrow mut Tessera, portSlot: Int, key: Key) -> Int {
+    var cancelled = 0
+    var objectIndex = 0
+    while objectIndex < process.objects.count {
+        if process.objects[objectIndex].live {
+            var i = 0
+            while i < process.objects[objectIndex].waiters.count {
+                if process.objects[objectIndex].waiters[i].live {
+                    if process.objects[objectIndex].waiters[i].portSlot == portSlot {
+                        if process.objects[objectIndex].waiters[i].key == key {
+                            process.objects[objectIndex].waiters[i].live = false
+                            cancelled = cancelled + 1
+                            let packet = completionCancelled(key, .Signal)
+                            tessDeliverToPort(process, portSlot, move packet)
+                        }
+                    }
+                }
+                i = i + 1
+            }
+        }
+        objectIndex = objectIndex + 1
+    }
+    return cancelled
+}
+
+// The option code (0/1/2) for a WaitOptions value.
+public function waitOptionCode(options: borrow WaitOptions) -> Int {
+    match options {
+        Once -> { return 0 }
+        Repeat -> { return 1 }
+        Edge -> { return 2 }
+    }
+}

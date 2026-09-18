@@ -112,6 +112,16 @@ pub type ElemFree = unsafe extern "C" fn(at: *mut u8);
 /// Compares two elements of one concrete type; non-zero means equal.
 pub use crate::enums::ElemEq;
 
+/// Three-way compares two elements of one concrete type: negative when `*a`
+/// orders before `*b`, zero when equal, positive otherwise. The ordering twin of
+/// [`ElemEq`], reading its operands where they lie and taking nothing.
+pub type ElemCmp = unsafe extern "C" fn(a: *const u8, b: *const u8) -> i8;
+
+/// Folds one element of a concrete type into a running hash accumulator,
+/// returning the updated accumulator. Reads `*at` where it lies and takes
+/// nothing.
+pub type ElemHash = unsafe extern "C" fn(acc: u64, at: *const u8) -> u64;
+
 /// The heap object behind a [`KArray`].
 ///
 /// `#[repr(C)]` because the backend reads `shares` directly — copying and
@@ -435,6 +445,108 @@ pub unsafe extern "C" fn kira_rt_array_eq(
         }
     }
     1
+}
+
+/// The three-way order of two arrays, compared with the element's cmp leaf.
+///
+/// Lexicographic, and the ordering twin of [`kira_rt_array_eq`]: the shared
+/// prefix is compared element by element, the first non-equal pair decides, and
+/// when one array is a prefix of the other the shorter orders first. So it
+/// matches the VM's `Heap::compare_values` exactly — equal contents give `0`,
+/// `[1, 2]` orders before `[1, 2, 0]`, and `[1, 3]` after `[1, 2, 9]`.
+///
+/// Neither array is consumed: a comparison reads and takes nothing.
+///
+/// # Safety
+/// Both handles must be null or live, `esize` must be the element stride both
+/// were built with, and `element` must three-way compare values of that element
+/// type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_array_cmp(
+    a: KArray,
+    b: KArray,
+    esize: usize,
+    element: Option<ElemCmp>,
+) -> i8 {
+    // A null handle is an empty array, which orders before any non-empty one and
+    // equal to another empty one — the length comparison below gives both.
+    // SAFETY: each length is read only after its handle is proven non-null, and
+    // the caller guarantees a non-null handle is live.
+    let (a_len, b_len) = unsafe {
+        (
+            if a.is_null() { 0 } else { (*a).len },
+            if b.is_null() { 0 } else { (*b).len },
+        )
+    };
+    let shared = a_len.min(b_len);
+    if shared > 0 {
+        // A null leaf cannot read these bytes as the type that wrote them, so it
+        // leaves the prefix "equal" and lets the length decide — the same
+        // conservative direction `kira_rt_array_eq` takes.
+        if let Some(element) = element {
+            // SAFETY: both are non-null with at least `shared` elements of
+            // `esize` bytes, and `element` reads a pair without taking them.
+            unsafe {
+                let (one, other) = ((*a).items, (*b).items);
+                for index in 0..shared {
+                    let offset = index * esize;
+                    let sign = element(one.add(offset), other.add(offset));
+                    if sign != 0 {
+                        return sign;
+                    }
+                }
+            }
+        }
+    }
+    // A shared prefix that matched: the shorter array orders first. `Ordering`
+    // is `repr(i8)` as `-1 / 0 / 1`, which is the sign this returns.
+    a_len.cmp(&b_len) as i8
+}
+
+/// Folds an array's structural hash into `acc`: its length, then each element
+/// through the element's hash leaf.
+///
+/// The hash twin of [`kira_rt_array_eq`], matching the VM's `hash_into` for an
+/// array: it folds the length first (as a little-endian `u64`, so `[1]` and
+/// `[1, 0]` never collide on their shared prefix) and then walks the elements in
+/// order. Reads only; the array stays the caller's.
+///
+/// # Safety
+/// `array` must be null or live, `esize` the element stride it was built with,
+/// and `element` must fold one element of that size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_hash_array(
+    acc: u64,
+    array: KArray,
+    esize: usize,
+    element: Option<ElemHash>,
+) -> u64 {
+    // SAFETY: the length is read only after the handle is proven non-null.
+    let len = unsafe {
+        if array.is_null() {
+            0
+        } else {
+            (*array).len
+        }
+    };
+    // SAFETY: eight readable bytes of a stack value.
+    let mut acc = unsafe {
+        let bytes = (len as u64).to_le_bytes();
+        crate::runtime::kira_rt_hash_bytes(acc, bytes.as_ptr(), bytes.len())
+    };
+    if len > 0 {
+        if let Some(element) = element {
+            // SAFETY: a non-null array of `len` elements of `esize` bytes; the
+            // leaf reads one without taking it.
+            unsafe {
+                let items = (*array).items;
+                for index in 0..len {
+                    acc = element(acc, items.add(index * esize));
+                }
+            }
+        }
+    }
+    acc
 }
 
 /// Releases one hold on an array, freeing the header, its block and whatever

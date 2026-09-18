@@ -128,6 +128,15 @@ impl<'a> Analyzer<'a> {
 
     /// Why `ty` fails the *derived* marker `bound`, phrased for a use site.
     fn derived_bound_unmet(&self, bound: &str, ty: Type) -> Option<String> {
+        if bound == crate::traits::EQUATABLE {
+            return self.equatable_refusal(ty);
+        }
+        if bound == crate::traits::ORDERED {
+            return self.ordered_refusal(ty);
+        }
+        if bound == crate::traits::HASHABLE {
+            return self.hashable_refusal(ty);
+        }
         let claimed = self.type_name(ty);
         match crate::traits::markers::Marker::from_name(bound) {
             Some(marker) => self.marker_reason(&claimed, ty, marker),

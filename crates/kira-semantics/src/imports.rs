@@ -251,6 +251,22 @@ impl ImportTable {
             .map(String::as_str)
     }
 
+    /// Whether `package` is a bundled library — shipped with the toolchain
+    /// rather than resolved from a dependency path, which its identity records
+    /// as an empty instance.
+    ///
+    /// A bundled library (`Foundation`) shares the program's scope: its
+    /// declarations are nameable across an import without `public`, exactly as
+    /// the program's own files are. Only a *dependency* package is gated by the
+    /// import-boundary visibility rule.
+    #[must_use]
+    pub fn is_bundled_package(&self, package: &str) -> bool {
+        self.modules
+            .identities
+            .get(package)
+            .is_some_and(|identity| identity.instance.is_empty())
+    }
+
     /// Whether a declaration written in `declaration` is nameable, bare, from
     /// `file`.
     ///

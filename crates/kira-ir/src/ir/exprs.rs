@@ -617,6 +617,13 @@ pub enum IrExpr {
 pub enum IrCallee {
     /// The `print` builtin: consume one argument, emit one output line.
     Print,
+    /// The `abort` builtin: emit the message and hard-trap; does not return.
+    Abort,
+    /// The `fromCode` builtin: clamp a code against the enum's variant count
+    /// (both `Int` arguments) and build the payload-less variant it names.
+    FromCode,
+    /// The `hash` builtin: fold one `Hashable` value into an `Int`, structurally.
+    Hash,
     /// A user function, indexed into [`IrProgram::functions`].
     User(u32),
     /// A foreign C function, indexed into [`IrProgram::foreign_imports`].

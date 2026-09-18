@@ -33,3 +33,19 @@ The result type comes from the family, not from the shorthand. A `name { … }` 
 ## Reading an `Any` Back
 
 A value crosses into `Any` and is stored, copied, passed, returned, and released. `value is Type` and `value as Type` read it back by nominal runtime identity, and a runner that wants a case's measured value asks for the type it expects rather than for the case's declaration.
+
+## `assert`, `assertEqual`, and `abort`
+
+A case can also fail loudly rather than by its return value. Foundation provides:
+
+```kira
+assert(condition)          // aborts unless `condition` holds
+assertEqual(got, want)     // aborts unless `got == want`
+abort(message)             // unconditional hard trap with a message
+```
+
+`abort(message)` is the primitive: it emits the message and **hard-traps — no unwinding**, the same way an out-of-bounds index or an overflow ends a run. It is for an unrecoverable state, not a recoverable error (those are a `Result`); there is deliberately no `panic!`. Because the test runner executes each case in its own child process, an abort ends that one case as a trap and the suite continues.
+
+`assert` and `assertEqual` are thin wrappers over it. `assertEqual` takes its two values as `Any` and compares them with `==`, which is the [structural walk](/docs/language-guide/structures-and-types#equality) — so it holds for a scalar, a string, a struct, a payload-carrying enum, or an array, not only a value hand-folded to a number.
+
+The message crosses every backend identically: a trapped run prints `kira: runtime trap: aborted: <message>` and exits non-zero on the VM, the native backend, and the hybrid split alike.

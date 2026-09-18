@@ -142,6 +142,7 @@ module.exports = grammar({
     // the program. There is no module-scope `var`.
     constant_declaration: ($) =>
       seq(
+        optional('public'),
         'let',
         field('name', $.identifier),
         optional(seq(':', field('type', $._type))),
@@ -259,7 +260,9 @@ module.exports = grammar({
     function_definition: ($) =>
       prec.right(
         seq(
+          optional('public'),
           repeat($.attribute),
+          optional('public'),
           optional('async'),
           'function',
           field('name', $.identifier),
@@ -394,7 +397,9 @@ module.exports = grammar({
     // `struct Name[: Trait, …] { <member>* }`. `:` is always conformance.
     struct_declaration: ($) =>
       seq(
+        optional('public'),
         repeat($.attribute),
+        optional('public'),
         'struct',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -408,7 +413,9 @@ module.exports = grammar({
     // parents second.
     class_declaration: ($) =>
       seq(
+        optional('public'),
         repeat($.attribute),
+        optional('public'),
         'class',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -478,7 +485,9 @@ module.exports = grammar({
     // `+`.
     enum_declaration: ($) =>
       seq(
+        optional('public'),
         repeat($.attribute),
+        optional('public'),
         'enum',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -520,14 +529,16 @@ module.exports = grammar({
 
     // `type Name = Target`.
     type_alias_declaration: ($) =>
-      seq('type', field('name', $.identifier), '=', field('target', $._type)),
+      seq(optional('public'), 'type', field('name', $.identifier), '=', field('target', $._type)),
 
     // `distinct Name = Representation`. The same shape as an alias and the
     // opposite meaning: an alias is a second spelling for one type, while this
     // is a second type over one representation.
     distinct_declaration: ($) =>
       seq(
+        optional('public'),
         repeat($.attribute),
+        optional('public'),
         'distinct',
         field('name', $.identifier),
         '=',
@@ -540,6 +551,7 @@ module.exports = grammar({
     // body is a default.
     trait_declaration: ($) =>
       seq(
+        optional('public'),
         'trait',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -569,7 +581,9 @@ module.exports = grammar({
     // is the family template.
     construct_declaration: ($) =>
       seq(
+        optional('public'),
         repeat($.attribute),
+        optional('public'),
         'construct',
         field('name', $.identifier),
         optional(field('parameters', $.parameters)),

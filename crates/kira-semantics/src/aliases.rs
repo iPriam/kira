@@ -221,7 +221,11 @@ impl Analyzer<'_> {
             .imported_packages(self.source)
             .into_iter()
             .map(|package| owned_alias_key(Some(&package), name))
-            .find(|key| self.aliases.contains_key(key))
+            .find(|key| {
+                self.aliases
+                    .get(key)
+                    .is_some_and(|header| self.sees_public(header.source, name))
+            })
     }
 
     /// Whether some declaration in the program describes the C type `name`,

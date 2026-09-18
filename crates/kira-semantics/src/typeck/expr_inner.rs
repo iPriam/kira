@@ -297,9 +297,22 @@ impl Analyzer<'_> {
                 {
                     return intrinsic;
                 }
+                // The `code`/`fromCode` builtins yield to a user function or a
+                // local of the same name: the nearer, written name wins, exactly
+                // as a local wins over a field. They apply only when nothing else
+                // claims the name.
+                let code_builtin =
+                    name == "code" && local.is_none() && self.lookup_function(&name).is_none();
+                let from_code_builtin =
+                    name == "fromCode" && local.is_none() && self.lookup_function(&name).is_none();
+                let hash_builtin =
+                    name == "hash" && local.is_none() && self.lookup_function(&name).is_none();
                 if !type_args.is_empty()
                     && !self.is_generic_function(&name)
                     && !self.is_generic_aggregate(&name)
+                    // `fromCode<E>(n)` is a builtin that takes its enum as a type
+                    // argument; it is handled below, not as a user generic.
+                    && !from_code_builtin
                 {
                     self.emit(
                         callee_span,
@@ -493,6 +506,35 @@ impl Analyzer<'_> {
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
                     self.analyze_print(&arg_hirs, callee_span)
+                } else if name == "abort" {
+                    // `abort(message)` renders its message and hard-traps; it
+                    // borrows the message and never returns.
+                    let arg_hirs: Vec<HirExprId> = values
+                        .iter()
+                        .map(|&arg| self.analyze_expr(ctx, arg))
+                        .collect();
+                    self.analyze_abort(&arg_hirs, callee_span)
+                } else if code_builtin {
+                    // `code(enumValue)` reads a payloadless enum's declaration
+                    // index — the native form of `@Derive(Tagged)`'s `code_`.
+                    let arg_hirs: Vec<HirExprId> = values
+                        .iter()
+                        .map(|&arg| self.analyze_expr(ctx, arg))
+                        .collect();
+                    self.analyze_code(&arg_hirs, callee_span)
+                } else if from_code_builtin {
+                    // `fromCode<E>(n)` rebuilds a payloadless enum variant from
+                    // its code — the native form of `@Derive(Tagged)`'s
+                    // `<E>_fromCode`.
+                    self.analyze_from_code(ctx, &type_args, &values, callee_span)
+                } else if hash_builtin {
+                    // `hash(value)` folds a `Hashable` value into one `Int` — the
+                    // native operation behind the `Hashable` trait.
+                    let arg_hirs: Vec<HirExprId> = values
+                        .iter()
+                        .map(|&arg| self.analyze_expr(ctx, arg))
+                        .collect();
+                    self.analyze_hash(&arg_hirs, callee_span)
                 } else if let Some(shapes) = self.foreign_named(&name) {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no

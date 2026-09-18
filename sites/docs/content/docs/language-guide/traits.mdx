@@ -125,7 +125,7 @@ extend Plate: Hashable {
 
 The colon form also reaches a construct family: `construct Widget: Hashable { … }` claims the trait for every declaration backed by the family, and `extend Widget: Hashable { … }` makes the same claim retroactively. A family is a template rather than a type, so it keeps no promise itself: the claim becomes one conformance per backed declaration, filed at that declaration. Members the family provides at its own scope answer for every variant at once, which is what makes claiming on the family worth writing rather than repeating the claim under each declaration. A declaration that already claims the trait in its own colon list keeps its own conformance untouched.
 
-A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, and `Sync` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
+A family cannot claim a compiler-known trait: `Copyable`, `Drop`, `Send`, `Sync`, `Equatable`, `Ordered`, and `Hashable` are facts about one type's own members, and a template has no members of its own (`KSEM298`).
 
 A type conforms to one trait in exactly one place: writing the trait in the declaration's colon list *and* in an `extend` block is `KSEM290`. An enum or another type without members can put the conformance in its declaration and provide behavioral members in a single impl block. A block may carry only members the trait declares (`KSEM294`).
 
@@ -199,8 +199,11 @@ Some traits exist without a declaration, because what they mean is decided by a 
 | `Drop` | The type attaches a body the engines run where they already release the value. See [Memory and Safety](/docs/language-guide/memory-and-safety). |
 | `Send` | A value of the type may be moved to another thread. |
 | `Sync` | A value of the type may be borrowed from more than one thread at once. |
+| `Equatable` | The type compares with `==` / `!=`, structurally. Every leaf must be comparable; one that is not is `KSEM390` at the comparison site. See [Equality](/docs/language-guide/structures-and-types). |
+| `Ordered` | The type compares with `<` / `<=` / `>` / `>=`, structurally and lexicographically. Every leaf must carry a total order; one that does not is `KSEM391`. See [Ordering](/docs/language-guide/structures-and-types). |
+| `Hashable` | The type folds into one `Int` with `hash(v)`, structurally and consistently with `==`. Every leaf must hash consistently with equality; a float (whose equal values may differ in bits) does not, and is `KSEM392`. |
 
-`Copyable`, `Send`, and `Sync` are **derived**: the fact belongs to every type whether or not anyone writes it down, and writing it is an assertion checked against the type's members. A `Send` or `Sync` claim the members refute is `KSEM311`.
+`Copyable`, `Send`, `Sync`, `Equatable`, `Ordered`, and `Hashable` are **derived**: the fact belongs to every type whether or not anyone writes it down, and writing it is an assertion checked against the type's members. A `Send` or `Sync` claim the members refute is `KSEM311`. `Equatable`, `Ordered`, and `Hashable` have nothing to write at all — the operator (`==`, `<`) or the operation (`hash`) and the bound read the same structural fact — so a `<T: Equatable>`, `<T: Ordered>`, or `<T: Hashable>` parameter accepts precisely the types whose shape earns it.
 
 A compiler-known trait may be required as a supertrait, and a derived one is discharged by the fact rather than by a second spelling of it:
 

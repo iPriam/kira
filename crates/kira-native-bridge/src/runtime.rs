@@ -188,6 +188,24 @@ pub unsafe extern "C" fn kira_rt_print_str(value: KStr) {
     unsafe { drop_handle(value) };
 }
 
+/// The native mirror of the VM's `Aborted` trap: `abort(message)` emits the
+/// message and exits non-zero, with no unwinding. The child-per-test runner
+/// records the non-zero exit as a trap.
+///
+/// # Safety
+/// `value` must be a live (or null) string handle, consumed exactly once here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_abort(value: KStr) -> ! {
+    // SAFETY: caller passes a live (or null) handle.
+    let message = String::from_utf8_lossy(unsafe { bytes_of(value) }).into_owned();
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    // Matches the VM's `Aborted` trap byte-for-byte: the CLI renders that error
+    // as `kira: runtime trap: {display}`, and the display is `aborted: {msg}`.
+    eprintln!("kira: runtime trap: aborted: {message}");
+    std::process::exit(1);
+}
+
 /// Materializes a `String` literal: copies `len` bytes from `data` into a fresh
 /// owned handle.
 ///
@@ -269,6 +287,86 @@ pub unsafe extern "C" fn kira_rt_str_eq(a: KStr, b: KStr) -> u8 {
         drop_handle(b);
     }
     u8::from(equal)
+}
+
+/// The 64-bit FNV-1a offset basis — the seed a structural hash folds from.
+///
+/// Shared by value with the VM's `Heap::hash_value`, so the two engines fold the
+/// identical byte stream and answer the identical `hash(v)`. The constant is the
+/// standard FNV-1a 64-bit basis; it is duplicated rather than shared through a
+/// crate because it is a fixed, well-known value that neither engine may change
+/// without the other.
+const FNV_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+/// The 64-bit FNV-1a prime, multiplied in after each byte.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// The seed a structural hash fold starts from.
+///
+/// Generated code reads it once at the top of a `hash(v)` walk, then threads the
+/// accumulator through [`kira_rt_hash_bytes`] and the leaf helpers.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_hash_seed() -> u64 {
+    FNV_SEED
+}
+
+/// Folds `len` bytes at `ptr` into the running FNV-1a accumulator `acc`.
+///
+/// The one place the fold math lives on the native side, so every leaf — a
+/// scalar's little-endian bytes, a string's bytes, an enum's tag — folds exactly
+/// as the VM's `hash_into` does. Reads only; takes nothing.
+///
+/// # Safety
+/// `ptr` must address `len` readable bytes (or `len` is zero).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_hash_bytes(acc: u64, ptr: *const u8, len: usize) -> u64 {
+    let mut acc = acc;
+    if !ptr.is_null() {
+        // SAFETY: the caller guarantees `len` readable bytes at `ptr`.
+        let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+        for &byte in bytes {
+            acc ^= u64::from(byte);
+            acc = acc.wrapping_mul(FNV_PRIME);
+        }
+    }
+    acc
+}
+
+/// Folds a string's bytes into `acc`, leaving the string as it was found.
+///
+/// The `String` leaf of the hash walk: it borrows the bytes rather than consuming
+/// the handle, so the value stays the caller's, exactly as the VM's string hash
+/// reads `self.get(id)` without taking it.
+///
+/// # Safety
+/// `s` must be null or a live handle from this runtime; it is not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_hash_str(acc: u64, s: KStr) -> u64 {
+    // SAFETY: caller passes a live (or null) handle; `bytes_of` borrows it.
+    let bytes = unsafe { bytes_of(s) };
+    // SAFETY: `bytes` addresses its own length of readable bytes.
+    unsafe { kira_rt_hash_bytes(acc, bytes.as_ptr(), bytes.len()) }
+}
+
+/// Three-way compares two strings by their bytes, freeing both inputs.
+///
+/// The ordering twin of [`kira_rt_str_eq`], and byte-lexicographic like the
+/// VM's `str` comparison: negative when `a` orders before `b`, zero when equal,
+/// positive otherwise. Both inputs are consumed exactly as `kira_rt_str_eq`
+/// consumes them, so a caller that keeps its strings clones them first.
+///
+/// # Safety
+/// `a` and `b` must each be null or a live handle; both are freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_cmp(a: KStr, b: KStr) -> i8 {
+    // SAFETY: caller passes live (or null) handles.
+    let ordering = unsafe { bytes_of(a).cmp(bytes_of(b)) };
+    // SAFETY: both inputs are live and consumed exactly once here.
+    unsafe {
+        drop_handle(a);
+        drop_handle(b);
+    }
+    // `Ordering` is `repr(i8)` as `-1 / 0 / 1`.
+    ordering as i8
 }
 
 /// Frees a string. A null handle is a no-op.

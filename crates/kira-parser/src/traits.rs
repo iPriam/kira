@@ -90,6 +90,7 @@ impl Parser<'_> {
             return Some(TraitDecl {
                 name,
                 name_span,
+                public: false,
                 type_params,
                 supertraits,
                 members,
@@ -131,6 +132,7 @@ impl Parser<'_> {
         Some(TraitDecl {
             name,
             name_span,
+            public: false,
             type_params,
             supertraits,
             members,

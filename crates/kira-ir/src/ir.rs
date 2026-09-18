@@ -284,7 +284,12 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::BitXor
         | IrBinOp::Shl
         | IrBinOp::ShrInt
-        | IrBinOp::ShrUInt => Type::INT,
+        | IrBinOp::ShrUInt
+        // A three-way structural compare answers a plain `Int` sign: negative,
+        // zero, or positive. The four orderings are recovered by comparing it
+        // against zero, so the walk itself is width-free like the arithmetic
+        // above.
+        | IrBinOp::CmpValue => Type::INT,
         IrBinOp::AddFloat
         | IrBinOp::SubFloat
         | IrBinOp::MulFloat
@@ -313,6 +318,8 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::NeStr
         | IrBinOp::EqAny
         | IrBinOp::NeAny
+        | IrBinOp::EqValue
+        | IrBinOp::NeValue
         | IrBinOp::EqType
         | IrBinOp::NeType
         | IrBinOp::And

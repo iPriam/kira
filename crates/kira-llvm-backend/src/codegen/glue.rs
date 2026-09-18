@@ -167,6 +167,152 @@ impl Codegen<'_> {
         Ok(self.truthy(equal))
     }
 
+    /// Structural `==` / `!=` on two owned values of one statically known type,
+    /// as an `i1` — the backing of `EqValue`/`NeValue`.
+    ///
+    /// [`equal_at`] compares values where they lie, so each operand is spilled
+    /// to a slot first; the walk itself reads and takes nothing. The operator
+    /// consumes what it compared — the two operands are owned temporaries — so
+    /// both are released afterwards, exactly as the erased `EqAny` drops the
+    /// boxes it was handed. `negate` builds the `!=` answer without a second
+    /// walk.
+    ///
+    /// [`equal_at`]: Self::equal_at
+    pub(super) fn equal_values(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        ty: Type,
+        negate: bool,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let llvm_type = self.llvm_type(ty)?;
+        // SAFETY: a comparison is only lowered inside a function body, so the
+        // builder is positioned in one and has a parent to allocate against.
+        let function = unsafe { LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder)) };
+        let left_slot = self.entry_alloca(function, llvm_type, c"eq.lhs");
+        let right_slot = self.entry_alloca(function, llvm_type, c"eq.rhs");
+        // SAFETY: both slots address storage of `llvm_type`, both operands have
+        // that type, and the builder is on a live block.
+        unsafe {
+            LLVMBuildStore(self.builder, left, left_slot);
+            LLVMBuildStore(self.builder, right, right_slot);
+        }
+        let equal = self.equal_at(left_slot, right_slot, ty)?;
+        self.release_at(left_slot, ty)?;
+        self.release_at(right_slot, ty)?;
+        if !negate {
+            return Ok(equal);
+        }
+        // SAFETY: `equal` is an `i1` and the builder is on a live block; `not`
+        // on a one-bit value is its logical negation.
+        Ok(unsafe { LLVMBuildNot(self.builder, equal, c"ne.value".as_ptr()) })
+    }
+
+    /// The three-way order of the values at `left` and `right`, as an `i8` sign
+    /// — the ordering twin of [`equal_at`].
+    ///
+    /// A struct goes through its compare leaf so a nested comparison is a call
+    /// rather than an inlined walk, exactly as equality does; everything else
+    /// walks where it lies. Neither operand is consumed.
+    ///
+    /// [`equal_at`]: Self::equal_at
+    pub(super) fn compare_at(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if !matches!(ty, Type::Struct(_)) {
+            return self.compare_at_walk(left, right, ty);
+        }
+        let compare = self.leaf_callable(ty, Leaf::Cmp)?;
+        let mut args = [left, right];
+        Ok(self.call(compare, &mut args, c"cmp.struct"))
+    }
+
+    /// Structural `<` / `<=` / `>` / `>=` on two owned values of one statically
+    /// known `Ordered` type, as the `i8` sign backing [`CmpValue`].
+    ///
+    /// The ordering counterpart of [`equal_values`]: each operand is spilled to
+    /// a slot, the walk reads them where they lie, and both are released
+    /// afterwards — the two are owned temporaries the operator consumes, exactly
+    /// as the equality path releases the values it compared. The surrounding
+    /// integer comparison of the sign against zero recovers which ordering was
+    /// written.
+    ///
+    /// [`equal_values`]: Self::equal_values
+    /// [`CmpValue`]: kira_semantics_model::hir::HirBinaryOp::CmpValue
+    pub(super) fn compare_values(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let llvm_type = self.llvm_type(ty)?;
+        // SAFETY: a comparison is only lowered inside a function body, so the
+        // builder is positioned in one and has a parent to allocate against.
+        let function = unsafe { LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder)) };
+        let left_slot = self.entry_alloca(function, llvm_type, c"cmp.lhs");
+        let right_slot = self.entry_alloca(function, llvm_type, c"cmp.rhs");
+        // SAFETY: both slots address storage of `llvm_type`, both operands have
+        // that type, and the builder is on a live block.
+        unsafe {
+            LLVMBuildStore(self.builder, left, left_slot);
+            LLVMBuildStore(self.builder, right, right_slot);
+        }
+        let sign = self.compare_at(left_slot, right_slot, ty)?;
+        self.release_at(left_slot, ty)?;
+        self.release_at(right_slot, ty)?;
+        Ok(sign)
+    }
+
+    /// Folds the value at `at` into `acc`, sending a struct through its hash leaf
+    /// so a nested fold is a call rather than an inlined walk — the hash twin of
+    /// [`compare_at`]. Nothing is consumed.
+    ///
+    /// [`compare_at`]: Self::compare_at
+    pub(super) fn hash_at(
+        &mut self,
+        acc: LLVMValueRef,
+        at: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if !matches!(ty, Type::Struct(_)) {
+            return self.hash_at_walk(acc, at, ty);
+        }
+        let leaf = self.leaf_callable(ty, Leaf::Hash)?;
+        let mut args = [acc, at];
+        Ok(self.call(leaf, &mut args, c"hash.struct"))
+    }
+
+    /// Structural `hash(v)` on one owned value of a statically known `Hashable`
+    /// type, as the `i64` backing [`HashValue`].
+    ///
+    /// The counterpart of [`compare_values`]: the value is spilled to a slot, the
+    /// walk folds it from the runtime seed, and the value is released afterwards —
+    /// the operand is an owned temporary the operation consumes, exactly as the
+    /// comparison paths release what they read.
+    ///
+    /// [`compare_values`]: Self::compare_values
+    /// [`HashValue`]: kira_semantics_model::hir::HirBinaryOp
+    pub(super) fn hash_values(
+        &mut self,
+        value: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let llvm_type = self.llvm_type(ty)?;
+        // SAFETY: a hash is only lowered inside a function body.
+        let function = unsafe { LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder)) };
+        let slot = self.entry_alloca(function, llvm_type, c"hash.value");
+        // SAFETY: `slot` addresses storage of `llvm_type`, `value` has that type,
+        // and the builder is on a live block.
+        unsafe { LLVMBuildStore(self.builder, value, slot) };
+        let seed = self.call(self.runtime.hash_seed, &mut [], c"hash.seed");
+        let acc = self.hash_at(seed, slot, ty)?;
+        self.release_at(slot, ty)?;
+        Ok(acc)
+    }
+
     /// The slot a site spills `ty` into for its leaf, allocated once per
     /// function.
     fn scratch(&mut self, ty: Type, llvm_type: LLVMTypeRef) -> LLVMValueRef {
@@ -205,7 +351,7 @@ impl Codegen<'_> {
     /// In the entry block rather than at the site, because a slot allocated
     /// inside a loop body grows the frame once per iteration — `alloca` is a
     /// stack bump, not a scope.
-    fn entry_alloca(
+    pub(in crate::codegen) fn entry_alloca(
         &self,
         function: LLVMValueRef,
         llvm_type: LLVMTypeRef,

@@ -1,0 +1,5 @@
+Package AssertionsAbort {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "AssertionsAbort"
+}

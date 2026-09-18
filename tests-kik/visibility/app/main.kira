@@ -1,0 +1,17 @@
+// Import-boundary visibility: an app importing VisLib may name only VisLib's
+// `public` declarations. The private helper `visInternalDouble` is not nameable
+// here (see the refusals harness for that case); the public struct, enum, and
+// function are, and the public function's result crosses even though it calls
+// the private helper internally.
+import Foundation
+import VisLib
+
+@Main
+function main() {
+    var acc = 0
+    let p = VisPoint { x: 3, y: 4 }
+    if p.x + p.y == 7 { acc = acc + 1 }
+    if visScale(5, 3) == 30 { acc = acc + 2 }
+    if VisTag.Two == VisTag.Two && VisTag.Two != VisTag.Zero { acc = acc + 4 }
+    print("vis:" + String(acc))
+}

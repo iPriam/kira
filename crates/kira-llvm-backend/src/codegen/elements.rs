@@ -65,6 +65,22 @@ pub(super) enum Leaf {
     /// `memcmp` would read padding bytes, which a copy never defines, so even a
     /// struct of two `Int`s needs a real leaf that compares the fields it has.
     Eq,
+    /// `(a, b) -> i8`: the three-way order of `*a` and `*b` — negative, zero, or
+    /// positive — the ordering twin of [`Leaf::Eq`].
+    ///
+    /// Has no "owns nothing" shortcut for the same reason `Eq` does not: the
+    /// order is field by field, not a byte compare, so even a struct of two
+    /// `Int`s needs a real leaf. Reached only for a type the frontend proved
+    /// `Ordered`, so every field it walks is one this can order.
+    Cmp,
+    /// `(acc, at) -> acc`: fold `*at` into the running hash accumulator `acc` and
+    /// return it — the fold twin of [`Leaf::Eq`].
+    ///
+    /// Threads an `i64` accumulator rather than answering a bool or a sign, so its
+    /// signature differs from the other leaves. No "owns nothing" shortcut, for
+    /// the same reason `Eq` has none. Reached only for a type the frontend proved
+    /// `Hashable`.
+    Hash,
 }
 
 impl Codegen<'_> {
@@ -117,6 +133,21 @@ impl Codegen<'_> {
         self.element_leaf(ty, Leaf::Eq)
     }
 
+    /// The three-way compare leaf for a value of `ty`, for ordering it as an
+    /// array element or a struct field.
+    ///
+    /// Always a real function, like [`Codegen::element_eq`]: an order is a walk,
+    /// never a byte compare.
+    pub(in crate::codegen) fn element_cmp(&mut self, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        self.element_leaf(ty, Leaf::Cmp)
+    }
+
+    /// The hash leaf for a value of `ty`, for folding it as an array element or a
+    /// struct field. Always a real function, like [`Codegen::element_eq`].
+    pub(in crate::codegen) fn element_hash(&mut self, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        self.element_leaf(ty, Leaf::Hash)
+    }
+
     /// The leaf for `ty`, paired with its signature so it can be *called*.
     ///
     /// [`Codegen::element_clone`] and [`Codegen::element_free`] hand a leaf to
@@ -126,7 +157,7 @@ impl Codegen<'_> {
     /// the two clone and free leaves are never null.
     pub(super) fn leaf_callable(&mut self, ty: Type, leaf: Leaf) -> Result<Callable, LlvmError> {
         debug_assert!(
-            leaf == Leaf::Eq || self.program.types.owns_heap(ty),
+            matches!(leaf, Leaf::Eq | Leaf::Cmp | Leaf::Hash) || self.program.types.owns_heap(ty),
             "a callable clone or free leaf for a type that owns nothing"
         );
         let value = self.element_leaf(ty, leaf)?;
@@ -143,11 +174,15 @@ impl Codegen<'_> {
     /// struct's walk off a load of the whole struct — see [`super::glue`].
     fn leaf_signature(&self, leaf: Leaf) -> LLVMTypeRef {
         let mut params = match leaf {
-            Leaf::Clone | Leaf::Eq => vec![self.types.ptr, self.types.ptr],
+            Leaf::Clone | Leaf::Eq | Leaf::Cmp => vec![self.types.ptr, self.types.ptr],
             Leaf::Retain | Leaf::Free => vec![self.types.ptr],
+            // The hash leaf threads an `i64` accumulator alongside the value
+            // pointer, unlike the pointer-only leaves.
+            Leaf::Hash => vec![self.types.i64, self.types.ptr],
         };
         let returns = match leaf {
-            Leaf::Eq => self.types.i8,
+            Leaf::Eq | Leaf::Cmp => self.types.i8,
+            Leaf::Hash => self.types.i64,
             Leaf::Clone | Leaf::Retain | Leaf::Free => self.types.void,
         };
         // SAFETY: every type belongs to this module's context and `params`
@@ -159,7 +194,7 @@ impl Codegen<'_> {
         // An element that owns nothing needs no clone or free leaf, and saying
         // so with a null pointer is what lets the runtime skip its loop for
         // `[Int]`. Equality has no such case — it compares the value itself.
-        if leaf != Leaf::Eq && !self.program.types.owns_heap(ty) {
+        if !matches!(leaf, Leaf::Eq | Leaf::Cmp | Leaf::Hash) && !self.program.types.owns_heap(ty) {
             // SAFETY: `types.ptr` is this context's opaque pointer type.
             return Ok(unsafe { LLVMConstNull(self.types.ptr) });
         }
@@ -203,6 +238,8 @@ impl Codegen<'_> {
             Leaf::Retain => format!("kira.elem.retain.{ordinal}"),
             Leaf::Free => format!("kira.elem.free.{ordinal}"),
             Leaf::Eq => format!("kira.elem.eq.{ordinal}"),
+            Leaf::Cmp => format!("kira.elem.cmp.{ordinal}"),
+            Leaf::Hash => format!("kira.elem.hash.{ordinal}"),
         });
         let signature = self.leaf_signature(leaf);
 
@@ -254,6 +291,30 @@ impl Codegen<'_> {
                         LLVMBuildZExt(self.builder, equal, self.types.i8, c"elem.eq".as_ptr());
                     LLVMBuildRet(self.builder, widened);
                 }
+                return Ok(());
+            }
+            Leaf::Cmp => {
+                // SAFETY: `other` is the second parameter of a two-parameter
+                // signature, addressing a live value of this type.
+                let other = unsafe { LLVMGetParam(function, 1) };
+                // The walk already answers the `i8` sign the seam speaks, so it
+                // is returned as-is — no widening, unlike the `i1` equality.
+                let sign = self.compare_at_walk(src, other, ty)?;
+                // SAFETY: `sign` is an `i8` and the builder is on an
+                // unterminated block of this function.
+                unsafe { LLVMBuildRet(self.builder, sign) };
+                return Ok(());
+            }
+            Leaf::Hash => {
+                // The hash leaf's parameters are `(acc, at)`, not `(at, other)`:
+                // the accumulator comes first, the value pointer second.
+                // SAFETY: both parameters exist on the just-built signature.
+                let acc = unsafe { LLVMGetParam(function, 0) };
+                let at = unsafe { LLVMGetParam(function, 1) };
+                let folded = self.hash_at_walk(acc, at, ty)?;
+                // SAFETY: `folded` is an `i64` and the builder is on an
+                // unterminated block of this function.
+                unsafe { LLVMBuildRet(self.builder, folded) };
                 return Ok(());
             }
         }

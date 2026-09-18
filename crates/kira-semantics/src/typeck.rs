@@ -189,10 +189,29 @@ impl Analyzer<'_> {
             return self.analyze_number_binary(op, lhs_hir, rhs_hir, span);
         }
 
-        // Enum equality is tag equality: `e == .V` becomes an `Int` comparison
-        // of two discriminants, so no backend learns enums can be compared.
-        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(lt, Type::Enum(_)) && lt == rt {
-            return self.enum_equality(op == BinaryOp::Eq, lhs_hir, rhs_hir);
+        // Structural equality on an aggregate: a struct, an array, or a
+        // payload-carrying enum compared to another value of its own type. Enum
+        // equality against a payload-less variant literal stays a tag
+        // comparison — the common `c == .Red` never allocates — and everything
+        // else walks the value; a leaf with no equality is refused here, naming
+        // it, rather than compiled into a wrong identity comparison.
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && lt == rt
+            && matches!(lt, Type::Struct(_) | Type::Array(_) | Type::Enum(_))
+        {
+            return self.analyze_structural_equality(op, lt, lhs_hir, rhs_hir, span);
+        }
+
+        // Structural ordering on an aggregate: a struct, an array, or an enum
+        // compared to another value of its own type with `<`, `<=`, `>`, `>=`.
+        // Every aggregate whose leaves are all totally ordered walks the value
+        // lexicographically; a leaf with no order is refused here, naming it,
+        // rather than compiled into a wrong or non-deterministic comparison.
+        if matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+            && lt == rt
+            && matches!(lt, Type::Struct(_) | Type::Array(_) | Type::Enum(_))
+        {
+            return self.analyze_structural_ordering(op, lt, lhs_hir, rhs_hir, span);
         }
 
         // Two pointer words compare as the words they are, which is what makes
@@ -250,6 +269,118 @@ impl Analyzer<'_> {
                     self.program.exprs.alloc(HirExpr::Error)
                 }),
         }
+    }
+
+    /// Builds `==` / `!=` on two values of one aggregate type.
+    ///
+    /// An enum compared against a payload-less variant literal, or an enum with
+    /// no payload-carrying variant at all, stays a tag comparison — correct and
+    /// allocation-free. Every other aggregate walks its value with
+    /// [`HirBinaryOp::EqValue`], once its type is known to conform to
+    /// `Equatable`; a non-comparable leaf is refused here, naming it, rather
+    /// than lowered to a wrong identity compare.
+    fn analyze_structural_equality(
+        &mut self,
+        op: BinaryOp,
+        ty: Type,
+        lhs_hir: HirExprId,
+        rhs_hir: HirExprId,
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let is_eq = op == BinaryOp::Eq;
+        if let Type::Enum(id) = ty {
+            let payloadless_enum = self
+                .program
+                .types
+                .enums()
+                .get(id)
+                .is_none_or(|def| def.variants.iter().all(|variant| variant.payload.is_none()));
+            if payloadless_enum
+                || self.is_payloadless_variant_literal(lhs_hir)
+                || self.is_payloadless_variant_literal(rhs_hir)
+            {
+                return self.enum_equality(is_eq, lhs_hir, rhs_hir);
+            }
+        }
+        if let Some(reason) = self.equatable_refusal(ty) {
+            self.emit(
+                span,
+                "KSEM390",
+                format!(
+                    "`{}` cannot be compared with `{}`: {reason}",
+                    self.type_name(ty),
+                    op.spelling()
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let hir_op = if is_eq {
+            HirBinaryOp::EqValue
+        } else {
+            HirBinaryOp::NeValue
+        };
+        self.program.exprs.alloc(HirExpr::Binary {
+            op: hir_op,
+            lhs: lhs_hir,
+            rhs: rhs_hir,
+            ty: Type::Bool,
+        })
+    }
+
+    /// Builds `<` / `<=` / `>` / `>=` on two values of one aggregate type.
+    ///
+    /// The aggregate walks its value with [`HirBinaryOp::CmpValue`], a
+    /// three-way structural compare answering an `Int` sign, once its type is
+    /// known to conform to `Ordered`; the written operator becomes the ordinary
+    /// integer comparison of that sign against zero. A leaf with no total order
+    /// is refused here, naming it, rather than lowered to an order read off an
+    /// address.
+    fn analyze_structural_ordering(
+        &mut self,
+        op: BinaryOp,
+        ty: Type,
+        lhs_hir: HirExprId,
+        rhs_hir: HirExprId,
+        span: kira_source::Span,
+    ) -> HirExprId {
+        if let Some(reason) = self.ordered_refusal(ty) {
+            self.emit(
+                span,
+                "KSEM391",
+                format!(
+                    "`{}` cannot be ordered with `{}`: {reason}",
+                    self.type_name(ty),
+                    op.spelling()
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let compare = self.program.exprs.alloc(HirExpr::Binary {
+            op: HirBinaryOp::CmpValue,
+            lhs: lhs_hir,
+            rhs: rhs_hir,
+            ty: Type::INT,
+        });
+        let zero = self.program.exprs.alloc(HirExpr::Int(0));
+        let int_op = match op {
+            BinaryOp::Lt => HirBinaryOp::LtInt,
+            BinaryOp::Le => HirBinaryOp::LeInt,
+            BinaryOp::Gt => HirBinaryOp::GtInt,
+            BinaryOp::Ge => HirBinaryOp::GeInt,
+            _ => unreachable!("analyze_structural_ordering is only reached for the four orderings"),
+        };
+        self.program.exprs.alloc(HirExpr::Binary {
+            op: int_op,
+            lhs: compare,
+            rhs: zero,
+            ty: Type::Bool,
+        })
+    }
+
+    /// Whether `id` is a payload-less variant literal such as `.Red`, the one
+    /// operand shape enum equality folds to a bare tag comparison.
+    fn is_payloadless_variant_literal(&self, id: HirExprId) -> bool {
+        matches!(self.program.expr(id), HirExpr::EnumNew { payload: None, .. })
     }
 
     /// Resolves a binary operator where at least one operand is a distinct

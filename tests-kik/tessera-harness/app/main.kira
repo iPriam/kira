@@ -1,0 +1,20 @@
+// LibTessera portable-front harness.
+//
+// The system interface of TesseraOS is written in Kira (spec §22). Its portable
+// front — the handle table, rights, signals, ports, completions and the Event
+// and EventPair objects (spec §1–5, §9) — is kernel-independent library state,
+// so it runs identically on every backend:
+//
+//   kira test --backend vm     tests-kik/tessera-harness
+//   kira test --backend llvm   tests-kik/tessera-harness
+//   kira test --backend hybrid tests-kik/tessera-harness
+//
+// Every declaration here uses the `tsx`/`Tsx` prefix. `main` is trivial; the
+// driver synthesized in test mode is the real entry.
+
+import Foundation
+
+@Main
+function main() {
+    return
+}

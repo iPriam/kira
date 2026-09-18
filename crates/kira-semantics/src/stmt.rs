@@ -268,6 +268,19 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                // A plain store consumes its right side exactly as a `let`
+                // binding does: a value whose type aliases its source — an
+                // array, an affine handle, a `Drop` type — would otherwise
+                // leave the source readable while the place became a second
+                // owner, so the later drops no longer match the source
+                // program's ownership (`self.field = e  return e` handing one
+                // value to both). A compound assignment reads the target as an
+                // operand and writes back a fresh result, so it moves nothing.
+                // Done before the target is remarked live so `x = x` reads the
+                // live source and only then revives the binding the move emptied.
+                if op.is_none() {
+                    self.apply_binding_move(ctx, value, value_expr);
+                }
                 // Assigning to the binding itself gives it a value again. The
                 // value is analyzed first, so `x = f(move x)` still reads the
                 // live `x` and only then restores it; `x.f = …` writes into a

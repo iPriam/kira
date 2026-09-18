@@ -1,0 +1,9 @@
+// visInternalDouble is private to VisLib; naming it across the import is
+// refused. This program must NOT compile.
+import Foundation
+import VisLib
+
+@Main
+function main() {
+    print(visInternalDouble(21))
+}

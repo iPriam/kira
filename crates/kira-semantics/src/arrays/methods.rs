@@ -3,10 +3,9 @@ mod sort;
 use kira_semantics_model::hir::{HirBinaryOp, HirExpr, HirExprId, HirPlace, HirStmt};
 use kira_semantics_model::Type;
 use kira_source::Span;
-use kira_syntax_model::ast::{BinaryOp, ExprId};
+use kira_syntax_model::ast::ExprId;
 
 use crate::analyze::{Analyzer, FnCtx};
-use crate::operators::resolve_binary;
 use crate::place::PlacePurpose;
 
 use super::unsupported_member;
@@ -67,7 +66,17 @@ impl Analyzer<'_> {
         }
         let needle = self.analyze_expr_expecting(ctx, args[0], Some(element));
         let needle_ty = self.program.expr(needle).type_of();
-        let Some((eq, _)) = resolve_binary(BinaryOp::Eq, element, needle_ty) else {
+        // The needle is checked against the element type above, so a mismatch is
+        // already an error; the remaining question is whether that element type
+        // has equality at all — the same structural rule `==` uses, so an array
+        // of structs or payload-carrying enums is searchable exactly when those
+        // values are comparable.
+        let eq = if element != needle_ty {
+            None
+        } else {
+            self.equality_op(element)
+        };
+        let Some(eq) = eq else {
             self.emit(
                 self.tree.expr(args[0]).span(),
                 "KSEM389",

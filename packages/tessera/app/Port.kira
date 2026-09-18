@@ -1,0 +1,117 @@
+// Ports (spec §5). A completion queue with no owner thread.
+//
+// A Port is the only way asynchronous results, signal notifications and
+// user-posted packets reach a process. In the portable front a Port is pure
+// library state: a queue of completions and a READABLE signal that asserts while
+// the queue is non-empty. `Port.wait` drains it; with no other threads an empty
+// wait returns Timeout, which is the honest single-threaded reading of "block
+// until a packet is available or the deadline passes".
+
+import Foundation
+
+// The default per-port bound on pending user packets (spec §5.1). User packets
+// are bounded so a process cannot exhaust memory through its own port.
+public function portUserPacketLimit() -> Int { return 65536 }
+
+// The object-store slot a Port handle names, or -1 if the handle is invalid or
+// not a Port.
+public function tessResolvePort(process: borrow Tessera, handle: Handle) -> Int {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        return -1
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    if objectTypeCode(process.objects[objectSlot].objectType) != U32(1) {
+        return -1
+    }
+    return objectSlot
+}
+
+// Port.create — a new completion queue. Rights: the default set.
+public function portCreate(process: borrow mut Tessera, options: PortOptions) -> Result<Handle, Error> {
+    let objectSlot = tessAddObject(process, .Port, signalsNone(), -1)
+    let handle = tessAddHandle(process, objectSlot, rightsDefault())
+    let out: Result<Handle, Error> = .Ok(handle)
+    return out
+}
+
+// Port.wait — dequeue up to `max` completions. Requires Wait. Returns Timeout
+// with an empty batch when the queue is empty (a bare deadline cannot block a
+// single-threaded front). Errors: InvalidHandle, AccessDenied, WrongType.
+public function portWait(process: borrow mut Tessera, port: Handle, max: U32, deadline: Deadline) -> Result<[Completion], Error> {
+    let slot = tessResolve(process, port)
+    if slot < 0 {
+        let out: Result<[Completion], Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    if !rightsHas(process.handles[slot].rights, rightWait()) {
+        let out: Result<[Completion], Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    if objectTypeCode(process.objects[objectSlot].objectType) != U32(1) {
+        let out: Result<[Completion], Error> = .Error(errorOf(.WrongType))
+        return out
+    }
+    var batch: [Completion] = []
+    var taken = U32(0)
+    while taken < max && process.objects[objectSlot].queueHead < process.objects[objectSlot].queue.count {
+        let head = process.objects[objectSlot].queueHead
+        batch.append(process.objects[objectSlot].queue[head])
+        process.objects[objectSlot].queueHead = head + 1
+        taken = taken + U32(1)
+    }
+    if process.objects[objectSlot].queueHead >= process.objects[objectSlot].queue.count {
+        process.objects[objectSlot].queue = []
+        process.objects[objectSlot].queueHead = 0
+        process.objects[objectSlot].signals = signalsClear(process.objects[objectSlot].signals, signalReadable())
+    }
+    if batch.count == 0 {
+        let out: Result<[Completion], Error> = .Error(errorOf(.Timeout))
+        return out
+    }
+    let out: Result<[Completion], Error> = .Ok(batch)
+    return out
+}
+
+// Port.post — enqueue a user packet. Requires Write. The kind is forced to User.
+// Returns ShouldWait if the port already holds its limit of pending packets.
+public function portPost(process: borrow mut Tessera, port: Handle, packet: Completion) -> Result<Nothing, Error> {
+    let slot = tessResolve(process, port)
+    if slot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    if !rightsHas(process.handles[slot].rights, rightWrite()) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    if objectTypeCode(process.objects[objectSlot].objectType) != U32(1) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.WrongType))
+        return out
+    }
+    let pending = process.objects[objectSlot].queue.count - process.objects[objectSlot].queueHead
+    if pending >= portUserPacketLimit() {
+        let out: Result<Nothing, Error> = .Error(errorOf(.ShouldWait))
+        return out
+    }
+    var forced = packet
+    forced.kind = .User
+    tessDeliverToPort(process, objectSlot, move forced)
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}
+
+// Port.cancel — cancel every armed waitAsync targeting this port with `key`.
+// Each cancelled arming delivers one Cancelled packet. Returns the count.
+public function portCancel(process: borrow mut Tessera, port: Handle, key: Key) -> Result<U32, Error> {
+    let objectSlot = tessResolvePort(process, port)
+    if objectSlot < 0 {
+        let out: Result<U32, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let cancelled = tessCancelKey(process, objectSlot, key)
+    let out: Result<U32, Error> = .Ok(U32(cancelled))
+    return out
+}

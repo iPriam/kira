@@ -528,6 +528,45 @@ impl Analyzer<'_> {
     /// Resolution that does not depend on which package the file itself belongs
     /// to: the declarations no package owns, then what this file's imports
     /// provide.
+    /// Whether the declaration named `name` in `decl_source` was written
+    /// `public`.
+    ///
+    /// The gate for cross-package access under the import-boundary visibility
+    /// rule: a declaration another package reaches only through an `import` is
+    /// nameable there exactly when it was exported with `public`. Intra-package
+    /// and bundled-library access does not consult this — those share one scope.
+    pub(crate) fn is_public_declaration(&self, decl_source: SourceId, name: &str) -> bool {
+        self.tree.items_with_source().any(|(source, item)| {
+            source == decl_source
+                && item.declared_public()
+                && item
+                    .declared_name()
+                    .is_some_and(|symbol| self.interner.resolve(symbol) == name)
+        })
+    }
+
+    /// Whether the file being analyzed may name the declaration `name` in
+    /// `decl_source` under the import-boundary visibility rule.
+    ///
+    /// Extends [`ImportTable::sees`](crate::imports::ImportTable::sees) with the
+    /// `public` gate. A bundled library and the program's own files share one
+    /// flat scope, so they are never gated. A *dependency package* is the only
+    /// boundary `public` guards: another package reaches into it only for the
+    /// declarations it exported, while its own files still see each other.
+    pub(crate) fn sees_public(&self, decl_source: SourceId, name: &str) -> bool {
+        if !self.imports.sees(self.source, decl_source) {
+            return false;
+        }
+        match self.imports.package_of(decl_source) {
+            None => true,
+            Some(package) => {
+                self.imports.is_bundled_package(package)
+                    || self.imports.package_of(self.source) == Some(package)
+                    || self.is_public_declaration(decl_source, name)
+            }
+        }
+    }
+
     pub(crate) fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
         let structs = self.program.types.structs();
         // The declarations no package owns — a bundled library like
@@ -544,11 +583,17 @@ impl Analyzer<'_> {
         {
             return Some(id);
         }
-        // And finally what the packages this file imports declare.
+        // And finally what the packages this file imports declare — but only
+        // the declarations those packages exported with `public`. A private
+        // struct in an imported package is not nameable across the import.
         self.imports
             .imported_packages(self.source)
             .into_iter()
-            .find_map(|package| structs.lookup_owned(Some(&package), name))
+            .find_map(|package| {
+                let id = structs.lookup_owned(Some(&package), name)?;
+                let declared = self.struct_sources.get(&id)?;
+                self.sees_public(*declared, name).then_some(id)
+            })
     }
 
     /// The enum `name` denotes *here*, or `None` when no declaration of that
@@ -603,7 +648,11 @@ impl Analyzer<'_> {
         self.imports
             .imported_packages(self.source)
             .into_iter()
-            .find_map(|package| enums.lookup_owned(Some(&package), name))
+            .find_map(|package| {
+                let id = enums.lookup_owned(Some(&package), name)?;
+                let declared = self.enum_sources.get(&id)?;
+                self.sees_public(*declared, name).then_some(id)
+            })
     }
 }
 

@@ -48,6 +48,89 @@ pub enum Item {
     Unsupported(UnsupportedItem),
 }
 
+impl Item {
+    /// The declaration's own name, for the item kinds that carry one that can
+    /// be named across a module boundary. `None` for an `import`, a
+    /// `namespace`, or an `extend` block, which export no name of their own.
+    pub fn declared_name(&self) -> Option<Symbol> {
+        match self {
+            Item::Function(decl) => Some(decl.name),
+            Item::Struct(decl) => Some(decl.name),
+            Item::Class(decl) => Some(decl.name),
+            Item::Enum(decl) => Some(decl.name),
+            Item::TypeAlias(decl) => Some(decl.name),
+            Item::Distinct(decl) => Some(decl.name),
+            Item::Constant(decl) => Some(decl.name),
+            Item::Construct(decl) => Some(decl.name),
+            Item::Trait(decl) => Some(decl.name),
+            _ => None,
+        }
+    }
+
+    /// Whether the declaration was written `public`. `false` for a kind that
+    /// carries no visibility of its own.
+    pub fn declared_public(&self) -> bool {
+        match self {
+            Item::Function(decl) => decl.public,
+            Item::Struct(decl) => decl.public,
+            Item::Class(decl) => decl.public,
+            Item::Enum(decl) => decl.public,
+            Item::TypeAlias(decl) => decl.public,
+            Item::Distinct(decl) => decl.public,
+            Item::Constant(decl) => decl.public,
+            Item::Construct(decl) => decl.public,
+            Item::Trait(decl) => decl.public,
+            _ => false,
+        }
+    }
+
+    /// Marks a declaration `public` after the parser consumed a leading
+    /// `public` keyword. Returns `false` for an item kind that cannot be
+    /// exported (an `import`, a `namespace`, an `extend` block), so the parser
+    /// can refuse `public` there rather than silently accept it.
+    pub fn set_public(&mut self) -> bool {
+        match self {
+            Item::Function(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Struct(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Class(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Enum(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::TypeAlias(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Distinct(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Constant(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Construct(decl) => {
+                decl.public = true;
+                true
+            }
+            Item::Trait(decl) => {
+                decl.public = true;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// An `extend Family { function ... }` block.
 ///
 /// New Kira design proven against the oracle's *meaning*: the oracle documents
@@ -105,6 +188,8 @@ pub struct ConstructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The type parameters the header wrote, when any did.
     ///
     /// Recorded so semantics can refuse a generic construct with its own typed
@@ -297,6 +382,8 @@ pub struct TypeAliasDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The written target type.
     pub target: TypeRefId,
     /// Span covering the whole declaration.
@@ -317,6 +404,8 @@ pub struct DistinctDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The written representation type.
     pub representation: TypeRefId,
     /// Span covering the whole declaration.
@@ -345,6 +434,8 @@ pub struct ConstantDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The written type, when the declaration spelled one.
     ///
     /// Optional for the same reason a local's is: the initializer usually says
@@ -396,6 +487,8 @@ pub struct EnumDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The traits the declaration claims to implement.
     pub traits: Vec<TraitRef>,
     /// The declared type parameters, in order; empty for an ordinary enum.
@@ -437,6 +530,8 @@ pub struct StructDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The declared type parameters, in order; empty for an ordinary struct.
     ///
     /// A generic struct names no type by itself: each written instantiation
@@ -484,6 +579,8 @@ pub struct ClassDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The declared type parameters, in order; empty for an ordinary class.
     ///
     /// A generic class instantiates exactly as a generic struct does — see
@@ -604,6 +701,10 @@ pub struct Function {
     /// declares one, with the type arguments inferred from the value arguments
     /// (or written explicitly) substituted into the signature and the body.
     pub type_params: Vec<TypeParamDecl>,
+    /// Whether the declaration was written `public`, exporting it from its
+    /// module. Declarations are private to their module by default; `public`
+    /// opts one into cross-module visibility.
+    pub public: bool,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
     /// Whether the declaration carried the `@MainThreadLifecycle` annotation.

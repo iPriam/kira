@@ -104,17 +104,97 @@ fn a_macro_is_reachable_through_the_import_that_names_its_package() {
     }
 }
 
+/// One expected-or-reported refusal: a diagnostic code anchored at a source
+/// line, keyed by the file's path relative to the refusals package.
+///
+/// The whole comparison is over multisets of these — a rule that stopped
+/// applying to three of four nested shapes drops one entry, a rule that fired
+/// where it should not adds one, and either way the sorted vectors differ.
+type Refusal = (String, usize, String);
+
+/// The refusal each source line marks with a `//~ CODE …` comment.
+///
+/// A compiletest-style annotation: the codes a line names are the diagnostics
+/// the build must anchor at that same line, so the expectation lives beside the
+/// code it is about rather than as a count in this file. One comment may list
+/// several codes when a single line earns several refusals.
+fn annotated_refusals(root: &Path) -> Vec<Refusal> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<Refusal>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .expect("read a refusals directory")
+            .map(|e| e.expect("a refusals entry").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().is_some_and(|e| e == "kira") {
+                let rel = path
+                    .strip_prefix(root)
+                    .expect("a path under the refusals root")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let text = std::fs::read_to_string(&path).expect("read a refusal source");
+                for (index, line) in text.lines().enumerate() {
+                    let Some((_, marked)) = line.split_once("//~") else {
+                        continue;
+                    };
+                    for code in marked.split_whitespace() {
+                        out.push((rel.clone(), index + 1, code.to_owned()));
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Every refusal the build reported, parsed from its `error[CODE]` headers and
+/// the `--> path:line:col` line that locates each one.
+///
+/// Paths are normalised to the same package-relative form the annotations use,
+/// so the two multisets are directly comparable.
+fn reported_refusals(output: &str) -> Vec<Refusal> {
+    let mut out = Vec::new();
+    let mut pending: Option<String> = None;
+    for line in output.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("error[") {
+            if let Some(code) = rest.split(']').next() {
+                pending = Some(code.to_owned());
+            }
+        } else if let (Some(code), Some(pos)) = (pending.clone(), line.find("-->")) {
+            let located = line[pos + 3..].trim();
+            let mut parts = located.rsplitn(3, ':');
+            let (_col, row, file) = (parts.next(), parts.next(), parts.next());
+            if let (Some(row), Some(file)) = (row, file) {
+                if let (Ok(row), Some(idx)) =
+                    (row.parse::<usize>(), file.find("refusals/"))
+                {
+                    let rel = file[idx + "refusals/".len()..].to_owned();
+                    out.push((rel, row, code));
+                    pending = None;
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The programs the language refuses, and the codes it refuses them under.
 ///
 /// A harness of runnable cases cannot hold a refusal — the point of each one is
 /// that it never becomes a program — so they are one package that must not
-/// build, and the codes it reports are pinned here. Asserted by count, because
-/// a rule that stopped applying to three of four nested shapes would still
-/// report one.
+/// build. Each refusal is pinned by a `//~ CODE` comment on the line it fires
+/// at, and the build's reported diagnostics must be exactly that set: no rule
+/// that quietly stopped firing, and no new refusal that crept in unannotated.
 #[test]
 fn the_refusal_harness_refuses_every_program_in_it() {
-    let path = kik("refusals");
-    let path = path.to_str().expect("a utf-8 path");
+    let root = kik("refusals");
+    let path = root.to_str().expect("a utf-8 path");
     let output = kira(&["build", "--backend", "vm", path]);
     assert!(
         !output.status.success(),
@@ -122,35 +202,17 @@ fn the_refusal_harness_refuses_every_program_in_it() {
     );
     let reported = String::from_utf8_lossy(&output.stderr).into_owned()
         + &String::from_utf8_lossy(&output.stdout);
-    let count = |code: &str| reported.matches(code).count();
-    // A pointer inside the value is the same pointer: the payload itself, a
-    // struct field, an enum variant's payload, and an array element.
-    assert_eq!(
-        count("KSEM365"),
-        4,
-        "a channel payload carrying a pointer must be refused at every depth:\n{reported}"
-    );
-    // Importing `RfxOuter` does not lend you `RfxInner`.
+
+    let expected = annotated_refusals(&root);
+    let actual = reported_refusals(&reported);
+    let missing: Vec<_> = expected.iter().filter(|r| !actual.contains(r)).collect();
+    let unexpected: Vec<_> = actual.iter().filter(|r| !expected.contains(r)).collect();
     assert!(
-        reported.contains("KMAC001"),
-        "a macro from a package the file never imported must not expand:\n{reported}"
+        missing.is_empty() && unexpected.is_empty(),
+        "the refusals reported do not match their `//~` annotations:\n  \
+         annotated but not reported: {missing:?}\n  \
+         reported but not annotated: {unexpected:?}\n\nfull output:\n{reported}"
     );
-    for (code, behavior) in [
-        ("KSEM373", "borrowing userdata from an owner temporary"),
-        ("KSEM375", "recovering through an owned temporary"),
-        ("KSEM376", "copying an affine state field out of its owner"),
-        (
-            "KSEM377",
-            "boxing a NativeState owner as callback-state root",
-        ),
-        ("KSEM378", "retaining an already tracked NativeState owner"),
-    ] {
-        assert_eq!(
-            count(code),
-            1,
-            "the refusal harness must report {behavior} exactly once under {code}:\n{reported}"
-        );
-    }
 }
 
 /// A run that ends with payloads still queued releases the storage they name.
@@ -262,6 +324,250 @@ fn the_ffi_harness_passes_on_the_hybrid_engine() {
         tally, "308 passed, 0 failed, 0 skipped, 308 total",
         "the ffi harness tally changed"
     );
+}
+
+/// Every case in the LibTessera harness passes on every executable backend.
+///
+/// `tests-kik/tessera-harness` drives `packages/tessera`, the portable front of
+/// the system interface. The front is kernel-independent library state, so
+/// unlike the syscall harness it is not gated on an operating system and must
+/// pass identically on `vm`, `llvm` and `hybrid`. The tally is asserted whole so
+/// a case that stops being collected fails this rather than shrinking the run.
+/// Import-boundary visibility: an app names an imported package's `public`
+/// declarations and cannot name its private ones.
+///
+/// The positive half runs on every backend — visibility is settled during name
+/// resolution, before any backend sees the program, so the three must agree —
+/// and the negative half is a build that must fail because the private helper
+/// is not in scope across the import.
+#[test]
+fn public_crosses_a_package_import_and_private_does_not() {
+    let path = kik("visibility");
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "the visibility harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("vis:7"),
+            "public access diverged on {backend}: {stdout}"
+        );
+    }
+    let refuse = kik("visibility/refuse");
+    let output = kira(&["build", "--backend", "vm", refuse.to_str().expect("a utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a program naming a private declaration across an import built anyway"
+    );
+    assert!(
+        stderr.contains("visInternalDouble"),
+        "the refusal did not name the private declaration: {stderr}"
+    );
+}
+
+/// Structural ordering walks an aggregate the way `==` does, with no `@Derive`,
+/// and the walk is byte-identical on every backend.
+///
+/// A struct orders field-by-field, an array element-by-element then by length,
+/// a string by its bytes, an enum by tag then payload — down to an enum whose
+/// payload is itself a struct — and a `<T: Ordered>` bound accepts any of them by
+/// shape. The native walk (`kira_rt_str_cmp`, `kira_rt_array_cmp`, `kira_rt_any_cmp`,
+/// a struct `Cmp` leaf, and the payload cmp leaf on an aggregate enum box) mirrors
+/// the VM's `Heap::compare_values`, so the same program prints the same bytes on
+/// the vm, llvm, and hybrid — asserted whole, because a divergence is exactly the
+/// failure this feature has to not have.
+#[test]
+fn structural_ordering_is_byte_identical_across_backends() {
+    let path = kik("ordering");
+    let path = path.to_str().expect("a utf-8 path");
+    const EXPECTED: &str = "true\nfalse\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\n\
+         true\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\n";
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the ordering harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            EXPECTED,
+            "structural ordering diverged on {backend}"
+        );
+    }
+}
+
+/// Structural `hash(v)` folds a value byte-identically on every backend.
+///
+/// `hash` is the native operation behind the `Hashable` trait — the fold twin of
+/// `==`, earned by any type whose leaves hash consistently with equality. The
+/// native walk (a `Hash` element leaf and runtime FNV helpers) mirrors the VM's
+/// `Heap::hash_value`, so a struct, an array, a string, a scalar, or a
+/// payloadless enum folds to the same number on the vm, llvm, and hybrid — and
+/// equal values hash equal, the contract with `==`. Asserted whole, because a
+/// divergent hash is exactly the failure this must not have.
+#[test]
+fn hashing_is_byte_identical_across_backends() {
+    let path = kik("hashable");
+    let path = path.to_str().expect("a utf-8 path");
+    const EXPECTED: &str =
+        "true\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\n";
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the hashable harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            EXPECTED,
+            "structural hashing diverged on {backend}"
+        );
+    }
+}
+
+/// The whole stress harness leaves the native heap balanced — no leak, no
+/// double free — on every engine that keeps a native heap.
+///
+/// The suite's own case assertions check *values*; this checks the invariant no
+/// case can see from inside itself. The allocation count is asserted non-trivial
+/// alongside the balance, because a run that allocated nothing balances for the
+/// wrong reason.
+#[test]
+fn the_harness_leaves_the_native_heap_balanced() {
+    let path = harness();
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["llvm", "hybrid"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+            .env(
+                "KIRA_FOUNDATION_HOME",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../foundation")
+                    .canonicalize()
+                    .expect("the checkout's foundation"),
+            )
+            .env("KIRA_HEAP_REPORT", "1")
+            .args(["run", "--backend", backend, path])
+            .output()
+            .expect("run kira");
+        assert!(
+            output.status.success(),
+            "the harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reported = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            reported.contains("imbalance=+0"),
+            "the native heap did not balance on {backend}:\n{reported}"
+        );
+        assert!(
+            !reported.contains("allocated=0 "),
+            "the harness allocated nothing on {backend}, so its balance proves nothing:\n{reported}"
+        );
+    }
+}
+
+/// The whole stress harness runs clean under AddressSanitizer on the native
+/// backend — no use-after-free, no overflow, no leak the allocator can see.
+///
+/// A second engine on the same invariant as the heap-balance gate, from the
+/// outside: the balance counters are the runtime's own accounting, and this is
+/// the toolchain's, so a bug that fooled one is unlikely to fool both.
+#[test]
+fn the_harness_is_clean_under_address_sanitizer() {
+    let path = harness();
+    let path = path.to_str().expect("a utf-8 path");
+    let output = Command::new(env!("CARGO_BIN_EXE_kira"))
+        .env(
+            "KIRA_FOUNDATION_HOME",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../foundation")
+                .canonicalize()
+                .expect("the checkout's foundation"),
+        )
+        .args(["run", "--backend", "llvm", "--sanitize", "address", path])
+        .output()
+        .expect("run kira");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("ERROR: AddressSanitizer"),
+        "AddressSanitizer reported a fault:\n{stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "the harness did not run clean under AddressSanitizer:\n{stderr}"
+    );
+}
+
+/// `assert` / `assertEqual` pass silently on true conditions and equal values,
+/// and a failing `assertEqual` hard-traps through `abort` on every backend.
+///
+/// The positive run proves the pass path — including structural `assertEqual`
+/// of a struct, a payload enum, and an array — is identical on all three
+/// engines; the negative run proves a failed assertion emits its message and
+/// exits non-zero (the child-runner trap), with nothing printed after it, and
+/// with the same bytes across engines.
+#[test]
+fn assertions_pass_and_a_failing_one_traps_on_every_backend() {
+    let path = kik("assertions");
+    let path = path.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, path]);
+        assert!(
+            output.status.success(),
+            "the assertions harness failed on {backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("assertions-passed"),
+            "an assertion that should hold did not on {backend}"
+        );
+    }
+    let abort = kik("assertions/abort");
+    let abort = abort.to_str().expect("a utf-8 path");
+    for backend in ["vm", "llvm", "hybrid"] {
+        let output = kira(&["run", "--backend", backend, abort]);
+        assert!(
+            !output.status.success(),
+            "a failing assertion did not trap on {backend}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("before-abort") && !stdout.contains("after-abort"),
+            "abort did not stop execution on {backend}: {stdout}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("aborted: assertion failed"),
+            "the abort message is missing on {backend}"
+        );
+    }
+}
+
+#[test]
+fn the_tessera_harness_passes_on_every_backend() {
+    for backend in ["vm", "llvm", "hybrid"] {
+        let path = kik("tessera-harness");
+        let path = path.to_str().expect("a utf-8 path");
+        let output = kira(&["test", "--backend", backend, path]);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "the tessera harness did not run on {backend}: {}\n{stdout}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tally = stdout.lines().last().unwrap_or_default().to_owned();
+        assert_eq!(
+            tally, "26 passed, 0 failed, 0 skipped, 26 total",
+            "the tessera harness tally changed on {backend}"
+        );
+    }
 }
 
 /// The raw system-call harness package, relative to this crate.
@@ -476,7 +782,7 @@ fn tally(backend: &str) -> String {
 fn the_harness_suite_passes_identically_on_vm_and_native() {
     let vm = tally("vm");
     let llvm = tally("llvm");
-    assert_eq!(vm, "1572 passed, 0 failed, 0 skipped, 1572 total");
+    assert_eq!(vm, "1595 passed, 0 failed, 0 skipped, 1595 total");
     assert_eq!(vm, llvm, "the vm and native backends disagree on the suite");
 }
 

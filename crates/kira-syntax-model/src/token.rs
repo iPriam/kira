@@ -83,6 +83,10 @@ pub enum TokenKind {
     Extends,
     /// `override`
     Override,
+    /// `public` — the visibility modifier that exports a declaration from its
+    /// module. Declarations are private to their module by default; `public`
+    /// opts one into cross-module visibility.
+    Public,
     /// `match`
     Match,
     /// `attempt`
@@ -224,6 +228,7 @@ impl TokenKind {
             "trait" => TokenKind::Trait,
             "extends" => TokenKind::Extends,
             "override" => TokenKind::Override,
+            "public" => TokenKind::Public,
             "match" => TokenKind::Match,
             // `handle` is deliberately absent: the reference lexes it as an
             // identifier, so it is recognized contextually after an `attempt`
@@ -268,6 +273,7 @@ impl TokenKind {
             TokenKind::Trait => "`trait`",
             TokenKind::Extends => "`extends`",
             TokenKind::Override => "`override`",
+            TokenKind::Public => "`public`",
             TokenKind::Match => "`match`",
             TokenKind::Attempt => "`attempt`",
             TokenKind::Try => "`try`",

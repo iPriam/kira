@@ -225,6 +225,15 @@ impl Analyzer<'_> {
     /// Why `ty` does not carry the derived trait `name`, or `None` when it
     /// does.
     pub(crate) fn derived_trait_unmet(&self, name: &str, ty: Type) -> Option<String> {
+        if name == crate::traits::EQUATABLE {
+            return self.equatable_refusal(ty);
+        }
+        if name == crate::traits::ORDERED {
+            return self.ordered_refusal(ty);
+        }
+        if name == crate::traits::HASHABLE {
+            return self.hashable_refusal(ty);
+        }
         let type_name = self.program.types.type_name(ty);
         match Marker::from_name(name) {
             Some(marker) => self.marker_reason(&type_name, ty, marker),

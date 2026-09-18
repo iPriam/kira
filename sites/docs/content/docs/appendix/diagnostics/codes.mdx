@@ -104,6 +104,8 @@ The parser.
 | `KPAR089` | a namespace holds `let` members and nested namespaces |
 | `KPAR090` | an `extern library` block contains only bodyless `function` declarations |
 | `KPAR091` | tuple values and tuple types support two through four elements |
+| `KPAR092` | `public` applies only to a top-level declaration |
+| `KPAR093` | `public` must be followed by a declaration |
 
 ## KMAC
 
@@ -440,6 +442,9 @@ Semantic analysis. The largest set by far.
 | `KSEM387` | a `match` expression arm defers a writeback after its value |
 | `KSEM388` | the arms of a `match` expression produce incompatible types |
 | `KSEM389` | `contains` requires array elements comparable with `==` |
+| `KSEM390` | `…` cannot be compared with `==`: a leaf it holds has no equality |
+| `KSEM391` | `…` cannot be ordered with `<`: a leaf it holds has no total order |
+| `KSEM392` | `…` cannot be hashed: a leaf it holds cannot fold consistently with `==` |
 | `KSEM900` | a keyword the parser recognizes but this compiler does not support yet |
 
 ## KIR

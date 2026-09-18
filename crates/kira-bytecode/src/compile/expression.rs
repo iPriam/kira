@@ -524,7 +524,7 @@ impl FnCompiler<'_> {
             }
             IrExpr::EnumTag { value } => {
                 let value = *value;
-                self.compile_expr(value)?;
+                self.compile_borrowed_expr(value)?;
                 self.code.push(Instruction::EnumTag);
             }
             IrExpr::EnumPayload { value, .. } => {
@@ -568,6 +568,15 @@ impl FnCompiler<'_> {
                         self.code.push(Instruction::PrintUnsigned);
                     }
                     IrCallee::Print => self.code.push(Instruction::Print),
+                    // The message string is on the stack; the instruction emits
+                    // it and traps, so nothing after it in this block runs.
+                    IrCallee::Abort => self.code.push(Instruction::Abort),
+                    // The code and the variant count are on the stack, in that
+                    // order; the instruction clamps and builds the enum.
+                    IrCallee::FromCode => self.code.push(Instruction::EnumFromCode),
+                    // The value is on the stack; the instruction folds it to an
+                    // `Int` and drops it.
+                    IrCallee::Hash => self.code.push(Instruction::HashValue),
                     // Which engine owns the callee is known here, at compile
                     // time, so the boundary costs a different opcode rather
                     // than a branch on every call.

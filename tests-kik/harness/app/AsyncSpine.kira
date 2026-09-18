@@ -136,10 +136,8 @@ async function asyncShiftPoint(point: AsyncPoint, by: Int) -> AsyncPoint {
 
 async function asyncSumValues(values: [Int]) -> Int {
     var total = 0
-    var i = 0
-    while i < values.count {
+    for i in 0..values.count {
         total = total + values[i]
-        i = i + 1
     }
     return total
 }

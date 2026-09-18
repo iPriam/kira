@@ -1,0 +1,201 @@
+// Generic handle and object calls (spec §3.5). All synchronous.
+//
+// These work on a handle whatever object it names: close it, narrow it,
+// duplicate it, read its info, name it, arm a readiness wait, or assert a user
+// signal. Every rights and type check the spec states is enforced here.
+
+import Foundation
+
+// What Handle.info reports (spec §3.5): the object's type, this handle's rights,
+// and the object's process-stable id (equal for handles to the same object).
+public struct HandleInfo {
+    var objectType: ObjectType
+    var rights: Rights
+    var objectId: U64
+}
+
+// Handle.close — invalidates the handle; the object is destroyed when its last
+// handle is closed. Errors: InvalidHandle.
+public function handleClose(process: borrow mut Tessera, handle: Handle) -> Result<Nothing, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    process.handles[slot].live = false
+    tessDropObject(process, objectSlot)
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}
+
+// Handle.closeMany — closes every listed handle, continuing past invalid ones
+// and reporting InvalidHandle if any were.
+public function handleCloseMany(process: borrow mut Tessera, handles: borrow [Handle]) -> Result<Nothing, Error> {
+    var anyInvalid = false
+    for handle in handles {
+        let slot = tessResolve(process, handle)
+        if slot < 0 {
+            anyInvalid = true
+        } else {
+            let objectSlot = process.handles[slot].objectSlot
+            process.handles[slot].live = false
+            tessDropObject(process, objectSlot)
+        }
+    }
+    if anyInvalid {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}
+
+// Handle.duplicate — another handle to the same object. Requires Duplicate;
+// `rights` must be a subset of the source's or RIGHTS_SAME. Errors:
+// InvalidHandle, AccessDenied.
+public function handleDuplicate(process: borrow mut Tessera, handle: Handle, rights: Rights) -> Result<Handle, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Handle, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let sourceRights = process.handles[slot].rights
+    if !rightsHas(sourceRights, rightDuplicate()) {
+        let out: Result<Handle, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    var granted = rights
+    if rights == rightsSame() {
+        granted = sourceRights
+    }
+    if !rightsSubset(granted, sourceRights) {
+        let out: Result<Handle, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    let minted = tessAddHandle(process, objectSlot, granted)
+    let out: Result<Handle, Error> = .Ok(minted)
+    return out
+}
+
+// Handle.replace — a new handle with reduced rights, invalidating the old one.
+// Does not require Duplicate: this is how a process narrows its own authority.
+public function handleReplace(process: borrow mut Tessera, handle: Handle, rights: Rights) -> Result<Handle, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Handle, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let sourceRights = process.handles[slot].rights
+    var granted = rights
+    if rights == rightsSame() {
+        granted = sourceRights
+    }
+    if !rightsSubset(granted, sourceRights) {
+        let out: Result<Handle, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    let minted = tessAddHandle(process, objectSlot, granted)
+    process.handles[slot].live = false
+    tessDropObject(process, objectSlot)
+    let out: Result<Handle, Error> = .Ok(minted)
+    return out
+}
+
+// Handle.info — the object's type, this handle's rights, and the object id.
+public function handleInfo(process: borrow Tessera, handle: Handle) -> Result<HandleInfo, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<HandleInfo, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    let info = HandleInfo {
+        objectType: process.objects[objectSlot].objectType,
+        rights: process.handles[slot].rights,
+        objectId: process.objects[objectSlot].objectId,
+    }
+    let out: Result<HandleInfo, Error> = .Ok(info)
+    return out
+}
+
+// Object.setName — a diagnostic name, at most 64 bytes UTF-8. Requires
+// SetProperty. Errors: InvalidHandle, AccessDenied, InvalidArgument.
+public function objectSetName(process: borrow mut Tessera, handle: Handle, name: String) -> Result<Nothing, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    if !rightsHas(process.handles[slot].rights, rightSetProperty()) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    if name.count > 64 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidArgument))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    process.objects[objectSlot].name = name
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}
+
+// Object.waitAsync — post a Signal completion to `port` when any of `signals`
+// is asserted (spec §3.5). Requires Wait on `handle`. The universal readiness
+// mechanism. Errors: InvalidHandle, WrongType (port), AccessDenied.
+public function objectWaitAsync(process: borrow mut Tessera, handle: Handle, signals: Signals, options: WaitOptions, port: Handle, key: Key) -> Result<Nothing, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    if !rightsHas(process.handles[slot].rights, rightWait()) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let portSlot = tessResolvePort(process, port)
+    if portSlot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.WrongType))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    tessArm(process, objectSlot, portSlot, key, signals, waitOptionCode(options))
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}
+
+// Object.signal — set/clear user bits and SIGNALED on an Event or EventPair
+// (spec §3.5). Requires Signal. On an EventPair the change lands on the peer,
+// where its other end observes it. Errors: AccessDenied, WrongType,
+// InvalidArgument.
+public function objectSignal(process: borrow mut Tessera, handle: Handle, set: Signals, clear: Signals) -> Result<Nothing, Error> {
+    let slot = tessResolve(process, handle)
+    if slot < 0 {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidHandle))
+        return out
+    }
+    if !rightsHas(process.handles[slot].rights, rightSignal()) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.AccessDenied))
+        return out
+    }
+    let objectSlot = process.handles[slot].objectSlot
+    let code = objectTypeCode(process.objects[objectSlot].objectType)
+    if code != U32(2) && code != U32(3) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.WrongType))
+        return out
+    }
+    if !signalsHas(signalsUserSettable(), set) || !signalsHas(signalsUserSettable(), clear) {
+        let out: Result<Nothing, Error> = .Error(errorOf(.InvalidArgument))
+        return out
+    }
+    var target = objectSlot
+    if code == U32(3) {
+        target = process.objects[objectSlot].peerSlot
+    }
+    tessRaiseSignals(process, target, set, clear)
+    let ok: Result<Nothing, Error> = .Ok(Nothing {})
+    return ok
+}

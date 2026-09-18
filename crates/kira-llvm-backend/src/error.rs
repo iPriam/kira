@@ -15,6 +15,15 @@ pub enum LlvmError {
         /// What was found, named as the invariant that did not hold.
         what: String,
     },
+    /// A language feature the frontend admits but the native backend does not
+    /// yet lower. Unlike [`LlvmError::Internal`] this is not a bug: the program
+    /// is well-formed and runs on another backend, so the message names the
+    /// feature and the backend that has it rather than blaming the frontend.
+    #[error("{what} is not yet lowered on the native backend")]
+    Unsupported {
+        /// The feature, named for the author, and where it does run today.
+        what: String,
+    },
     /// A `break`/`continue` reached codegen with no enclosing loop, which
     /// analysis is supposed to have rejected.
     #[error(
@@ -151,5 +160,11 @@ impl LlvmError {
     #[must_use]
     pub fn internal(what: impl Into<String>) -> Self {
         LlvmError::Internal { what: what.into() }
+    }
+
+    /// A well-formed feature the native backend does not yet lower.
+    #[must_use]
+    pub fn unsupported(what: impl Into<String>) -> Self {
+        LlvmError::Unsupported { what: what.into() }
     }
 }

@@ -28,6 +28,7 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
             print_float: declare(c"kira_rt_print_float", types.void, &mut [types.f64]),
             print_bool: declare(c"kira_rt_print_bool", types.void, &mut [types.i8]),
             print_str: declare(c"kira_rt_print_str", types.void, &mut [types.ptr]),
+            abort: declare(c"kira_rt_abort", types.void, &mut [types.ptr]),
             str_new: declare(
                 c"kira_rt_str_new",
                 types.ptr,
@@ -39,6 +40,7 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                 &mut [types.ptr, types.ptr],
             ),
             str_eq: declare(c"kira_rt_str_eq", types.i8, &mut [types.ptr, types.ptr]),
+            str_cmp: declare(c"kira_rt_str_cmp", types.i8, &mut [types.ptr, types.ptr]),
             str_free: declare(c"kira_rt_str_free", types.void, &mut [types.ptr]),
             // The array helpers are generic over the element type: a size and
             // a clone/free callback are all they need, so one declaration each
@@ -88,19 +90,42 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                 // (a, b, element size, element equality leaf)
                 &mut [types.ptr, types.ptr, types.i64, types.ptr],
             ),
-            enum_new_aggregate_eq: declare(
-                c"kira_rt_enum_new_aggregate_eq",
-                types.ptr,
-                // (tag, source, size, clone, free, eq)
-                &mut [
-                    types.i64, types.ptr, types.i64, types.ptr, types.ptr, types.ptr,
-                ],
+            array_cmp: declare(
+                c"kira_rt_array_cmp",
+                types.i8,
+                // (a, b, element size, element three-way-compare leaf)
+                &mut [types.ptr, types.ptr, types.i64, types.ptr],
+            ),
+            any_cmp: declare(c"kira_rt_any_cmp", types.i8, &mut [types.ptr, types.ptr]),
+            any_hash: declare(c"kira_rt_any_hash", types.i64, &mut [types.i64, types.ptr]),
+            hash_seed: declare(c"kira_rt_hash_seed", types.i64, &mut []),
+            hash_bytes: declare(
+                c"kira_rt_hash_bytes",
+                types.i64,
+                // (acc, ptr, len)
+                &mut [types.i64, types.ptr, types.i64],
+            ),
+            hash_str: declare(c"kira_rt_hash_str", types.i64, &mut [types.i64, types.ptr]),
+            hash_array: declare(
+                c"kira_rt_hash_array",
+                types.i64,
+                // (acc, array, element size, element hash leaf)
+                &mut [types.i64, types.ptr, types.i64, types.ptr],
             ),
             enum_new_aggregate: declare(
                 c"kira_rt_enum_new_aggregate",
                 types.ptr,
                 // (tag, source, size, clone, free)
                 &mut [types.i64, types.ptr, types.i64, types.ptr, types.ptr],
+            ),
+            enum_new_aggregate_ord: declare(
+                c"kira_rt_enum_new_aggregate_ord",
+                types.ptr,
+                // (tag, source, size, clone, free, eq, cmp, hash)
+                &mut [
+                    types.i64, types.ptr, types.i64, types.ptr, types.ptr, types.ptr, types.ptr,
+                    types.ptr,
+                ],
             ),
             enum_tag: declare(c"kira_rt_enum_tag", types.i64, &mut [types.ptr]),
             enum_payload: declare(c"kira_rt_enum_payload", types.i64, &mut [types.ptr]),

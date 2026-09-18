@@ -21,3 +21,29 @@ construct HxTaggedUsesDeclarationOrder() extends Test {
     }
     expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
+
+// The native `code(...)` reads the same zero-based declaration index the derived
+// `code_HxMaterial` does — the compiler's own form of Tagged's read direction,
+// earned by every enum with no `@Derive` — and it agrees on every backend.
+construct HxNativeCodeMatchesDeclarationOrder() extends Test {
+    test {
+        return code(HxMaterial.Flat) + code(HxMaterial.Frosted) * 10 + code(HxMaterial.Metallic) * 100
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(210) return e }
+}
+
+// The native `fromCode<E>(n)` rebuilds the variant whose code is `n`, and falls
+// back to the first variant for a code outside the range — the inverse of
+// `code`, byte-identical on every backend. A round trip through both is the
+// identity for an in-range code, and out-of-range codes land on `Flat` (0).
+construct HxNativeFromCodeRoundTripsAndClamps() extends Test {
+    test {
+        let roundTrip = code(fromCode<HxMaterial>(0))
+            + code(fromCode<HxMaterial>(1)) * 10
+            + code(fromCode<HxMaterial>(2)) * 100
+        let clampHigh = code(fromCode<HxMaterial>(99))
+        let clampLow = code(fromCode<HxMaterial>(0 - 5))
+        return roundTrip + clampHigh + clampLow
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(210) return e }
+}

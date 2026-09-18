@@ -37,3 +37,20 @@ A segment is an identifier or a numeric token. A version-like `5.6` is one float
 ## Why a Name, Not a Value
 
 A namespace flattens to ordinary module constants whose names are their dotted paths: `AI.Providers.OpenAI.GPT.5.6.Sol` is the constant's name, in full. An access spelled the same way resolves to it. Because a dot cannot appear in an identifier, a qualified name can never collide with a declared one — the same rule a module-qualified type reference relies on — so the grouping costs nothing at run time and adds no lookup a plain constant would not have.
+
+## Visibility Across Packages
+
+A declaration is written `public` to export it from its package:
+
+```kira
+public struct Point { let x: Int let y: Int }   // nameable by importers
+public function add(a: Int, b: Int) -> Int { return a + b }
+
+struct Internal { let raw: Int }                // private to this package
+```
+
+Within one package every file — and every `namespace` block inside it — sees every declaration freely, so `public` is never needed for a package's own code. The keyword governs one boundary only: **an `import` of another package.** A file that imports package `B` can name only the declarations `B` marked `public`; a private one is not in scope there, and referencing it is an ordinary unknown-name error.
+
+`public` leads the declaration, before or after any annotations — `public @Derive(Equatable) distinct Handle = U64` and `@Derive(Equatable) public distinct Handle = U64` are the same. It applies only to a top-level declaration (`KPAR092`) and must front one (`KPAR093`).
+
+The bundled standard library `Foundation` is exempt: it shares the program's scope, so an `import Foundation` names its declarations without any of them being written `public`. Only a *dependency package* — one resolved from a path in the manifest — is gated by this rule.

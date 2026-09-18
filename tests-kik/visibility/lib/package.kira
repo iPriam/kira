@@ -1,0 +1,5 @@
+Package VisLib {
+    let version = "0.1.0"
+    let kind = PackageKind.Library
+    let moduleRoot = "VisLib"
+}

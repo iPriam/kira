@@ -1,0 +1,435 @@
+import Foundation
+import Tessera
+
+// TsxTesseraTests.kira — the LibTessera portable front (spec §1–5, §9) against
+// its own runtime. Every top-level name uses the `tsx`/`Tsx` prefix.
+//
+// Each test builds a fresh process, drives real calls, and reduces the outcome
+// to an Int the `expect` compares. The behaviours pinned here are the handle
+// table's rights and generation checks, the signal-to-completion delivery path,
+// waitAsync's Once/Repeat/Edge arming, port draining and cancellation, and the
+// EventPair peer-death and cross-end signalling that need no kernel.
+
+// ─── Result reducers ────────────────────────────────────────────────────────
+
+function tsxHandleOf(result: Result<Handle, Error>) -> Handle {
+    match result {
+        Ok(handle) -> { return handle }
+        Error(error) -> { return handleInvalid() }
+    }
+}
+
+function tsxCodeH(result: Result<Handle, Error>) -> Int {
+    match result {
+        Ok(handle) -> { return 0 }
+        Error(error) -> { return Int(errorCodeNumber(error.code)) }
+    }
+}
+
+function tsxCodeN(result: Result<Nothing, Error>) -> Int {
+    match result {
+        Ok(value) -> { return 0 }
+        Error(error) -> { return Int(errorCodeNumber(error.code)) }
+    }
+}
+
+function tsxCodeInfo(result: Result<HandleInfo, Error>) -> Int {
+    match result {
+        Ok(info) -> { return 0 }
+        Error(error) -> { return Int(errorCodeNumber(error.code)) }
+    }
+}
+
+function tsxRightsOf(result: Result<HandleInfo, Error>) -> Rights {
+    match result {
+        Ok(info) -> { return info.rights }
+        Error(error) -> { return rightsNone() }
+    }
+}
+
+function tsxTypeOf(result: Result<HandleInfo, Error>) -> U32 {
+    match result {
+        Ok(info) -> { return objectTypeCode(info.objectType) }
+        Error(error) -> { return U32(999) }
+    }
+}
+
+function tsxBatch(result: Result<[Completion], Error>) -> [Completion] {
+    match result {
+        Ok(batch) -> { return batch }
+        Error(error) -> { return [] }
+    }
+}
+
+function tsxCancelCount(result: Result<U32, Error>) -> Int {
+    match result {
+        Ok(count) -> { return Int(count) }
+        Error(error) -> { return -1 }
+    }
+}
+
+function tsxPairOf(result: Result<HandlePair, Error>) -> HandlePair {
+    match result {
+        Ok(pair) -> { return pair }
+        Error(error) -> { return HandlePair { first: handleInvalid(), second: handleInvalid() } }
+    }
+}
+
+// ─── Completion field accessors (borrow so no enum is moved) ─────────────────
+
+function tsxKind(packet: borrow Completion) -> U32 {
+    return completionKindNumber(packet.kind)
+}
+
+function tsxErr(packet: borrow Completion) -> U32 {
+    return errorCodeNumber(packet.error.code)
+}
+
+function tsxKey(packet: borrow Completion) -> U64 {
+    return packet.key.raw
+}
+
+function tsxRes0(packet: borrow Completion) -> U64 {
+    return packet.result0
+}
+
+function tsxHasSignal(packet: borrow Completion, mask: Signals) -> Bool {
+    return (packet.result0 & U64(mask.raw)) != U64(0)
+}
+
+// ─── Port and handle basics ──────────────────────────────────────────────────
+
+construct TsxPortCreateReturnsValidHandle() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        return handleIsValid(port) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxEventCreateReturnsValidHandle() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        return handleIsValid(event) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxHandleInfoReportsObjectType() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        return Int(tsxTypeOf(handleInfo(process, event)))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
+}
+
+// ─── Signal-to-completion delivery ───────────────────────────────────────────
+
+construct TsxSignalDeliversCompletion() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Once, port, Key(U64(7)))
+        let _ = objectSignal(process, event, signalSignaled(), signalsNone())
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if batch.count == 1 {
+            if tsxKind(batch[0]) == U32(1) && tsxKey(batch[0]) == U64(7) && tsxHasSignal(batch[0], signalSignaled()) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxWaitAsyncFiresWhenAlreadyAsserted() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalSignaled()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Once, port, Key(U64(1)))
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        return batch.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxOnceDisarmsAfterOneDelivery() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Once, port, Key(U64(1)))
+        let _ = objectSignal(process, event, signalSignaled(), signalsNone())
+        let _ = objectSignal(process, event, signalsNone(), signalSignaled())
+        let _ = objectSignal(process, event, signalSignaled(), signalsNone())
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        return batch.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxRepeatReArmsOnEachTransition() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Repeat, port, Key(U64(1)))
+        let _ = objectSignal(process, event, signalSignaled(), signalsNone())
+        let _ = objectSignal(process, event, signalsNone(), signalSignaled())
+        let _ = objectSignal(process, event, signalSignaled(), signalsNone())
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        return batch.count
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
+}
+
+construct TsxEmptyPortWaitTimesOut() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let result = portWait(process, port, U32(16), Deadline(U64(0)))
+        var out = 0
+        match result {
+            Ok(batch) -> { out = 0 }
+            Error(error) -> { out = Int(errorCodeNumber(error.code)) }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(25) return e }
+}
+
+// ─── Close, duplicate, replace ───────────────────────────────────────────────
+
+construct TsxCloseInvalidatesHandle() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = handleClose(process, event)
+        return tsxCodeInfo(handleInfo(process, event))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
+}
+
+construct TsxCloseDestroysAndCancelsWaiters() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Once, port, Key(U64(3)))
+        let _ = handleClose(process, event)
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if batch.count == 1 {
+            if tsxErr(batch[0]) == U32(26) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxDuplicateNarrowsRights() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let duplicate = tsxHandleOf(handleDuplicate(process, event, rightRead()))
+        let rights = tsxRightsOf(handleInfo(process, duplicate))
+        return rights == rightRead() ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxDuplicateRejectsSuperset() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        // Enumerate is a filesystem bit the default event rights never carry.
+        return tsxCodeH(handleDuplicate(process, event, rightEnumerate()))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+construct TsxDuplicateRequiresDuplicateRight() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        // Replace to a handle without Duplicate, then try to duplicate it.
+        let narrowed = tsxHandleOf(handleReplace(process, event, rightRead()))
+        return tsxCodeH(handleDuplicate(process, narrowed, rightRead()))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+construct TsxReplaceInvalidatesOldHandle() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let replaced = tsxHandleOf(handleReplace(process, event, rightRead()))
+        var out = 0
+        if tsxCodeInfo(handleInfo(process, event)) == 2 {
+            if handleIsValid(replaced) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// ─── EventPair ────────────────────────────────────────────────────────────────
+
+construct TsxEventPairAssertsPeerClosed() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let pair = tsxPairOf(eventPairCreate(process))
+        let _ = objectWaitAsync(process, pair.second, signalPeerClosed(), .Once, port, Key(U64(4)))
+        let _ = handleClose(process, pair.first)
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if batch.count == 1 {
+            if tsxHasSignal(batch[0], signalPeerClosed()) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxEventPairSignalCrossesToPeer() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let pair = tsxPairOf(eventPairCreate(process))
+        let _ = objectWaitAsync(process, pair.second, signalUser(U32(0)), .Once, port, Key(U64(5)))
+        let _ = objectSignal(process, pair.first, signalUser(U32(0)), signalsNone())
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if batch.count == 1 {
+            if tsxHasSignal(batch[0], signalUser(U32(0))) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// ─── Port post and cancel ──────────────────────────────────────────────────
+
+construct TsxPortPostDeliversUserPacket() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let _ = portPost(process, port, completionUser(Key(U64(5)), U64(42), U64(0), U64(0)))
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if batch.count == 1 {
+            if tsxKind(batch[0]) == U32(0) && tsxRes0(batch[0]) == U64(42) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxPortCancelDeliversCancelled() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let _ = objectWaitAsync(process, event, signalSignaled(), .Once, port, Key(U64(9)))
+        let cancelled = tsxCancelCount(portCancel(process, port, Key(U64(9))))
+        let batch = tsxBatch(portWait(process, port, U32(16), deadlineInfinite()))
+        var out = 0
+        if cancelled == 1 && batch.count == 1 {
+            if tsxErr(batch[0]) == U32(26) {
+                out = 1
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// ─── Rights and type enforcement ─────────────────────────────────────────────
+
+construct TsxWaitAsyncRequiresWaitRight() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        // Narrow the event handle to Signal alone — no Wait.
+        let narrowed = tsxHandleOf(handleReplace(process, event, rightSignal()))
+        return tsxCodeN(objectWaitAsync(process, narrowed, signalSignaled(), .Once, port, Key(U64(1))))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(4) return e }
+}
+
+construct TsxSignalRejectsNonUserBit() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        return tsxCodeN(objectSignal(process, event, signalReadable(), signalsNone()))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxSignalRejectsNonSignalableType() extends Test {
+    test {
+        var process = tesseraCreate()
+        let port = tsxHandleOf(portCreate(process, .None))
+        return tsxCodeN(objectSignal(process, port, signalSignaled(), signalsNone()))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(3) return e }
+}
+
+construct TsxSetNameRejectsOverLongName() extends Test {
+    test {
+        var process = tesseraCreate()
+        let event = tsxHandleOf(eventCreate(process, signalsNone()))
+        let tooLong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        return tsxCodeN(objectSetName(process, event, move tooLong))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct TsxInvalidHandleIsRejected() extends Test {
+    test {
+        var process = tesseraCreate()
+        return tsxCodeInfo(handleInfo(process, handleInvalid()))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(2) return e }
+}
+
+// ─── Pure wire mappings ───────────────────────────────────────────────────────
+
+construct TsxErrorCodeWireNumber() extends Test {
+    test {
+        return Int(errorCodeNumber(.PeerClosed))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(27) return e }
+}
+
+construct TsxObjectTypeWireNumber() extends Test {
+    test {
+        return Int(objectTypeCode(.Channel))
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
+}
+
+construct TsxDefaultRightsHoldWait() extends Test {
+    test {
+        return rightsHas(rightsDefault(), rightWait()) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}

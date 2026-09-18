@@ -1,0 +1,273 @@
+// Structural equality: `==` / `!=` on structs, arrays, and payload-carrying
+// enums, plus the enum-payload regression the old tag-only compare got wrong.
+//
+// Every value here is comparable by its shape, with no `@Derive` — the compiler
+// auto-conforms a type to `Equatable` when its every leaf is comparable, and
+// `==` walks it: a struct field-by-field, an array by length then element, an
+// enum by tag then payload. Each case returns `1` for the expected answer so a
+// wrong compare anywhere fails its own case, and the whole section also folds to
+// a checksum the cross-backend run diffs.
+
+import Foundation
+
+struct EqxPoint {
+    let x: Int
+    let y: Int
+}
+
+struct EqxSeg {
+    let from: EqxPoint
+    let to: EqxPoint
+    let label: String
+}
+
+distinct EqxId = Int
+
+struct EqxTagged {
+    let id: EqxId
+    let at: EqxPoint
+}
+
+enum EqxShape {
+    Empty
+    Dot(EqxPoint)
+    Named(String)
+    Count(Int)
+}
+
+// --- structs ---
+
+construct EqxStructEqualByField() extends Test {
+    test {
+        let a = EqxPoint { x: 1, y: 2 }
+        let b = EqxPoint { x: 1, y: 2 }
+        return a == b ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxStructUnequalByField() extends Test {
+    test {
+        let a = EqxPoint { x: 1, y: 2 }
+        let c = EqxPoint { x: 1, y: 3 }
+        return a != c ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxStructNestedAndString() extends Test {
+    test {
+        let a = EqxPoint { x: 1, y: 2 }
+        let c = EqxPoint { x: 1, y: 3 }
+        let l1 = EqxSeg { from: a, to: c, label: "ac" }
+        let l2 = EqxSeg { from: EqxPoint { x: 1, y: 2 }, to: EqxPoint { x: 1, y: 3 }, label: "ac" }
+        let l3 = EqxSeg { from: a, to: c, label: "other" }
+        return (l1 == l2 && l1 != l3) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxStructWithDistinctField() extends Test {
+    test {
+        let a = EqxTagged { id: EqxId(7), at: EqxPoint { x: 4, y: 5 } }
+        let b = EqxTagged { id: EqxId(7), at: EqxPoint { x: 4, y: 5 } }
+        let c = EqxTagged { id: EqxId(8), at: EqxPoint { x: 4, y: 5 } }
+        return (a == b && a != c) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+struct EqxMoney {
+    let amount: Number
+    let label: String
+}
+
+construct EqxStructWithNumberField() extends Test {
+    test {
+        let a = EqxMoney { amount: Number("1.50"), label: "usd" }
+        let b = EqxMoney { amount: Number("1.50"), label: "usd" }
+        let c = EqxMoney { amount: Number("1.75"), label: "usd" }
+        return (a == b && a != c) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// --- arrays ---
+
+construct EqxArrayOfScalars() extends Test {
+    test {
+        let xs = [1, 2, 3]
+        let ys = [1, 2, 3]
+        let zs = [1, 2, 4]
+        return (xs == ys && xs != zs) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxArrayLengthDiffers() extends Test {
+    test {
+        let xs = [1, 2, 3]
+        let ys = [1, 2]
+        return xs != ys ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxArrayOfStructs() extends Test {
+    test {
+        let ps = [EqxPoint { x: 1, y: 2 }, EqxPoint { x: 1, y: 3 }]
+        let qs = [EqxPoint { x: 1, y: 2 }, EqxPoint { x: 1, y: 3 }]
+        return ps == qs ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxArrayContainsStruct() extends Test {
+    test {
+        let ps = [EqxPoint { x: 1, y: 2 }, EqxPoint { x: 1, y: 3 }]
+        let hit = ps.contains(EqxPoint { x: 1, y: 3 })
+        let miss = ps.contains(EqxPoint { x: 9, y: 9 })
+        return (hit && miss == false) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// --- enums: the payload regression ---
+
+construct EqxEnumPayloadEqual() extends Test {
+    test {
+        return EqxShape.Dot(EqxPoint { x: 5, y: 6 }) == EqxShape.Dot(EqxPoint { x: 5, y: 6 }) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumPayloadUnequal() extends Test {
+    // The tag-only compare answered `true` here; structural equality answers
+    // `false` because the payloads differ.
+    test {
+        return EqxShape.Dot(EqxPoint { x: 5, y: 6 }) == EqxShape.Dot(EqxPoint { x: 5, y: 7 }) ? 0 : 1
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumStringPayload() extends Test {
+    test {
+        let same = EqxShape.Named("k") == EqxShape.Named("k")
+        let diff = EqxShape.Named("k") == EqxShape.Named("j")
+        return (same && diff == false) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumIntPayload() extends Test {
+    test {
+        let same = EqxShape.Count(3) == EqxShape.Count(3)
+        let diff = EqxShape.Count(3) == EqxShape.Count(4)
+        return (same && diff == false) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumTagMismatch() extends Test {
+    test {
+        return EqxShape.Dot(EqxPoint { x: 0, y: 0 }) != EqxShape.Named("x") ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumPayloadlessEqual() extends Test {
+    test {
+        return EqxShape.Empty == EqxShape.Empty ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+construct EqxEnumAgainstVariantLiteral() extends Test {
+    test {
+        let s = EqxShape.Count(9)
+        return (s == .Count(9) && s != .Empty) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// A test may return an aggregate directly and expect an aggregate: the runner
+// compares `got` against `expect()` with `==`, which is now structural, so a
+// case no longer has to hand-fold its result to a scalar to be checked.
+construct EqxAggregateReturnedAndExpected() extends Test {
+    test {
+        return EqxSeg { from: EqxPoint { x: 1, y: 2 }, to: EqxPoint { x: 3, y: 4 }, label: "d" }
+    }
+    expect {
+        let e: Result<Any, TestFailure> =
+            .Ok(EqxSeg { from: EqxPoint { x: 1, y: 2 }, to: EqxPoint { x: 3, y: 4 }, label: "d" })
+        return e
+    }
+}
+
+construct EqxEnumPayloadReturnedAndExpected() extends Test {
+    test { return EqxShape.Dot(EqxPoint { x: 5, y: 6 }) }
+    expect {
+        let e: Result<Any, TestFailure> = .Ok(EqxShape.Dot(EqxPoint { x: 5, y: 6 }))
+        return e
+    }
+}
+
+/// A generic function constrained to comparable types, so `==` in its body is
+/// the structural walk once monomorphized.
+function eqxSame<T: Equatable>(a: T, b: T) -> Bool {
+    return a == b
+}
+
+construct EqxGenericEquatableBound() extends Test {
+    test {
+        let hit = eqxSame(EqxPoint { x: 1, y: 2 }, EqxPoint { x: 1, y: 2 })
+        let miss = eqxSame(EqxPoint { x: 1, y: 2 }, EqxPoint { x: 3, y: 2 })
+        let scalar = eqxSame(7, 7)
+        return (hit && miss == false && scalar) ? 1 : 0
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(1) return e }
+}
+
+// A float carried in an enum payload compares *as a float* on every backend, not
+// by its raw bits: equal values are equal, different ones are not, and a `NaN`
+// payload equals nothing — including itself. The native backend once folded the
+// payload's bits (a `NaN` wrongly equal to itself, diverging from the vm); this
+// pins the fix.
+enum EqxMeasure {
+    Empty
+    Exact(Float)
+}
+
+construct EqxEnumFloatPayloadComparesAsFloat() extends Test {
+    test {
+        let zero = 0.0
+        let nan = zero / zero
+        var acc = 0
+        if EqxMeasure.Exact(1.5) == EqxMeasure.Exact(1.5) { acc = acc + 1 }
+        if EqxMeasure.Exact(1.5) != EqxMeasure.Exact(2.5) { acc = acc + 2 }
+        if EqxMeasure.Exact(nan) != EqxMeasure.Exact(nan) { acc = acc + 4 }
+        if EqxMeasure.Empty != EqxMeasure.Exact(1.5) { acc = acc + 8 }
+        return acc
+    }
+    expect { let e: Result<Any, TestFailure> = .Ok(15) return e }
+}
+
+/// The section checksum, folded from a spread of comparisons so the
+/// cross-backend run diffs the same value on every engine.
+function eqxSection() -> Int {
+    var acc = 0
+    let a = EqxPoint { x: 1, y: 2 }
+    let b = EqxPoint { x: 1, y: 2 }
+    let c = EqxPoint { x: 1, y: 3 }
+    if a == b { acc = acc + 1 }
+    if a != c { acc = acc + 2 }
+    let ps = [a, c]
+    let qs = [b, EqxPoint { x: 1, y: 3 }]
+    if ps == qs { acc = acc + 4 }
+    if EqxShape.Dot(a) == EqxShape.Dot(b) { acc = acc + 8 }
+    if EqxShape.Dot(a) != EqxShape.Dot(c) { acc = acc + 16 }
+    if EqxShape.Named("k") == EqxShape.Named("k") { acc = acc + 32 }
+    if EqxShape.Count(3) != EqxShape.Count(4) { acc = acc + 64 }
+    if ps.contains(c) { acc = acc + 128 }
+    return acc
+}

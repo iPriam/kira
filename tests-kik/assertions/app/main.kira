@@ -1,0 +1,20 @@
+// `assert` / `assertEqual` pass silently for true conditions and equal values.
+// `assertEqual` compares structurally (through `Any`/`EqAny`), so it holds for a
+// struct and a payload enum, not just a scalar.
+import Foundation
+
+struct AsxPoint { let x: Int let y: Int }
+
+enum AsxTag { Zero One Dot(Int) }
+
+@Main
+function main() {
+    assert(1 + 1 == 2)
+    assert("ab" == "a" + "b")
+    assertEqual(42, 42)
+    assertEqual("kira", "kira")
+    assertEqual(AsxPoint { x: 3, y: 4 }, AsxPoint { x: 3, y: 4 })
+    assertEqual(AsxTag.Dot(7), AsxTag.Dot(7))
+    assertEqual([1, 2, 3], [1, 2, 3])
+    print("assertions-passed")
+}

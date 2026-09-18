@@ -51,6 +51,8 @@ pub struct TraitDecl {
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// Whether the declaration was written `public` (module-exported).
+    pub public: bool,
     /// The declared type parameters, in order; empty for an ordinary trait.
     ///
     /// A generic trait names no contract by itself: each written instantiation
