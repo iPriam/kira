@@ -8,7 +8,7 @@ use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
 use kira_runtime_abi::NativeStatePathStep;
 
-use super::frames::Frame;
+use super::frames::{Frame, is_heap_value};
 use super::{Vm, foreign_scalar_value};
 use crate::error::{NativeStateOperation, VmError};
 use crate::value::Value;
@@ -66,18 +66,39 @@ impl Vm<'_> {
         Ok(())
     }
 
-    /// Pushes local `slot`, leaving unit behind.
+    /// Pushes local `slot`, transferring ownership of its one reference to the
+    /// operand stack while leaving the handle bytes readable in the slot.
     ///
-    /// The read of a value that runs a user `Drop`: binding one moves, so a
-    /// read is its last use and the slot no longer holds it. Leaving the value
-    /// behind would let the frame release run a body the new owner will run.
+    /// The native backend does exactly this: a move clears a per-local live
+    /// flag but does not zero the storage, so an affine value read again after
+    /// its "last" use (a match's tag then payload, a value stored then
+    /// returned, an argument reused) still finds it rather than a hole. The
+    /// slot keeps a *dead* handle — `Value` is `Copy`, no reference count moved
+    /// — and the frame's release skips it because `live` is now clear, so the
+    /// reference is freed once, by whoever took it.
     pub(super) fn take_local(&mut self, frame: &mut Frame, slot: u64) -> Result<(), VmError> {
         let index = usize::try_from(slot).map_err(|_| VmError::LocalSlotOutOfRange(slot))?;
-        let held = frame
+        let value = *frame
             .locals
-            .get_mut(index)
+            .get(index)
             .ok_or(VmError::LocalSlotOutOfRange(slot))?;
-        self.stack.push(std::mem::replace(held, Value::Void));
+        if frame.live.get(index).copied().unwrap_or(false) {
+            // A live slot owns its one reference: hand it to the stack and clear
+            // the flag. The handle bytes stay in the slot so a later borrowing
+            // read (`LoadLocal`, e.g. a field base) still finds the value, but
+            // this frame no longer drops it.
+            self.stack.push(value);
+            if let Some(flag) = frame.live.get_mut(index) {
+                *flag = false;
+            }
+        } else {
+            // Already moved out: the reference left with the earlier taker, so a
+            // second consuming take must not hand out a second owner — that is
+            // the double free `ReleaseLocals` (`TakeLocal`+`Pop`) of an
+            // already-taken slot used to cause. `Void` is what the destructive
+            // take left here before; a genuine second move is a checker error.
+            self.stack.push(Value::Void);
+        }
         Ok(())
     }
 
@@ -108,6 +129,10 @@ impl Vm<'_> {
                 .native_state_replace(token, type_id, stored)
                 .map_err(VmError::NativeState)?;
         } else {
+            // Whether the slot owned what it held: a slot taken from holds a
+            // dead handle whose reference already moved to the taker, so its old
+            // value must not be dropped here.
+            let was_live = frame.live.get(slot).copied().unwrap_or(false);
             let old = std::mem::replace(
                 frame
                     .locals
@@ -118,17 +143,23 @@ impl Vm<'_> {
             // Loop-shaped assignment constantly replaces scalar locals. Those
             // values own no heap storage, so skip the general recursive drop
             // walk and retain it for heap-backed values and snapshots.
-            if matches!(
-                old,
-                Value::Str(_)
-                    | Value::Struct(_)
-                    | Value::Array(_)
-                    | Value::Enum(_)
-                    | Value::Erased(_)
-                    | Value::Cell(_)
-                    | Value::NativeSnapshot(_)
-            ) {
+            if was_live
+                && matches!(
+                    old,
+                    Value::Str(_)
+                        | Value::Struct(_)
+                        | Value::Array(_)
+                        | Value::Enum(_)
+                        | Value::Erased(_)
+                        | Value::Cell(_)
+                        | Value::NativeSnapshot(_)
+                )
+            {
                 self.heap.drop_value(old);
+            }
+            // The slot now owns the value it was just given.
+            if let Some(flag) = frame.live.get_mut(slot) {
+                *flag = is_heap_value(&value);
             }
         }
         Ok(())
@@ -186,6 +217,14 @@ impl Vm<'_> {
                     .ok_or(VmError::UnprintableValue)?;
                 self.host.write_line(&line);
                 self.stack.push(Value::Void);
+            }
+            Instruction::Abort => {
+                let value = self.pop()?;
+                let message = self
+                    .heap
+                    .format_and_consume(value)
+                    .unwrap_or_else(|| "abort".to_owned());
+                return Err(VmError::Aborted(message));
             }
             Instruction::NewStruct(count) => {
                 let count = usize::try_from(*count).map_err(|_| VmError::ArrayTooLong)?;
@@ -510,6 +549,29 @@ impl Vm<'_> {
                 self.stack.push(Value::Int(
                     i64::try_from(tag?).map_err(|_| VmError::ArrayTooLong)?,
                 ));
+            }
+            Instruction::EnumFromCode => {
+                // The count was pushed last, so it comes off first; the code is
+                // below it. A code inside `0..count` is its own variant, and
+                // anything else falls back to the first — the `fromCode`
+                // contract. A payload-less variant is a tag and nothing else.
+                let count = self.pop_int()?;
+                let code = self.pop_int()?;
+                let tag = if code >= 0 && code < count {
+                    code as u64
+                } else {
+                    0
+                };
+                let id = self.heap.alloc_enum(tag, None);
+                self.stack.push(Value::Enum(id));
+            }
+            Instruction::HashValue => {
+                // Fold the value structurally to an `Int`, then drop it — a hash
+                // reads and keeps nothing, exactly as a comparison does.
+                let value = self.pop()?;
+                let hash = self.heap.hash_value(value);
+                self.heap.drop_value(value);
+                self.stack.push(Value::Int(hash));
             }
             Instruction::EnumPayload => {
                 // The same shape as `EnumTag`: the enum is consumed, an owned

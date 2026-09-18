@@ -1,0 +1,115 @@
+// Ports and completions (spec §5).
+//
+// A Port is a completion queue: the only way asynchronous results, signal
+// notifications, timer expirations, and user-posted packets reach a process.
+// Every packet is a Completion — 64 bytes carrying the submitter's key, an
+// error, what kind of operation completed, and up to three result words.
+
+import Foundation
+
+// What kind of operation a completion reports (spec §5.2).
+public enum CompletionKind {
+    User
+    Signal
+    Timer
+    Io
+    Namespace
+    Launch
+    Grant
+    Net
+    Stream
+    Gpu
+    Power
+    Service
+}
+
+// How a waitAsync arming behaves (spec §3.5).
+public enum WaitOptions {
+    Once
+    Repeat
+    Edge
+}
+
+// Options for Port.create (spec §5.1).
+public enum PortOptions {
+    None
+}
+
+// One packet drained from a Port (spec §5.2, 64 bytes on the wire).
+public struct Completion {
+    var key: Key
+    var error: Error
+    var kind: CompletionKind
+    var flags: U32
+    var result0: U64
+    var result1: U64
+    var aux: U64
+    var timestamp: Instant
+}
+
+// Completion flag: further packets will follow (multi-shot). Set on every packet
+// of a Repeat arming or a periodic timer.
+public function completionFlagMore() -> U32 { return U32(1) }
+
+// The wire number for a completion kind (spec §5.2).
+public function completionKindNumber(kind: borrow CompletionKind) -> U32 {
+    match kind {
+        User -> { return U32(0) }
+        Signal -> { return U32(1) }
+        Timer -> { return U32(2) }
+        Io -> { return U32(3) }
+        Namespace -> { return U32(4) }
+        Launch -> { return U32(5) }
+        Grant -> { return U32(6) }
+        Net -> { return U32(7) }
+        Stream -> { return U32(8) }
+        Gpu -> { return U32(9) }
+        Power -> { return U32(10) }
+        Service -> { return U32(11) }
+    }
+}
+
+// A zeroed completion carrying only a key: the base every builder starts from.
+public function completionEmpty(key: Key) -> Completion {
+    return Completion {
+        key: key,
+        error: errorOk(),
+        kind: .User,
+        flags: U32(0),
+        result0: U64(0),
+        result1: U64(0),
+        aux: U64(0),
+        timestamp: Instant(U64(0)),
+    }
+}
+
+// A signal-readiness completion: kind Signal, result0 = the signals asserted at
+// delivery (spec §3.5). `more` marks a re-arming (Repeat) packet.
+public function completionSignal(key: Key, asserted: Signals, more: Bool) -> Completion {
+    var packet = completionEmpty(key)
+    packet.kind = .Signal
+    packet.result0 = U64(asserted.raw)
+    if more {
+        packet.flags = completionFlagMore()
+    }
+    return packet
+}
+
+// A cancellation completion: the packet an in-flight operation delivers when its
+// object or port is torn down, or Port.cancel names its key (spec §2.4).
+public function completionCancelled(key: Key, kind: CompletionKind) -> Completion {
+    var packet = completionEmpty(key)
+    packet.kind = kind
+    packet.error = errorOf(.Cancelled)
+    return packet
+}
+
+// A user packet posted through Port.post (spec §5.1). The kind is forced to User.
+public function completionUser(key: Key, result0: U64, result1: U64, aux: U64) -> Completion {
+    var packet = completionEmpty(key)
+    packet.kind = .User
+    packet.result0 = result0
+    packet.result1 = result1
+    packet.aux = aux
+    return packet
+}

@@ -1,0 +1,66 @@
+// Structural ordering: `<`, `<=`, `>`, `>=` on an aggregate whose every leaf
+// carries a total order, with no `@Derive`. The compiler walks the value
+// lexicographically — a struct field-by-field, an array element-by-element then
+// by length — exactly as it walks `==`.
+//
+// Everything here runs on all three backends and must print the same bytes: the
+// native walk (`kira_rt_str_cmp`, `kira_rt_array_cmp`, and a struct `Cmp` leaf)
+// mirrors the VM's `Heap::compare_values` leaf for leaf. Enum ordering lives in
+// the `enum` subpackage, which is vm-only until the native enum walk exists.
+
+import Foundation
+
+struct Pt { let x: Int let y: Int }
+
+struct Named { let tag: String let pt: Pt }
+
+// A payloadless enum orders by declaration order — the tag alone — which every
+// backend reads the same way, so it belongs with the cross-backend cases.
+enum Grade { Bronze Silver Gold }
+
+// A scalar-payload enum orders by tag, then payload — folded through the runtime,
+// byte-identical on every backend.
+enum Measure { Empty Exact(Int) }
+
+// An enum carrying a *struct* payload orders by tag, then by the aggregate
+// payload through the cmp leaf its box carries — also byte-identical everywhere.
+enum Boxed { Nothing Wrap(Pt) }
+
+// A generic bound proves `Ordered` conformance is structural: `Pt` is accepted
+// with no declaration, because its leaves are.
+function isBefore<T: Ordered>(a: T, b: T) -> Bool {
+    return a < b
+}
+
+@Main
+function main() {
+    // Struct: the first differing field decides.
+    print(Pt { x: 1, y: 2 } < Pt { x: 1, y: 3 })
+    print(Pt { x: 2, y: 0 } < Pt { x: 1, y: 9 })
+    print(Pt { x: 1, y: 2 } <= Pt { x: 1, y: 2 })
+    print(Pt { x: 1, y: 3 } > Pt { x: 1, y: 2 })
+    print(Pt { x: 1, y: 2 } >= Pt { x: 1, y: 2 })
+    // Nested struct with a string leaf: the string orders by its bytes.
+    print(Named { tag: "a", pt: Pt { x: 1, y: 1 } } < Named { tag: "a", pt: Pt { x: 1, y: 2 } })
+    print(Named { tag: "b", pt: Pt { x: 0, y: 0 } } < Named { tag: "a", pt: Pt { x: 9, y: 9 } })
+    // Array: element-by-element, then shorter is less.
+    print([1, 2, 3] < [1, 2, 4])
+    print([1, 2] < [1, 2, 0])
+    print([1, 2, 3] <= [1, 2, 3])
+    // Float array: ordered comparisons, no surprise from an equal lead element.
+    print([1.5, 2.5] < [1.5, 3.0])
+    // Payloadless enum: declaration order is the order.
+    print(Grade.Bronze < Grade.Gold)
+    print(Grade.Gold < Grade.Silver)
+    print(Grade.Silver <= Grade.Silver)
+    // Scalar-payload enum: tag first, then the payload.
+    print(Measure.Empty < Measure.Exact(0))
+    print(Measure.Exact(1) < Measure.Exact(2))
+    print(Measure.Exact(5) < Measure.Exact(5))
+    // Struct-payload enum: tag first, then the struct payload field-by-field.
+    print(Boxed.Nothing < Boxed.Wrap(Pt { x: 0, y: 0 }))
+    print(Boxed.Wrap(Pt { x: 1, y: 2 }) < Boxed.Wrap(Pt { x: 1, y: 3 }))
+    // Through a generic `Ordered` bound.
+    print(isBefore(Pt { x: 0, y: 0 }, Pt { x: 0, y: 1 }))
+    return
+}

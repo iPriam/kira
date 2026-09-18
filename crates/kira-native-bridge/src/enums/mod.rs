@@ -119,6 +119,9 @@ pub const PAYLOAD_STR: i64 = EnumPayloadKind::STR.as_i64();
 pub const PAYLOAD_ENUM: i64 = EnumPayloadKind::ENUM.as_i64();
 /// Payload word points to an owned erased aggregate and its clone/free leaves.
 pub const PAYLOAD_AGGREGATE: i64 = EnumPayloadKind::AGGREGATE.as_i64();
+/// Payload word is inert `f64` bits — a `Float` payload. Owns nothing, but its
+/// equality compares as a float rather than by its bits.
+pub const PAYLOAD_FLOAT: i64 = EnumPayloadKind::FLOAT.as_i64();
 
 /// The heap box behind a [`KEnum`].
 ///
@@ -189,6 +192,13 @@ pub(crate) struct AggregatePayload {
     /// which no comparison reaches — and a null leaf answers "not equal"
     /// rather than reading bytes it has no layout for.
     eq: Option<ElemEq>,
+    /// Three-way orders two payloads of this concrete type, for ordering an enum
+    /// that carries it. Null when the payload's type is not `Ordered` — then no
+    /// comparison reaches it, since the frontend refuses ordering such an enum.
+    cmp: Option<crate::array::ElemCmp>,
+    /// Folds one payload of this concrete type into a hash, for hashing an enum
+    /// that carries it. Null when the payload's type is not `Hashable`.
+    hash: Option<crate::array::ElemHash>,
 }
 
 /// Compares two elements of one concrete type.
@@ -238,6 +248,8 @@ pub(crate) unsafe fn move_aggregate(
     clone: Option<ElemClone>,
     free: Option<ElemFree>,
     eq: Option<ElemEq>,
+    cmp: Option<crate::array::ElemCmp>,
+    hash: Option<crate::array::ElemHash>,
 ) -> *mut AggregatePayload {
     let data = alloc_aggregate_bytes(size);
     if size > 0 {
@@ -255,6 +267,8 @@ pub(crate) unsafe fn move_aggregate(
         clone,
         free,
         eq,
+        cmp,
+        hash,
     }))
 }
 
@@ -347,7 +361,7 @@ pub unsafe extern "C" fn kira_rt_enum_new_aggregate(
     free: Option<ElemFree>,
 ) -> KEnum {
     // SAFETY: caller provides the concrete payload's bytes and matching leaves.
-    let payload = unsafe { move_aggregate(source, size, clone, free, None) };
+    let payload = unsafe { move_aggregate(source, size, clone, free, None, None, None) };
     kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
 }
 
@@ -371,7 +385,33 @@ pub unsafe extern "C" fn kira_rt_enum_new_aggregate_eq(
     eq: Option<ElemEq>,
 ) -> KEnum {
     // SAFETY: caller provides the concrete payload's bytes and matching leaves.
-    let payload = unsafe { move_aggregate(source, size, clone, free, eq) };
+    let payload = unsafe { move_aggregate(source, size, clone, free, eq, None, None) };
+    kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
+}
+
+/// Boxes an aggregate payload that can be compared, ordered, and hashed.
+///
+/// Appended beside [`kira_rt_enum_new_aggregate_eq`] so existing callers keep
+/// their ABI. The backend uses this one when the payload type is `Ordered` or
+/// `Hashable`, passing the extra leaves; a `cmp` or `hash` that the type does
+/// not earn is null, and no ordering or hash reaches it.
+///
+/// # Safety
+/// As [`kira_rt_enum_new_aggregate_eq`], and `cmp`/`hash`, when present, must
+/// have been generated for the same concrete type as the other leaves.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_enum_new_aggregate_ord(
+    tag: i64,
+    source: *const u8,
+    size: usize,
+    clone: Option<ElemClone>,
+    free: Option<ElemFree>,
+    eq: Option<ElemEq>,
+    cmp: Option<crate::array::ElemCmp>,
+    hash: Option<crate::array::ElemHash>,
+) -> KEnum {
+    // SAFETY: caller provides the concrete payload's bytes and matching leaves.
+    let payload = unsafe { move_aggregate(source, size, clone, free, eq, cmp, hash) };
     kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
 }
 
@@ -393,6 +433,37 @@ pub unsafe extern "C" fn kira_rt_enum_new_aggregate_eq(
 pub unsafe extern "C" fn kira_rt_any_eq(a: KEnum, b: KEnum) -> u8 {
     // SAFETY: the caller's live-handle contract is this function's own.
     u8::from(unsafe { boxes_equal(a, b) })
+}
+
+/// The three-way structural order of two enum-shaped boxes, as an `i8` sign.
+///
+/// The ordering twin of [`kira_rt_any_eq`], reached only for an actual enum the
+/// frontend proved `Ordered` (never an erased `Any`, which `Ordered` refuses),
+/// and never for one carrying an aggregate payload — the LLVM enum arm refuses
+/// that until its box leaf exists. So it orders a tag, then a scalar, float,
+/// string, or nested-enum payload, matching the VM's `compare_values` exactly.
+///
+/// # Safety
+/// `a` and `b` must be null or live handles from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_any_cmp(a: KEnum, b: KEnum) -> i8 {
+    // SAFETY: the caller's live-handle contract is this function's own.
+    unsafe { boxes_compare(a, b) as i8 }
+}
+
+/// Folds an enum-shaped box's structural hash into `acc` — its tag, then its
+/// payload — matching the VM's `hash_into` for an enum.
+///
+/// Reached only for an actual `Hashable` enum without an aggregate payload, the
+/// same boundary [`kira_rt_any_cmp`] has. Reads only; the enum stays the
+/// caller's.
+///
+/// # Safety
+/// `e` must be null or a live handle from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_any_hash(acc: u64, e: KEnum) -> u64 {
+    // SAFETY: the caller's live-handle contract is this function's own.
+    unsafe { boxes_hash(acc, e) }
 }
 
 /// The family word an `ErasedTypeId` carries in its high 32 bits.
@@ -438,6 +509,11 @@ unsafe fn boxes_equal(a: KEnum, b: KEnum) -> bool {
             }
             one.payload == other.payload
         }
+        // A `Float` payload compares as an IEEE `f64`, so a `NaN` equals nothing
+        // (including itself) and `0.0` equals `-0.0` — the same answer `EqFloat`
+        // and the VM give. Comparing the raw bits, as an inert payload does,
+        // would disagree with both.
+        PAYLOAD_FLOAT => f64::from_bits(one.payload) == f64::from_bits(other.payload),
         // SAFETY: the kind says both words are live `KStr` handles.
         PAYLOAD_STR => unsafe { str_payloads_equal(one.payload, other.payload) },
         // SAFETY: the kind says both words are live nested `KEnum` handles.
@@ -487,6 +563,157 @@ unsafe fn str_payloads_equal(one: u64, other: u64) -> bool {
             kira_rt_str_clone(other as KStr),
         );
         crate::runtime::kira_rt_str_eq(a, b) != 0
+    }
+}
+
+/// Three-way orders two enum-shaped boxes: tag first, then payload by kind.
+///
+/// The ordering counterpart of [`boxes_equal`], matching the VM's
+/// `compare_values` for an enum — the variant's declaration order, then the
+/// payload. An aggregate payload never arrives (the caller gates it out), so the
+/// arms are tag, scalar, float, string, and nested enum.
+///
+/// # Safety
+/// Both must be null or live handles from this runtime.
+unsafe fn boxes_compare(a: KEnum, b: KEnum) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if a.is_null() || b.is_null() {
+        // A constructed `Ordered` enum is never null; if one ever is, order it
+        // before a real box so the result stays total.
+        return b.is_null().cmp(&a.is_null());
+    }
+    // SAFETY: both are live handles, and reading a tag never consumes one.
+    let (a_tag, b_tag) = unsafe { (kira_rt_enum_tag(a), kira_rt_enum_tag(b)) };
+    match a_tag.cmp(&b_tag) {
+        Ordering::Equal => {}
+        other => return other,
+    }
+    // Equal tags with either inline: same payload-less variant, nothing more.
+    if is_inline(a) || is_inline(b) {
+        return Ordering::Equal;
+    }
+    // SAFETY: neither is inline, so both address a live `KiraEnum`; equal tags
+    // give them the same payload kind.
+    let (one, other) = unsafe { (&*a, &*b) };
+    match one.payload_kind {
+        // A signed scalar orders as the `i64` word it is — unsigned payloads were
+        // refused by the `Ordered` classifier, so signed is the whole story.
+        PAYLOAD_INERT => (one.payload as i64).cmp(&(other.payload as i64)),
+        PAYLOAD_FLOAT => {
+            let (x, y) = (f64::from_bits(one.payload), f64::from_bits(other.payload));
+            if x < y {
+                Ordering::Less
+            } else if x > y {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        }
+        // SAFETY: the kind says both words are live `KStr` handles.
+        PAYLOAD_STR => unsafe { str_payloads_compare(one.payload, other.payload) },
+        // SAFETY: the kind says both words are live nested `KEnum` handles.
+        PAYLOAD_ENUM => unsafe {
+            boxes_compare(one.payload as KEnum, other.payload as KEnum)
+        },
+        // A struct or array payload orders through the cmp leaf generated for its
+        // concrete type, exactly as `Any` equality reads its `eq` leaf. Equal
+        // tags proved both hold the same Kira type, so either leaf reads either
+        // payload; a null leaf means the payload's type is not `Ordered`, which
+        // the frontend refuses to order, so it is unreachable.
+        PAYLOAD_AGGREGATE => {
+            let (one, other) = (
+                one.payload as *mut AggregatePayload,
+                other.payload as *mut AggregatePayload,
+            );
+            if one.is_null() || other.is_null() {
+                return other.is_null().cmp(&one.is_null());
+            }
+            // SAFETY: the kind says both words are live aggregate payloads.
+            let (one, other) = unsafe { (&*one, &*other) };
+            match one.cmp {
+                // SAFETY: both point at live payloads of the type `cmp` was
+                // generated for; it reads without taking.
+                Some(cmp) => unsafe { cmp(one.data, other.data) }.cmp(&0),
+                None => Ordering::Equal,
+            }
+        }
+        // Unknown kind: the conservative total answer.
+        _ => Ordering::Equal,
+    }
+}
+
+/// Byte-lexicographically orders two `KStr` payload words, leaving both in place.
+///
+/// The ordering twin of [`str_payloads_equal`]: each side is cloned for
+/// `kira_rt_str_cmp`, which frees the clones, so the payloads stay owned by their
+/// boxes.
+///
+/// # Safety
+/// Both words must be live `KStr` handles or null.
+unsafe fn str_payloads_compare(one: u64, other: u64) -> std::cmp::Ordering {
+    // SAFETY: caller's live-handle contract; each clone is handed to
+    // `kira_rt_str_cmp`, which releases exactly the two it is given.
+    let sign = unsafe {
+        let (a, b) = (
+            kira_rt_str_clone(one as KStr),
+            kira_rt_str_clone(other as KStr),
+        );
+        crate::runtime::kira_rt_str_cmp(a, b)
+    };
+    sign.cmp(&0)
+}
+
+/// Folds an enum-shaped box's structural hash into `acc`: its tag, then its
+/// payload by kind.
+///
+/// The hash counterpart of [`boxes_equal`], matching the VM's `hash_into` for an
+/// enum. An aggregate payload never arrives (the caller gates it out).
+///
+/// # Safety
+/// `e` must be null or a live handle from this runtime.
+unsafe fn boxes_hash(acc: u64, e: KEnum) -> u64 {
+    // SAFETY: reading a tag never consumes the handle.
+    let tag = unsafe { kira_rt_enum_tag(e) };
+    // The tag folds as eight little-endian bytes, matching the VM's `hash_into`.
+    let bytes = tag.to_le_bytes();
+    // SAFETY: eight readable bytes of a stack value.
+    let acc = unsafe { crate::runtime::kira_rt_hash_bytes(acc, bytes.as_ptr(), bytes.len()) };
+    if e.is_null() || is_inline(e) {
+        return acc;
+    }
+    // SAFETY: a non-null, non-inline handle addresses a live `KiraEnum`.
+    let one = unsafe { &*e };
+    match one.payload_kind {
+        // A scalar folds its eight `i64` bytes, exactly as the VM's `Int` arm
+        // feeds `i.to_le_bytes()`. A `Float` payload never reaches a hash — the
+        // `Hashable` classifier refused it — so `INERT` is the only scalar here.
+        PAYLOAD_INERT => {
+            let bytes = (one.payload as i64).to_le_bytes();
+            // SAFETY: eight readable bytes of a stack value.
+            unsafe { crate::runtime::kira_rt_hash_bytes(acc, bytes.as_ptr(), bytes.len()) }
+        }
+        // SAFETY: the kind says the word is a live `KStr`; the fold borrows it.
+        PAYLOAD_STR => unsafe { crate::runtime::kira_rt_hash_str(acc, one.payload as KStr) },
+        // SAFETY: the kind says the word is a live nested `KEnum`.
+        PAYLOAD_ENUM => unsafe { boxes_hash(acc, one.payload as KEnum) },
+        // A struct or array payload folds through the hash leaf generated for its
+        // concrete type. A null leaf means the payload's type is not `Hashable`,
+        // which the frontend refuses to hash, so it is unreachable.
+        PAYLOAD_AGGREGATE => {
+            let agg = one.payload as *mut AggregatePayload;
+            if agg.is_null() {
+                return acc;
+            }
+            // SAFETY: the kind says the word is a live aggregate payload.
+            let agg = unsafe { &*agg };
+            match agg.hash {
+                // SAFETY: the payload is live and of the type `hash` folds.
+                Some(hash) => unsafe { hash(acc, agg.data) },
+                None => acc,
+            }
+        }
+        // Unknown kind: fold nothing.
+        _ => acc,
     }
 }
 

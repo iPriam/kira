@@ -5,6 +5,7 @@
 # Agent scratch. Nothing here is tracked, which is what lets scratch tooling
 # (including Python) exist without ever reaching a commit.
 .codex/tmp/
+.codex/work/
 .codex/scheduled_tasks.lock
 # One machine's tool permissions, beside the settings the repository does share.
 .codex/settings.local.json

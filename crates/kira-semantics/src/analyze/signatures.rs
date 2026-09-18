@@ -330,10 +330,7 @@ impl<'a> Analyzer<'a> {
         }
         ids.iter()
             .copied()
-            .filter(|id| {
-                self.imports
-                    .sees(self.source, self.sigs[id.0 as usize].source)
-            })
+            .filter(|id| self.sees_public(self.sigs[id.0 as usize].source, name))
             .collect()
     }
 
@@ -376,10 +373,7 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn lookup_function(&self, name: &str) -> Option<(FuncId, &[Type], Type)> {
         let ids = self.sig_index.get(name)?;
         let id = *ids.iter().find(|id| {
-            name.contains('.')
-                || self
-                    .imports
-                    .sees(self.source, self.sigs[id.0 as usize].source)
+            name.contains('.') || self.sees_public(self.sigs[id.0 as usize].source, name)
         })?;
         let sig = &self.sigs[id.0 as usize];
         Some((id, &sig.params, sig.return_type))

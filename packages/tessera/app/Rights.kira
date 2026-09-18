@@ -1,0 +1,94 @@
+// Rights: what a handle is allowed to do (spec §3.3).
+//
+// A rights set is 64 bits. Bits 0–15 are generic and mean the same on every
+// object type; 16–31 are type-specific; 32–63 are reserved. A handle may only
+// ever be narrowed: `Handle.duplicate` and `Handle.replace` reject a superset of
+// the source's rights. `rightsSame()` (all ones) means "the same rights as the
+// source" and is only meaningful in a duplicate.
+
+import Foundation
+
+// One right bit, `1 << n`, as a Rights set with a single member.
+public function rightBit(index: U64) -> Rights {
+    return Rights(U64(1) << index)
+}
+
+// ─── Generic rights (bits 0–15) ─────────────────────────────────────────────
+
+// May create another handle to the object.
+public function rightDuplicate() -> Rights { return rightBit(U64(0)) }
+// May be sent through a channel.
+public function rightTransfer() -> Rights { return rightBit(U64(1)) }
+// Read bytes / receive / observe state.
+public function rightRead() -> Rights { return rightBit(U64(2)) }
+// Write bytes / send / mutate state (filesystem: Update).
+public function rightWrite() -> Rights { return rightBit(U64(3)) }
+// May be mapped into the address space.
+public function rightMap() -> Rights { return rightBit(U64(4)) }
+// May be mapped executable.
+public function rightExecute() -> Rights { return rightBit(U64(5)) }
+// May assert user signals.
+public function rightSignal() -> Rights { return rightBit(U64(6)) }
+// May wait on signals / receive completions.
+public function rightWait() -> Rights { return rightBit(U64(7)) }
+// May read info topics.
+public function rightInspect() -> Rights { return rightBit(U64(8)) }
+// May destroy, kill, resize, configure, set policy.
+public function rightManage() -> Rights { return rightBit(U64(9)) }
+// May set name / attributes.
+public function rightSetProperty() -> Rights { return rightBit(U64(10)) }
+// Filesystem: List.
+public function rightEnumerate() -> Rights { return rightBit(U64(11)) }
+// Filesystem: Create.
+public function rightCreate() -> Rights { return rightBit(U64(12)) }
+// Filesystem: Delete.
+public function rightDelete() -> Rights { return rightBit(U64(13)) }
+// Filesystem: lookup into child directories.
+public function rightTraverse() -> Rights { return rightBit(U64(14)) }
+// Presence: may request grants and present pickers.
+public function rightGrant() -> Rights { return rightBit(U64(15)) }
+
+// The empty rights set.
+public function rightsNone() -> Rights { return Rights(U64(0)) }
+
+// "The same rights as the source" — all ones. Only valid in Handle.duplicate.
+public function rightsSame() -> Rights { return Rights(u64Max()) }
+
+// ─── Set algebra ────────────────────────────────────────────────────────────
+
+// The union of two rights sets.
+public function rightsUnion(left: Rights, right: Rights) -> Rights {
+    return Rights(left.raw | right.raw)
+}
+
+// The intersection of two rights sets.
+public function rightsIntersect(left: Rights, right: Rights) -> Rights {
+    return Rights(left.raw & right.raw)
+}
+
+// Whether `set` holds every bit in `needed`.
+public function rightsHas(set: Rights, needed: Rights) -> Bool {
+    return (set.raw & needed.raw) == needed.raw
+}
+
+// Whether `sub` is a subset of `sup` (every bit of `sub` is in `sup`).
+public function rightsSubset(sub: Rights, sup: Rights) -> Bool {
+    return (sub.raw & sup.raw) == sub.raw
+}
+
+// The default rights a newly created object carries for its creator (spec §3.3):
+// Duplicate, Transfer, Read, Write, Signal, Wait, Inspect, Manage, SetProperty.
+// A type's natural extras (Map for Memory, the filesystem bits on a Node) are
+// added by that type's create call.
+public function rightsDefault() -> Rights {
+    var set = rightDuplicate()
+    set = rightsUnion(set, rightTransfer())
+    set = rightsUnion(set, rightRead())
+    set = rightsUnion(set, rightWrite())
+    set = rightsUnion(set, rightSignal())
+    set = rightsUnion(set, rightWait())
+    set = rightsUnion(set, rightInspect())
+    set = rightsUnion(set, rightManage())
+    set = rightsUnion(set, rightSetProperty())
+    return set
+}

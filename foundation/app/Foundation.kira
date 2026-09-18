@@ -15,6 +15,29 @@ function printLine(text: borrow String) {
     return
 }
 
+// Assertions, built on the `abort` hard-trap primitive. A failing assertion is
+// an unrecoverable state — a bug the run cannot continue past — so it aborts
+// (no unwind); the child-per-test runner records the trap as a failed case.
+// `assertEqual` compares structurally through the `Equatable` bound, so it holds
+// for any comparable value — a scalar, a string, a struct, or a payload enum —
+// not just a scalar folded by hand.
+function assert(condition: Bool) {
+    if condition == false {
+        abort("assertion failed")
+    }
+    return
+}
+
+function assertEqual(got: Any, want: Any) {
+    // `==` on two `Any` values is the structural walk (`EqAny`): it compares by
+    // kind then by shape, so any two comparable values — scalars, strings,
+    // structs, payload enums — check here without a generic bound.
+    if got != want {
+        abort("assertion failed: values are not equal")
+    }
+    return
+}
+
 // Restricts a value to the closed interval `[lower, upper]`.
 // The bounds are intentionally not reordered: a reversed interval is a caller
 // error in the same sense as passing the wrong coordinate space is.

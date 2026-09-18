@@ -41,6 +41,12 @@ impl EnumPayloadKind {
     /// callbacks. Used for struct payloads, including synthesized construct-family
     /// variants.
     pub const AGGREGATE: Self = Self(3);
+    /// Inert bits that are an IEEE `f64` — a `Float` payload. Owns nothing, so it
+    /// clones and frees exactly as [`INERT`](Self::INERT) does; it is a distinct
+    /// kind only so equality compares it *as a float* (`NaN` unequal to itself,
+    /// `0.0` equal to `-0.0`) rather than by its raw bits, which is the answer the
+    /// VM gives and the one that agrees with `==`.
+    pub const FLOAT: Self = Self(4);
 
     /// The raw word this kind is written as.
     pub const fn as_i64(self) -> i64 {
@@ -60,6 +66,7 @@ mod tests {
         assert_eq!(EnumPayloadKind::STR.as_i64(), 1);
         assert_eq!(EnumPayloadKind::ENUM.as_i64(), 2);
         assert_eq!(EnumPayloadKind::AGGREGATE.as_i64(), 3);
+        assert_eq!(EnumPayloadKind::FLOAT.as_i64(), 4);
     }
 
     /// The tag is one word wide, which is what the `kira_rt_enum_new` parameter

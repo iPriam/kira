@@ -1,0 +1,82 @@
+// Signals: the observable state bits of an object (spec §3.4).
+//
+// A signal set is 32 bits. Bits 0–15 are defined per object type, 16–23 are
+// reserved, and 24–31 are the eight user signals settable on Event and
+// EventPair. `Object.waitAsync` observes them and `Object.signal` asserts the
+// user bits and SIGNALED. This is the universal readiness mechanism — the
+// equivalent of every poll/epoll/kqueue use, expressed as completions.
+
+import Foundation
+
+// One signal bit, `1 << n`, as a set with a single member.
+public function signalBit(index: U32) -> Signals {
+    return Signals(U32(1) << index)
+}
+
+// Something to read / a completion is available.
+public function signalReadable() -> Signals { return signalBit(U32(0)) }
+// Can accept a write without ShouldWait.
+public function signalWritable() -> Signals { return signalBit(U32(1)) }
+// The other end of a pair is gone.
+public function signalPeerClosed() -> Signals { return signalBit(U32(2)) }
+// Event / Fence / Timer fired.
+public function signalSignaled() -> Signals { return signalBit(U32(3)) }
+// Thread / Process / Job ended.
+public function signalTerminated() -> Signals { return signalBit(U32(4)) }
+// Object is in an error state (Endpoint, Stream).
+public function signalError() -> Signals { return signalBit(U32(5)) }
+// Stream: data lost.
+public function signalOverrun() -> Signals { return signalBit(U32(6)) }
+
+// User signal N (0–7), asserted through Object.signal on Event / EventPair.
+public function signalUser(index: U32) -> Signals {
+    return signalBit(U32(24) + index)
+}
+
+// The empty signal set.
+public function signalsNone() -> Signals { return Signals(U32(0)) }
+
+// The largest `U32`, 2^32 - 1, built from the signed maximum the way `u64Max`
+// is (the literal would overflow the signed integer parse).
+public function u32Max() -> U32 {
+    return (U32(2147483647) << U32(1)) | U32(1)
+}
+
+// The bits that a caller may set or clear through Object.signal: the user
+// signals and SIGNALED. Every other bit is owned by the object's own machinery.
+public function signalsUserSettable() -> Signals {
+    var set = signalSignaled()
+    var index = U32(24)
+    while index < U32(32) {
+        set = signalsUnion(set, signalBit(index))
+        index = index + U32(1)
+    }
+    return set
+}
+
+// ─── Set algebra ────────────────────────────────────────────────────────────
+
+// The union of two signal sets.
+public function signalsUnion(left: Signals, right: Signals) -> Signals {
+    return Signals(left.raw | right.raw)
+}
+
+// The intersection of two signal sets.
+public function signalsIntersect(left: Signals, right: Signals) -> Signals {
+    return Signals(left.raw & right.raw)
+}
+
+// `set` with every bit of `clear` removed.
+public function signalsClear(set: Signals, clear: Signals) -> Signals {
+    return Signals(set.raw & (u32Max() ^ clear.raw))
+}
+
+// Whether `set` holds every bit in `needed`.
+public function signalsHas(set: Signals, needed: Signals) -> Bool {
+    return (set.raw & needed.raw) == needed.raw
+}
+
+// Whether any bit of `mask` is asserted in `set`.
+public function signalsAny(set: Signals, mask: Signals) -> Bool {
+    return (set.raw & mask.raw) != U32(0)
+}

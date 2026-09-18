@@ -61,6 +61,19 @@ struct Point { var x: Int var y: Int }
 let key = hash_Point(Point { x = 3, y = 4 })
 ```
 
+`hash(v)` is also a language builtin — the operation behind the `Hashable`
+trait, earned by any type whose leaves fold consistently with `==`, with no
+`@Derive`. It folds structurally (a struct by its fields, an array by its length
+then elements, an enum by its tag then payload) and refuses a leaf that cannot
+hash consistently with equality — a float, a pointer, an opaque handle
+(`KSEM392`). `<T: Hashable>` accepts exactly the types it folds.
+
+```kira
+struct Point { let x: Int let y: Int }
+
+let key = hash(Point { x: 3, y: 4 })            // no derive needed
+```
+
 ## `Tagged`
 
 `Tagged` applies to enums and generates `code_<Type>` plus
@@ -75,6 +88,24 @@ enum Material { Flat Frosted }
 
 let code = code_Material(Material.Frosted)       // 1
 let value = Material_fromCode(code)              // Material.Frosted
+```
+
+Both directions are also language builtins, so a payloadless enum gets them with
+no `@Derive`, byte-identical on every backend:
+
+- `code(enumValue)` returns the zero-based declaration index — the discriminant
+  the language already carries. A non-enum argument is refused (`KSEM081`).
+- `fromCode<Enum>(n)` rebuilds the variant whose index is `n`, falling back to
+  the first variant for an `n` outside `0..variantCount`. The enum is named as a
+  type argument and must have no payload-carrying variant — there is nothing to
+  reconstruct a payload from — else it is refused (`KSEM081`).
+
+```kira
+enum Material { Flat Frosted }
+
+let n = code(Material.Frosted)                   // 1, no derive needed
+let m = fromCode<Material>(0)                     // Material.Flat
+let f = fromCode<Material>(99)                    // Material.Flat (clamped)
 ```
 
 ## `Ordered`

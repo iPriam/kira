@@ -1,0 +1,6 @@
+Package VisibilityRefusal {
+    let version = "0.1.0"
+    let kind = PackageKind.App
+    let moduleRoot = "VisibilityRefusal"
+    let dependencies = [ Dependency { name: "VisLib", path: "../lib" } ]
+}

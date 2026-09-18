@@ -30,6 +30,14 @@ pub enum Callee {
 pub enum Builtin {
     /// `print(value)` — writes one formatted line of output.
     Print,
+    /// `abort(message)` — writes the message and hard-traps (no unwind).
+    ///
+    /// The unrecoverable-failure primitive: it does not return, so it is how a
+    /// test assertion or an invariant check ends a run the child-runner then
+    /// records as a trap. It is a hard trap, not a recoverable `panic!` — there
+    /// is no unwinding, matching how the language already aborts on an
+    /// out-of-bounds index or an overflow.
+    Abort,
     /// `taskYield()` — a cooperative suspend point.
     ///
     /// The executor hands the next runnable task a turn and comes back here;
@@ -38,6 +46,26 @@ pub enum Builtin {
     TaskYield,
     /// `taskSleep(ms)` — park, moving the virtual clock forward by `ms`.
     TaskSleep,
+    /// `fromCode<E>(code)` — the payload-less enum variant whose declaration
+    /// index is `code`, falling back to the first variant for a code outside
+    /// `0..variantCount`.
+    ///
+    /// The inverse of the tag read behind [`crate::hir::HirExpr::EnumTag`], and
+    /// the native form of what `@Derive(Tagged)` generated as `<Enum>_fromCode`.
+    /// The call carries two `Int` arguments — the code, then the enum's variant
+    /// count (baked in by the analyzer from the type argument) — so the backend
+    /// clamps and builds the inline enum without a type lookup; its result type
+    /// is the named enum.
+    FromCode,
+    /// `hash(value)` — fold a `Hashable` value into one `Int`, structurally and
+    /// consistently with `==`.
+    ///
+    /// The native operation behind the `Hashable` trait, the fold twin of the
+    /// `EqValue` walk: a struct folds its fields, an array its length then
+    /// elements, an enum its tag then payload, each leaf an integer, a boolean,
+    /// a string's bytes, or a decimal's value. Floats are refused by the
+    /// classifier, so two values that are `==` always hash the same.
+    Hash,
 }
 
 /// A type-resolved unary operator.
@@ -149,14 +177,55 @@ pub enum HirBinaryOp {
     /// pattern, strings by bytes, and aggregates field-by-field and
     /// element-by-element.
     ///
-    /// Deliberately wider than `==` on the concrete types: a `Point` may not be
-    /// compared to a `Point`, because that would commit the language to
-    /// structural equality for every struct. Erasure is the one place a value's
-    /// structure is already carried at runtime for the sake of freeing it, so
-    /// comparing it costs no new representation.
+    /// The erased twin of [`EqValue`]: it reads each side's kind at run time
+    /// rather than being told the type at compile time. Two values of the same
+    /// kind then compare by the same structural rule — scalars by bit pattern,
+    /// strings by bytes, aggregates field-by-field and element-by-element — so
+    /// `Any` equality and concrete-type equality never disagree.
     EqAny,
     /// Structural inequality of two erased values (`Any`).
     NeAny,
+    /// Structural equality of two values of one statically known type
+    /// (`EqValue`), the operator behind `==` on a struct, an array, or a
+    /// payload-carrying enum.
+    ///
+    /// The type checker has already settled that both operands are the same
+    /// type and that the type conforms to `Equatable` — every leaf is itself
+    /// comparable — so the comparison walks the shape without a runtime kind
+    /// tag: a struct field-by-field, an array by length then element-by-element,
+    /// an enum by tag then payload, each leaf bottoming out at a scalar, string,
+    /// or another conforming aggregate. This is the same walk [`EqAny`] runs
+    /// once erasure has recovered the type; the two share one implementation on
+    /// every backend so they can never drift.
+    ///
+    /// A type carrying a non-comparable leaf — an opaque handle, a callback,
+    /// bare native state — never reaches here: it fails `Equatable` conformance
+    /// at the comparison site with a diagnostic naming the leaf, rather than
+    /// falling back to identity.
+    EqValue,
+    /// Structural inequality of two values of one statically known type.
+    NeValue,
+    /// Structural three-way comparison of two values of one statically known
+    /// type, the operator behind `<`, `<=`, `>`, `>=` on a struct, an array, or
+    /// a payload-carrying enum. Answers a plain `Int`: negative when the left is
+    /// ordered before the right, zero when they are equal, positive otherwise.
+    ///
+    /// The type checker has already settled that both operands are the same type
+    /// and that the type conforms to `Ordered` — every leaf is itself totally
+    /// ordered — so the comparison walks the shape without a runtime kind tag,
+    /// lexicographically: a struct field-by-field in declaration order, an array
+    /// element-by-element then by length, an enum by tag then payload, each leaf
+    /// bottoming out at a scalar, a string's bytes, or another ordered
+    /// aggregate. The first pair that differs decides; equal pairs walk on. It
+    /// shares the structural nesting [`EqValue`] walks so the two can never
+    /// disagree about a type's shape, and each backend wraps the ordinary
+    /// integer comparison of its result against zero to answer the four
+    /// orderings from one walk.
+    ///
+    /// A type carrying a leaf with no total order — a pointer word, an opaque
+    /// handle, bare native state, `Any` — never reaches here: it fails `Ordered`
+    /// conformance at the comparison site with a diagnostic naming the leaf.
+    CmpValue,
     /// Identity equality of two runtime type descriptors (`Type`).
     ///
     /// One word against another: a type has one descriptor row, so equal ids

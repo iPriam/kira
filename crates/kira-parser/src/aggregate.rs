@@ -50,6 +50,7 @@ impl Parser<'_> {
             return Some(StructDecl {
                 name,
                 name_span,
+                public: false,
                 type_params,
                 traits,
                 fields,
@@ -107,6 +108,7 @@ impl Parser<'_> {
         Some(StructDecl {
             name,
             name_span,
+            public: false,
             type_params,
             traits,
             fields,
@@ -187,6 +189,7 @@ impl Parser<'_> {
             return Some(EnumDecl {
                 name,
                 name_span,
+                public: false,
                 traits,
                 type_params,
                 variants,
@@ -226,6 +229,7 @@ impl Parser<'_> {
         Some(EnumDecl {
             name,
             name_span,
+            public: false,
             traits,
             type_params,
             variants,
@@ -296,6 +300,7 @@ impl Parser<'_> {
             return Some(ClassDecl {
                 name,
                 name_span,
+                public: false,
                 type_params,
                 traits,
                 parents,
@@ -382,6 +387,7 @@ impl Parser<'_> {
         Some(ClassDecl {
             name,
             name_span,
+            public: false,
             type_params,
             traits,
             parents,

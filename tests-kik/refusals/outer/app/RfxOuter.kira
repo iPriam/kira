@@ -1,6 +1,6 @@
 import Foundation
 import RfxInner
 
-function rfxOuterHelper() -> Int {
-    return rfxInnerHelper()
+public function rfxOuterHelper() -> Int {
+    return rfxInnerHelper() //~ KSEM061
 }

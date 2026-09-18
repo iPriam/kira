@@ -96,6 +96,8 @@ KPAR088	expected a namespace path segment
 KPAR089	a namespace holds `let` members and nested namespaces
 KPAR090	an `extern library` block contains only bodyless `function` declarations
 KPAR091	tuple values and tuple types support two through four elements
+KPAR092	`public` applies only to a top-level declaration
+KPAR093	`public` must be followed by a declaration
 KMAC001	a `name!(…)` call site names no macro
 KMAC002	a `name!(…)` call site passed the wrong number of fragments
 KMAC003	an `expr` fragment was given something that is not an expression
@@ -418,6 +420,9 @@ KSEM386	a `match` expression arm does not produce a value
 KSEM387	a `match` expression arm defers a writeback after its value
 KSEM388	the arms of a `match` expression produce incompatible types
 KSEM389	`contains` requires array elements comparable with `==`
+KSEM390	`…` cannot be compared with `==`: a leaf it holds has no equality
+KSEM391	`…` cannot be ordered with `<`: a leaf it holds has no total order
+KSEM392	`…` cannot be hashed: a leaf it holds cannot fold consistently with `==`
 KSEM900	a keyword the parser recognizes but this compiler does not support yet
 KIR005	`…` derives `Copy`, but …, so `…` moves rather than copies. Remove the derive and let it move, borrow it, or give it an explicit duplication
 KBE001	a backend was asked for a feature it does not support

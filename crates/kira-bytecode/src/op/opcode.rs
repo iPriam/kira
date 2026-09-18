@@ -299,3 +299,31 @@ pub const NATIVE_STATE_TAKE: u8 = 0x92;
 /// operand byte that follows — the same shape `STRING_OP` has. Appended after
 /// `NATIVE_STATE_TAKE`; adding an opcode is not an ABI change.
 pub const NUMBER_OP: u8 = 0x93;
+
+/// Structural equality and inequality of two values of one statically known
+/// type — `==`/`!=` on a struct, an array, or a payload-carrying enum. Appended
+/// after `NUMBER_OP`; nullary like every other comparison, both operands come
+/// off the stack, and adding an opcode is not an ABI change.
+pub const EQ_VALUE: u8 = 0x94;
+pub const NE_VALUE: u8 = 0x95;
+
+/// The `abort(message)` builtin: pop the message, emit it, and hard-trap.
+/// Appended after `NE_VALUE`; adding an opcode is not an ABI change.
+pub const ABORT: u8 = 0x96;
+
+/// Structural three-way comparison of two values of one statically known
+/// `Ordered` type — `<`/`<=`/`>`/`>=` on a struct, an array, or a
+/// payload-carrying enum. Appended after `ABORT`; nullary like the other
+/// comparisons, both operands come off the stack, and adding an opcode is not an
+/// ABI change.
+pub const CMP_VALUE: u8 = 0x97;
+
+/// `fromCode`: build a payload-less enum from a runtime code clamped against its
+/// variant count. Appended after `CMP_VALUE`; nullary — count and code come off
+/// the stack — and adding an opcode is not an ABI change.
+pub const ENUM_FROM_CODE: u8 = 0x98;
+
+/// `hash`: fold one statically known `Hashable` value into an `Int`. Appended
+/// after `ENUM_FROM_CODE`; nullary — the value comes off the stack — and adding
+/// an opcode is not an ABI change.
+pub const HASH_VALUE: u8 = 0x99;

@@ -102,7 +102,7 @@ impl FnCompiler<'_> {
             return self.compile_expr(arg);
         }
         let slot = self.local_slot(slot)?;
-        self.code.push(Instruction::TakeLocal(slot));
+        self.code.push(Instruction::LoadLocal(slot));
         Ok(())
     }
 

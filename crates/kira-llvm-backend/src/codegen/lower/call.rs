@@ -251,6 +251,69 @@ impl FunctionLowering<'_, '_> {
                 };
                 Ok(self.call(helper, &mut [value], c""))
             }
+            IrCallee::Abort => {
+                let argument = *args
+                    .first()
+                    .ok_or(LlvmError::internal("an abort with no message"))?;
+                let value = self.lower_expr(argument)?;
+                let result = self.call(self.codegen.runtime.abort, &mut [value], c"");
+                // `kira_rt_abort` does not return; terminate the block so
+                // nothing generated after the call is reachable.
+                // SAFETY: the builder is on a live, unterminated block.
+                unsafe { LLVMBuildUnreachable(self.codegen.builder) };
+                Ok(result)
+            }
+            IrCallee::FromCode => {
+                // Two `Int` arguments, in order: the code, then the enum's
+                // variant count. A code inside `0..count` is its own variant;
+                // anything else clamps to the first — the `fromCode` contract —
+                // and the result is the inline handle a payload-less variant is.
+                let code = self.lower_expr(
+                    *args
+                        .first()
+                        .ok_or(LlvmError::internal("a fromCode with no code"))?,
+                )?;
+                let count = self.lower_expr(
+                    *args
+                        .get(1)
+                        .ok_or(LlvmError::internal("a fromCode with no variant count"))?,
+                )?;
+                let builder = self.codegen.builder;
+                let zero = self.codegen.const_int(0);
+                // SAFETY: `code`/`count`/`zero` are `i64` and the builder is on
+                // a live block.
+                let tag = unsafe {
+                    let ge_zero = LLVMBuildICmp(
+                        builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntSGE,
+                        code,
+                        zero,
+                        c"fromcode.ge".as_ptr(),
+                    );
+                    let lt_count = LLVMBuildICmp(
+                        builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntSLT,
+                        code,
+                        count,
+                        c"fromcode.lt".as_ptr(),
+                    );
+                    let in_range =
+                        LLVMBuildAnd(builder, ge_zero, lt_count, c"fromcode.in".as_ptr());
+                    LLVMBuildSelect(builder, in_range, code, zero, c"fromcode.tag".as_ptr())
+                };
+                Ok(self.codegen.inline_enum_value(tag))
+            }
+            IrCallee::Hash => {
+                // Fold the one value structurally into an `i64`, matching the VM's
+                // FNV walk. An enum with a payload is refused inside the walk until
+                // its box fold exists; everything else folds byte-for-byte.
+                let argument = *args
+                    .first()
+                    .ok_or(LlvmError::internal("a hash with no value"))?;
+                let operand_ty = self.type_of(argument);
+                let value = self.lower_expr(argument)?;
+                return self.codegen.hash_values(value, operand_ty);
+            }
             IrCallee::User(index) => {
                 let target = *self
                     .codegen

@@ -76,6 +76,7 @@ impl Parser<'_> {
         Some(ConstantDecl {
             name,
             name_span,
+            public: false,
             declared_type,
             value,
             span,
@@ -105,6 +106,7 @@ impl Parser<'_> {
         Some(TypeAliasDecl {
             name,
             name_span,
+            public: false,
             target,
             span,
         })
@@ -154,6 +156,7 @@ impl Parser<'_> {
         Some(DistinctDecl {
             name,
             name_span,
+            public: false,
             representation,
             span,
         })

@@ -396,6 +396,10 @@ pub enum VmError {
     /// that does not read as a decimal. The message is the decimal type's own.
     #[error("{0}")]
     NumberTrap(&'static str),
+    /// The program called `abort(message)`: a deliberate hard trap for an
+    /// unrecoverable state, carrying the message the program supplied.
+    #[error("aborted: {0}")]
+    Aborted(String),
     /// A handle reached this seam, and this run has no heap that outlives it.
     ///
     /// A handle names an object in a heap that survives between calls; a `call`

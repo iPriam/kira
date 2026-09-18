@@ -8,6 +8,6 @@ macro mikInnerDouble(value: expr) {
 }
 
 // The package's own use of its own macro, which no import gates.
-function mikInnerHelper() -> Int {
+public function mikInnerHelper() -> Int {
     return mikInnerDouble!(3)
 }

@@ -27,29 +27,80 @@ enum RfxCarried {
 }
 
 function rfxDirectPointerChannel() -> Int {
-    let tx = Channel<RawPtr>()
+    let tx = Channel<RawPtr>() //~ KSEM365
     return 1
 }
 
 function rfxStructPointerChannel() -> Int {
-    let tx = Channel<RfxEnvelope>()
+    let tx = Channel<RfxEnvelope>() //~ KSEM365
     return 2
 }
 
 function rfxEnumPointerChannel() -> Int {
-    let tx = Channel<RfxCarried>()
+    let tx = Channel<RfxCarried>() //~ KSEM365
     return 3
 }
 
 function rfxArrayPointerChannel() -> Int {
-    let tx = Channel<[RfxEnvelope]>()
+    let tx = Channel<[RfxEnvelope]>() //~ KSEM365
     return 4
+}
+
+// KSEM391 — a struct is ordered only when every leaf carries a total order.
+// `RfxEnvelope` holds a `RawPtr`, whose one order would be its address, so
+// ordering it is refused rather than compiled into a non-deterministic compare.
+function rfxOrderPointerStruct() -> Bool {
+    let a = RfxEnvelope { at: RawPtr.null }
+    let b = RfxEnvelope { at: RawPtr.null }
+    return a < b //~ KSEM391
+}
+
+// KSEM391 — an unsigned leaf is refused too, and for a subtler reason: the walk
+// compares a width-erased value, so it cannot recover the signedness `U64`
+// ordering needs. A bare `<` on a `U64` compiles to the unsigned operator that
+// carries that signedness; the structural walk has no such carrier.
+struct RfxCounter {
+    let n: U64
+}
+
+function rfxOrderUnsignedStruct() -> Bool {
+    let a = RfxCounter { n: 1 }
+    let b = RfxCounter { n: 2 }
+    return a < b //~ KSEM391
 }
 
 // KMAC001 — importing `RfxOuter` does not lend you `RfxInner`. Visibility does
 // not compose, and a macro is a name this file writes like any other.
 function rfxTransitiveMacro() -> Int {
-    return rfxInnerDouble!(21)
+    return rfxInnerDouble!(21) //~ KSEM060 KSEM070 KMAC001
+}
+
+// KSEM081 — `code(...)` reads an enum's declaration index, so a non-enum
+// argument has no code to read and is refused, naming the type.
+function rfxCodeOfNonEnum() -> Int {
+    return code(5) //~ KSEM081
+}
+
+// KSEM081 — `fromCode<E>` builds an enum, so a non-enum type argument is refused.
+function rfxFromCodeIntoNonEnum() -> Int {
+    return code(fromCode<Int>(0)) //~ KSEM081
+}
+
+// KSEM081 — `fromCode` reconstructs a bare variant, so an enum carrying a
+// payload is refused: there is nothing to build the payload from.
+function rfxFromCodeIntoPayloadEnum() -> Int {
+    return code(fromCode<RfxCarried>(0)) //~ KSEM081
+}
+
+// KSEM392 — `hash` folds consistently with `==`, and a float cannot: equal
+// floats may carry different bits, so a fold of the bits would disagree with
+// equality. A struct holding one is refused, naming the leaf.
+struct RfxWeighted {
+    let weight: Float
+}
+
+function rfxHashOfFloatStruct() -> Int {
+    return hash(RfxWeighted { weight: 1.0 }) //~ KSEM392
 }
 
 struct RfxNativeOwner {
@@ -59,7 +110,7 @@ struct RfxNativeOwner {
 // KSEM373 — a borrowed raw userdata word cannot be produced from an owner that
 // dies at the end of the same expression.
 function rfxBorrowTemporaryState() -> Int {
-    let token = nativeUserDataBorrow(nativeState(1))
+    let token = nativeUserDataBorrow(nativeState(1)) //~ KSEM373
     return rawPointerWord(token)
 }
 
@@ -67,20 +118,20 @@ function rfxBorrowTemporaryState() -> Int {
 // the NativeState<T> value itself.
 function rfxTypedReleaseOfTrackedOwner() -> Int {
     let owner = nativeState(1)
-    nativeUserDataRelease<Int>(owner)
+    nativeUserDataRelease<Int>(owner) //~ KSEM221
     return 6
 }
 
 // KSEM375 — a recovered view may not outlive an owned temporary it borrows.
 function rfxRecoverTemporaryOwner() -> Int {
-    var view = nativeRecover<Int>(nativeState(1))
+    var view = nativeRecover<Int>(nativeState(1)) //~ KSEM375
     return view
 }
 
 // KSEM376 — reading an affine field would manufacture a second owner.
 function rfxCopyAffineField() -> Int {
     let holder = RfxNativeOwner { state: nativeState(1) }
-    let duplicate = holder.state
+    let duplicate = holder.state //~ KSEM376
     return 8
 }
 
@@ -88,7 +139,7 @@ function rfxCopyAffineField() -> Int {
 // callback-state payload.
 function rfxBoxNativeStateAsRoot() -> Int {
     let inner = nativeState(1)
-    let outer = nativeState(move inner)
+    let outer = nativeState(move inner) //~ KSEM377
     return 9
 }
 
@@ -96,7 +147,7 @@ function rfxBoxNativeStateAsRoot() -> Int {
 // tracked affine NativeState<T> value. Clone it with nativeUserData instead.
 function rfxRetainTrackedOwner() -> Int {
     let owner = nativeState(1)
-    nativeUserDataRetain(owner)
+    nativeUserDataRetain(owner) //~ KSEM378
     return 10
 }
 
@@ -106,6 +157,12 @@ function main() {
     print(rfxStructPointerChannel())
     print(rfxEnumPointerChannel())
     print(rfxArrayPointerChannel())
+    print(rfxOrderPointerStruct())
+    print(rfxOrderUnsignedStruct())
+    print(rfxCodeOfNonEnum())
+    print(rfxFromCodeIntoNonEnum())
+    print(rfxFromCodeIntoPayloadEnum())
+    print(rfxHashOfFloatStruct())
     print(rfxTransitiveMacro())
     print(rfxBorrowTemporaryState())
     print(rfxTypedReleaseOfTrackedOwner())

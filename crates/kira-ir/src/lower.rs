@@ -335,6 +335,9 @@ impl Lowerer<'_> {
     fn lower_callee(&mut self, callee: Callee) -> IrCallee {
         match callee {
             Callee::Builtin(Builtin::Print) => IrCallee::Print,
+            Callee::Builtin(Builtin::Abort) => IrCallee::Abort,
+            Callee::Builtin(Builtin::FromCode) => IrCallee::FromCode,
+            Callee::Builtin(Builtin::Hash) => IrCallee::Hash,
             Callee::Builtin(Builtin::TaskYield) => {
                 self.uses_tasks = true;
                 IrCallee::User(self.task_base + crate::tasks::TaskFns::YIELD)

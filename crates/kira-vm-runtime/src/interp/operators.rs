@@ -125,7 +125,8 @@ impl Vm<'_> {
             }
             I::EqBool | I::NeBool => self.bool_compare(instruction),
             I::EqStr | I::NeStr => self.str_compare(instruction),
-            I::EqAny | I::NeAny => self.any_compare(instruction),
+            I::EqAny | I::NeAny | I::EqValue | I::NeValue => self.any_compare(instruction),
+            I::CmpValue => self.value_compare(),
             I::EqType | I::NeType => self.type_compare(instruction),
             I::BitAnd | I::BitOr | I::BitXor | I::Shl | I::ShrInt | I::ShrUInt => {
                 self.bitwise(instruction)
@@ -319,14 +320,18 @@ impl Vm<'_> {
         Ok(())
     }
 
-    /// Structural equality of two erased values.
+    /// Structural equality of two values, erased (`EqAny`) or of one statically
+    /// known type (`EqValue`).
     ///
-    /// Erasure is the identity here — the VM's `Value` already carries its own
-    /// tag, so an `Any` operand is just a value — which is why this pops two
-    /// values of no particular kind rather than a pair of one kind. Both are
-    /// dropped afterwards, as every comparison drops what it consumed; the
-    /// comparison itself borrows the heap and takes nothing from it, so the
-    /// drops are the only ownership this arm has to get right.
+    /// One implementation for both because erasure is the identity here — the
+    /// VM's `Value` already carries its own tag, so an `Any` operand is just a
+    /// value, and a typed operand the type checker proved equal on both sides is
+    /// too. Either way this pops two values and compares them structurally, so
+    /// `EqValue` on a struct or a payload-carrying enum walks fields and
+    /// payloads exactly as `EqAny` does. Both operands are dropped afterwards,
+    /// as every comparison drops what it consumed; the comparison itself borrows
+    /// the heap and takes nothing from it, so the drops are the only ownership
+    /// this arm has to get right.
     fn any_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         let operands = self.pop_operands(2)?;
         let rhs = operands[0];
@@ -336,11 +341,38 @@ impl Vm<'_> {
             self.heap.drop_value(operand);
         }
         let value = match instruction {
-            Instruction::EqAny => equal,
-            Instruction::NeAny => !equal,
+            Instruction::EqAny | Instruction::EqValue => equal,
+            Instruction::NeAny | Instruction::NeValue => !equal,
             _ => return Err(VmError::BadDispatch),
         };
         self.stack.push(Value::Bool(value));
+        Ok(())
+    }
+
+    /// Structural three-way comparison of two values of one statically known
+    /// `Ordered` type (`CmpValue`).
+    ///
+    /// The ordering twin of [`Self::any_compare`]: it pops two values the type
+    /// checker proved share one totally ordered type, walks them
+    /// lexicographically ([`Heap::compare_values`]), and pushes the sign of that
+    /// order as a plain `Int` — `-1`, `0`, or `1` — which the surrounding
+    /// integer comparison against zero turns back into `<`, `<=`, `>`, `>=`.
+    /// Both operands are dropped afterwards, as every comparison drops what it
+    /// consumed.
+    fn value_compare(&mut self) -> Result<(), VmError> {
+        let operands = self.pop_operands(2)?;
+        let rhs = operands[0];
+        let lhs = operands[1];
+        let ordering = self.heap.compare_values(lhs, rhs);
+        for operand in operands {
+            self.heap.drop_value(operand);
+        }
+        let sign = match ordering {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        };
+        self.stack.push(Value::Int(sign));
         Ok(())
     }
 

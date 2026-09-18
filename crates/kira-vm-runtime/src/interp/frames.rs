@@ -36,6 +36,14 @@ pub(super) struct Frame {
     pub(super) func: u64,
     pub(super) pc: usize,
     pub(super) locals: Vec<Value>,
+    /// Whether each local slot currently holds a heap value THIS frame is
+    /// responsible for dropping. A `TakeLocal` leaves the slot's handle bytes
+    /// readable (so a later read of the same affine local still finds it — the
+    /// native backend does the same) but clears this flag, because ownership of
+    /// the one reference moved to the taker; the frame's release then skips it.
+    /// This replaces the old `Value::Void`-in-slot "moved out" sentinel, which
+    /// broke every affine value that was read more than once.
+    pub(super) live: Vec<bool>,
     /// Which of this frame's final parameter slots are written back on return.
     ///
     /// Non-empty only for a frame entered by
@@ -78,6 +86,7 @@ fn fresh_frame(module: &Module, index: u64) -> Result<Frame, VmError> {
         func: index,
         pc: 0,
         locals: vec![Value::Void; local_count],
+        live: vec![false; local_count],
         writebacks: Vec::new(),
         capture: Vec::new(),
     })
@@ -160,6 +169,10 @@ impl<'h> Vm<'h> {
             frame.locals.clear();
             frame.locals.resize(local_count, Value::Void);
         }
+        // Every slot starts owning nothing: a cached frame was released before
+        // it returned here, and a fresh one holds only Void.
+        frame.live.clear();
+        frame.live.resize(local_count, false);
         frame.writebacks.clear();
         frame.capture.clear();
         Ok(frame)
@@ -339,6 +352,7 @@ impl<'h> Vm<'h> {
         }
         for (slot, value) in args.into_iter().enumerate() {
             frame.locals[slot] = value;
+            frame.live[slot] = is_heap_value(&value);
         }
         // Only the frame the embedder entered captures: a nested call's
         // writebacks go to its caller's places, which is a different mechanism
@@ -380,6 +394,7 @@ impl<'h> Vm<'h> {
         }
         for (slot, value) in args.into_iter().enumerate() {
             frame.locals[slot] = value;
+            frame.live[slot] = is_heap_value(&value);
         }
         frame.capture = std::mem::take(&mut self.pending_capture);
         self.run_with_debug(module, frame, observer)
@@ -466,13 +481,38 @@ impl<'h> Vm<'h> {
             return Ok(());
         }
         if param_count == 1 {
-            frame.locals[0] = self.pop()?;
+            let value = self.pop()?;
+            frame.locals[0] = value;
+            frame.live[0] = is_heap_value(&value);
             return Ok(());
         }
         for slot in (0..param_count).rev() {
-            frame.locals[slot] = self.pop()?;
+            let value = self.pop()?;
+            frame.locals[slot] = value;
+            frame.live[slot] = is_heap_value(&value);
         }
         Ok(())
+    }
+
+    /// Drops every local this frame still owns and marks every slot released.
+    ///
+    /// A slot is dropped only when its `live` flag is set: a `TakeLocal` handed
+    /// the one reference to the taker and cleared the flag, so the handle bytes
+    /// still sitting in the slot are not ours to free. `Value` is `Copy`, so
+    /// overwriting a dead handle with `Void` forgets it without a double free.
+    /// After this every slot is `Void` and not live, which is what makes the
+    /// frame safe to cache and reuse.
+    pub(super) fn release_live_locals(&mut self, frame: &mut Frame) {
+        for index in 0..frame.locals.len() {
+            let live = frame.live.get(index).copied().unwrap_or(false);
+            let value = std::mem::replace(&mut frame.locals[index], Value::Void);
+            if live && is_heap_value(&value) {
+                self.heap.drop_value(value);
+            }
+            if let Some(flag) = frame.live.get_mut(index) {
+                *flag = false;
+            }
+        }
     }
 
     /// Tears down the frame that just returned, and answers with the run's
@@ -504,7 +544,7 @@ impl<'h> Vm<'h> {
             .ok()
             .and_then(|index| module.functions.get(index))
         else {
-            self.discard(finished.locals);
+            self.release_live_locals(&mut finished);
             self.heap.drop_value(result);
             return Err(VmError::UnknownFunction(finished.func));
         };
@@ -517,12 +557,7 @@ impl<'h> Vm<'h> {
             && finished.capture.is_empty()
             && matches!(&function.releases, FrameRelease::EveryLocal)
         {
-            for held in &mut finished.locals {
-                let value = std::mem::replace(held, Value::Void);
-                if is_heap_value(&value) {
-                    self.heap.drop_value(value);
-                }
-            }
+            self.release_live_locals(&mut finished);
             self.cache_frame(finished);
             if frames.is_empty() {
                 // Structural validation cannot prove operand-stack typing. A
@@ -547,18 +582,24 @@ impl<'h> Vm<'h> {
             // cleared for reuse too.
             let mut writebacks = std::mem::take(&mut finished.writebacks);
             for writeback in &mut writebacks {
+                let index = match usize::try_from(writeback.param) {
+                    Ok(index) => index,
+                    Err(_) => continue,
+                };
                 let Some(value) = finished
                     .locals
-                    .get_mut(match usize::try_from(writeback.param) {
-                        Ok(index) => index,
-                        Err(_) => continue,
-                    })
+                    .get_mut(index)
                     .map(|slot| std::mem::replace(slot, Value::Void))
                 else {
                     continue;
                 };
+                // The value moved into the caller's place: the slot no longer
+                // owns it, so the release walk below must skip it.
+                if let Some(flag) = finished.live.get_mut(index) {
+                    *flag = false;
+                }
                 if let Err(error) = self.write_back(frames, writeback, value) {
-                    self.discard(finished.locals);
+                    self.release_live_locals(&mut finished);
                     self.heap.drop_value(result);
                     return Err(error);
                 }
@@ -573,28 +614,28 @@ impl<'h> Vm<'h> {
         // `Void` left behind rather than the value now in the embedder's hands.
         let capture = std::mem::take(&mut finished.capture);
         for slot in capture {
+            let index = match usize::try_from(slot) {
+                Ok(index) => index,
+                Err(_) => continue,
+            };
             let Some(value) = finished
                 .locals
-                .get_mut(match usize::try_from(slot) {
-                    Ok(index) => index,
-                    Err(_) => continue,
-                })
+                .get_mut(index)
                 .map(|held| std::mem::replace(held, Value::Void))
             else {
                 continue;
             };
+            // Moved into the embedder's hands; the release walk must not free it.
+            if let Some(flag) = finished.live.get_mut(index) {
+                *flag = false;
+            }
             self.captured.push((slot, value));
         }
         let (cacheable, reset_locals) = match &function.releases {
             FrameRelease::EveryLocal => {
-                for held in &mut finished.locals {
-                    let value = std::mem::replace(held, Value::Void);
-                    if is_heap_value(&value) {
-                        self.heap.drop_value(value);
-                    }
-                }
-                // Every slot was just replaced with Void, so there is no
-                // second scan to perform before caching this frame.
+                self.release_live_locals(&mut finished);
+                // Every slot is Void and not live, so there is no second scan
+                // to perform before caching this frame.
                 (true, false)
             }
             FrameRelease::Planned(slots) => {
@@ -602,23 +643,41 @@ impl<'h> Vm<'h> {
                     // A slot past the frame is refused by `Module::validate`
                     // before a module runs; skipping it here is what makes the
                     // unreachable case a leak rather than a panic.
+                    let index = match usize::try_from(slot) {
+                        Ok(index) => index,
+                        Err(_) => continue,
+                    };
+                    let live = finished.live.get(index).copied().unwrap_or(false);
                     let Some(held) = finished
                         .locals
-                        .get_mut(match usize::try_from(slot) {
-                            Ok(index) => index,
-                            Err(_) => continue,
-                        })
+                        .get_mut(index)
                         .map(|slot| std::mem::replace(slot, Value::Void))
                     else {
                         continue;
                     };
-                    if is_heap_value(&held) {
+                    // Only free a slot the frame still owns: a taken slot handed
+                    // its one reference to the taker (live cleared) and the
+                    // handle bytes left behind are not ours to drop.
+                    if live && is_heap_value(&held) {
                         self.heap.drop_value(held);
+                    }
+                    if let Some(flag) = finished.live.get_mut(index) {
+                        *flag = false;
+                    }
+                }
+                // A `TakeLocal` leaves a dead handle in its slot. It owns
+                // nothing (the taker holds the reference), but it still reads as
+                // a heap value, so forget it — overwrite with `Void`, which is a
+                // `Copy` so no drop runs — before the cacheable scan, or an
+                // ordinary function that moved a value out would never cache.
+                for index in 0..finished.locals.len() {
+                    if !finished.live.get(index).copied().unwrap_or(false) {
+                        finished.locals[index] = Value::Void;
                     }
                 }
                 // A planned module is allowed to leave scalar or opaque
                 // values in slots it does not own. Those are safe to retain;
-                // an unplanned heap handle is not.
+                // an unplanned heap handle it still owns is not.
                 (
                     finished.locals.iter().all(|value| !is_heap_value(value)),
                     true,
@@ -702,7 +761,7 @@ impl<'h> Vm<'h> {
 }
 
 /// Whether dropping `value` releases an object in this VM's heap.
-fn is_heap_value(value: &Value) -> bool {
+pub(super) fn is_heap_value(value: &Value) -> bool {
     matches!(
         value,
         Value::Str(_)

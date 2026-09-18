@@ -97,14 +97,27 @@ impl Codegen<'_> {
         unsafe { LLVMBuildStore(self.builder, value, slot) };
         let clone = self.element_clone(ty)?;
         let free = self.element_free(ty)?;
-        // The equality leaf travels with the other two so an erased aggregate
-        // can be compared. It goes through the constructor appended beside the
-        // original rather than through a changed signature, which is what keeps
-        // this additive at the ABI.
+        // The equality leaf travels with the other two so an erased aggregate can
+        // be compared. The ordering and hash leaves travel too, when the payload
+        // type earns them: an aggregate enum payload that is `Ordered` or
+        // `Hashable` gets a `cmp`/`hash` leaf, and one that is not gets a null,
+        // which no ordering or hash reaches (the frontend refuses those). Only an
+        // eligible type gets a leaf, so a leaf is never built for a type its walk
+        // cannot handle.
         let eq = self.element_eq(ty)?;
+        let cmp = if self.type_orders(ty, &mut Vec::new()) {
+            self.element_cmp(ty)?
+        } else {
+            unsafe { LLVMConstNull(self.types.ptr) }
+        };
+        let hash = if self.type_hashes(ty, &mut Vec::new()) {
+            self.element_hash(ty)?
+        } else {
+            unsafe { LLVMConstNull(self.types.ptr) }
+        };
         let result = self.call(
-            self.runtime.enum_new_aggregate_eq,
-            &mut [tag, slot, size, clone, free, eq],
+            self.runtime.enum_new_aggregate_ord,
+            &mut [tag, slot, size, clone, free, eq, cmp, hash],
             c"enum.aggregate",
         );
         self.release_dynamic_alloca(slot, saved);
@@ -243,6 +256,11 @@ fn payload_kind(ty: Type) -> i64 {
         // nested enum reclaims one of these too.
         Type::Enum(_) | Type::Any => EnumPayloadKind::ENUM,
         Type::Struct(_) | Type::Array(_) => EnumPayloadKind::AGGREGATE,
+        // A `Float` payload is inert bits that own nothing, like any scalar, but
+        // it records a distinct kind so equality compares it *as a float* rather
+        // than by its raw bits — otherwise a `NaN` payload would wrongly equal
+        // itself, diverging from both `==` and the VM.
+        Type::Float(_) => EnumPayloadKind::FLOAT,
         _ => EnumPayloadKind::INERT,
     }
     .as_i64()
@@ -291,5 +309,8 @@ mod tests {
         // aggregate box, with generated clone/free leaves.
         let array = types.array_of(Type::INT);
         assert_eq!(payload_kind(array), EnumPayloadKind::AGGREGATE.as_i64());
+        // A `Float` payload is inert bits that own nothing, but its own kind, so
+        // equality folds it as a float rather than by its raw bits.
+        assert_eq!(payload_kind(Type::FLOAT), EnumPayloadKind::FLOAT.as_i64());
     }
 }

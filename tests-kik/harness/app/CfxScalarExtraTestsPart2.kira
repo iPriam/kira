@@ -98,8 +98,7 @@ construct CfxSBoolNorTable() extends Test {
 construct CfxSBoolThreeVar() extends Test {
     test {
         var trues = 0
-        var a = 0
-        while a < 2 {
+        for a in 0..2 {
             for b in 0..2 {
                 for c in 0..2 {
                     let av = a == 1
@@ -110,7 +109,6 @@ construct CfxSBoolThreeVar() extends Test {
                     }
                 }
             }
-            a = a + 1
         }
         // majority function: true when >=2 of 3 are true
         // (T,T,F),(T,F,T),(F,T,T),(T,T,T) = 4

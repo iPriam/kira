@@ -13,9 +13,13 @@ pub(in crate::codegen) struct Runtime {
     pub(in crate::codegen) print_float: Callable,
     pub(in crate::codegen) print_bool: Callable,
     pub(in crate::codegen) print_str: Callable,
+    /// `kira_rt_abort`: emit a message and hard-trap; does not return.
+    pub(in crate::codegen) abort: Callable,
     pub(in crate::codegen) str_new: Callable,
     pub(in crate::codegen) str_concat: Callable,
     pub(in crate::codegen) str_eq: Callable,
+    /// Three-way byte-lexicographic order of two strings, as an `i8` sign.
+    pub(in crate::codegen) str_cmp: Callable,
     pub(in crate::codegen) str_free: Callable,
     pub(in crate::codegen) array_new: Callable,
     pub(in crate::codegen) array_len: Callable,
@@ -32,10 +36,24 @@ pub(in crate::codegen) struct Runtime {
     pub(in crate::codegen) any_eq: Callable,
     /// Structural equality of two arrays, given the element's equality leaf.
     pub(in crate::codegen) array_eq: Callable,
-    /// Boxes a moved aggregate payload with clone/free **and** equality leaves.
-    pub(in crate::codegen) enum_new_aggregate_eq: Callable,
+    /// Structural three-way order of two arrays, given the element's cmp leaf.
+    pub(in crate::codegen) array_cmp: Callable,
+    /// Structural three-way order of two enum boxes (non-aggregate payloads).
+    pub(in crate::codegen) any_cmp: Callable,
+    /// Structural hash fold of an enum box (non-aggregate payloads).
+    pub(in crate::codegen) any_hash: Callable,
+    /// The FNV-1a seed a `hash(v)` fold starts from.
+    pub(in crate::codegen) hash_seed: Callable,
+    /// Folds raw bytes into a running hash accumulator.
+    pub(in crate::codegen) hash_bytes: Callable,
+    /// Folds a string's bytes into a running hash accumulator.
+    pub(in crate::codegen) hash_str: Callable,
+    /// Folds an array's length and elements into a hash, given the element leaf.
+    pub(in crate::codegen) hash_array: Callable,
     /// Boxes a moved aggregate payload with type-specific clone/free leaves.
     pub(in crate::codegen) enum_new_aggregate: Callable,
+    /// Boxes a moved aggregate payload with equality, ordering, and hash leaves.
+    pub(in crate::codegen) enum_new_aggregate_ord: Callable,
     pub(in crate::codegen) enum_tag: Callable,
     /// Reads an enum's payload as an owned word (`match` arm bindings).
     pub(in crate::codegen) enum_payload: Callable,

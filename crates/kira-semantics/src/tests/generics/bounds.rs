@@ -116,18 +116,18 @@ fn several_bounds_on_one_parameter_all_hold() {
 
 #[test]
 fn a_bound_holds_its_supertraits_obligation_too() {
-    // Slice 1a's rule, asked of an argument: keeping `Ordered` means keeping
+    // Slice 1a's rule, asked of an argument: keeping `Ranked` means keeping
     // `Equated`, so an argument whose own claim left that unmet fails the
     // bound as well.
     assert!(
         codes(
             "trait Equated { function equals(borrow self, other: Int) -> Bool }\n\
-             trait Ordered: Equated { function less(borrow self, other: Int) -> Bool }\n\
-             struct Half: Ordered {\n\
+             trait Ranked: Equated { function less(borrow self, other: Int) -> Bool }\n\
+             struct Half: Ranked {\n\
                  let n: Int\n\
                  function less(borrow self, other: Int) -> Bool { return n < other }\n\
              }\n\
-             enum Pair<T: Ordered> { Of(T) }\n\
+             enum Pair<T: Ranked> { Of(T) }\n\
              @Main function main() { let p: Pair<Half> = .Of(Half(n: 1)) print(1) return }"
         )
         .iter()
@@ -142,15 +142,15 @@ fn a_supertrait_met_by_a_retroactive_claim_discharges_the_bound() {
     assert!(
         codes(
             "trait Equated { function equals(borrow self, other: Int) -> Bool }\n\
-             trait Ordered: Equated { function less(borrow self, other: Int) -> Bool }\n\
-             struct Late: Ordered {\n\
+             trait Ranked: Equated { function less(borrow self, other: Int) -> Bool }\n\
+             struct Late: Ranked {\n\
                  let n: Int\n\
                  function less(borrow self, other: Int) -> Bool { return n < other }\n\
              }\n\
              extend Late: Equated {\n\
                  function equals(borrow self, other: Int) -> Bool { return n * 2 == other }\n\
              }\n\
-             enum Pair<T: Ordered> { Of(T) }\n\
+             enum Pair<T: Ranked> { Of(T) }\n\
              @Main function main() { let p: Pair<Late> = .Of(Late(n: 2)) print(1) return }"
         )
         .is_empty()

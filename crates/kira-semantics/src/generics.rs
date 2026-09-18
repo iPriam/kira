@@ -315,7 +315,18 @@ impl<'a> Analyzer<'a> {
     /// The key under which `name`, written in the current file, finds a
     /// template in `table`: the file's own package first, then the program's
     /// own declarations, then the packages the file imports.
-    fn visible_template_key<T>(&self, table: &HashMap<String, T>, name: &str) -> Option<String> {
+    /// The key `name` resolves a template under, gated for cross-package access.
+    ///
+    /// `source_of` reads a template row's declaring file so the imported-package
+    /// branch can consult [`sees_public`](crate::analyze::Analyzer::sees_public):
+    /// a private generic type or function in a dependency is no more nameable
+    /// across the import than a non-generic one.
+    fn visible_template_key<T>(
+        &self,
+        table: &HashMap<String, T>,
+        name: &str,
+        source_of: impl Fn(&T) -> SourceId,
+    ) -> Option<String> {
         let home = self.template_key(self.source, name);
         if table.contains_key(&home) {
             return Some(home);
@@ -327,18 +338,23 @@ impl<'a> Analyzer<'a> {
             .imported_packages(self.source)
             .into_iter()
             .map(|package| format!("{package}::{name}"))
-            .find(|key| table.contains_key(key))
+            .find(|key| {
+                table
+                    .get(key)
+                    .is_some_and(|value| self.sees_public(source_of(value), name))
+            })
     }
 
     /// The generic enum template `name` names from the current file.
     pub(crate) fn generic_enum_named(&self, name: &str) -> Option<GenericEnum<'a>> {
-        let key = self.visible_template_key(&self.generic_enums, name)?;
+        let key = self.visible_template_key(&self.generic_enums, name, |e| e.source)?;
         self.generic_enums.get(&key).copied()
     }
 
     /// The generic struct or class template `name` names from the current file.
     pub(crate) fn generic_aggregate_named(&self, name: &str) -> Option<GenericAggregate<'a>> {
-        let key = self.visible_template_key(&self.generic_aggregates, name)?;
+        let key =
+            self.visible_template_key(&self.generic_aggregates, name, GenericAggregate::source)?;
         self.generic_aggregates.get(&key).copied()
     }
 
@@ -350,7 +366,7 @@ impl<'a> Analyzer<'a> {
 
     /// The generic free-function template `name` names from the current file.
     pub(crate) fn generic_function_named(&self, name: &str) -> Option<GenericFunction<'a>> {
-        let key = self.visible_template_key(&self.generic_functions, name)?;
+        let key = self.visible_template_key(&self.generic_functions, name, |f| f.source)?;
         self.generic_functions.get(&key).copied()
     }
 

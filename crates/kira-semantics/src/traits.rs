@@ -58,9 +58,47 @@ pub(crate) const SEND: &str = "Send";
 /// than one thread at once.
 pub(crate) const SYNC: &str = "Sync";
 
+/// The compiler-known trait asserting that a type has structural equality, so
+/// `==` compares it and `<T: Equatable>` accepts it.
+///
+/// Like `Copyable`, it is *derived* from a type's shape rather than declared: a
+/// type conforms when its every leaf is comparable ([`Analyzer::is_equatable`]).
+/// There is nothing to write — `==` and the bound both read the same structural
+/// fact — which is why it has no members and cannot be declared or `extend`ed.
+///
+/// [`Analyzer::is_equatable`]: crate::analyze::Analyzer::is_equatable
+pub(crate) const EQUATABLE: &str = "Equatable";
+
+/// The compiler-known trait asserting that a type has a total structural order,
+/// so `<` / `<=` / `>` / `>=` compare it and `<T: Ordered>` accepts it.
+///
+/// The ordering sibling of [`EQUATABLE`], and stricter: it is *derived* from a
+/// type's shape rather than declared, and conforms when its every leaf carries a
+/// total order ([`Analyzer::ordered_refusal`]) — a number, a boolean, a string,
+/// and the aggregates of those — refusing a leaf, such as a pointer word or an
+/// opaque handle, whose only order would be its address. There is nothing to
+/// write; the orderings and the bound read the same structural fact.
+///
+/// [`Analyzer::ordered_refusal`]: crate::analyze::Analyzer::ordered_refusal
+pub(crate) const ORDERED: &str = "Ordered";
+
+/// The compiler-known trait asserting that a type folds into one number
+/// consistently with equality, so `hash(v)` accepts it and `<T: Hashable>` does.
+///
+/// Derived from a type's shape like [`EQUATABLE`], and gated on the same
+/// promise equality keeps: it admits only leaves whose bits are their value, so
+/// two values that are `==` hash the same. A float is refused
+/// ([`Analyzer::hashable_refusal`]), because equal floats may differ in bits.
+///
+/// [`Analyzer::hashable_refusal`]: crate::analyze::Analyzer::hashable_refusal
+pub(crate) const HASHABLE: &str = "Hashable";
+
 /// Whether `name` is a trait the compiler knows without a declaration.
 pub(crate) fn is_builtin_trait(name: &str) -> bool {
-    matches!(name, COPYABLE | DROP | SEND | SYNC)
+    matches!(
+        name,
+        COPYABLE | DROP | SEND | SYNC | EQUATABLE | ORDERED | HASHABLE
+    )
 }
 
 /// Whether `name` is a compiler-known trait whose truth is *derived* from a
@@ -71,7 +109,7 @@ pub(crate) fn is_builtin_trait(name: &str) -> bool {
 /// supertrait requiring one is discharged by the fact rather than by a second
 /// spelling of it.
 pub(crate) fn is_derived_trait(name: &str) -> bool {
-    matches!(name, COPYABLE | SEND | SYNC)
+    matches!(name, COPYABLE | SEND | SYNC | EQUATABLE | ORDERED | HASHABLE)
 }
 
 /// One declared trait's members and where it was written.
@@ -200,6 +238,10 @@ impl<'a> Analyzer<'a> {
             .imported_packages(self.source)
             .into_iter()
             .map(|package| format!("{package}::{name}"))
-            .find(|key| self.traits.contains_key(key))
+            .find(|key| {
+                self.traits
+                    .get(key)
+                    .is_some_and(|info| self.sees_public(info.source, name))
+            })
     }
 }

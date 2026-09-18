@@ -198,6 +198,18 @@ impl FunctionLowering<'_, '_> {
                 IrBinOp::EqStr | IrBinOp::NeStr => {
                     return Ok(self.lower_string_compare(op, left, right));
                 }
+                // `==` / `!=` on a struct, an array, or a payload-carrying enum.
+                // The type checker settled that both operands share one
+                // `Equatable` type, so the walk is type-directed — the same one
+                // `EqAny` reaches once erasure recovers the type — rather than
+                // reading a runtime tag. The operand type is the operands', not
+                // `ty`, which is the `Bool` result.
+                IrBinOp::EqValue | IrBinOp::NeValue => {
+                    let operand_ty = self.type_of(lhs);
+                    return self
+                        .codegen
+                        .equal_values(left, right, operand_ty, op == IrBinOp::NeValue);
+                }
                 // Both operands are erasure boxes, and the runtime reads the
                 // type each carries before it reads either payload. The two are
                 // dropped afterwards, as every comparison drops what it
@@ -237,6 +249,16 @@ impl FunctionLowering<'_, '_> {
                     right,
                     c"type.ne".as_ptr(),
                 ),
+                // Structural three-way ordering on a struct or an array (an enum
+                // is refused inside the walk until its native path exists). The
+                // walk answers an `i8` sign; `CmpValue` is a plain `Int`, so it
+                // is sign-extended to `i64` and the surrounding comparison
+                // against zero recovers `<`, `<=`, `>`, `>=`.
+                IrBinOp::CmpValue => {
+                    let operand_ty = self.type_of(lhs);
+                    let sign = self.codegen.compare_values(left, right, operand_ty)?;
+                    LLVMBuildSExt(builder, sign, self.codegen.types.i64, c"cmp.wide".as_ptr())
+                }
                 IrBinOp::BitAnd => LLVMBuildAnd(builder, left, right, c"and".as_ptr()),
                 IrBinOp::BitOr => LLVMBuildOr(builder, left, right, c"or".as_ptr()),
                 IrBinOp::BitXor => LLVMBuildXor(builder, left, right, c"xor".as_ptr()),

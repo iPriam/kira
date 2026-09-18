@@ -1,0 +1,142 @@
+// LibTessera boundary primitive types (spec §2.1, §3.1, §3.2).
+//
+// Every value that crosses the system interface has a stated width and meaning.
+// Kira's `Number` never crosses here, nor does any platform-sized integer: a
+// handle is a `U64`, a rights set is a `U64`, a signal set is a `U32`, and time
+// is nanoseconds in a `U64`. Each is a `distinct` type rather than a bare width,
+// so a `Handle` cannot be passed where a `Key` is expected and the two never
+// silently swap at a call.
+//
+// This file is kernel-independent. It is the vocabulary §6 onward is written in.
+
+import Foundation
+
+// A process-local, unforgeable name for one kernel or system object.
+//
+// The value 0 is INVALID and is never a live handle. A non-zero value is opaque:
+// internally it packs a table index and a generation counter (see Runtime), so a
+// handle to a closed object cannot be mistaken for a later one that reused its
+// slot. Handles are process-local — the same object seen by two processes has
+// unrelated values.
+@Derive(Equatable, Clone)
+public distinct Handle = U64
+
+// A caller-chosen correlation value carried on a completion (spec §5).
+@Derive(Equatable, Clone)
+public distinct Key = U64
+
+// A rights bitset (spec §3.3). Bits 0–15 are generic across every object type,
+// 16–31 are type-specific, 32–63 reserved.
+@Derive(Equatable, Clone)
+public distinct Rights = U64
+
+// A signals bitset (spec §3.4). Bits 0–15 are per object type, 16–23 reserved,
+// 24–31 are the user signals settable on Event and EventPair.
+@Derive(Equatable, Clone)
+public distinct Signals = U32
+
+// Nanoseconds on a stated clock (spec §2.1, §8).
+@Derive(Equatable, Clone)
+public distinct Instant = U64
+
+// A span of nanoseconds.
+@Derive(Equatable, Clone)
+public distinct Duration = U64
+
+// An Instant on Clock.Monotonic used as a deadline. 0 = poll (do not block);
+// `deadlineInfinite()` = wait forever.
+@Derive(Equatable, Clone)
+public distinct Deadline = U64
+
+// A byte count. Spelled `ByteSize` because Foundation's geometry already owns
+// the bare name `Size`; every spec field of type `Size` is a `ByteSize` here.
+@Derive(Equatable, Clone)
+public distinct ByteSize = U64
+
+// A virtual address in the calling process.
+@Derive(Equatable, Clone)
+public distinct Address = U64
+
+// The success payload of a call that returns no value. The C ABI reduces
+// `-> Result<Void, Error>` to a bare `tessera_error_t`; in Kira the same call is
+// `Result<Nothing, Error>`, whose Ok arm carries this.
+public struct Nothing {}
+
+// A pointer/length pair naming a region of the caller's memory (spec §2.1).
+// Strings are UTF-8 bytes in a Buffer, never NUL-terminated.
+public struct Buffer {
+    var address: Address
+    var length: ByteSize
+}
+
+// The kind of object a handle names (spec §3.2). Boundary enums cross as `U32`;
+// `objectTypeCode` is the mechanical mapping to that wire number.
+public enum ObjectType {
+    None
+    Port
+    Event
+    EventPair
+    Timer
+    Channel
+    Memory
+    Thread
+    Process
+    Job
+    Node
+    File
+    Watch
+    Endpoint
+    Stream
+    GpuDevice
+    Fence
+    WakeLock
+    Presence
+}
+
+// The invalid handle: value 0, never live.
+public function handleInvalid() -> Handle {
+    return Handle(U64(0))
+}
+
+// Whether a handle value is non-zero. A zero handle is INVALID; this does not
+// prove the handle is live in any table, only that it is not the null name.
+public function handleIsValid(handle: Handle) -> Bool {
+    return handle.raw != U64(0)
+}
+
+// The largest `U64`, 2^64 - 1. Written as a literal it would not fit the signed
+// parse of an integer token, so it is built from the signed maximum: shift it up
+// one bit and set the low bit back.
+public function u64Max() -> U64 {
+    return (U64(9223372036854775807) << U64(1)) | U64(1)
+}
+
+// The largest deadline: wait forever (spec §2.1, `UInt64.max` = INFINITE).
+public function deadlineInfinite() -> Deadline {
+    return Deadline(u64Max())
+}
+
+// The wire number for an object type (spec §3.2).
+public function objectTypeCode(kind: borrow ObjectType) -> U32 {
+    match kind {
+        None -> { return U32(0) }
+        Port -> { return U32(1) }
+        Event -> { return U32(2) }
+        EventPair -> { return U32(3) }
+        Timer -> { return U32(4) }
+        Channel -> { return U32(5) }
+        Memory -> { return U32(6) }
+        Thread -> { return U32(7) }
+        Process -> { return U32(8) }
+        Job -> { return U32(9) }
+        Node -> { return U32(10) }
+        File -> { return U32(11) }
+        Watch -> { return U32(12) }
+        Endpoint -> { return U32(13) }
+        Stream -> { return U32(14) }
+        GpuDevice -> { return U32(15) }
+        Fence -> { return U32(16) }
+        WakeLock -> { return U32(17) }
+        Presence -> { return U32(18) }
+    }
+}

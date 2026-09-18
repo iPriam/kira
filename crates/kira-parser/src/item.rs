@@ -68,6 +68,32 @@ impl Default for Annotations {
 
 impl Parser<'_> {
     pub(crate) fn parse_item(&mut self) {
+        // `public` is a leading visibility modifier: it precedes the whole
+        // declaration (and any `@` annotations), exporting it from its module.
+        // Consume it, parse the declaration it fronts, then mark that
+        // declaration public — refusing the keyword where no exportable
+        // declaration follows.
+        if self.at(TokenKind::Public) {
+            let keyword = self.current().span;
+            self.bump();
+            let before = self.items.len();
+            self.parse_item();
+            let applied = self.items.get_mut(before).map(|item| item.set_public());
+            match applied {
+                Some(true) => {}
+                Some(false) => self.error(
+                    keyword,
+                    "KPAR092",
+                    "`public` applies only to a top-level declaration",
+                ),
+                None => self.error(
+                    keyword,
+                    "KPAR093",
+                    "`public` must be followed by a declaration",
+                ),
+            }
+            return;
+        }
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
@@ -193,6 +219,14 @@ impl Parser<'_> {
     fn parse_annotated_item(&mut self) {
         let start = self.current().span;
         let annotations = self.parse_annotations();
+        // `public` may sit between the annotations and the declaration
+        // (`@Derive(...) public distinct Handle = U64`) as well as before them;
+        // either way it exports the declaration the annotations front.
+        let public = self.at(TokenKind::Public);
+        if public {
+            self.bump();
+        }
+        let before = self.items.len();
         if self.at(TokenKind::Identifier) && self.at_async_function() {
             self.bump(); // `async`
             if let Some(mut function) = self.parse_function_annotated(&annotations) {
@@ -321,6 +355,9 @@ impl Parser<'_> {
         } else {
             // Annotated non-function construct: parse-don't-crash.
             self.parse_unsupported_item_from(start);
+        }
+        if public && self.items.len() > before {
+            self.items[before].set_public();
         }
     }
 
@@ -510,6 +547,9 @@ impl Parser<'_> {
             name,
             name_span,
             type_params,
+            // Set by the caller that consumed a leading `public`; a bare
+            // declaration is private to its module.
+            public: false,
             is_main,
             is_main_thread_lifecycle: false,
             is_main_thread: false,

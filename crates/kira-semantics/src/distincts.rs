@@ -187,7 +187,11 @@ impl Analyzer<'_> {
             .imported_packages(self.source)
             .into_iter()
             .map(|package| owned_distinct_key(Some(&package), name))
-            .find(|key| self.distincts.contains_key(key))
+            .find(|key| {
+                self.distincts
+                    .get(key)
+                    .is_some_and(|header| self.sees_public(header.source, name))
+            })
     }
 
     pub(crate) fn resolve_distinct_name(

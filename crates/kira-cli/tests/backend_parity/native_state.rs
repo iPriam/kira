@@ -443,3 +443,35 @@ function main() {
         "4\n",
     );
 }
+
+/// Regression for the systemic non-destructive `TakeLocal`.
+///
+/// The VM used to zero a local the moment it was read into a move, which broke
+/// every affine value read again afterward (a match's tag then its payload, a
+/// value stored then returned, an argument reused): the second read found a
+/// hole and trapped "field access on a value that is not a struct" on the VM
+/// alone, where the native backend leaves the storage readable. Making the
+/// take non-destructive fixes that, but the frame's release must then be told,
+/// by the per-slot live flag, NOT to free a handle whose one reference already
+/// moved into native-state storage — or `nativeUserDataRelease` traps
+/// "token ... already freed" (a double free the heap balance also catches).
+#[test]
+fn a_native_state_source_taken_then_released_frees_exactly_once() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct SourceState { var count: Int }
+@Main function main() {
+    var original = SourceState { count: 3 }
+    var state = nativeState(original)
+    original.count = 9
+    let token = nativeUserData(state)
+    var recovered = nativeRecover<SourceState>(token)
+    print(original.count)
+    print(recovered.count)
+    nativeUserDataRelease(token)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "9\n3\n");
+}

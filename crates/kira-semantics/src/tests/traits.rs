@@ -221,7 +221,7 @@ fn a_compiler_known_trait_may_be_required_as_a_supertrait() {
 #[test]
 fn a_supertrait_that_is_not_a_trait_is_refused() {
     let items = diagnostics(&program(
-        "struct Point {\n    let x: Int\n}\ntrait Ordered: Point {}\n",
+        "struct Point {\n    let x: Int\n}\ntrait Ranked: Point {}\n",
     ));
     let refusal = items
         .iter()

@@ -1,0 +1,15 @@
+import Foundation
+
+// Exported surface — nameable by importers.
+public struct VisPoint { let x: Int let y: Int }
+
+public enum VisTag { Zero One Two }
+
+public function visScale(v: Int, by: Int) -> Int {
+    return visInternalDouble(v) * by
+}
+
+// Private to VisLib — not nameable across the import.
+function visInternalDouble(v: Int) -> Int {
+    return v + v
+}
