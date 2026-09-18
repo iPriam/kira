@@ -130,6 +130,18 @@ let order = compare_Severity(Severity.Note, Severity.Error)   // Ordering.Less
 let sorts = lt_Severity(Severity.Note, Severity.Warning)      // true
 ```
 
+Both are also native, with no `@Derive`: `<` / `<=` / `>` / `>=` give the boolean
+order, and `compare(a, b)` gives the three-way `Ordering` (`Less`/`Equal`/
+`Greater`) — structural, for any `Ordered` type, and the same answer on every
+backend. `compare` is `fromCode<Ordering>` of the structural compare's sign, so
+it needs Foundation's `Ordering` in scope.
+
+```kira
+enum Severity { Note Warning Error }
+
+let order = compare(Severity.Note, Severity.Error)            // Ordering.Less, no derive
+```
+
 **A payload-carrying variant is refused.** Ordering by position alone would
 call two `Custom` values equal when their payloads differ, silently breaking the
 total order a sort depends on; ordering by payload needs that payload type

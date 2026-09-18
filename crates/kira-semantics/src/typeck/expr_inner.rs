@@ -307,6 +307,8 @@ impl Analyzer<'_> {
                     name == "fromCode" && local.is_none() && self.lookup_function(&name).is_none();
                 let hash_builtin =
                     name == "hash" && local.is_none() && self.lookup_function(&name).is_none();
+                let compare_builtin =
+                    name == "compare" && local.is_none() && self.lookup_function(&name).is_none();
                 if !type_args.is_empty()
                     && !self.is_generic_function(&name)
                     && !self.is_generic_aggregate(&name)
@@ -535,6 +537,14 @@ impl Analyzer<'_> {
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
                     self.analyze_hash(&arg_hirs, callee_span)
+                } else if compare_builtin {
+                    // `compare(a, b)` answers the three-way order as `Ordering` —
+                    // the native form of `@Derive(Ordered)`'s `compare_`.
+                    let arg_hirs: Vec<HirExprId> = values
+                        .iter()
+                        .map(|&arg| self.analyze_expr(ctx, arg))
+                        .collect();
+                    self.analyze_compare(&arg_hirs, callee_span)
                 } else if let Some(shapes) = self.foreign_named(&name) {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no
