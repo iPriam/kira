@@ -73,7 +73,7 @@ Every binding form counts, not only `let` and `var`: a `for` variable, a `match`
 
 Fragment parameters are the only names that cross the boundary, and they cross as the caller wrote them, resolved in the caller's scope.
 
-Procedural macros are deliberately **not** hygienic: they emit source, and their generated names bind in the caller's scope by design. That is what lets a derive macro generate `eq_Point` and a caller call it.
+Procedural macros are deliberately **not** hygienic: they emit source, and their generated names bind in the caller's scope by design. That is what lets a derive macro generate `serialize_Point` and a caller call it.
 
 ## One Name, One Declaration
 

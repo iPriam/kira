@@ -1,0 +1,15 @@
+// Where one value sits relative to another.
+//
+// A three-way answer rather than two `Bool` calls: `a < b` and `b < a` asks the
+// comparison twice and leaves "equal" to be inferred from both being false,
+// which is one place for a hand-written comparison to disagree with itself.
+//
+// This is the type the compiler's native `compare(a, b)` answers — the whole
+// three-way order of any value whose shape carries one, with no `@Derive`. It
+// lives here as an ordinary Foundation type, not behind a macro, because the
+// comparison that produces it is the compiler's own.
+enum Ordering {
+    Less
+    Equal
+    Greater
+}

@@ -3,7 +3,7 @@ title: Annotations
 description: "The annotations the compiler answers to: the entrypoint, execution placement, library exports, construct members, the FFI family, and the derive surface."
 ---
 
-An annotation is `@Name`, optionally with a payload. Every one the compiler answers to is listed here; there is no `annotation` declaration form, so a program cannot add one. What a program *can* add is a [macro](/docs/macros), which is how `@Derive(Equatable)` and a property wrapper's `@State` exist without a compiler branch.
+An annotation is `@Name`, optionally with a payload. Every one the compiler answers to is listed here; there is no `annotation` declaration form, so a program cannot add one. What a program *can* add is a [macro](/docs/macros), which is how `@Derive(Serializable)` and a property wrapper's `@State` exist without a compiler branch.
 
 ## Entrypoint and Execution
 
@@ -52,7 +52,7 @@ Each of these carries a `{ key: value; … }` block. [Interop and FFI](/docs/lan
 
 `@Derive(Name, …)` runs each named derive macro over the declaration below it.
 
-`Copy` is the one derive the compiler answers itself. It generates no code and is an opt-in assertion that a type is structurally copyable, checked at compile time and reported as `KIR005` when it is not. Every other derive is a macro: Foundation ships `Equatable`, `Clone`, and `Serializable`, written in Kira. See [Derives](/docs/macros/derives).
+`Copy` is the one derive the compiler answers itself. It generates no code and is an opt-in assertion that a type is structurally copyable, checked at compile time and reported as `KIR005` when it is not. The one remaining derive is a macro: Foundation ships `Serializable`, written in Kira. Equality, ordering, hashing, enum tags, cloning, and interpolation are no longer derives at all — the compiler answers comparison, hashing, ordering, and tags natively as `==`, `<` / `compare`, `hash`, and `code` / `fromCode`, a `Copy` value copies with a plain binding, and `lerp` is a plain overload. See [Derives](/docs/macros/derives).
 
 ## Documentation
 

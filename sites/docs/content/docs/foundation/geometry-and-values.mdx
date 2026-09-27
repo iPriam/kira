@@ -69,9 +69,12 @@ That is the whole surface. `print(value)` does not consult it, and there is no `
 
 ## Derives
 
-`Derive.kira`, `DeriveHashable.kira`, `DeriveSerde.kira`, and
-`DeriveTagged.kira` ship `Equatable`, `Clone`, `Hashable`, `Serializable`,
-and `Tagged`, written in pure Kira on top of `comptime macro`.
+`DeriveSerde.kira` ships `Serializable`, written in pure Kira on top of
+`comptime macro`. Equality, ordering, hashing, enum tags, cloning, and
+interpolation are no longer derives — the compiler answers comparison, hashing,
+ordering, and tags natively as `==`, `<` / `compare`, `hash`, and
+`code` / `fromCode`, a `Copy` value copies with a plain binding, and `lerp` is a
+plain overload.
 See [Derives](/docs/macros/derives).
 
 ## `Byte`

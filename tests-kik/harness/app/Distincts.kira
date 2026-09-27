@@ -14,7 +14,7 @@ distinct DistinctMillis = U64
 distinct DistinctTicks = DistinctMillis
 distinct DistinctStream = Int
 
-@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
+@Derive(Serializable)
 distinct DistinctPort = U32
 
 struct DistinctTab {
@@ -114,28 +114,32 @@ function distinctOperatorSection() -> Int {
     return score
 }
 
-// The derives, folded the same way: each answer is a number so a backend that
-// generated a different function shows up as a different total.
+// A distinct type's whole value surface, folded the same way. A distinct over a
+// scalar word is `Copy`, so a plain binding copies it — no `clone` needed — and
+// equality, hashing, and ordering are the compiler's own — `==`, `hash(...)`,
+// and `<` — walking the representation with no derive. Each answer is a number
+// so a backend that lowered any of them differently shows up as a different
+// total.
 function distinctDerivesSection() -> Int {
     let port = DistinctPort(U32(41))
-    let copied = clone_DistinctPort(port)
+    let copied = port
     var score = 0
-    if eq_DistinctPort(port, copied) {
+    if port == copied {
         score = score + 1
     }
-    if eq_DistinctPort(port, DistinctPort(U32(42))) {
+    if port == DistinctPort(U32(42)) {
         score = score + 10
     }
-    if hash_DistinctPort(port) == hash_DistinctPort(copied) {
+    if hash(port) == hash(copied) {
         score = score + 100
     }
-    if hash_DistinctPort(port) == hash_DistinctPort(DistinctPort(U32(42))) {
+    if hash(port) == hash(DistinctPort(U32(42))) {
         score = score + 1000
     }
-    if lt_DistinctPort(port, DistinctPort(U32(42))) {
+    if port < DistinctPort(U32(42)) {
         score = score + 10000
     }
-    if lt_DistinctPort(DistinctPort(U32(42)), port) {
+    if DistinctPort(U32(42)) < port {
         score = score + 100000
     }
     return score
@@ -150,7 +154,7 @@ function distinctSerdeSection() -> Int {
     if wire == "DistinctPort(U32(8080))" {
         score = score + 10
     }
-    if eq_DistinctPort(deserialize_DistinctPort(wire), port) {
+    if deserialize_DistinctPort(wire) == port {
         score = score + 100
     }
     return score

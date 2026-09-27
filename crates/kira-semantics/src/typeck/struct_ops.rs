@@ -7,7 +7,7 @@
 //! and do not each invent an operator-overload ABI.
 
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::HirExprId;
+use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_syntax_model::ast::{BinaryOp, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -59,11 +59,7 @@ impl Analyzer<'_> {
                     "KSEM275",
                     format!("this operator call of `{qualified}` fits {list} equally well"),
                 );
-                return Some(
-                    self.program
-                        .exprs
-                        .alloc(kira_semantics_model::hir::HirExpr::Error),
-                );
+                return Some(self.program.exprs.alloc(HirExpr::Error));
             }
             Err(crate::typeck::overloads::OverloadFailure::None) => candidates[0],
         };

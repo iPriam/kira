@@ -127,11 +127,20 @@ construct CexLazyIteratorForLoop() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(12) return e }
 }
 
-@Derive(Lerp)
 struct CexLerpPoint { let x: Float let y: Float }
 
-@Derive(Lerp)
+// Fieldwise interpolation, written by hand: each field joins the ordinary `lerp`
+// overload set — the `Float` fields use Foundation's scalar `lerp`, and the
+// nested `CexLerpPoint` field resolves to the overload just above it.
+function lerp(from: borrow CexLerpPoint, to: borrow CexLerpPoint, amount: Float) -> CexLerpPoint {
+    return CexLerpPoint { x: lerp(from.x, to.x, amount), y: lerp(from.y, to.y, amount) }
+}
+
 struct CexLerpState { let point: CexLerpPoint let alpha: Float }
+
+function lerp(from: borrow CexLerpState, to: borrow CexLerpState, amount: Float) -> CexLerpState {
+    return CexLerpState { point: lerp(from.point, to.point, amount), alpha: lerp(from.alpha, to.alpha, amount) }
+}
 
 construct CexDerivedFieldwiseLerp() extends Test {
     test {

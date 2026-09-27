@@ -23,7 +23,7 @@ Channels are independent installs. `release` is a GitHub release not marked prer
 | Diagnostic codes | Stable. A code names one refusal and is not reused. |
 | `KBC1` bytecode, `KHM1` hybrid manifest, `KLB1` bundle manifest | Versioned wire formats. A decoder rejects a tag it does not know. |
 | `kira_lib_<library>_<export>` trampoline names | A fixed contract the generated Rust crate reads. |
-| Generated derive function names (`eq_Point`, `serialize_Point`) | A fixed contract other tooling reads. |
+| Generated derive function names (`serialize_Point`, `deserialize_Point`) | A fixed contract other tooling reads. |
 | Language syntax | Moving. A migration that makes the language cleaner is preferred to compatibility with a shape that was wrong. |
 
 ## Pinning a Project

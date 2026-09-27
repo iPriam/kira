@@ -68,7 +68,7 @@ let low: U8 = wrappingAdd(byte, 1)                    // wraps at 8 bits: U8(255
 
 Foundation provides `clamp` for `Int` and `Float`. It returns the lower bound below the interval, the upper bound above it, and the input otherwise. The bounds are not reordered.
 
-`lerp(from, to, amount)` linearly interpolates `Float`, `Point`, `Size`, `Vec2`, `Vec3`, `Vec4`, and `Color`. `amount` is not clamped, so values outside `0.0..1.0` extrapolate. `@Derive(Lerp)` adds the same overload for a struct by interpolating each field through the ordinary `lerp` overload set.
+`lerp(from, to, amount)` linearly interpolates `Float`, `Point`, `Size`, `Vec2`, `Vec3`, `Vec4`, and `Color`. `amount` is not clamped, so values outside `0.0..1.0` extrapolate. A struct interpolates by writing its own `lerp` overload that interpolates each field through the ordinary `lerp` overload set.
 
 `cbrt(value)` is the floating-point cube-root primitive. It preserves the sign of negative inputs, so `cbrt(-8.0)` is `-2.0`.
 

@@ -1,15 +1,14 @@
 import Foundation
 
-// Hashable derives a deterministic FNV-1a fold from every field. These tests
-// keep the value-level contract in the Kira harness rather than proving it only
-// through generated Rust or macro snapshots.
+// Hashing folds a deterministic FNV-1a from every field. The native `hash(...)`
+// walks a value's shape with no `@Derive`, and these tests keep the value-level
+// contract in the Kira harness rather than proving it only through generated
+// Rust or macro snapshots.
 
-@Derive(Hashable)
 struct HxInner {
     var id: Int
 }
 
-@Derive(Hashable)
 struct HxRecord {
     var id: Int
     var name: String
@@ -31,7 +30,7 @@ construct HxEqualRecordsHashTheSame() extends Test {
             enabled: true,
             inner: HxInner { id: 11 }
         }
-        return hash_HxRecord(left) == hash_HxRecord(right)
+        return hash(left) == hash(right)
     }
     expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
@@ -50,7 +49,7 @@ construct HxEveryFieldChangesTheFold() extends Test {
             enabled: true,
             inner: HxInner { id: 11 }
         }
-        return hash_HxRecord(base) != hash_HxRecord(changed)
+        return hash(base) != hash(changed)
     }
     expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }
@@ -59,7 +58,7 @@ construct HxNestedFieldsUseTheirOwnDerive() extends Test {
     test {
         let first = HxInner { id: 1 }
         let second = HxInner { id: 2 }
-        return hash_HxInner(first) != hash_HxInner(second)
+        return hash(first) != hash(second)
     }
     expect { let e: Result<Any, TestFailure> = .Ok(true) return e }
 }

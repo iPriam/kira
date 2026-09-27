@@ -301,11 +301,11 @@ let group = layers[stream - 1]    // indexes as the Int it is
 The nominal boundary still holds. Two **different** distinct types share no operator (`streamId + tabId` is `KSEM071`), and a distinct type does not mix with a *written* representation value — `tabId == U32(1)` is refused, because that is comparing an identity to the machine word underneath it; only a bare literal pairs. `print` is refused for the same reason, so render one through `@Derive(Serializable)` or take `.raw` and say so.
 
 ```kira
-@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
+@Derive(Serializable)
 distinct Port = U32
 ```
 
-Each derive delegates to the representation, so `serialize_Port(Port(U32(8080)))` writes `8080` rather than a struct envelope around it. `@Derive(Tagged)` does not apply — it answers which number a *variant* is — and `@Derive(Copy)` is refused, because one scalar word is copyable already.
+Equality, hashing, and ordering are native — `Port(U32(41)) == Port(U32(41))`, `hash(port)`, and `Port(U32(41)) < Port(U32(42))` all work with no derive — and a distinct over a scalar word is `Copy`, so a plain binding copies it. `@Derive(Serializable)` supplies the wire form the compiler does not own; it delegates to the representation, so `serialize_Port(Port(U32(8080)))` writes `Port(U32(8080))` rather than a struct envelope around it. `@Derive(Copy)` is refused, because one scalar word is copyable already.
 
 At an `@FFI.Extern` signature a distinct type crosses as its representation, so the C prototype is the scalar's and no unwrapping is written at the call. The Kira side stays nominal: a parameter declared `TabId` still refuses the `U32` underneath it.
 
