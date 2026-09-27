@@ -18,43 +18,34 @@ import Foundation
 // handle to a closed object cannot be mistaken for a later one that reused its
 // slot. Handles are process-local — the same object seen by two processes has
 // unrelated values.
-@Derive(Equatable, Clone)
 public distinct Handle = U64
 
 // A caller-chosen correlation value carried on a completion (spec §5).
-@Derive(Equatable, Clone)
 public distinct Key = U64
 
 // A rights bitset (spec §3.3). Bits 0–15 are generic across every object type,
 // 16–31 are type-specific, 32–63 reserved.
-@Derive(Equatable, Clone)
 public distinct Rights = U64
 
 // A signals bitset (spec §3.4). Bits 0–15 are per object type, 16–23 reserved,
 // 24–31 are the user signals settable on Event and EventPair.
-@Derive(Equatable, Clone)
 public distinct Signals = U32
 
 // Nanoseconds on a stated clock (spec §2.1, §8).
-@Derive(Equatable, Clone)
 public distinct Instant = U64
 
 // A span of nanoseconds.
-@Derive(Equatable, Clone)
 public distinct Duration = U64
 
 // An Instant on Clock.Monotonic used as a deadline. 0 = poll (do not block);
 // `deadlineInfinite()` = wait forever.
-@Derive(Equatable, Clone)
 public distinct Deadline = U64
 
 // A byte count. Spelled `ByteSize` because Foundation's geometry already owns
 // the bare name `Size`; every spec field of type `Size` is a `ByteSize` here.
-@Derive(Equatable, Clone)
 public distinct ByteSize = U64
 
 // A virtual address in the calling process.
-@Derive(Equatable, Clone)
 public distinct Address = U64
 
 // The success payload of a call that returns no value. The C ABI reduces

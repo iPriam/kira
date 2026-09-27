@@ -1,9 +1,9 @@
 import Foundation
 
-// Tagged turns an enum's declaration order into a stable zero-based code and
-// reconstructs payload-less variants from those codes.
+// An enum's declaration order is a stable zero-based code, and payload-less
+// variants reconstruct from it. The compiler owns both directions natively —
+// `code(...)` and `fromCode<E>(...)` — with no `@Derive`.
 
-@Derive(Tagged)
 enum HxMaterial {
     Flat
     Frosted
@@ -12,19 +12,19 @@ enum HxMaterial {
 
 construct HxTaggedUsesDeclarationOrder() extends Test {
     test {
-        let first = code_HxMaterial(HxMaterial.Flat)
-        let second = code_HxMaterial(HxMaterial.Frosted)
-        let third = code_HxMaterial(HxMaterial.Metallic)
-        let roundTrip = code_HxMaterial(HxMaterial_fromCode(2))
-        let fallback = code_HxMaterial(HxMaterial_fromCode(99))
+        let first = code(HxMaterial.Flat)
+        let second = code(HxMaterial.Frosted)
+        let third = code(HxMaterial.Metallic)
+        let roundTrip = code(fromCode<HxMaterial>(2))
+        let fallback = code(fromCode<HxMaterial>(99))
         return first + second + third + roundTrip + fallback
     }
     expect { let e: Result<Any, TestFailure> = .Ok(5) return e }
 }
 
-// The native `code(...)` reads the same zero-based declaration index the derived
-// `code_HxMaterial` does — the compiler's own form of Tagged's read direction,
-// earned by every enum with no `@Derive` — and it agrees on every backend.
+// The native `code(...)` reads the zero-based declaration index of a variant,
+// folded a second way here so a backend that lowered it differently shows a
+// different total, and it agrees on every backend.
 construct HxNativeCodeMatchesDeclarationOrder() extends Test {
     test {
         return code(HxMaterial.Flat) + code(HxMaterial.Frosted) * 10 + code(HxMaterial.Metallic) * 100

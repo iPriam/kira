@@ -3,7 +3,6 @@ import Foundation
 // Ordered turns an enum's declaration order into a total order and exposes the
 // comparison, never the position it is built from.
 
-@Derive(Ordered)
 enum OdxSeverity {
     Note
     Warning
@@ -23,16 +22,16 @@ function odxScore(ordering: borrow Ordering) -> Int {
 construct OdxOrderedFollowsDeclarationOrder() extends Test {
     test {
         var total = 0
-        total = total + odxScore(compare_OdxSeverity(.Note, .Error))
-        total = total + odxScore(compare_OdxSeverity(.Warning, .Warning))
-        total = total + odxScore(compare_OdxSeverity(.Error, .Note))
-        if lt_OdxSeverity(.Note, .Warning) {
+        total = total + odxScore(compare(OdxSeverity.Note, OdxSeverity.Error))
+        total = total + odxScore(compare(OdxSeverity.Warning, OdxSeverity.Warning))
+        total = total + odxScore(compare(OdxSeverity.Error, OdxSeverity.Note))
+        if OdxSeverity.Note < OdxSeverity.Warning {
             total = total + 8
         }
-        if !lt_OdxSeverity(.Error, .Warning) {
+        if !(OdxSeverity.Error < OdxSeverity.Warning) {
             total = total + 16
         }
-        if !lt_OdxSeverity(.Warning, .Warning) {
+        if !(OdxSeverity.Warning < OdxSeverity.Warning) {
             total = total + 32
         }
         return total
@@ -40,9 +39,9 @@ construct OdxOrderedFollowsDeclarationOrder() extends Test {
     expect { let e: Result<Any, TestFailure> = .Ok(63) return e }
 }
 
-// The native `compare(a, b)` answers the same `Ordering` the derived
-// `compare_OdxSeverity` does — `Less`/`Equal`/`Greater` — built from the
-// structural three-way compare with no `@Derive`, and it agrees on every backend.
+// The native `compare(a, b)` answers an `Ordering` — `Less`/`Equal`/`Greater` —
+// built from the structural three-way compare with no `@Derive`, folded a second
+// way here so a backend that lowered it differently shows a different total.
 construct OdxNativeCompareMatchesDerived() extends Test {
     test {
         var total = 0

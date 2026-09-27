@@ -1,160 +1,70 @@
 ---
 title: Derives
-description: The eight derives Foundation and the compiler ship in Kira, their field classification, interpolation, hash and serde contracts, and the builtin `@Derive(Copy)` assertion.
+description: The Serializable derive macro, the native comparison, hash, and tag operations that replaced the structural derives, and the builtin `@Derive(Copy)` assertion.
 ---
 
-Foundation ships seven derive macros written in pure Kira, in `foundation/app/Derive.kira`, `foundation/app/DeriveHashable.kira`, `foundation/app/DeriveSerde.kira`, `foundation/app/DeriveTagged.kira`, and `foundation/app/DeriveOrdered.kira`, plus the builtin `@Derive(Copy)` assertion. Together they are the eight derives. All eight are available as `@Derive` targets in any file with its own `import Foundation`.
+Equality, ordering, hashing, and enum tags are the compiler's own **native operations** — `==`, `<` / `compare(...)`, `hash(...)`, and `code(...)` / `fromCode<E>(...)` — earned by any type whose shape carries them, with no `@Derive` at all. They were once Foundation macros; the compiler now owns them, structurally and byte-identically on every backend.
+
+What remains as a macro is the one the compiler does not own: `Serializable`, in `foundation/app/DeriveSerde.kira`, written in pure Kira, plus the builtin `@Derive(Copy)` assertion. Both are available as `@Derive` targets in any file with its own `import Foundation`.
 
 | Derive | Generated free function | Contract |
 | --- | --- | --- |
-| `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
-| `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
-| `Lerp` | `function lerp(from: borrow <Type>, to: borrow <Type>, amount: Float) -> <Type>` | fieldwise interpolation through the ordinary `lerp` overload set |
-| `Hashable` | `function hash_<Type>(v: borrow <Type>) -> Int` | deterministic FNV-1a fold of every supported field |
 | `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` and `function deserialize_<Type>(s: borrow String) -> <Type>` | value to compact wire string and back, trapping on malformed input |
-| `Tagged` | `function code_<Type>(v: borrow <Type>) -> Int` and `<Type>_fromCode` | stable declaration-order enum tags |
-| `Ordered` | `function compare_<Type>(a: borrow <Type>, b: borrow <Type>) -> Ordering` and `lt_<Type>` | declaration-order total order, with no position exposed |
+| `Copy` | none (compiler assertion) | opt-in assertion that a type is structurally copyable |
 
-The generated name is glued to the derived type's exact name (`eq_Point`,
-`clone_Point`, `hash_Point`, `serialize_Point`, `deserialize_Point`,
-`code_Note`, `Note_fromCode`), and that is a fixed contract other tooling reads.
+The generated name is glued to the derived type's exact name (`serialize_Point`,
+`deserialize_Point`), and that is a fixed contract other tooling reads.
+
+There is no `Clone` or `Lerp` derive: a value whose every leaf is `Copy` copies with a plain binding, and interpolation is a plain overload — `function lerp(from: borrow T, to: borrow T, amount: Float) -> T` written fieldwise, joining the ordinary `lerp` overload set. `Serializable` is the lone survivor because its wire form is a reflection over field, type, and variant *names* that no native operation carries.
+
+## The Native Operations
+
+Equality, ordering, hashing, and tags need no derive: the operator (or operation) and the generic bound read the same structural fact off a type's shape. Each walks a value structurally — a struct by its fields, an array by its length then elements, an enum by its tag then payload — and refuses a leaf that cannot answer.
+
+- **Equality** — `==` / `!=`, and `<T: Equatable>`. Admits any leaf that is its value; refuses one with no structural equality, an opaque handle or native state (`KSEM390`).
+- **Ordering** — `<` / `<=` / `>` / `>=` for the boolean order, and `compare(a, b)` for the three-way [`Ordering`](/docs/language-reference/types) (`Less` / `Equal` / `Greater`), plus `<T: Ordered>`. Refuses a leaf whose only order would be its address (`KSEM391`). `compare` needs Foundation's `Ordering` in scope.
+- **Hashing** — `hash(v)`, and `<T: Hashable>`. A deterministic 64-bit FNV-1a fold, consistent with `==`: it admits only leaves whose bits are their value, so two values that are `==` hash the same. A float is refused, because equal floats may differ in bits (`KSEM392`).
+- **Tags** — `code(enumValue)` returns an enum's zero-based declaration index; `fromCode<Enum>(n)` rebuilds the variant whose index is `n`, clamping an out-of-range `n` to the first variant. A non-enum, or an enum with a payload-carrying variant, is refused (`KSEM081`).
+
+```kira
+struct Point { let x: Int let y: Int }
+enum Severity { Note Warning Error }
+
+let same  = Point { x: 3, y: 4 } == Point { x: 3, y: 4 }   // true, no derive
+let key   = hash(Point { x: 3, y: 4 })                      // no derive
+let order = compare(Severity.Note, Severity.Error)          // Ordering.Less
+let sorts = Severity.Note < Severity.Warning                // true
+let n     = code(Severity.Warning)                          // 1
+let s     = fromCode<Severity>(0)                           // Severity.Note
+```
+
+Because ordering compares a value's shape and an unsigned integer is width-erased once it is a leaf, `compare` refuses an unsigned leaf rather than compare it signed. The scalar `<` operator keeps the type, so `<` on a `distinct` over `U32` still gives the typed unsigned order — only the structural three-way `compare` steps back.
 
 ## Field Classification
 
-`Equatable`, `Clone`, and `Serializable` share one classification. A builtin scalar field (`Int`, the sized numeric widths, `Float`, `F32`, `Bool`, `String`, and the C types) is handled directly. A field whose type is another bare named type is a nested derived type and recurses through that type's own generated function. A missing `eq_X` surfaces as an ordinary unknown-call diagnostic.
+`Serializable` classifies each field. A builtin scalar field (`Int`, the sized numeric widths, `Float`, `F32`, `Bool`, `String`, and the C types) is handled directly. A field whose type is another bare named type is a nested derived type and recurses through that type's own generated function. A missing `serialize_X` surfaces as an ordinary unknown-call diagnostic.
 
 An array field holds scalars, nested arrays, or named derived types to any depth. A generic, optional, qualified, or function field type is refused with a `Diagnostics.error` naming the field. Detection is exact: a type is bare exactly when concatenating its identifiers reproduces its source text.
 
-## `Lerp`
+## Interpolation
 
-`Lerp` applies to structs and generates an overload named `lerp` for the derived type. Every field is interpolated by calling the ordinary `lerp(from.field, to.field, amount)` overload, so a field may be a `Float`, one of Foundation's vector/color/geometry types, or another struct that also derives `Lerp`.
+Fieldwise interpolation is a plain overload, not a derive. Write `lerp` for a struct by interpolating each field through the ordinary `lerp` overload set — a `Float` field uses Foundation's scalar `lerp`, a vector/color/geometry field uses its own, and a nested struct resolves to the `lerp` written for it:
 
 ```kira
-@Derive(Lerp)
 struct Point { let x: Float let y: Float }
 
-@Derive(Lerp)
-struct State { let point: Point let alpha: Float }
+function lerp(from: borrow Point, to: borrow Point, amount: Float) -> Point {
+    return Point { x: lerp(from.x, to.x, amount), y: lerp(from.y, to.y, amount) }
+}
 
 let middle = lerp(start, end, 0.5)
 ```
 
-A field with no matching `lerp` overload fails as an ordinary unresolved overload at that field. The derive does not invent interpolation for discrete values such as `Bool` or `String`.
-
-## `Hashable`
-
-`Hashable` folds fields in declaration order with 64-bit FNV-1a and generates
-`hash_<Type>`. Integer widths, `Bool`, `String` bytes, and nested structs are
-supported; a nested struct must derive `Hashable` too. This is a change
-detector, not a cryptographic hash, so collisions are possible and only mean
-redundant work for a cache or diff.
-
-Array, generic, and optional field types are refused instead of guessing
-whether identity, order, or length is part of the hash. `Float` and `F32` are
-also refused: equal floating-point values can have distinct bit patterns, so a
-bitwise fold would disagree with `Equatable`.
-
-```kira
-@Derive(Hashable)
-struct Point { var x: Int var y: Int }
-
-let key = hash_Point(Point { x = 3, y = 4 })
-```
-
-`hash(v)` is also a language builtin — the operation behind the `Hashable`
-trait, earned by any type whose leaves fold consistently with `==`, with no
-`@Derive`. It folds structurally (a struct by its fields, an array by its length
-then elements, an enum by its tag then payload) and refuses a leaf that cannot
-hash consistently with equality — a float, a pointer, an opaque handle
-(`KSEM392`). `<T: Hashable>` accepts exactly the types it folds.
-
-```kira
-struct Point { let x: Int let y: Int }
-
-let key = hash(Point { x: 3, y: 4 })            // no derive needed
-```
-
-## `Tagged`
-
-`Tagged` applies to enums and generates `code_<Type>` plus
-`<Type>_fromCode`. `code_<Type>` returns the zero-based declaration position;
-payloads do not affect the code. `fromCode` returns the matching payload-less
-variant and falls back to the first variant for an unknown number, so use it on
-an enum whose variants carry no payload.
-
-```kira
-@Derive(Tagged)
-enum Material { Flat Frosted }
-
-let code = code_Material(Material.Frosted)       // 1
-let value = Material_fromCode(code)              // Material.Frosted
-```
-
-Both directions are also language builtins, so a payloadless enum gets them with
-no `@Derive`, byte-identical on every backend:
-
-- `code(enumValue)` returns the zero-based declaration index — the discriminant
-  the language already carries. A non-enum argument is refused (`KSEM081`).
-- `fromCode<Enum>(n)` rebuilds the variant whose index is `n`, falling back to
-  the first variant for an `n` outside `0..variantCount`. The enum is named as a
-  type argument and must have no payload-carrying variant — there is nothing to
-  reconstruct a payload from — else it is refused (`KSEM081`).
-
-```kira
-enum Material { Flat Frosted }
-
-let n = code(Material.Frosted)                   // 1, no derive needed
-let m = fromCode<Material>(0)                     // Material.Flat
-let f = fromCode<Material>(99)                    // Material.Flat (clamped)
-```
-
-## `Ordered`
-
-`Ordered` applies to enums and generates `compare_<Type>`, returning the
-Foundation enum `Ordering` (`Less`, `Equal`, `Greater`), plus `lt_<Type>`.
-Earlier variants sort before later ones.
-
-It answers a different question from `Tagged` and deliberately answers only
-that one. A program that needs a sort but not a wire code should not have to
-take a number to get an order: once the position is a value, it reaches call
-sites, gets stored, and ends up written down, making declaration order a wire
-fact nobody declared it to be. The ordinal `Ordered` is built from stays inside
-the expansion under the reserved `__kira_ord_` prefix, so nothing above it can
-read a position or compare one against a literal.
-
-```kira
-@Derive(Ordered)
-enum Severity { Note Warning Error }
-
-let order = compare_Severity(Severity.Note, Severity.Error)   // Ordering.Less
-let sorts = lt_Severity(Severity.Note, Severity.Warning)      // true
-```
-
-Both are also native, with no `@Derive`: `<` / `<=` / `>` / `>=` give the boolean
-order, and `compare(a, b)` gives the three-way `Ordering` (`Less`/`Equal`/
-`Greater`) — structural, for any `Ordered` type, and the same answer on every
-backend. `compare` is `fromCode<Ordering>` of the structural compare's sign, so
-it needs Foundation's `Ordering` in scope.
-
-```kira
-enum Severity { Note Warning Error }
-
-let order = compare(Severity.Note, Severity.Error)            // Ordering.Less, no derive
-```
-
-**A payload-carrying variant is refused.** Ordering by position alone would
-call two `Custom` values equal when their payloads differ, silently breaking the
-total order a sort depends on; ordering by payload needs that payload type
-ordered too. Guessing which was meant ships a wrong answer instead of a
-diagnostic, so the derive refuses, the same way `Hashable` refuses an array
-field.
-
-Like `Tagged`, the order is stable exactly as long as the enum is only appended
-to: inserting a variant in the middle reorders values already written down.
+A field with no matching `lerp` overload fails as an ordinary unresolved overload at that field, which is why interpolation is left explicit rather than invented for discrete values such as `Bool` or `String`.
 
 ## The Wire Format
 
-`Serializable` builds on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expand into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
+`Serializable` builds on the value-`String` primitives (`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf`) and expands into ordinary Kira, so the generated printer and parser are identical on every backend. The format is compact, deterministic, and single-line:
 
 ```text
 TypeName{field1:VALUE,field2:VALUE,...}
@@ -166,22 +76,23 @@ Deserialization is the exact inverse. It validates the leading `TypeName{`, then
 
 **Malformed input traps.** A wrong type name, a missing `:` or `,` or `}`, truncated text, trailing text after the closing `}`, a field out of order, a duplicate or unknown label, or a non-digit where an integer is expected drives an out-of-range `charAt` or an inverted `substring`. Both turn into a hard trap on every backend. There is no partial parse: a value either round-trips or the program stops.
 
-**Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise.
+**Round-trip law.** For every value `v` of a supported type, `deserialize_T(serialize_T(v))` equals `v` field-wise — checked here with the native `==`, no derive.
 
 ```kira
-@Derive(Equatable, Serializable)
+@Derive(Serializable)
 struct Point { var x: Int var y: Int }
 
 let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x:Int(1),y:Int(-2)}"
 let back = deserialize_Point(wire)                    // Point { x = 1, y = -2 }
+let ok   = back == Point { x: 1, y: -2 }             // true, native equality
 ```
 
 ## Enums
 
-An enum derives too, and writes the variant it holds by name, with a payload in parentheses after it.
+An enum serializes too, and writes the variant it holds by name, with a payload in parentheses after it.
 
 ```kira
-@Derive(Equatable, Serializable)
+@Derive(Serializable)
 enum Note { Blank Rank(Int) Tag(String) }
 
 serialize_Note(Note.Rank(42))                       // "Note.Rank(Int(42))"
@@ -199,22 +110,23 @@ A `Float` is written as its bits, not as a rendering of them, so it reads back a
 
 ## Distinct Types
 
-A [`distinct` type](/docs/language-reference/types#distinct-types) derives too, and every derive delegates to the representation it was declared over rather than wrapping it.
+A [`distinct` type](/docs/language-reference/types#distinct-types) works with both the native operations and the remaining derives, and every derive delegates to the representation it was declared over rather than wrapping it.
 
 ```kira
-@Derive(Equatable, Clone, Hashable, Serializable, Ordered)
+@Derive(Serializable)
 distinct Port = U32
 
-serialize_Port(Port(U32(8080)))       // "Port(U32(8080))"
-deserialize_Port("Port(U32(8080))")   // Port(U32(8080))
-lt_Port(Port(U32(41)), Port(U32(42))) // true
+let same   = Port(U32(41)) == Port(U32(41))   // true, native equality
+let key    = hash(Port(U32(41)))              // native hash
+let less   = Port(U32(41)) < Port(U32(42))    // true, native unsigned order
+let copied = Port(U32(41))                    // a distinct over a scalar is Copy
+serialize_Port(Port(U32(8080)))               // "Port(U32(8080))"
+deserialize_Port("Port(U32(8080))")           // Port(U32(8080))
 ```
 
-A distinct type has exactly one readable member, `raw`, and the derives see it as a field of that name. A distinct is built by calling it, so `clone_Port` returns `Port(v.raw)` rather than a brace literal.
+A distinct type has exactly one readable member, `raw`, and `Serializable` sees it as a field of that name. A distinct over a scalar word is `Copy`, so a plain binding copies it; `Serializable` builds it by calling it, so the wire reader returns `Port(raw)` rather than a brace literal.
 
-Two representations are refused where they have no answer, each by name: `Float` and `F32` for `Hashable` and `Ordered`, and `RawPtr` for `Hashable`, `Ordered`, and `Serializable`.
-
-`Tagged` does not apply: it answers which number a *variant* is, and a distinct type has no variants. `@Derive(Copy)` is refused at the parser (`KPAR086`) — one scalar word is copyable already, so the assertion can neither add nor withhold anything.
+`RawPtr` is refused where it has no answer: `Serializable` cannot write an opaque foreign word as a portable value, and the native `hash` and `compare` refuse it too — an address means nothing across runs.
 
 ## `@Derive(Copy)`
 
@@ -238,6 +150,6 @@ struct Label {                //   member `text` has type `String`, which is not
 }
 ```
 
-`Copy` composes with the Foundation derives: `@Derive(Copy, Equatable)` runs the builtin assertion *and* generates `eq_<Type>`. It is recognized before the user-macro lookup, so it never trips `KMAC011`.
+`Copy` composes with the Foundation derives: `@Derive(Copy, Serializable)` runs the builtin assertion *and* generates `serialize_<Type>`. It is recognized before the user-macro lookup, so it never trips `KMAC011`.
 
 `Copyable` is the trait spelling of the same assertion. See [Traits](/docs/language-guide/traits#compiler-known-traits).

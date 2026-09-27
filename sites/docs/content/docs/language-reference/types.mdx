@@ -146,7 +146,7 @@ Its operator surface is its representation's. Arithmetic, bitwise, and shift ope
 
 At an `@FFI.Extern` signature a distinct type crosses as its representation, so the C prototype is the scalar's. The Kira side stays nominal: a parameter written `TabId` takes a `TabId` and refuses the `U32` underneath it (`KSEM183`).
 
-Foundation's `@Derive(Equatable)`, `Clone`, `Hashable`, `Serializable`, and `Ordered` all apply. Each delegates to the representation, so the wire form of a distinct type over `U32` is `Port(U32(8080))`. `@Derive(Tagged)` does not apply: it answers which number a *variant* is, and a distinct type has none. `@Derive(Copy)` is refused (`KPAR086`): the type is one scalar word, so it is copyable already.
+Equality, hashing, and ordering are native — `==`, `hash`, and `<` / `compare` all work on a distinct type with no derive, delegating to the representation (a distinct over `U32` compares as an unsigned `U32`). A distinct over a scalar word is `Copy`, so a plain binding copies it. Foundation's `@Derive(Serializable)` supplies the wire form the compiler does not own; the wire form of a distinct over `U32` is `Port(U32(8080))`. `@Derive(Copy)` is refused (`KPAR086`): the type is one scalar word, so it is copyable already.
 
 ## FFI Type Forms
 
