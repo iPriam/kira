@@ -45,9 +45,24 @@ impl Emitter<'_> {
         self.scopes.push(HashMap::new());
 
         // A parameter is a value in SPIR-V and a place in KSL, so each one gets
-        // a variable of its own to be written through.
+        // a variable of its own to be written through; a texture or sampler,
+        // which no variable may hold, is used as the value it is.
         let mut copies = Vec::new();
         for (param, &value) in function.params.iter().zip(&param_ids) {
+            if matches!(param.ty, Type::Texture(_) | Type::Sampler(_)) {
+                self.builder.name(value, &param.name);
+                if let Some(top) = self.scopes.last_mut() {
+                    top.insert(
+                        param.name.clone(),
+                        Place {
+                            pointer: value,
+                            ty: param.ty.clone(),
+                            storage: crate::BY_VALUE,
+                        },
+                    );
+                }
+                continue;
+            }
             let pointer = self.variable(&param.ty);
             self.builder.name(pointer, &param.name);
             if let Some(top) = self.scopes.last_mut() {
@@ -203,9 +218,13 @@ impl Emitter<'_> {
             }
             Type::Scalar(ScalarType::Int) => self.sint(0),
             Type::Scalar(ScalarType::Uint) => self.uint(0),
+            // A vector, matrix or struct has no one-word literal; its zero is
+            // the null constant.
             other => {
                 let id = self.ty(other);
-                self.builder.constant(id, 0)
+                let out = self.builder.fresh();
+                self.builder.global(op::CONSTANT_NULL, &[id.word(), out.word()]);
+                out
             }
         }
     }

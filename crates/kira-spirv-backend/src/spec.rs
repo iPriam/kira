@@ -47,6 +47,7 @@ pub(crate) mod op {
     pub(crate) const CONSTANT_TRUE: u16 = 41;
     pub(crate) const CONSTANT_FALSE: u16 = 42;
     pub(crate) const CONSTANT: u16 = 43;
+    pub(crate) const CONSTANT_NULL: u16 = 46;
     pub(crate) const FUNCTION: u16 = 54;
     pub(crate) const FUNCTION_PARAMETER: u16 = 55;
     pub(crate) const FUNCTION_END: u16 = 56;
@@ -63,7 +64,9 @@ pub(crate) mod op {
     pub(crate) const COMPOSITE_EXTRACT: u16 = 81;
     pub(crate) const SAMPLED_IMAGE: u16 = 86;
     pub(crate) const IMAGE_SAMPLE_IMPLICIT_LOD: u16 = 87;
+    pub(crate) const IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
     pub(crate) const IMAGE_FETCH: u16 = 95;
+    pub(crate) const IMAGE_READ: u16 = 98;
     /// `OpImageWrite` — one texel into a storage image. Takes no result id:
     /// it is the one image op called purely for its effect.
     pub(crate) const IMAGE_WRITE: u16 = 99;
@@ -169,6 +172,7 @@ pub(crate) mod decoration {
     pub(crate) const NO_PERSPECTIVE: u32 = 13;
     pub(crate) const FLAT: u32 = 14;
     pub(crate) const NON_WRITABLE: u32 = 24;
+    pub(crate) const NON_READABLE: u32 = 25;
     pub(crate) const LOCATION: u32 = 30;
     pub(crate) const BINDING: u32 = 33;
     pub(crate) const DESCRIPTOR_SET: u32 = 34;
@@ -192,6 +196,12 @@ pub(crate) mod built_in {
 pub(crate) mod dim {
     pub(crate) const TWO_D: u32 = 1;
     pub(crate) const CUBE: u32 = 3;
+}
+
+/// `OpTypeImage` texel formats, for a storage image.
+pub(crate) mod image_format {
+    pub(crate) const RGBA8: u32 = 4;
+    pub(crate) const R32UI: u32 = 33;
 }
 
 /// Memory scopes and semantics, for the atomics.

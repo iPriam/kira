@@ -61,7 +61,7 @@ impl Emitter<'_> {
                         Type::StructRef(nested) => self.laid_out_struct(nested),
                         other => self.ty(other),
                     };
-                    let stride = kira_shader_ir::layout::stride_of(self.module, &element);
+                    let stride = kira_shader_ir::layout::storage_stride_of(self.module, &element);
                     self.remember_stride(element_id, stride);
                     let array = self.runtime_array(element_id);
                     let block = self.buffer_block(&name, array);
@@ -72,7 +72,13 @@ impl Emitter<'_> {
                     )
                 }
                 ResourceKind::Texture | ResourceKind::Sampler => {
-                    let handle = self.ty(&declared.ty);
+                    let handle = match (&declared.ty, reflected.access) {
+                        (
+                            Type::Texture(dimension),
+                            Some(AccessMode::Write | AccessMode::ReadWrite),
+                        ) => self.storage_image(*dimension),
+                        _ => self.ty(&declared.ty),
+                    };
                     (
                         storage_class::UNIFORM_CONSTANT,
                         handle,
@@ -89,6 +95,18 @@ impl Emitter<'_> {
                 .decorate(variable, decoration::DESCRIPTOR_SET, &[binding.group_index]);
             self.builder
                 .decorate(variable, decoration::BINDING, &[binding.binding_index]);
+            if reflected.resource_kind == ResourceKind::Texture
+                && matches!(
+                    reflected.access,
+                    Some(AccessMode::Write | AccessMode::ReadWrite)
+                )
+            {
+                self.storage_images.insert(variable, pointee);
+                if reflected.access == Some(AccessMode::Write) {
+                    self.builder
+                        .decorate(variable, decoration::NON_READABLE, &[]);
+                }
+            }
             if reflected.resource_kind == ResourceKind::Storage
                 && reflected.access != Some(AccessMode::ReadWrite)
             {
