@@ -372,11 +372,9 @@ impl<'a> Codegen<'a> {
             // A capture cell is the same shape again, and literally the same
             // box as an enum: `kira-native-bridge`'s `cells` module boxes a
             // held value in a `KiraEnum` with the tag unused.
-            Type::String
-            | Type::Array(_)
-            | Type::Enum(_)
-            | Type::Any
-            | Type::Cell(_) => self.types.ptr,
+            Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => {
+                self.types.ptr
+            }
             // A `Number` is a two-word value held inline — a mantissa and a
             // scale packed into a register pair — not a handle.
             Type::Number => self.types.i128,

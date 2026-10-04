@@ -417,9 +417,13 @@ impl<'h> Vm<'h> {
         // budget installed for a sliced entry must not count them — a heavy
         // initializer exhausting it would trap the run instead of yielding.
         let budget = self.slice_budget.take();
+        // The capture belongs to the requested entry, not to the initializer
+        // frames that enter_values runs first. Keep those frames from taking it.
+        let capture = std::mem::take(&mut self.pending_capture);
         self.initializing_constants = true;
         let result = self.fill_constants(module);
         self.initializing_constants = false;
+        self.pending_capture = capture;
         self.slice_budget = budget;
         result
     }

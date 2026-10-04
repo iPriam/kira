@@ -187,12 +187,8 @@ impl Codegen<'_> {
                 // A `Number` arrives as the node holding its two words, decoded
                 // and freed like any other node.
                 Type::Number => {
-                    let node = LLVMBuildIntToPtr(
-                        self.builder,
-                        payload,
-                        types.ptr,
-                        c"arg.number".as_ptr(),
-                    );
+                    let node =
+                        LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.number".as_ptr());
                     self.decode_native_state_value(node, ty)?
                 }
                 Type::CString

@@ -272,7 +272,7 @@ pub fn build(args: &[String]) -> i32 {
 /// Best-effort: an asset a manifest names but that is not on disk was already
 /// reported by the frontend, and a copy that fails leaves the working-directory
 /// path as the only place to find it — the same place it was before.
-fn stage_bundled_assets(entry: &std::path::Path, compiled: &kira_build::Compiled) {
+pub(super) fn stage_bundled_assets(entry: &std::path::Path, compiled: &kira_build::Compiled) {
     let build_directory = kira_project::build_directory(entry);
 
     // The distinct package roots that took part in this build, the entry's own

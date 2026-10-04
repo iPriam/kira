@@ -77,15 +77,30 @@ pub(crate) use self::types::Callable;
 const FAST_CODEGEN_REACHABLE_FUNCTIONS: usize = 1_000;
 
 fn needs_fast_codegen(program: &IrProgram, plan: &Plan<'_>) -> bool {
-    // Never for a cross build. This is a build-time escape hatch, bought by
-    // emitting worse code, and it is worth that on the machine a developer is
-    // waiting at. A binary being produced for another machine is one nobody is
-    // waiting to run here, and the frames the direct selector leaves behind are
-    // the ones that overflowed an 8 MB stack.
-    if !matches!(plan.target, CodegenTarget::Native(NativeTarget::Host)) {
-        return false;
+    // Hybrid native halves are synchronous developer-facing builds: export and
+    // live both block on them before an app can launch. Always take LLVM's
+    // latency-first machine pipeline for an unoptimized hybrid module. Leaving
+    // this behind a function-count heuristic made Apple device and simulator
+    // slices choose different instruction selectors as optional native imports
+    // changed reachability, and the simulator could fall back into minutes of
+    // SelectionDAG work.
+    //
+    // `fast_codegen` is ignored by the target machine when `optimize` is true,
+    // so release hybrids still receive the aggressive pipeline.
+    if plan.kind == ModuleKind::HybridLibrary {
+        return true;
     }
-    if plan.kind != ModuleKind::Executable {
+
+    // Ordinary executables keep the conservative host-only threshold. The
+    // direct selector's larger stack frames previously overflowed a real 8 MiB
+    // stack in cross-built programs, so do not extend this escape hatch there.
+    if !matches!(
+        (&plan.target, plan.kind),
+        (
+            CodegenTarget::Native(NativeTarget::Host),
+            ModuleKind::Executable
+        )
+    ) {
         return false;
     }
     let native_reachable = program

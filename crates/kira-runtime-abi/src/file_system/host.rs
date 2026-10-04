@@ -83,19 +83,36 @@ fn resolved(path: &str) -> Cow<'_, Path> {
     if direct.is_absolute() || direct.exists() {
         return Cow::Borrowed(direct);
     }
-    let Ok(entries) = fs::read_dir(".kira-build") else {
-        return Cow::Borrowed(direct);
-    };
-    for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().ends_with(".klbundle") {
-            continue;
-        }
-        let candidate = entry.path().join("resources").join(path);
+    // A packaged app is launched independently of its working directory.
+    // Its executable directory contains both loose resources and library bundles.
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        let candidate = directory.join(direct);
         if candidate.exists() {
             return Cow::Owned(candidate);
         }
+        if let Some(candidate) = bundled_resource(&directory.join("Bundles"), direct) {
+            return Cow::Owned(candidate);
+        }
+    }
+    if let Some(candidate) = bundled_resource(Path::new(".kira-build"), direct) {
+        return Cow::Owned(candidate);
     }
     Cow::Borrowed(direct)
+}
+
+fn bundled_resource(directory: &Path, relative: &Path) -> Option<std::path::PathBuf> {
+    for entry in fs::read_dir(directory).ok()?.flatten() {
+        if !entry.file_name().to_string_lossy().ends_with(".klbundle") {
+            continue;
+        }
+        let candidate = entry.path().join("resources").join(relative);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Reads at most `count` bytes from `offset`, answering with what it got.
@@ -344,6 +361,24 @@ mod tests {
             FileResponse::Bytes(value) => value,
             other => panic!("expected bytes, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn native_app_reads_a_catalog_from_its_library_bundle() {
+        let executable = std::env::current_exe().expect("test executable");
+        let name = format!("packaged-catalog-{}.kcui", std::process::id());
+        let relative = format!("Resources/{name}");
+        let bundle = executable.parent().unwrap().join("Bundles").join(format!(
+            "catalog-{}.klbundle", std::process::id()
+        ));
+        let resources = bundle.join("resources/Resources");
+        fs::create_dir_all(&resources).expect("bundle resources");
+        fs::write(resources.join(name), b"KIRA").expect("catalog bytes");
+        assert!(flag(perform(FileRequest::FileExists { path: &relative })));
+        assert_eq!(bytes(perform(FileRequest::ReadRange {
+            path: &relative, offset: 0, count: 4,
+        })), b"KIRA");
+        fs::remove_dir_all(bundle).expect("remove catalog fixture");
     }
 
     #[test]

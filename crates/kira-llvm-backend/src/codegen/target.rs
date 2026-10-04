@@ -167,7 +167,6 @@ impl TargetMachine {
         // is disposed of before returning or stored in `Self` for its drop.
         unsafe {
             initialize_targets();
-
             let triple = LLVMGetDefaultTargetTriple();
             let mut target: LLVMTargetRef = std::ptr::null_mut();
             let mut message: *mut std::os::raw::c_char = std::ptr::null_mut();
@@ -198,6 +197,9 @@ impl TargetMachine {
                 return Err(LlvmError::Emit(
                     "LLVM could not create a target machine for this host".to_owned(),
                 ));
+            }
+            if fast_codegen && !optimize {
+                LLVMSetTargetMachineFastISel(machine, 1);
             }
             Ok(TargetMachine { machine, triple })
         }
@@ -239,7 +241,6 @@ impl TargetMachine {
         // disposes what it allocated before returning.
         unsafe {
             initialize_targets();
-
             let spelled = c_string(&requested);
             let triple = LLVMCreateMessage(spelled.as_ptr());
             let mut resolved: LLVMTargetRef = std::ptr::null_mut();
@@ -273,6 +274,9 @@ impl TargetMachine {
                 return Err(LlvmError::Emit(format!(
                     "LLVM could not create a target machine for `{requested}`"
                 )));
+            }
+            if fast_codegen && !optimize {
+                LLVMSetTargetMachineFastISel(machine, 1);
             }
             Ok(TargetMachine { machine, triple })
         }

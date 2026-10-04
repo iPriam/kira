@@ -14,6 +14,7 @@ use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_manifest::RunnerId;
 
+use super::artifacts::stage_bundled_assets;
 use super::execute::{
     build_native, refuse_syscalls_on_the_vm, run_hybrid, run_native, run_on_vm, run_vm_module_file,
     run_web,
@@ -100,6 +101,10 @@ pub fn run(args: &[String]) -> i32 {
     if let Err(code) = refuse_unsupported_sanitizer("run", &options) {
         return code;
     }
+    // The program about to run reads its dependencies' assets out of the
+    // bundles `kira build` lays down; a run is a build too, and a dependency's
+    // catalog that only `build` staged is a file `run` silently goes without.
+    stage_bundled_assets(Path::new(&options.path), &compiled);
     let ir = match runnable_ir("run", compiled) {
         Ok(ir) => ir,
         Err(code) => return code,

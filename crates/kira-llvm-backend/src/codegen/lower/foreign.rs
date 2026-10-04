@@ -268,7 +268,7 @@ impl FunctionLowering<'_, '_> {
             }
         };
 
-        if self.codegen.calls_foreign_directly() {
+        if self.codegen.calls_import_directly(import.signature()) {
             self.emit_direct_foreign_call(
                 import.symbol(),
                 &params,
@@ -546,8 +546,12 @@ impl FunctionLowering<'_, '_> {
                 // import colliding with a maths declaration — would build a
                 // call whose type disagrees with the definition. Name the
                 // collision rather than fail verification far from the cause.
+                //
+                // A native image calls one symbol at several prototypes the way
+                // C casts `objc_msgSend`, so only wasm, whose call checks the
+                // callee's type, refuses the mismatch.
                 let found = LLVMGlobalGetValueType(existing);
-                if found != function_type {
+                if found != function_type && self.codegen.calls_foreign_directly() {
                     return Err(LlvmError::SymbolCollision {
                         symbol: symbol.to_owned(),
                     });
