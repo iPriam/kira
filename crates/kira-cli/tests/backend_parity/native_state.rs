@@ -138,6 +138,56 @@ function main() {
     assert_eq!(output, "1\n");
 }
 
+#[test]
+fn mutable_frame_callback_writes_back_after_module_constant_initialization() {
+    let output = assert_parity_with_heap_balance(
+        r#"
+struct Attachments {
+    var enabled: Bool = false
+}
+
+let defaultAttachments = Attachments {}
+
+class Frame {
+    var attachments: Attachments
+    var submitted: Bool = false
+}
+
+@Native
+function begin(frame: borrow mut Frame) {
+    frame.attachments.enabled = true
+    return
+}
+
+@Runtime
+function draw(frame: borrow mut Frame) {
+    begin(frame)
+    frame.submitted = true
+    return
+}
+
+@Native
+function run(handler: borrow (borrow mut Frame) -> Void) {
+    var frame = Frame { attachments: defaultAttachments }
+    handler(frame)
+    print(frame.attachments.enabled)
+    print(frame.submitted)
+    handler(frame)
+    print(frame.submitted)
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    run(draw)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\n");
+}
+
 /// Callback state that holds a **function value** boxes, recovers, and is still
 /// callable on every backend.
 ///

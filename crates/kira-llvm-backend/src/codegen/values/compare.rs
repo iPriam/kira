@@ -301,14 +301,13 @@ impl Codegen<'_> {
                     // the same choice the equality walk makes with `and`.
                     // SAFETY: all are `i8`/`i1` and the builder is live.
                     sign = unsafe {
-                        let decided =
-                            LLVMBuildICmp(
-                                builder,
-                                llvm_sys::LLVMIntPredicate::LLVMIntNE,
-                                sign,
-                                zero,
-                                c"cmp.decided".as_ptr(),
-                            );
+                        let decided = LLVMBuildICmp(
+                            builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                            sign,
+                            zero,
+                            c"cmp.decided".as_ptr(),
+                        );
                         LLVMBuildSelect(builder, decided, sign, field_sign, c"cmp.field".as_ptr())
                     };
                 }
@@ -322,7 +321,11 @@ impl Codegen<'_> {
                 let esize = self.abi_size(element)?;
                 let cmp = self.element_cmp(element)?;
                 let (a, b) = self.load_operands(left, right, ty)?;
-                Ok(self.call(self.runtime.array_cmp, &mut [a, b, esize, cmp], c"cmp.array"))
+                Ok(self.call(
+                    self.runtime.array_cmp,
+                    &mut [a, b, esize, cmp],
+                    c"cmp.array",
+                ))
             }
             // A distinct type orders as the one scalar word it is, read through
             // its representation, exactly as the equality walk does.
@@ -402,7 +405,11 @@ impl Codegen<'_> {
                 // SAFETY: `slot` holds an `i64` and the builder is live.
                 unsafe { LLVMBuildStore(builder, widened, slot) };
                 let eight = self.const_i64(8);
-                Ok(self.call(self.runtime.hash_bytes, &mut [acc, slot, eight], c"hash.int"))
+                Ok(self.call(
+                    self.runtime.hash_bytes,
+                    &mut [acc, slot, eight],
+                    c"hash.int",
+                ))
             }
             // The string's bytes fold through the runtime, which borrows the
             // handle and takes nothing.
@@ -473,7 +480,9 @@ impl Codegen<'_> {
             Type::Struct(id) => {
                 seen.push(ty);
                 self.program.types.structs().get(id).is_some_and(|def| {
-                    def.fields.iter().all(|field| self.type_orders(field.ty, seen))
+                    def.fields
+                        .iter()
+                        .all(|field| self.type_orders(field.ty, seen))
                 })
             }
             Type::Enum(id) => {
@@ -513,7 +522,9 @@ impl Codegen<'_> {
             Type::Struct(id) => {
                 seen.push(ty);
                 self.program.types.structs().get(id).is_some_and(|def| {
-                    def.fields.iter().all(|field| self.type_hashes(field.ty, seen))
+                    def.fields
+                        .iter()
+                        .all(|field| self.type_hashes(field.ty, seen))
                 })
             }
             Type::Enum(id) => {

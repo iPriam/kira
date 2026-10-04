@@ -354,11 +354,9 @@ pub(in crate::codegen) fn declare_runtime(module: LLVMModuleRef, types: &Types) 
                     N::Add | N::Subtract | N::Multiply | N::Divide => {
                         (types.i128, vec![types.i128, types.i128])
                     }
-                    N::Equal
-                    | N::Less
-                    | N::LessOrEqual
-                    | N::Greater
-                    | N::GreaterOrEqual => (types.i1, vec![types.i128, types.i128]),
+                    N::Equal | N::Less | N::LessOrEqual | N::Greater | N::GreaterOrEqual => {
+                        (types.i1, vec![types.i128, types.i128])
+                    }
                 };
                 declare(&name, ret, &mut params)
             }),

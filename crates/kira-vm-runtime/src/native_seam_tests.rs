@@ -7,6 +7,50 @@ use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction as I;
 use kira_runtime_abi::CapturingHost;
 
+#[test]
+fn constant_initializers_do_not_capture_callback_parameters() {
+    use kira_runtime_abi::{NativeArg, NativeResult};
+
+    let initializer = func(
+        "constant",
+        0,
+        2,
+        vec![I::ConstStr(0), I::StoreLocal(1), I::ConstInt(7), I::Return],
+    );
+    let callback = func(
+        "callback",
+        2,
+        2,
+        vec![I::ConstStr(1), I::StoreLocal(1), I::ReturnVoid],
+    );
+    let module = Module {
+        exports: Default::default(),
+        foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
+        constants: vec![0],
+        types: Vec::new(),
+        functions: vec![initializer, callback],
+        main: None,
+        strings: vec!["initializer".to_owned(), "updated frame".to_owned()],
+    };
+    let program = Program::load(module).expect("valid callback program");
+    let mut host = CapturingHost::new();
+    let returned = program
+        .call_capturing(
+            &mut host,
+            1,
+            &[NativeArg::Int(0), NativeArg::Str("frame")],
+            &[1],
+        )
+        .expect("callback returns its mutable parameter");
+    assert_eq!(returned.result, NativeResult::Void);
+    assert_eq!(
+        returned.writebacks,
+        [(1, NativeResult::Str("updated frame".to_owned()))]
+    );
+}
+
 /// A host with a native half: answers `shout(n, s)` with `s` repeated `n`
 /// times, and records what it was handed.
 #[derive(Default)]

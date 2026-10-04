@@ -56,9 +56,11 @@ impl Codegen<'_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         Ok(match ty {
             // A `Number` crosses as a node holding its two-word value.
-            Type::Number => {
-                self.call(self.runtime.native_value_number, &mut [value], c"native.number")
-            }
+            Type::Number => self.call(
+                self.runtime.native_value_number,
+                &mut [value],
+                c"native.number",
+            ),
             Type::Int(_) => self.call(self.runtime.native_value_int, &mut [value], c"native.value"),
             Type::Float(_) => self.call(
                 self.runtime.native_value_float,
@@ -173,9 +175,7 @@ impl Codegen<'_> {
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         Ok(match ty {
-            Type::Number => {
-                self.read_and_free_node(node, self.runtime.native_value_read_number)
-            }
+            Type::Number => self.read_and_free_node(node, self.runtime.native_value_read_number),
             Type::Int(_) => self.read_and_free_node(node, self.runtime.native_value_read_int),
             Type::Float(_) => self.read_and_free_node(node, self.runtime.native_value_read_float),
             Type::Bool => {

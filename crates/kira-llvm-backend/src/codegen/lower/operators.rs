@@ -206,9 +206,12 @@ impl FunctionLowering<'_, '_> {
                 // `ty`, which is the `Bool` result.
                 IrBinOp::EqValue | IrBinOp::NeValue => {
                     let operand_ty = self.type_of(lhs);
-                    return self
-                        .codegen
-                        .equal_values(left, right, operand_ty, op == IrBinOp::NeValue);
+                    return self.codegen.equal_values(
+                        left,
+                        right,
+                        operand_ty,
+                        op == IrBinOp::NeValue,
+                    );
                 }
                 // Both operands are erasure boxes, and the runtime reads the
                 // type each carries before it reads either payload. The two are

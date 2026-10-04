@@ -127,9 +127,11 @@ macro_rules! comparison {
 }
 
 comparison!(kira_rt_number_less, |o: core::cmp::Ordering| o.is_lt());
-comparison!(kira_rt_number_less_or_equal, |o: core::cmp::Ordering| o.is_le());
+comparison!(kira_rt_number_less_or_equal, |o: core::cmp::Ordering| o
+    .is_le());
 comparison!(kira_rt_number_greater, |o: core::cmp::Ordering| o.is_gt());
-comparison!(kira_rt_number_greater_or_equal, |o: core::cmp::Ordering| o.is_ge());
+comparison!(kira_rt_number_greater_or_equal, |o: core::cmp::Ordering| o
+    .is_ge());
 
 /// Whether two `Number`s are numerically equal.
 #[unsafe(no_mangle)]

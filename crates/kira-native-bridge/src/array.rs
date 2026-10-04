@@ -522,13 +522,7 @@ pub unsafe extern "C" fn kira_rt_hash_array(
     element: Option<ElemHash>,
 ) -> u64 {
     // SAFETY: the length is read only after the handle is proven non-null.
-    let len = unsafe {
-        if array.is_null() {
-            0
-        } else {
-            (*array).len
-        }
-    };
+    let len = unsafe { if array.is_null() { 0 } else { (*array).len } };
     // SAFETY: eight readable bytes of a stack value.
     let mut acc = unsafe {
         let bytes = (len as u64).to_le_bytes();

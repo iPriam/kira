@@ -1,6 +1,6 @@
 //! Native constants for the shared recursive libffi descriptor graph.
 
-use kira_runtime_abi::{ForeignArrayElement, ForeignMember, ForeignTypeSpec};
+use kira_runtime_abi::{ForeignAggregateId, ForeignArrayElement, ForeignMember, ForeignTypeSpec};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMLinkage, LLVMUnnamedAddr};
@@ -82,10 +82,17 @@ impl Codegen<'_> {
     }
 }
 
+/// Encodes one signature as a self-contained descriptor blob.
+///
+/// The blob carries only the aggregates its signature reaches, renumbered
+/// densely in table order. Copying the program's whole table into every blob
+/// made each one as large as that table, once per import, per codegen unit:
+/// half a gigabyte of constants in an app whose code is ten megabytes.
 fn descriptor_bytes(
     signature: &kira_runtime_abi::ForeignSignature,
     aggregates: &kira_runtime_abi::ForeignAggregates,
 ) -> Result<Vec<u8>, LlvmError> {
+    let reached = reached_aggregates(signature, aggregates)?;
     let mut words = Vec::new();
     words.push(MAGIC);
     words.push(0);
@@ -93,15 +100,20 @@ fn descriptor_bytes(
         u32::try_from(signature.parameters().len())
             .map_err(|_| LlvmError::internal("a foreign signature has too many parameters"))?,
     );
-    push_spec(&mut words, signature.result());
+    push_spec(&mut words, signature.result(), &reached);
     words.push(
-        u32::try_from(aggregates.len())
+        u32::try_from(reached.len())
             .map_err(|_| LlvmError::internal("a foreign aggregate table is too large"))?,
     );
     for spec in signature.parameters() {
-        push_spec(&mut words, *spec);
+        push_spec(&mut words, *spec, &reached);
     }
-    for aggregate in aggregates.iter() {
+    for id in &reached {
+        let aggregate = aggregates
+            .get(ForeignAggregateId(*id))
+            .ok_or(LlvmError::internal(
+                "a foreign signature names an unknown aggregate",
+            ))?;
         words.push(
             u32::try_from(aggregate.members().len())
                 .map_err(|_| LlvmError::internal("a foreign aggregate has too many members"))?,
@@ -112,14 +124,14 @@ fn descriptor_bytes(
                     words.extend([0, u32::from(ty.tag()), 0, 0]);
                 }
                 ForeignMember::Aggregate(id) => {
-                    words.extend([1, 0, id.0, 0]);
+                    words.extend([1, 0, local_id(&reached, *id), 0]);
                 }
                 ForeignMember::Array { element, count } => match element {
                     ForeignArrayElement::Scalar(ty) => {
                         words.extend([2, u32::from(ty.tag()), u32::MAX, *count]);
                     }
                     ForeignArrayElement::Aggregate(id) => {
-                        words.extend([2, 0, id.0, *count]);
+                        words.extend([2, 0, local_id(&reached, *id), *count]);
                     }
                 },
             }
@@ -139,9 +151,55 @@ fn descriptor_bytes(
     Ok(bytes)
 }
 
-fn push_spec(words: &mut Vec<u32>, spec: ForeignTypeSpec) {
+/// The program-table ids `signature` reaches, nested ones included, ascending.
+///
+/// Ascending keeps the table's own invariant — a nested aggregate before the
+/// one containing it — so the renumbered blob decodes as any other.
+fn reached_aggregates(
+    signature: &kira_runtime_abi::ForeignSignature,
+    aggregates: &kira_runtime_abi::ForeignAggregates,
+) -> Result<Vec<u32>, LlvmError> {
+    let mut pending: Vec<u32> = std::iter::once(signature.result())
+        .chain(signature.parameters().iter().copied())
+        .filter_map(|spec| match spec {
+            ForeignTypeSpec::Scalar(_) => None,
+            ForeignTypeSpec::Aggregate(id) => Some(id.0),
+        })
+        .collect();
+    let mut reached = std::collections::BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        let aggregate = aggregates
+            .get(ForeignAggregateId(id))
+            .ok_or(LlvmError::internal(
+                "a foreign signature names an unknown aggregate",
+            ))?;
+        for member in aggregate.members() {
+            match member {
+                ForeignMember::Aggregate(nested)
+                | ForeignMember::Array {
+                    element: ForeignArrayElement::Aggregate(nested),
+                    ..
+                } => pending.push(nested.0),
+                _ => {}
+            }
+        }
+    }
+    Ok(reached.into_iter().collect())
+}
+
+/// Where program-table aggregate `id` sits in a blob's own table.
+fn local_id(reached: &[u32], id: ForeignAggregateId) -> u32 {
+    reached
+        .binary_search(&id.0)
+        .map_or(u32::MAX, |index| index as u32)
+}
+
+fn push_spec(words: &mut Vec<u32>, spec: ForeignTypeSpec, reached: &[u32]) {
     match spec {
         ForeignTypeSpec::Scalar(ty) => words.extend([0, u32::from(ty.tag()), 0]),
-        ForeignTypeSpec::Aggregate(id) => words.extend([1, 0, id.0]),
+        ForeignTypeSpec::Aggregate(id) => words.extend([1, 0, local_id(reached, id)]),
     }
 }

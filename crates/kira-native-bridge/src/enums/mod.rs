@@ -612,9 +612,7 @@ unsafe fn boxes_compare(a: KEnum, b: KEnum) -> std::cmp::Ordering {
         // SAFETY: the kind says both words are live `KStr` handles.
         PAYLOAD_STR => unsafe { str_payloads_compare(one.payload, other.payload) },
         // SAFETY: the kind says both words are live nested `KEnum` handles.
-        PAYLOAD_ENUM => unsafe {
-            boxes_compare(one.payload as KEnum, other.payload as KEnum)
-        },
+        PAYLOAD_ENUM => unsafe { boxes_compare(one.payload as KEnum, other.payload as KEnum) },
         // A struct or array payload orders through the cmp leaf generated for its
         // concrete type, exactly as `Any` equality reads its `eq` leaf. Equal
         // tags proved both hold the same Kira type, so either leaf reads either

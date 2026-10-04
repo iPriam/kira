@@ -285,9 +285,7 @@ impl<'a> Codegen<'a> {
                 | Type::Array(_)
                 | Type::Enum(_)
                 | Type::Any
-                | Type::Cell(_) => {
-                    LLVMConstPointerNull(llvm_type)
-                }
+                | Type::Cell(_) => LLVMConstPointerNull(llvm_type),
                 // A fresh `RawPtr` slot holds the null pointer word (zero), the
                 // same value the VM initializes a `Value::RawPtr` slot to. It
                 // owns nothing, so no first-store special case is needed.

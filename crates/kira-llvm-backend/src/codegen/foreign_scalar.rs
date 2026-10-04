@@ -67,6 +67,20 @@ impl Codegen<'_> {
         matches!(self.target, super::plan::CodegenTarget::Wasm(_))
     }
 
+    /// Whether this import's call is the symbol itself rather than libffi.
+    ///
+    /// Every target takes an address with a real link-time reference to the
+    /// symbol, so a scalar-only C signature is the platform's own prototype and
+    /// a direct call has the ABI libffi would rebuild at run time. An aggregate
+    /// keeps the generated shim on a native target, because only wasm passes
+    /// a struct the way [`Self::calls_foreign_directly`] lowers it.
+    pub(super) fn calls_import_directly(
+        &self,
+        signature: &kira_runtime_abi::ForeignSignature,
+    ) -> bool {
+        self.calls_foreign_directly() || !signature.has_aggregate()
+    }
+
     /// The scalar an aggregate crosses as when it has exactly one member.
     ///
     /// `None` for every other aggregate, which crosses behind a pointer.

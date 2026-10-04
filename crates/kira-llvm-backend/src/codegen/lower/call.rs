@@ -205,9 +205,8 @@ impl FunctionLowering<'_, '_> {
                     // consumes the number — then print that string, which the
                     // string printer frees.
                     Type::Number => {
-                        let to_string = self.codegen.runtime.number_ops[usize::from(
-                            kira_runtime_abi::NumberOp::ToString.as_byte(),
-                        )];
+                        let to_string = self.codegen.runtime.number_ops
+                            [usize::from(kira_runtime_abi::NumberOp::ToString.as_byte())];
                         value = self.call(to_string, &mut [value], c"number.str");
                         self.codegen.runtime.print_str
                     }

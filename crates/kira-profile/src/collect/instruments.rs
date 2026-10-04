@@ -216,6 +216,9 @@ fn callee_count(nodes: &[Node], index: usize) -> u64 {
     total
 }
 
+/// The characters `sample` indents its call tree with.
+const TREE_GUIDES: &[char] = &[' ', '+', '!', ':', '|'];
+
 /// Reads the indented call tree out of a `sample` report.
 fn read_tree(text: &str) -> Vec<Node> {
     let mut nodes = Vec::new();
@@ -234,8 +237,10 @@ fn read_tree(text: &str) -> Vec<Node> {
         {
             break;
         }
-        let depth = line.len() - line.trim_start().len();
-        let trimmed = line.trim();
+        // `sample` draws the tree with `+ ! : |` guides ahead of each count, so
+        // a node's depth is where its count starts, not where its line does.
+        let depth = line.len() - line.trim_start_matches(TREE_GUIDES).len();
+        let trimmed = line[depth..].trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -333,6 +338,34 @@ Total number in stack: 100
             crate::model::FrameKind::Kira
         );
         assert_eq!(profile.thread_name(ThreadId::new(0)), "Thread_1001");
+    }
+
+    const GUIDED_REPORT: &str = "\
+Call graph:
+    100 Thread_1001   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 100 start  (in dyld) + 1903  [0x1002b4f28]
+    + ! 100 _kira_fn_0_main  (in hello) + 52  [0x100001f34]  main.kira:1
+    + ! : 80 _kira_fn_4_Grid_step  (in hello) + 120  [0x100002abc]  main.kira:13
+    + ! : | 30 kira_rt_string_new  (in hello) + 8  [0x100003000]
+    + !   20 kira_rt_string_new  (in hello) + 8  [0x100003000]
+
+Total number in stack: 100
+";
+
+    #[test]
+    fn a_call_tree_drawn_with_guides_keeps_every_count() {
+        let profile = parse(GUIDED_REPORT, 1_000, &symbols());
+        assert_eq!(profile.samples.len(), 100);
+        let step = profile
+            .samples
+            .iter()
+            .filter(|sample| {
+                sample
+                    .leaf()
+                    .is_some_and(|leaf| profile.frames.symbol_of(leaf) == "Grid.step")
+            })
+            .count();
+        assert_eq!(step, 50);
     }
 
     #[test]
