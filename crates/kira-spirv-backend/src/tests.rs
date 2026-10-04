@@ -350,9 +350,10 @@ fn a_compute_entry_declares_the_workgroup_it_runs_as() {
 #[test]
 fn a_storage_buffer_says_how_far_apart_its_elements_are() {
     let words = emit(&build(COMPUTE), Stage::Compute).expect("compute");
-    // Two floats round up to 16 under this workspace's layout, and a driver
-    // steps the array by what this says rather than by what it would guess.
-    assert!(decorated(&words, decoration::ARRAY_STRIDE, &[16]));
+    // A storage buffer is std430: two floats step by 8, as the host packs
+    // them, and a driver steps the array by what this says rather than by
+    // what it would guess.
+    assert!(decorated(&words, decoration::ARRAY_STRIDE, &[8]));
     assert!(has(&words, op::TYPE_RUNTIME_ARRAY));
     let buffers = all(&words, op::VARIABLE)
         .iter()

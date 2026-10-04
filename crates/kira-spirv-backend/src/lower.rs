@@ -361,7 +361,12 @@ impl Emitter<'_> {
 
     /// Loads whatever `place` points at.
     pub(crate) fn load(&mut self, place: &Place) -> Id {
-        let ty = if place.storage == storage_class::UNIFORM
+        if place.storage == crate::BY_VALUE {
+            return place.pointer;
+        }
+        let ty = if let Some(&image) = self.storage_images.get(&place.pointer) {
+            image
+        } else if place.storage == storage_class::UNIFORM
             || place.storage == storage_class::STORAGE_BUFFER
         {
             self.laid_out_ty(&place.ty)
@@ -371,6 +376,9 @@ impl Emitter<'_> {
         let loaded = self.builder.fresh();
         self.builder
             .code(op::LOAD, &[ty.word(), loaded.word(), place.pointer.word()]);
+        if self.storage_images.contains_key(&place.pointer) {
+            self.storage_image_values.insert(loaded);
+        }
         loaded
     }
 
@@ -562,8 +570,16 @@ impl Emitter<'_> {
     /// one that passed has no invalid expression in it — but a backend that
     /// answered `None` would make every caller handle a case that cannot
     /// happen.
+    ///
+    /// A void expression, such as a `store`, has no value to make: its id is
+    /// one nothing defines, which is sound because nothing can read it.
     pub(crate) fn undefined(&mut self, ty: &Type) -> Id {
+        if *ty == Type::Void {
+            return self.builder.fresh();
+        }
         let id = self.ty(ty);
-        self.builder.constant(id, 0)
+        let out = self.builder.fresh();
+        self.builder.global(op::CONSTANT_NULL, &[id.word(), out.word()]);
+        out
     }
 }

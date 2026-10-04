@@ -53,6 +53,8 @@ pub(crate) enum TypeKey {
         dim: u32,
         sampled_type: Id,
         depth: u32,
+        sampled: u32,
+        format: u32,
     },
     Sampler,
     SampledImage(Id),

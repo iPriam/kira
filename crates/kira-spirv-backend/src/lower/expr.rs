@@ -6,7 +6,7 @@
 //! beside the tables in [`ops`](super::ops) that answer it.
 
 use kira_ksl_semantics::model::{BinaryOp, BuiltinFn, CheckedExprId};
-use kira_shader_model::{ScalarType, Type};
+use kira_shader_model::{ScalarType, Stage, Type};
 
 use crate::Emitter;
 use crate::builder::Id;
@@ -59,6 +59,13 @@ impl Emitter<'_> {
             }
         }
 
+        // Every other operator takes two operands of one type, so a scalar
+        // beside a vector is spread across the vector's lanes first.
+        let (lhs, rhs) = match (&lhs_ty, &rhs_ty) {
+            (Type::Vector(vector), Type::Scalar(_)) => (lhs, self.splat(rhs, &lhs_ty, vector.width)),
+            (Type::Scalar(_), Type::Vector(vector)) => (self.splat(lhs, &rhs_ty, vector.width), rhs),
+            _ => (lhs, rhs),
+        };
         let scalar = element_scalar(&lhs_ty).unwrap_or(ScalarType::Float);
         let opcode = opcode_for(operator, scalar);
         self.builder.code(
@@ -145,15 +152,33 @@ impl Emitter<'_> {
         );
         let result_id = self.ty(result);
         let out = self.builder.fresh();
-        self.builder.code(
-            op::IMAGE_SAMPLE_IMPLICIT_LOD,
-            &[
-                result_id.word(),
-                out.word(),
-                combined.word(),
-                coordinate.word(),
-            ],
-        );
+        // Only a fragment has the neighbours an implicit level is derived
+        // from; any other stage samples level 0, as GLSL's `texture` does there.
+        if self.stage == Stage::Fragment {
+            self.builder.code(
+                op::IMAGE_SAMPLE_IMPLICIT_LOD,
+                &[
+                    result_id.word(),
+                    out.word(),
+                    combined.word(),
+                    coordinate.word(),
+                ],
+            );
+        } else {
+            let float = self.float();
+            let level = self.builder.constant(float, 0f32.to_bits());
+            self.builder.code(
+                op::IMAGE_SAMPLE_EXPLICIT_LOD,
+                &[
+                    result_id.word(),
+                    out.word(),
+                    combined.word(),
+                    coordinate.word(),
+                    LOD_OPERAND,
+                    level.word(),
+                ],
+            );
+        }
         out
     }
 
@@ -187,6 +212,14 @@ impl Emitter<'_> {
         let image = self.value(texture);
         let coordinate = self.value(coordinate);
         let result_id = self.ty(result);
+        if self.storage_image_values.contains(&image) {
+            let out = self.builder.fresh();
+            self.builder.code(
+                op::IMAGE_READ,
+                &[result_id.word(), out.word(), image.word(), coordinate.word()],
+            );
+            return out;
+        }
         let level = self.uint(0);
         let out = self.builder.fresh();
         // The `Lod` image operand is not optional for a sampled image, and KSL's
@@ -266,12 +299,39 @@ impl Emitter<'_> {
             self.builder.code(op::DOT, &operands);
             return out;
         }
+        // A componentwise builtin may take a scalar beside vectors — `mix`'s
+        // blend, `clamp`'s bounds — but each of its operands has to be the
+        // result's type in SPIR-V, so a scalar is spread across the lanes.
+        let values: Vec<Id> = match result {
+            Type::Vector(vector) => args
+                .iter()
+                .zip(values)
+                .map(|(&arg, value)| {
+                    if matches!(self.module.expr(arg).ty, Type::Scalar(_)) {
+                        self.splat(value, result, vector.width)
+                    } else {
+                        value
+                    }
+                })
+                .collect(),
+            _ => values,
+        };
         let result_id = self.ty(result);
         let set = self.builder.glsl;
         let out = self.builder.fresh();
         let mut operands = vec![result_id.word(), out.word(), set.word(), instruction];
         operands.extend(values.iter().map(|id| id.word()));
         self.builder.code(op::EXT_INST, &operands);
+        out
+    }
+
+    /// `value` in every one of `width` lanes of the vector type `ty`.
+    fn splat(&mut self, value: Id, ty: &Type, width: u8) -> Id {
+        let vector = self.ty(ty);
+        let out = self.builder.fresh();
+        let mut operands = vec![vector.word(), out.word()];
+        operands.extend(std::iter::repeat_n(value.word(), usize::from(width)));
+        self.builder.code(op::COMPOSITE_CONSTRUCT, &operands);
         out
     }
 }

@@ -43,7 +43,7 @@ mod spec;
 mod tests;
 mod types;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kira_ksl_semantics::model::{CheckedFunction, CheckedModule, CheckedStmtId, ConstValue};
 use kira_shader_ir::ShaderIr;
@@ -77,6 +77,11 @@ pub(crate) struct Place {
     pub(crate) storage: u32,
 }
 
+/// The storage of a place that is a value rather than a pointer: a texture or
+/// sampler parameter, which Vulkan forbids storing into a variable, so `pointer`
+/// is the parameter itself and reading the place is using it.
+pub(crate) const BY_VALUE: u32 = u32::MAX;
+
 /// A module-scope variable a resource binds to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Global {
@@ -100,6 +105,14 @@ pub(crate) struct Emitter<'a> {
     pub(crate) strides: HashMap<Id, u32>,
     /// Every resource's variable, by the name the shader binds it under.
     pub(crate) globals: HashMap<String, Global>,
+    /// The storage image type of each written texture's variable, which its
+    /// KSL type alone does not say.
+    pub(crate) storage_images: HashMap<Id, Id>,
+    /// Every value loaded from such a variable, which is read with
+    /// `OpImageRead` rather than fetched as a sampled image is.
+    pub(crate) storage_image_values: HashSet<Id>,
+    /// The stage this module is the entry point of.
+    pub(crate) stage: Stage,
     /// The value each compile-time option was declared with.
     pub(crate) options: HashMap<String, ConstValue>,
     /// Every function a body may call, by name.
@@ -172,6 +185,9 @@ pub fn emit(ir: &ShaderIr, stage: Stage) -> Result<Vec<u32>, SpirvError> {
         structs: HashMap::new(),
         laid_out: HashMap::new(),
         strides: HashMap::new(),
+        storage_images: HashMap::new(),
+        storage_image_values: HashSet::new(),
+        stage,
         globals: HashMap::new(),
         options: shader
             .options

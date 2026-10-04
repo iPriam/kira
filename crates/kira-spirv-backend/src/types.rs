@@ -12,7 +12,7 @@ use kira_shader_model::{MatrixType, ScalarType, TextureDimension, Type, VectorTy
 
 use crate::Emitter;
 use crate::builder::{Id, TypeKey};
-use crate::spec::{decoration, dim, op};
+use crate::spec::{decoration, dim, image_format, op};
 
 impl Emitter<'_> {
     /// The plain SPIR-V type for `ty`.
@@ -137,6 +137,8 @@ impl Emitter<'_> {
                 dim: shape,
                 sampled_type,
                 depth,
+                sampled: 1,
+                format: 0,
             },
             |builder, id| {
                 // Arrayed 0, multisampled 0, sampled 1 (read through a sampler
@@ -144,6 +146,41 @@ impl Emitter<'_> {
                 builder.global(
                     op::TYPE_IMAGE,
                     &[id.word(), sampled_type.word(), shape, depth, 0, 0, 1, 0],
+                );
+            },
+        )
+    }
+
+    /// A written texture's image type: a storage image, which is never sampled
+    /// and must say its texel format. The format is the one GLSL and WGSL
+    /// declare the same texture with, so every target writes the same texels.
+    pub(crate) fn storage_image(&mut self, dimension: TextureDimension) -> Id {
+        let (sampled_type, format) = match dimension {
+            TextureDimension::Texture2dUint => (self.int(false), image_format::R32UI),
+            TextureDimension::Texture2d
+            | TextureDimension::TextureCube
+            | TextureDimension::Depth2d => (self.float(), image_format::RGBA8),
+        };
+        let shape = match dimension {
+            TextureDimension::TextureCube => dim::CUBE,
+            TextureDimension::Texture2d
+            | TextureDimension::Depth2d
+            | TextureDimension::Texture2dUint => dim::TWO_D,
+        };
+        self.builder.pooled(
+            TypeKey::Image {
+                dim: shape,
+                sampled_type,
+                depth: 0,
+                sampled: 2,
+                format,
+            },
+            |builder, id| {
+                // Arrayed 0, multisampled 0, sampled 2 (read and written
+                // without a sampler).
+                builder.global(
+                    op::TYPE_IMAGE,
+                    &[id.word(), sampled_type.word(), shape, 0, 0, 0, 2, format],
                 );
             },
         )

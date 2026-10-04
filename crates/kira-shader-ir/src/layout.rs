@@ -57,6 +57,46 @@ pub fn stride_of(module: &CheckedModule, ty: &Type) -> u32 {
     }
 }
 
+/// The stride between consecutive elements of `ty` in a storage buffer.
+///
+/// A storage buffer is `std430`, not `std140`: a struct there aligns to its
+/// widest member rather than to 16, so an array of structs of scalars steps by
+/// exactly their bytes. That is what the GLSL dialect declares (`std430`), what
+/// WGSL and Metal lay a storage array out as, and what a host packing structs
+/// back to back writes. Members keep the offsets `layout_of` gives them; only
+/// the struct's own alignment, and so the stride, differs.
+#[must_use]
+pub fn storage_stride_of(module: &CheckedModule, ty: &Type) -> u32 {
+    match ty {
+        Type::StructRef(name) => module.struct_named(name).map_or(0, |declared| {
+            let layout = layout_of(module, &declared.fields);
+            let end = layout
+                .fields
+                .iter()
+                .map(|field| field.offset + field.size)
+                .max()
+                .unwrap_or(0);
+            round_up(end, storage_alignment_of(module, ty))
+        }),
+        other => stride_of(module, other),
+    }
+}
+
+/// What `ty` aligns to inside a storage buffer: a struct to its widest member.
+fn storage_alignment_of(module: &CheckedModule, ty: &Type) -> u32 {
+    match ty {
+        Type::StructRef(name) => module.struct_named(name).map_or(4, |declared| {
+            declared
+                .fields
+                .iter()
+                .map(|field| storage_alignment_of(module, &field.ty))
+                .max()
+                .unwrap_or(4)
+        }),
+        other => size_and_alignment(other).1.max(1),
+    }
+}
+
 /// Lays out `fields` in declaration order.
 #[must_use]
 pub fn layout_of(module: &CheckedModule, fields: &[CheckedField]) -> ReflectedLayout {
@@ -207,5 +247,36 @@ mod tests {
         };
         let stride = stride_of(&module, &Type::StructRef("Particle".to_owned()));
         assert_eq!(stride, 16);
+    }
+
+    #[test]
+    fn a_storage_array_of_structs_strides_by_the_widest_member() {
+        let module = CheckedModule {
+            structs: vec![
+                CheckedStruct {
+                    name: "Quad".to_owned(),
+                    fields: (0..70)
+                        .map(|index| field(&format!("f{index}"), Type::Scalar(ScalarType::Float)))
+                        .collect(),
+                },
+                CheckedStruct {
+                    name: "Tinted".to_owned(),
+                    fields: vec![
+                        field(
+                            "color",
+                            Type::Vector(VectorType {
+                                scalar: ScalarType::Float,
+                                width: 4,
+                            }),
+                        ),
+                        field("weight", Type::Scalar(ScalarType::Float)),
+                    ],
+                },
+            ],
+            ..CheckedModule::default()
+        };
+        assert_eq!(storage_stride_of(&module, &Type::StructRef("Quad".to_owned())), 280);
+        assert_eq!(stride_of(&module, &Type::StructRef("Quad".to_owned())), 288);
+        assert_eq!(storage_stride_of(&module, &Type::StructRef("Tinted".to_owned())), 32);
     }
 }
