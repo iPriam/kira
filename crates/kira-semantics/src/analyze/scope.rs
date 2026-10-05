@@ -306,15 +306,25 @@ impl FnCtx {
     /// `move xs` marks `xs` gone. When that analysis is only a probe (the array
     /// path re-resolves the receiver from syntax instead), those effects have to
     /// be undone, or a later use of the receiver reports a move that never
-    /// happened. An expression declares no locals, so the state's length is
-    /// stable and a whole-vector snapshot restores it exactly.
+    /// happened.
     pub(crate) fn ownership_snapshot(&self) -> Vec<LocalOwnership> {
         self.ownership.clone()
     }
 
     /// Restores a snapshot taken by [`FnCtx::ownership_snapshot`].
+    ///
+    /// A prefix restore, not a whole-vector replacement. A probe can declare
+    /// locals of its own, and the HIR it produced goes on to be analyzed, so
+    /// those locals outlive the probe and stay in the local table. Truncating
+    /// the ownership column back to the snapshot would leave it shorter than
+    /// the table it indexes, and the first liveness check on such a local would
+    /// index past its end.
     pub(crate) fn restore_ownership(&mut self, snapshot: Vec<LocalOwnership>) {
-        self.ownership = snapshot;
+        for (slot, saved) in snapshot.into_iter().enumerate() {
+            if let Some(entry) = self.ownership.get_mut(slot) {
+                *entry = saved;
+            }
+        }
     }
 
     /// Where each local was moved out, if it has been — the part of the
